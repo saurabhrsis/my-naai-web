@@ -43,7 +43,10 @@ import {
   MIN_OFFSET_MINUTES,
   describeOffset,
   isValidOffset,
+  offsetForTargetTime,
+  parseBookingDateTime,
   shiftBookingTime,
+  toInputTime,
 } from '../lib/bookingTime';
 import { STATE_OPTIONS } from '../lib/stateOptions';
 import { SALON_ABOUT_CONTENT, SALON_FAQ_CONTENT, SALON_TERMS_CONTENT } from '../lib/salonContent';
@@ -111,29 +114,49 @@ function isSameDate(value, offset = 0) {
 // ("6:50 PM"), not just an offset, because that is what it will say to the
 // customer on the phone and what the customer sees in the notification.
 function UpdateTimeModal({ booking, open, onClose, onSubmit, saving }) {
+  // `mode` decides which control owns the new time, so the two can never
+  // disagree about what will be sent: 'offset' = a chip or the minutes box,
+  // 'exact' = the time picker.
+  const [mode, setMode] = useState('offset');
   const [offset, setOffset] = useState(null);
   const [custom, setCustom] = useState('');
+  const [exactTime, setExactTime] = useState('');
   const [reason, setReason] = useState('');
-
-  // Reset whenever a different booking is opened, so the previous customer's
-  // choice can never be sent for this one.
-  useEffect(() => {
-    if (!open) return;
-    setOffset(null);
-    setCustom('');
-    setReason('');
-  }, [open, booking?.bookingId]);
 
   const bookingDate = booking?.bookingDate;
   const bookingTime = booking?.bookingTime;
-  const effectiveOffset = custom.trim() !== '' ? Number(custom) : offset;
-  const preview = isValidOffset(effectiveOffset) ? shiftBookingTime(bookingDate, bookingTime, effectiveOffset) : null;
+
+  // Reset whenever a different booking is opened, so the previous customer's
+  // choice can never be sent for this one. The picker starts at the booking's
+  // own time, which is the sensible place to nudge from.
+  useEffect(() => {
+    if (!open) return;
+    setMode('offset');
+    setOffset(null);
+    setCustom('');
+    setReason('');
+    const start = parseBookingDateTime(bookingDate, bookingTime);
+    setExactTime(start ? toInputTime(start) : '');
+  }, [open, booking?.bookingId, bookingDate, bookingTime]);
+
+  const customOffset = custom.trim() !== '' ? Number(custom) : null;
+  const effectiveOffset = customOffset !== null ? customOffset : offset;
+  const exactOffset = mode === 'exact' && exactTime ? offsetForTargetTime(bookingDate, bookingTime, exactTime) : null;
+
+  const preview = mode === 'exact'
+    ? (isValidOffset(exactOffset) ? shiftBookingTime(bookingDate, bookingTime, exactOffset) : null)
+    : (isValidOffset(effectiveOffset) ? shiftBookingTime(bookingDate, bookingTime, effectiveOffset) : null);
+
   const currentLabel = formatTime(bookingTime);
-  const customInvalid = custom.trim() !== '' && !isValidOffset(Number(custom));
+  const customInvalid = mode === 'offset' && custom.trim() !== '' && !isValidOffset(customOffset);
+  // Picking the time it is already booked for is a no-op, not an error worth shouting about.
+  const exactUnchanged = mode === 'exact' && exactTime && exactOffset === 0;
+  const exactOutOfRange = mode === 'exact' && exactTime && exactOffset !== null && exactOffset !== 0 && !isValidOffset(exactOffset);
   const blocked = Boolean(preview?.inPast);
   const canSend = Boolean(preview) && !blocked && !saving;
 
-  const pick = value => {
+  const pickOffset = value => {
+    setMode('offset');
     setOffset(value);
     setCustom('');
   };
@@ -141,7 +164,7 @@ function UpdateTimeModal({ booking, open, onClose, onSubmit, saving }) {
   return (
     <Modal open={open} onClose={onClose} title="Update appointment time">
       <p className="modal-lede">
-        Running late, or free earlier than expected? Choose the new time for <strong>{booking?.userName || 'this customer'}</strong> and My Naai will notify them straight away.
+        Running late, or free earlier than expected? Set the new time for <strong>{booking?.userName || 'this customer'}</strong> and My Naai will notify them straight away.
       </p>
 
       <div className="time-update-current">
@@ -149,50 +172,74 @@ function UpdateTimeModal({ booking, open, onClose, onSubmit, saving }) {
         <span><small>Booked for</small><strong>{formatDate(bookingDate)} · {currentLabel}</strong></span>
       </div>
 
-      <span className="time-update-group-label">Running late — push it later</span>
-      <div className="time-offset-grid">
-        {LATER_OFFSETS.map(value => (
-          <button
-            type="button"
-            key={value}
-            className={cx('time-offset-chip', effectiveOffset === value && 'active')}
-            onClick={() => pick(value)}
-            disabled={saving}
-          >+{value} min</button>
-        ))}
+      <div className="time-mode-switch" role="tablist" aria-label="How to set the new time">
+        <button type="button" role="tab" aria-selected={mode === 'offset'} className={cx(mode === 'offset' && 'active')} onClick={() => setMode('offset')} disabled={saving}>Shift by minutes</button>
+        <button type="button" role="tab" aria-selected={mode === 'exact'} className={cx(mode === 'exact' && 'active')} onClick={() => setMode('exact')} disabled={saving}>Pick exact time</button>
       </div>
 
-      <span className="time-update-group-label">Free earlier — bring it forward</span>
-      <div className="time-offset-grid">
-        {EARLIER_OFFSETS.map(value => (
-          <button
-            type="button"
-            key={value}
-            className={cx('time-offset-chip', 'earlier', effectiveOffset === value && 'active')}
-            onClick={() => pick(value)}
+      {mode === 'offset' ? (
+        <>
+          <span className="time-update-group-label">Running late — push it later</span>
+          <div className="time-offset-grid">
+            {LATER_OFFSETS.map(value => (
+              <button
+                type="button"
+                key={value}
+                className={cx('time-offset-chip', effectiveOffset === value && 'active')}
+                onClick={() => pickOffset(value)}
+                disabled={saving}
+              >+{value} min</button>
+            ))}
+          </div>
+
+          <span className="time-update-group-label">Free earlier — bring it forward</span>
+          <div className="time-offset-grid">
+            {EARLIER_OFFSETS.map(value => (
+              <button
+                type="button"
+                key={value}
+                className={cx('time-offset-chip', 'earlier', effectiveOffset === value && 'active')}
+                onClick={() => pickOffset(value)}
+                disabled={saving}
+              >{value} min</button>
+            ))}
+          </div>
+
+          <Field label="Or enter minutes" hint={`Negative for earlier, e.g. -25. Between ${MIN_OFFSET_MINUTES} and ${MAX_OFFSET_MINUTES}.`} error={customInvalid ? 'Enter a whole number of minutes, not zero, within the allowed range.' : ''}>
+            <input
+              type="number"
+              inputMode="numeric"
+              step="5"
+              value={custom}
+              onChange={event => { setCustom(event.target.value); setOffset(null); setMode('offset'); }}
+              placeholder="e.g. 25 or -15"
+              disabled={saving}
+            />
+          </Field>
+        </>
+      ) : (
+        <Field
+          label="New start time"
+          hint="Choose the time this customer should arrive. My Naai works out the difference for you."
+          error={exactOutOfRange ? `That is more than ${MAX_OFFSET_MINUTES} minutes away from the booked time. Use a smaller change, or rebook the appointment.` : ''}
+        >
+          <input
+            type="time"
+            value={exactTime}
+            onChange={event => { setExactTime(event.target.value); setMode('exact'); }}
             disabled={saving}
-          >{value} min</button>
-        ))}
-      </div>
+          />
+        </Field>
+      )}
 
-      <Field label="Or enter minutes" hint={`Negative for earlier, e.g. -25. Between ${MIN_OFFSET_MINUTES} and ${MAX_OFFSET_MINUTES}.`} error={customInvalid ? 'Enter a whole number of minutes, not zero, within the allowed range.' : ''}>
-        <input
-          type="number"
-          inputMode="numeric"
-          step="5"
-          value={custom}
-          onChange={event => { setCustom(event.target.value); setOffset(null); }}
-          placeholder="e.g. 25 or -15"
-          disabled={saving}
-        />
-      </Field>
-
-      <Field label="Message to the customer" hint="Optional · shown with the notification">
-        <input
+      <Field label="Note to the customer" hint="Optional · sent with the notification, max 200 characters">
+        <textarea
+          className="time-update-note"
+          rows="2"
           value={reason}
-          onChange={event => setReason(event.target.value)}
-          placeholder="e.g. Previous service is running long"
-          maxLength={120}
+          onChange={event => setReason(event.target.value.slice(0, 200))}
+          placeholder="e.g. Previous service is running long — sorry for the wait!"
+          maxLength={200}
           disabled={saving}
         />
       </Field>
@@ -220,7 +267,9 @@ function UpdateTimeModal({ booking, open, onClose, onSubmit, saving }) {
           onClick={() => onSubmit({ preview, reason: reason.trim() })}
         >Update &amp; notify <Check size={17} /></Button>
       </div>
-      {!preview && !customInvalid && <p className="time-update-hint">Choose a new time to continue.</p>}
+      {!preview && !customInvalid && !exactOutOfRange && (
+        <p className="time-update-hint">{exactUnchanged ? 'That is the current booking time — pick a different one.' : 'Choose a new time to continue.'}</p>
+      )}
     </Modal>
   );
 }

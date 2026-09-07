@@ -1175,6 +1175,15 @@ img.image-fallback-tile {
 .time-update-current > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .time-update-current small { color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 .time-update-current strong { color: var(--white); font-size: 13px; }
+/* Segmented switch between the two ways of setting a new time. */
+.time-mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 0 0 14px; padding: 4px; border: 1px solid var(--line); border-radius: 13px; background: var(--card); }
+.time-mode-switch button { min-height: 38px; border: 0; border-radius: 10px; color: var(--muted-light); background: transparent; font-size: 12.5px; font-weight: 700; transition: background .18s, color .18s; }
+.time-mode-switch button:hover:not(:disabled) { color: var(--white); }
+.time-mode-switch button.active { color: #111; background: var(--gold); }
+.time-mode-switch button:disabled { opacity: .5; }
+
+.time-update-note { resize: vertical; min-height: 58px; line-height: 1.5; }
+
 .time-update-group-label { display: block; margin: 0 0 8px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
 .time-offset-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(78px, 1fr)); gap: 7px; margin-bottom: 16px; }
 .time-offset-chip { min-height: 42px; padding: 0 8px; border: 1px solid var(--line); border-radius: 11px; color: var(--white); background: var(--card); font-size: 12.5px; font-weight: 700; transition: border-color .18s, background .18s, color .18s; }

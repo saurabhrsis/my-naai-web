@@ -200,12 +200,22 @@ The web wrapper is `api.salonDelayBooking()`. The server-side `owner-action` imp
 
 The booking-request screen only exists during the 60-second response window. Once a booking is accepted it lives in the **Customer queue**, and until now a salon that fell behind had no way to tell the customer. Every queue card therefore carries an **Update time** action next to **Done**.
 
-The modal (`UpdateTimeModal` in `src/components/SalonScreens.jsx`) works in **signed minutes** — negative means *earlier* — so one control covers both directions:
+The modal (`UpdateTimeModal` in `src/components/SalonScreens.jsx`) works in **signed minutes** — negative means *earlier* — so one control covers both directions. A switch at the top picks how the salon expresses the new time, because the two situations are genuinely different: *"I'm about twenty minutes behind"* is an offset, while *"the chair frees up at quarter past seven"* is a clock time, and making the salon convert one into the other in its head is where mistakes come from.
+
+**Shift by minutes**
 
 - **Running late — push it later**: +10 / +20 / +30 / +45 / +60 / +90.
 - **Free earlier — bring it forward**: −10 / −15 / −20 / −30. Deliberately shorter than the delay options: a customer still has to travel, so pulling them in by an hour is not a reasonable one-tap action.
 - **Or enter minutes**: any whole number between −120 and +240 for anything else.
-- **Message to the customer**: an optional free-text note (e.g. *"Previous service is running long"*) sent as `reason`.
+
+**Pick exact time**
+
+- A native time input, pre-filled with the booking's current time so the salon nudges from where it already is rather than from midnight.
+- The offset is *derived* from the picked time by `offsetForTargetTime()`, so a later pick sends a positive value and an earlier pick a negative one — the rest of the pipeline never learns which control was used.
+- A late-night salon that picks `00:15` for a `23:45` booking means *thirty minutes later*, not twenty-three-and-a-half hours earlier, so a target more than 12 hours behind the booking is read as the next day. Beyond that window the literal reading wins, so an ordinary earlier pick still moves backwards.
+- Picking the time it is already booked for is not an error, just a no-op: the send button stays disabled with *"That is the current booking time"*.
+
+**Note to the customer** — an optional 200-character message (e.g. *"Previous service is running long"*) sent as `reason`, shown in both directions.
 
 **Proper timing is the point of the feature**, so the salon always sees the resolved wall-clock time before sending — `6:30 PM → 6:50 PM · 20 minutes later` — not just an offset. The maths is in `src/lib/bookingTime.js` (plain, unit-tested functions, no React):
 
@@ -230,7 +240,9 @@ POST /api/bookingRequest/owner-action/{bookingRequestId}/
 
 `delayMinutes` stays the mobile contract's stringified number; the extra fields are additive and are ignored by a backend that only reads `action` + `delayMinutes`. The queue row updates optimistically, rolls back on failure, and reloads so the Today/Tomorrow grouping is right after a day cross. Requests are addressed by `bookingRequestId`, falling back to `bookingId` for queue payloads that only carry the latter.
 
-**Backend note.** For an *earlier* proposal to read correctly on the customer's phone, the notification copy should respect the sign of `delayMinutes` (and pass `proposedTime` through). The web `DelayRequestScreen` already does: a negative offset renders *"Your salon can see you earlier"* with an **Earlier time available** heading, because telling a customer their booking "needs a little more time" when it has actually been pulled forward would make them arrive late.
+**Backend.** A ready-to-paste Express + Mongoose implementation of this endpoint lives in [`backend/`](../backend/README.md) — schema fields, the wall-clock maths, direction-aware FCM copy and both handlers, with 20 tests (`node --test backend/tests/*.test.js`). It is not part of the web build; copy it into the API repo. Two things it fixes that matter here: the notification copy respects the **sign** of `delayMinutes` (a negative offset reads *"Sharp Cuts can see you 15 minutes earlier"*, never *"delayed by -15 minutes"*), and when `newBookingTime` is present the server **recomputes** the offset from it rather than trusting the client's arithmetic. The proposed time is stored separately and only becomes the booked time once the customer accepts, so a customer who never replies keeps the slot they originally agreed to.
+
+The web `DelayRequestScreen` already matches that copy: a negative offset renders *"Your salon can see you earlier"* with an **Earlier time available** heading, because telling a customer their booking "needs a little more time" when it has actually been pulled forward would make them arrive late.
 
 The customer can receive the delay notification in the background or while the portal is open:
 
@@ -397,7 +409,8 @@ request runs a 60-second countdown that a second dialog would eat into.
 | `src/lib/planDetails.js` | Plan catalog and active-subscription normalization |
 | `src/lib/devtoolsShield.js` | Swallows the known Chrome DevTools Performance-panel crash (also inlined in `index.html` so it runs before the bundle) |
 | `src/lib/razorpay.js` | Checkout loader, amount rules, payment outcomes, UPI hand-off tracking and pending-payment recovery |
-| `src/lib/bookingTime.js` | Signed-offset time maths for the queue time update: local wall-clock parsing, hour/date rollover, past-time and day-cross detection, human offset labels |
+| `src/lib/bookingTime.js` | Signed-offset time maths for the queue time update: local wall-clock parsing, hour/date rollover, past-time and day-cross detection, exact-time→offset derivation, human offset labels |
+| `backend/` | Standalone Express + Mongoose API for the time change (model fields, clock maths, FCM copy, controllers, routes, tests). Copied into the API repo, not built with the web app |
 | `src/components/SubscriptionScreen.jsx` | Plan picker, Razorpay flow, cancellation/failure copy and payment recovery |
 | `src/components/ConfirmDialog.jsx` | Promise-based in-app confirmation sheet that replaces every native browser dialog |
 | `src/lib/push.js` | Firebase initialization, permission/token flow and notification route mapping |

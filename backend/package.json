@@ -1,0 +1,9 @@
+{
+  "name": "mynaai-booking-time-api",
+  "private": true,
+  "type": "commonjs",
+  "description": "Standalone Express + Mongoose API for the booking time-change feature. Not part of the web app build — copy these files into your backend.",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  }
+}

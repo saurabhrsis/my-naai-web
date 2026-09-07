@@ -32,6 +32,17 @@ const booking = {
 
 const flush = async () => { await act(async () => { await Promise.resolve(); }); };
 
+// React tracks the DOM value itself, so a bare `node.value = x` is swallowed.
+// Go through the native setter before dispatching, as React's own test utils do.
+function setNativeValue(node, value) {
+  const proto = Object.getPrototypeOf(node);
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+  if (setter) setter.call(node, value); else node.value = value;
+  node.dispatchEvent(new Event('input', { bubbles: true }));
+}
+const setTimeValue = setNativeValue;
+const setTextValue = setNativeValue;
+
 function byText(label, root = document.body) {
   return Array.from(root.querySelectorAll('button')).find(node => node.textContent.trim().replace(/\s+/g, ' ') === label);
 }
@@ -147,6 +158,88 @@ describe('salon queue — update appointment time', () => {
     // (ICU renders the meridiem as 'pm' or 'PM' depending on the build.)
     expect(container.textContent.toLowerCase()).toContain('06:30 pm');
     expect(container.textContent.toLowerCase()).not.toContain('07:00 pm →');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('lets the salon pick an exact clock time instead of counting minutes', async () => {
+    const { container, root } = await renderQueue();
+    await act(async () => { byText('Update time', container).click(); });
+    await flush();
+
+    await act(async () => { byText('Pick exact time').click(); });
+    await flush();
+
+    const picker = document.querySelector('input[type="time"]');
+    expect(picker).toBeTruthy();
+    // Defaults to the booking's own time, so the salon nudges from where it is.
+    expect(picker.value).toBe('18:30');
+
+    await act(async () => { setTimeValue(picker, '19:15'); });
+    await flush();
+
+    expect(document.body.textContent).toContain('45 minutes later');
+
+    await act(async () => { byText('Update & notify').click(); });
+    await flush();
+    await flush();
+
+    const [, payload] = salonUpdateBookingTime.mock.calls[0];
+    expect(payload.offsetMinutes).toBe(45);
+    expect(payload.bookingTime).toBe('19:15:00');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('reads an exact time before the booking as moving it earlier', async () => {
+    const { container, root } = await renderQueue();
+    await act(async () => { byText('Update time', container).click(); });
+    await flush();
+    await act(async () => { byText('Pick exact time').click(); });
+    await flush();
+    await act(async () => { setTimeValue(document.querySelector('input[type="time"]'), '18:05'); });
+    await flush();
+
+    expect(document.body.textContent).toContain('25 minutes earlier');
+
+    await act(async () => { byText('Update & notify').click(); });
+    await flush();
+    await flush();
+
+    const [, payload] = salonUpdateBookingTime.mock.calls[0];
+    expect(payload.offsetMinutes).toBe(-25);
+    expect(payload.bookingTime).toBe('18:05:00');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('will not send an exact time identical to the current booking', async () => {
+    const { container, root } = await renderQueue();
+    await act(async () => { byText('Update time', container).click(); });
+    await flush();
+    await act(async () => { byText('Pick exact time').click(); });
+    await flush();
+
+    expect(document.body.textContent).toContain('That is the current booking time');
+    expect(byText('Update & notify').disabled).toBe(true);
+    expect(salonUpdateBookingTime).not.toHaveBeenCalled();
+    await act(async () => { root.unmount(); });
+  });
+
+  it('sends the note along with the new time', async () => {
+    const { container, root } = await renderQueue();
+    await act(async () => { byText('Update time', container).click(); });
+    await flush();
+    await act(async () => { byText('+20 min').click(); });
+    await flush();
+
+    const note = document.querySelector('textarea.time-update-note');
+    expect(note).toBeTruthy();
+    await act(async () => { setTextValue(note, '  Previous cut running long  '); });
+    await flush();
+    await act(async () => { byText('Update & notify').click(); });
+    await flush();
+    await flush();
+
+    const [, payload] = salonUpdateBookingTime.mock.calls[0];
+    expect(payload.reason).toBe('Previous cut running long');
     await act(async () => { root.unmount(); });
   });
 

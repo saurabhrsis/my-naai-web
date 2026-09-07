@@ -77,6 +77,44 @@ export function shiftBookingTime(date, time, offsetMinutes) {
   };
 }
 
+// The inverse of shiftBookingTime: the salon picks an exact clock time and we
+// derive the offset. A time picker is the natural control when the salon
+// already knows when the chair frees up ("I can take them at 7:15"), whereas
+// counting minutes in your head is not.
+//
+// `targetTime` is an 'HH:mm' value from an <input type="time">. `targetDate` is
+// optional and defaults to the booking's own date.
+//
+// Midnight rule: with no explicit date, a target that lands more than 12 hours
+// *before* the booking is read as the next day. A salon closing at 00:30 that
+// picks 00:15 for a 23:45 booking means fifteen minutes later, not
+// twenty-three-and-a-half hours earlier. Beyond that window the literal reading
+// wins, so an ordinary "earlier" pick still moves backwards.
+export function offsetForTargetTime(bookingDate, bookingTime, targetTime, targetDate = '') {
+  const start = parseBookingDateTime(bookingDate, bookingTime);
+  if (!start) return null;
+  const explicitDate = String(targetDate || '').trim();
+  const target = parseBookingDateTime(explicitDate || toApiDate(start), targetTime);
+  if (!target) return null;
+  let minutes = Math.round((target.getTime() - start.getTime()) / 60000);
+  if (!explicitDate && minutes < -12 * 60) minutes += 24 * 60;
+  return minutes;
+}
+
+// Convenience wrapper: pick a clock time, get the same result shape as
+// shiftBookingTime so the UI has one preview path for both controls.
+export function shiftBookingToTime(bookingDate, bookingTime, targetTime, targetDate = '') {
+  const minutes = offsetForTargetTime(bookingDate, bookingTime, targetTime, targetDate);
+  if (minutes === null) return null;
+  return shiftBookingTime(bookingDate, bookingTime, minutes);
+}
+
+// 'HH:mm' for an <input type="time">, which does not accept seconds.
+export function toInputTime(value) {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) return '';
+  return `${pad(value.getHours())}:${pad(value.getMinutes())}`;
+}
+
 // "20 minutes later" / "15 minutes earlier" — spelled out, because "+20" and
 // "-20" are easy to misread on a phone in a busy salon.
 export function describeOffset(offsetMinutes) {

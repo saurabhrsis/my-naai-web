@@ -3,8 +3,11 @@ import {
   describeOffset,
   formatClockTime,
   isValidOffset,
+  offsetForTargetTime,
   parseBookingDateTime,
   shiftBookingTime,
+  shiftBookingToTime,
+  toInputTime,
   toApiDate,
   toApiTime,
 } from './bookingTime';
@@ -109,5 +112,59 @@ describe('isValidOffset', () => {
     expect(isValidOffset(1000)).toBe(false);
     expect(isValidOffset(-600)).toBe(false);
     expect(isValidOffset('abc')).toBe(false);
+  });
+});
+
+describe('offsetForTargetTime (exact clock-time picker)', () => {
+  it('derives a positive offset for a later time', () => {
+    expect(offsetForTargetTime('2026-09-07', '18:30', '19:15')).toBe(45);
+  });
+
+  it('derives a negative offset for an earlier time', () => {
+    expect(offsetForTargetTime('2026-09-07', '18:30', '18:05')).toBe(-25);
+  });
+
+  it('reads a small hours target after a late booking as the next day', () => {
+    // A salon open past midnight picking 00:15 for a 23:45 booking means
+    // "30 minutes later", not "23.5 hours earlier".
+    expect(offsetForTargetTime('2026-09-07', '23:45', '00:15')).toBe(30);
+  });
+
+  it('still treats an ordinary earlier pick as earlier', () => {
+    expect(offsetForTargetTime('2026-09-07', '18:30', '10:00')).toBe(-510);
+  });
+
+  it('honours an explicit target date instead of guessing', () => {
+    expect(offsetForTargetTime('2026-09-07', '23:45', '00:15', '2026-09-08')).toBe(30);
+    expect(offsetForTargetTime('2026-09-07', '10:00', '09:00', '2026-09-07')).toBe(-60);
+  });
+
+  it('returns null for unusable input', () => {
+    expect(offsetForTargetTime('2026-09-07', '18:30', '')).toBeNull();
+    expect(offsetForTargetTime('2026-09-07', '', '19:00')).toBeNull();
+  });
+});
+
+describe('shiftBookingToTime', () => {
+  it('produces the same preview shape as an offset shift', () => {
+    const byTime = shiftBookingToTime('2026-09-07', '18:30', '19:15');
+    const byOffset = shiftBookingTime('2026-09-07', '18:30', 45);
+    expect(byTime.apiTime).toBe(byOffset.apiTime);
+    expect(byTime.apiDate).toBe(byOffset.apiDate);
+    expect(byTime.offsetMinutes).toBe(45);
+  });
+
+  it('carries the day cross through to the API date', () => {
+    const result = shiftBookingToTime('2026-09-07', '23:45', '00:15');
+    expect(result.apiTime).toBe('00:15:00');
+    expect(result.apiDate).toBe('2026-09-08');
+    expect(result.crossesDay).toBe(true);
+  });
+});
+
+describe('toInputTime', () => {
+  it('renders HH:mm for an input type=time', () => {
+    expect(toInputTime(parseBookingDateTime('2026-09-07', '09:05'))).toBe('09:05');
+    expect(toInputTime(null)).toBe('');
   });
 });
