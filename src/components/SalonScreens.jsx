@@ -36,6 +36,15 @@ import { api, getFileUrl } from '../lib/api';
 import { closeNotification } from '../lib/push';
 import { DEFAULT_SERVICES } from '../lib/defaultServices';
 import { normalizePlanDetails } from '../lib/planDetails';
+import {
+  EARLIER_OFFSETS,
+  LATER_OFFSETS,
+  MAX_OFFSET_MINUTES,
+  MIN_OFFSET_MINUTES,
+  describeOffset,
+  isValidOffset,
+  shiftBookingTime,
+} from '../lib/bookingTime';
 import { STATE_OPTIONS } from '../lib/stateOptions';
 import { SALON_ABOUT_CONTENT, SALON_FAQ_CONTENT, SALON_TERMS_CONTENT } from '../lib/salonContent';
 import { NotificationDiagnostics } from './NotificationDiagnostics';
@@ -97,11 +106,132 @@ function isSameDate(value, offset = 0) {
 
 
 
+// Lets a salon move a queued appointment earlier or later and notify the
+// customer, without leaving the queue. The salon reads a real clock time
+// ("6:50 PM"), not just an offset, because that is what it will say to the
+// customer on the phone and what the customer sees in the notification.
+function UpdateTimeModal({ booking, open, onClose, onSubmit, saving }) {
+  const [offset, setOffset] = useState(null);
+  const [custom, setCustom] = useState('');
+  const [reason, setReason] = useState('');
+
+  // Reset whenever a different booking is opened, so the previous customer's
+  // choice can never be sent for this one.
+  useEffect(() => {
+    if (!open) return;
+    setOffset(null);
+    setCustom('');
+    setReason('');
+  }, [open, booking?.bookingId]);
+
+  const bookingDate = booking?.bookingDate;
+  const bookingTime = booking?.bookingTime;
+  const effectiveOffset = custom.trim() !== '' ? Number(custom) : offset;
+  const preview = isValidOffset(effectiveOffset) ? shiftBookingTime(bookingDate, bookingTime, effectiveOffset) : null;
+  const currentLabel = formatTime(bookingTime);
+  const customInvalid = custom.trim() !== '' && !isValidOffset(Number(custom));
+  const blocked = Boolean(preview?.inPast);
+  const canSend = Boolean(preview) && !blocked && !saving;
+
+  const pick = value => {
+    setOffset(value);
+    setCustom('');
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Update appointment time">
+      <p className="modal-lede">
+        Running late, or free earlier than expected? Choose the new time for <strong>{booking?.userName || 'this customer'}</strong> and My Naai will notify them straight away.
+      </p>
+
+      <div className="time-update-current">
+        <Clock3 size={16} />
+        <span><small>Booked for</small><strong>{formatDate(bookingDate)} · {currentLabel}</strong></span>
+      </div>
+
+      <span className="time-update-group-label">Running late — push it later</span>
+      <div className="time-offset-grid">
+        {LATER_OFFSETS.map(value => (
+          <button
+            type="button"
+            key={value}
+            className={cx('time-offset-chip', effectiveOffset === value && 'active')}
+            onClick={() => pick(value)}
+            disabled={saving}
+          >+{value} min</button>
+        ))}
+      </div>
+
+      <span className="time-update-group-label">Free earlier — bring it forward</span>
+      <div className="time-offset-grid">
+        {EARLIER_OFFSETS.map(value => (
+          <button
+            type="button"
+            key={value}
+            className={cx('time-offset-chip', 'earlier', effectiveOffset === value && 'active')}
+            onClick={() => pick(value)}
+            disabled={saving}
+          >{value} min</button>
+        ))}
+      </div>
+
+      <Field label="Or enter minutes" hint={`Negative for earlier, e.g. -25. Between ${MIN_OFFSET_MINUTES} and ${MAX_OFFSET_MINUTES}.`} error={customInvalid ? 'Enter a whole number of minutes, not zero, within the allowed range.' : ''}>
+        <input
+          type="number"
+          inputMode="numeric"
+          step="5"
+          value={custom}
+          onChange={event => { setCustom(event.target.value); setOffset(null); }}
+          placeholder="e.g. 25 or -15"
+          disabled={saving}
+        />
+      </Field>
+
+      <Field label="Message to the customer" hint="Optional · shown with the notification">
+        <input
+          value={reason}
+          onChange={event => setReason(event.target.value)}
+          placeholder="e.g. Previous service is running long"
+          maxLength={120}
+          disabled={saving}
+        />
+      </Field>
+
+      {preview && (
+        <div className={cx('time-update-preview', blocked && 'blocked')}>
+          <span className="time-update-preview-mark">{blocked ? <CircleAlert size={17} /> : <Clock3 size={17} />}</span>
+          <div>
+            <strong>{preview.originalLabel} → {preview.updatedLabel}</strong>
+            <small>
+              {describeOffset(preview.offsetMinutes)}
+              {preview.crossesDay ? ` · moves to ${formatDate(preview.apiDate)}` : ''}
+            </small>
+            {blocked && <small className="time-update-warning">That time has already passed. Pick a later time — a customer cannot be notified about a slot in the past.</small>}
+          </div>
+        </div>
+      )}
+
+      <div className="form-actions">
+        <Button type="button" variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
+        <Button
+          type="button"
+          loading={saving}
+          disabled={!canSend}
+          onClick={() => onSubmit({ preview, reason: reason.trim() })}
+        >Update &amp; notify <Check size={17} /></Button>
+      </div>
+      {!preview && !customInvalid && <p className="time-update-hint">Choose a new time to continue.</p>}
+    </Modal>
+  );
+}
+
 export function SalonQueueScreen({ session, navigate, notify }) {
   const confirm = useConfirm();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [doneId, setDoneId] = useState('');
+  const [timeTarget, setTimeTarget] = useState(null);
+  const [savingTime, setSavingTime] = useState(false);
   const load = useCallback(async (isRefresh = false) => {
     if (!isRefresh) setLoading(true);
     try { const response = await api.customerList({ salonId: session.userId, page: 1 }); setItems(getList(response, ['bookings', 'customers'])); } catch (error) { notify?.('error', getErrorMessage(error, 'Unable to load your queue.')); } finally { setLoading(false); }
@@ -126,8 +256,50 @@ export function SalonQueueScreen({ session, navigate, notify }) {
     setDoneId(bookingId);
     try { const response = await api.bookingDone({ salonId: session.userId, bookingId }); if (response?.status && response.status !== 'SUCCESS') throw new Error(response.message || 'Could not complete service'); setItems(current => current.filter(item => item.bookingId !== bookingId)); notify?.('success', 'Service marked as completed.'); } catch (error) { notify?.('error', getErrorMessage(error, 'Could not complete service.')); } finally { setDoneId(''); }
   };
+  // Sends the new time and lets the backend dispatch the customer notification
+  // through the stored deviceToken — the same owner-action contract the booking
+  // request screen and the mobile app use, so there is one delay pipeline, not
+  // two. The queue row is updated optimistically and rolled back on failure.
+  const submitTimeUpdate = async ({ preview, reason }) => {
+    const booking = timeTarget;
+    // The request id is what owner-action addresses; some queue payloads only
+    // carry bookingId, so fall back rather than posting to `/undefined/`.
+    const requestId = booking?.bookingRequestId || booking?.requestId || booking?.bookingId;
+    if (!booking || !preview || !requestId) {
+      notify?.('error', 'This booking cannot be updated. Refresh the queue and try again.');
+      return;
+    }
+    setSavingTime(true);
+    const previous = items;
+    try {
+      const response = await api.salonUpdateBookingTime(requestId, {
+        offsetMinutes: preview.offsetMinutes,
+        proposedTime: preview.updatedLabel,
+        bookingDate: preview.apiDate,
+        bookingTime: preview.apiTime,
+        reason,
+      });
+      if (response?.status && response.status !== 'SUCCESS') throw new Error(response.message || 'Could not update the appointment time.');
+      setItems(current => current.map(item => (item.bookingId === booking.bookingId
+        ? { ...item, bookingTime: preview.apiTime, bookingDate: preview.apiDate }
+        : item)));
+      setTimeTarget(null);
+      notify?.('success', `${booking.userName || 'Customer'} notified — new time ${preview.updatedLabel} (${describeOffset(preview.offsetMinutes)}).`);
+      // Re-read the queue so the row reflects whatever the server actually
+      // stored, and so the group (Today/Tomorrow) is right after a day cross.
+      load(true);
+    } catch (error) {
+      setItems(previous);
+      notify?.('error', getErrorMessage(error, 'Could not update the appointment time.'));
+    } finally {
+      setSavingTime(false);
+    }
+  };
+
   const grouped = [{ label: 'Today', key: 0, items: items.filter(item => isSameDate(item.bookingDate, 0)) }, { label: 'Tomorrow', key: 1, items: items.filter(item => isSameDate(item.bookingDate, 1)) }, { label: 'Day after tomorrow', key: 2, items: items.filter(item => !isSameDate(item.bookingDate, 0) && !isSameDate(item.bookingDate, 1)) }].filter(group => group.items.length);
-  return <div className="screen salon-queue-screen"><PageHeader title="Customer queue" subtitle="Keep every chair moving smoothly." action={<div className="page-actions"><button className="refresh-icon-button" onClick={load} aria-label="Refresh queue"><Zap size={17} /></button></div>} />{loading ? <div className="list-stack">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} className="queue-skeleton" />)}</div> : grouped.length ? <div className="queue-groups">{grouped.map(group => <section className="queue-group" key={group.label}><div className="queue-group-heading"><h2>{group.label}</h2><span>{group.items.length} {group.items.length === 1 ? 'booking' : 'bookings'}</span></div>{group.items.map(item => <article className="queue-card" key={item.bookingId}><div className="queue-main"><div className="queue-card-heading"><div><h3>{item.userName || 'Guest'}</h3><span>{item.bookingDate ? `${formatDate(item.bookingDate)} · ${formatTime(item.bookingTime)}` : 'Appointment time pending'}</span></div><Button size="small" onClick={() => markDone(item.bookingId)} loading={doneId === item.bookingId}>Done</Button></div><div className="queue-meta"><span><Scissors size={14} /> {item.serviceNames || item.services || 'Salon service'}</span>{item.barberName && <span><UserRound size={14} /> {item.barberName}</span>}{item.userPhone && item.userPhone !== '0000000000' && <a href={`tel:${item.userPhone}`}><Phone size={14} /> {item.userPhone}</a>}</div></div></article>)}</section>)}</div> : <EmptyState icon={UsersRound} title="No customers in queue" message="New booking requests will appear here." />}</div>;
+  return <div className="screen salon-queue-screen"><PageHeader title="Customer queue" subtitle="Keep every chair moving smoothly." action={<div className="page-actions"><button className="refresh-icon-button" onClick={load} aria-label="Refresh queue"><Zap size={17} /></button></div>} />{loading ? <div className="list-stack">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} className="queue-skeleton" />)}</div> : grouped.length ? <div className="queue-groups">{grouped.map(group => <section className="queue-group" key={group.label}><div className="queue-group-heading"><h2>{group.label}</h2><span>{group.items.length} {group.items.length === 1 ? 'booking' : 'bookings'}</span></div>{group.items.map(item => <article className="queue-card" key={item.bookingId}><div className="queue-main"><div className="queue-card-heading"><div><h3>{item.userName || 'Guest'}</h3><span>{item.bookingDate ? `${formatDate(item.bookingDate)} · ${formatTime(item.bookingTime)}` : 'Appointment time pending'}</span></div><div className="queue-card-actions"><Button size="small" variant="secondary" onClick={() => setTimeTarget(item)} disabled={!item.bookingTime}><Clock3 size={15} /> Update time</Button><Button size="small" onClick={() => markDone(item.bookingId)} loading={doneId === item.bookingId}>Done</Button></div></div><div className="queue-meta"><span><Scissors size={14} /> {item.serviceNames || item.services || 'Salon service'}</span>{item.barberName && <span><UserRound size={14} /> {item.barberName}</span>}{item.userPhone && item.userPhone !== '0000000000' && <a href={`tel:${item.userPhone}`}><Phone size={14} /> {item.userPhone}</a>}</div></div></article>)}</section>)}</div> : <EmptyState icon={UsersRound} title="No customers in queue" message="New booking requests will appear here." />}
+    <UpdateTimeModal booking={timeTarget} open={Boolean(timeTarget)} onClose={() => { if (!savingTime) setTimeTarget(null); }} onSubmit={submitTimeUpdate} saving={savingTime} />
+  </div>;
 }
 
 export function SalonHistoryScreen({ notify }) {

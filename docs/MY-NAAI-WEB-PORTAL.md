@@ -196,10 +196,46 @@ Authorization: Bearer <salon-access-token>
 
 The web wrapper is `api.salonDelayBooking()`. The server-side `owner-action` implementation is responsible for saving the new delay state and sending the customer notification through the stored `deviceToken`, exactly like the mobile owner-action flow. The browser does not contain Firebase server credentials and does not send FCM messages directly.
 
+### Updating the time from the Customer queue
+
+The booking-request screen only exists during the 60-second response window. Once a booking is accepted it lives in the **Customer queue**, and until now a salon that fell behind had no way to tell the customer. Every queue card therefore carries an **Update time** action next to **Done**.
+
+The modal (`UpdateTimeModal` in `src/components/SalonScreens.jsx`) works in **signed minutes** — negative means *earlier* — so one control covers both directions:
+
+- **Running late — push it later**: +10 / +20 / +30 / +45 / +60 / +90.
+- **Free earlier — bring it forward**: −10 / −15 / −20 / −30. Deliberately shorter than the delay options: a customer still has to travel, so pulling them in by an hour is not a reasonable one-tap action.
+- **Or enter minutes**: any whole number between −120 and +240 for anything else.
+- **Message to the customer**: an optional free-text note (e.g. *"Previous service is running long"*) sent as `reason`.
+
+**Proper timing is the point of the feature**, so the salon always sees the resolved wall-clock time before sending — `6:30 PM → 6:50 PM · 20 minutes later` — not just an offset. The maths is in `src/lib/bookingTime.js` (plain, unit-tested functions, no React):
+
+- Booking values are parsed as **local wall-clock** time. `new Date('2026-09-07T18:00:00Z')` would shift an Indian salon's 6 PM by 5h30m; a salon thinks in its own clock.
+- Hour and date rollover is handled, and a shift that crosses midnight is called out (`moves to 08 Sept 2026`) instead of silently moving the appointment to another day.
+- A new time that lands **in the past** is blocked with an explanation and the send button is disabled — notifying a customer about a slot that has already gone is worse than not notifying them.
+
+Sending calls `api.salonUpdateBookingTime()`, which posts to the **same `owner-action` endpoint with the same `DELAY` action** as the mobile app, so there is one delay pipeline rather than two, and the backend keeps dispatching the customer notification:
+
+```http
+POST /api/bookingRequest/owner-action/{bookingRequestId}/
+
+{
+  "action": "DELAY",
+  "delayMinutes": "-15",
+  "proposedTime": "6:15 PM",
+  "newBookingDate": "2026-09-07",
+  "newBookingTime": "18:15:00",
+  "reason": "Chair free early"
+}
+```
+
+`delayMinutes` stays the mobile contract's stringified number; the extra fields are additive and are ignored by a backend that only reads `action` + `delayMinutes`. The queue row updates optimistically, rolls back on failure, and reloads so the Today/Tomorrow grouping is right after a day cross. Requests are addressed by `bookingRequestId`, falling back to `bookingId` for queue payloads that only carry the latter.
+
+**Backend note.** For an *earlier* proposal to read correctly on the customer's phone, the notification copy should respect the sign of `delayMinutes` (and pass `proposedTime` through). The web `DelayRequestScreen` already does: a negative offset renders *"Your salon can see you earlier"* with an **Earlier time available** heading, because telling a customer their booking "needs a little more time" when it has actually been pulled forward would make them arrive late.
+
 The customer can receive the delay notification in the background or while the portal is open:
 
-1. A notification click opens `#/delay?bookingRequestId=...&delayMinutes=...&proposedTime=...`.
-2. The `DelayRequestScreen` lets the customer accept or reject the proposed delay.
+1. A notification click opens `#/delay?bookingRequestId=...&delayMinutes=...&proposedTime=...` (optionally `&reason=...`).
+2. The `DelayRequestScreen` lets the customer accept or reject the proposed time. It reads the **sign** of `delayMinutes`, so an earlier offer is worded as one, spells the shift out in words ("15 minutes earlier" — `+20`/`-20` is easy to misread on a phone) and shows the salon's optional message.
 3. The response calls `POST /api/bookingRequest/customer-delay-response/{bookingRequestId}/` with `{ "action": "ACCEPT" }` or `{ "action": "REJECT" }`.
 4. The customer is returned to `#/bookings`.
 
@@ -361,6 +397,7 @@ request runs a 60-second countdown that a second dialog would eat into.
 | `src/lib/planDetails.js` | Plan catalog and active-subscription normalization |
 | `src/lib/devtoolsShield.js` | Swallows the known Chrome DevTools Performance-panel crash (also inlined in `index.html` so it runs before the bundle) |
 | `src/lib/razorpay.js` | Checkout loader, amount rules, payment outcomes, UPI hand-off tracking and pending-payment recovery |
+| `src/lib/bookingTime.js` | Signed-offset time maths for the queue time update: local wall-clock parsing, hour/date rollover, past-time and day-cross detection, human offset labels |
 | `src/components/SubscriptionScreen.jsx` | Plan picker, Razorpay flow, cancellation/failure copy and payment recovery |
 | `src/components/ConfirmDialog.jsx` | Promise-based in-app confirmation sheet that replaces every native browser dialog |
 | `src/lib/push.js` | Firebase initialization, permission/token flow and notification route mapping |

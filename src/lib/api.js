@@ -266,6 +266,30 @@ export const api = {
   bookingRequestOwnerAction: (bookingRequestId, payload) => post(`/api/bookingRequest/owner-action/${bookingRequestId}/`, payload),
   // The mobile owner-action contract also dispatches the customer delay notification.
   salonDelayBooking: (bookingRequestId, delayMinutes) => post(`/api/bookingRequest/owner-action/${bookingRequestId}/`, { action: 'DELAY', delayMinutes: String(delayMinutes) }),
+  // Queue-side time update. Same owner-action endpoint and the same DELAY
+  // action the mobile app uses (so the backend keeps dispatching the customer
+  // notification through the stored deviceToken), with the extra fields a
+  // queue update needs:
+  //   delayMinutes  — signed: negative means the salon can take the customer
+  //                   EARLIER. Sent as a string like every other numeric field
+  //                   in this API.
+  //   proposedTime  — the resulting wall-clock time, so the notification can
+  //                   say "6:50 PM" instead of only "+20 minutes".
+  //   newBookingDate/newBookingTime — the resolved slot, for backends that
+  //                   store the moved appointment rather than just an offset.
+  // Extra fields are ignored by a backend that only reads action/delayMinutes,
+  // so this stays compatible with the current server.
+  salonUpdateBookingTime: (bookingRequestId, { offsetMinutes, proposedTime, bookingDate, bookingTime, reason } = {}) => post(
+    `/api/bookingRequest/owner-action/${bookingRequestId}/`,
+    {
+      action: 'DELAY',
+      delayMinutes: String(offsetMinutes),
+      ...(proposedTime ? { proposedTime } : {}),
+      ...(bookingDate ? { newBookingDate: bookingDate } : {}),
+      ...(bookingTime ? { newBookingTime: bookingTime } : {}),
+      ...(reason ? { reason } : {}),
+    },
+  ),
 
   // Salon owner API.
   salonOwnerLogin: payload => post('/api/salons/send-register-otp', payload, { auth: false }),
