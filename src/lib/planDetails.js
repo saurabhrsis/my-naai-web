@@ -2,16 +2,30 @@
 // Ids, titles, prices and durations mirror the mobile app's
 // SubscriptionsPlan / RenewalSubscriptionsPlan screens so the web portal uses
 // the same names and labels partners already know.
+// One price list for the whole portal. A renewal costs the same as a new
+// purchase, so the price lives here once and both lists read it — the two
+// arrays previously drifted (renewals were still on the old ₹99/₹179/₹249
+// ladder), which showed a partner one price on the plan card and charged
+// another on the next screen.
+export const PLAN_PRICES = {
+  monthly: 199,
+  trial_2_months: 299,
+  quarterly: 499,
+};
+
 export const PARTNER_PLANS = [
-  { id: 'trial_2_months', title: 'Introductory', price: 299, duration: '2 Months (60 Days)', note: 'A gentle start for new partners' },
-  { id: 'monthly', title: 'Monthly Plan', price: 199, duration: 'Per Month', note: 'Flexible month-to-month growth' },
-  { id: 'quarterly', title: 'Quarterly Plan', price: 499, duration: '3 Months (90 Days)', note: 'Best value for busy salons', best: true },
+  { id: 'monthly', title: 'Monthly Plan', price: PLAN_PRICES.monthly, duration: '1 Month (30 Days)', note: 'Flexible month-to-month growth' },
+  { id: 'trial_2_months', title: 'Introductory', price: PLAN_PRICES.trial_2_months, duration: '2 Months (60 Days)', note: 'A gentle start for new partners' },
+  { id: 'quarterly', title: 'Quarterly Plan', price: PLAN_PRICES.quarterly, duration: '3 Months (90 Days)', note: 'Best value for busy salons', best: true },
 ];
-export const RENEWAL_PLANS = [
-  { id: 'trial_2_months', title: 'Introductory', price: 179, duration: '2 Months (60 Days)', note: 'Restart with a simple plan' },
-  { id: 'monthly', title: 'Monthly Plan', price: 99, duration: 'Per Month', note: 'Flexible month-to-month growth' },
-  { id: 'quarterly', title: 'Quarterly Plan', price: 249, duration: '3 Months (90 Days)', note: 'Best value for busy salons', best: true },
-];
+// Same ids, durations and prices as above; only the supporting line changes so
+// the copy reads as a renewal rather than a first purchase.
+const RENEWAL_NOTES = {
+  monthly: 'Flexible month-to-month growth',
+  trial_2_months: 'Restart with a simple plan',
+  quarterly: 'Best value for busy salons',
+};
+export const RENEWAL_PLANS = PARTNER_PLANS.map(plan => ({ ...plan, note: RENEWAL_NOTES[plan.id] || plan.note }));
 export const FREE_ONBOARDING_PLAN = { id: 'Free', title: 'Free trial', displayPrice: '₹ 00', price: 0, duration: '20 days', note: 'Start your salon journey at no cost', best: true };
 
 const PLAN_CATALOG = {};

@@ -118,6 +118,10 @@ Sign-in, session restore and the salon account screen all force an incomplete pr
 
 Both realtime screens (salon **Customer queue** and customer **My bookings**) share one socket.io connection managed by `src/lib/socket.js`. It mirrors the mobile app's global socket approach: it joins the `join_salon`/`join_user` room for the signed-in identity, re-joins rooms after every reconnect, listens for `queue_updated`/`booking_status_updated`, and starts with polling before upgrading to WebSocket so a blocked `wss` upgrade degrades to polling instead of failing (the earlier websocket-only connections produced "WebSocket is closed before the connection is established" during React StrictMode remounts and never recovered behind proxies without an upgrade path). Local development connects same-origin through the Vite `/socket.io` ws proxy; production uses `VITE_API_BASE_URL`. The connection is rebuilt on logout and session expiry.
 
+### Plan prices
+
+One price list serves the whole portal (`PLAN_PRICES` in `src/lib/planDetails.js`): **₹199 / 1 month**, **₹299 / 2 months**, **₹499 / 3 months**. `RENEWAL_PLANS` is derived from `PARTNER_PLANS` and only overrides the supporting note, so a renewal costs exactly what a new purchase costs. The two arrays previously carried independent prices and had drifted (renewals were still on an old ₹99 / ₹179 / ₹249 ladder), which showed a partner one price on the plan card and charged another on the next screen.
+
 ### Active plan display
 
 `src/lib/planDetails.js` keeps the plan catalog (same ids, titles, prices and durations as the mobile `SubscriptionsPlan`/`RenewalSubscriptionsPlan` screens) and normalizes the subscription fields returned by `get-salon` (root fields such as `planType`/`planExpiryDate` or nested `subscription`/`plan` objects). The salon account screen shows an active-plan card (plan title, price, start/expiry dates, days remaining, status, manage/renew action) and the profile editor shows a compact plan strip. When the backend response carries no plan fields, the account screen falls back to a "Plan details unavailable" card that deep-links to the subscription picker instead of guessing.
@@ -142,10 +146,34 @@ The public Razorpay key is read from `VITE_RAZORPAY_KEY_ID` (with the mobile app
 - **Failed** — `payment.failed` shows the bank/gateway reason but leaves the sheet open so the partner can retry with another method; only a terminal validation failure resolves immediately. A failed attempt is never treated as success, and a retry that succeeds still activates the plan.
 - **UPI app redirect (GPay / PhonePe / Paytm / BHIM)** — the sheet is kept alive while the tab is hidden (`visibilitychange` / `pagehide`), the UI switches to *"Waiting for your payment app…"* and then *"Confirming your payment… — please do not pay again"* when the partner returns. If Checkout hands the result back through a redirect instead, `razorpay_payment_id` / `razorpay_order_id` / `razorpay_signature` are read from the URL (search **or** hash query), matched to the stored order, used to finish `create-salon-with-plan` / `renew-salon-plan`, and then stripped from the address bar so a refresh cannot replay them.
 - **Interrupted / killed tab** — the order, plan and (for registration) the registration payload are persisted before the sheet opens. On return the portal shows a recovery card with the order ID, **Try again** and a `tel:` link to 8380017393; a stale record (over 30 minutes) is discarded. If a payment succeeded but activation failed, the card switches to *"Payment received, plan not activated"*, hides **Try again** and shows the payment ID, so a partner is never invited to pay twice.
-- **Gateway availability** — `checkout.js` is loaded on demand if the async tag in `index.html` was blocked, and the screen shows a live status line (`Secure payments powered by Razorpay` / `Preparing…` / `could not load` with **Retry**) instead of failing only when the partner taps pay.
+- **Gateway availability** — `checkout.js` is loaded on demand if the async tag in `index.html` was blocked, and the screen shows a live status line (`Secure payments powered by Razorpay` / `Preparing…` / `could not load` with **Retry**) instead of failing only when the partner taps pay. Checkout is loaded **before** the order is created, so a blocked gateway no longer strands a live unpaid order on the backend.
+- **Order response shape** — `extractRazorpayOrder()` searches the response for a real `order_…` id instead of reading only `response.order.id`. `create-payment-order` has returned the order as `{ order }`, `{ data: { order } }`, `{ data: … }` and as the bare object, under both `id` and `orderId`; every other shape used to surface as *"the payment order came back empty"* even though the order existed. Ids that are not Razorpay order ids (a salon id, a booking id) are rejected rather than sent to Checkout.
+- **Order authorization** — during registration there is no persisted session, so the temporary `verify-otp-register` token is sent as the `Authorization` header on `create-payment-order`. Backends that protect that route were returning a 401 that surfaced as *"could not start the payment"*. A logged-in renewal uses the normal session token.
+- **Public key validation** — a `VITE_RAZORPAY_KEY_ID` that is not a real `rzp_(test|live)_…` id (empty, or a leftover placeholder) is rejected up front with a clear message and the support number, instead of being handed to Checkout and failing with an opaque gateway error.
+- **Signature passthrough** — `renew-salon-plan` receives `orderId` and `signature` alongside the mobile contract's `planType` / `paymentId` / `totalAmount`, so a backend that verifies the Razorpay signature has what it needs and cannot reject an already-charged payment.
+- **The sheet always closes** — a terminal failure or a success used to resolve the promise while the Razorpay iframe was still on screen, leaving the partner looking at a dead payment window while the app carried on underneath. `finish()` now closes Checkout explicitly on those paths.
 - **Registration token** — the temporary `verify-otp-register` token is sent only as an `Authorization` header on `create-salon-with-plan`; it is no longer written into the session before payment, so a cancelled payment cannot leave the portal holding a temporary token.
 
-## 7. Salon time update and customer notification
+### Cancelling out of the salon profile editor
+
+The editor's **Cancel** button is never disabled. It used to render `disabled={isOnboarding}` while the header back arrow was hidden on the same condition, so during onboarding a partner saw a Cancel control that did nothing at all and had no way off the screen — the "cancel button not working" report. `session.isNewSalon` can also be stale-true after a failed profile fetch, which put an ordinary partner in that dead-end.
+
+- **Routine edit** — Cancel asks *"Discard your changes?"* through the in-app sheet and returns to Account on confirm.
+- **Onboarding** — Account does not exist yet, so Cancel explains that the profile has to be finished and offers **Sign out** (saved details are kept) rather than silently doing nothing.
+- The header back arrow is always rendered and runs the same handler, so there are two ways out on every device.
+
+Both paths use `useConfirm()`, never `window.confirm` — the native dialog is suppressed in some installed-PWA webviews, where it returns `false` and makes a button look dead on exactly one device.
+
+## 7. Browser permissions
+
+Notification permission is still required to sign in (the backend requires a `deviceToken`), but the portal explains it rather than demanding it, and always offers a next step:
+
+- **Never asked yet** — *"Turn on booking alerts"* with an **Allow** button and a **Need help?** link.
+- **Blocked** — a browser will not show its prompt a second time, so an Enable button there is a button that cannot work. That state shows **Show me how** instead, opening step-by-step instructions for the actual browser in use (Chrome on Android, Chrome/Edge/Firefox/Opera desktop, Samsung Internet, Safari and Chrome on iOS, Safari desktop) plus the support number.
+- **iPhone** — web push only exists for Home Screen apps, so the card gives the Add-to-Home-Screen steps rather than pointing at a Settings toggle iOS does not have.
+- **Location is optional and says so.** The card reads *"Show nearby salons first?"*, carries a **Not now** action that hides it for the session, and when blocked explains that salons are still listed, just without distances. It never blocks login.
+
+## 8. Salon time update and customer notification
 
 When a salon cannot start a booking at the selected time, the salon can open the booking request and choose **Update time**. The web flow offers the same delay options as the mobile app:
 
@@ -168,14 +196,62 @@ Authorization: Bearer <salon-access-token>
 
 The web wrapper is `api.salonDelayBooking()`. The server-side `owner-action` implementation is responsible for saving the new delay state and sending the customer notification through the stored `deviceToken`, exactly like the mobile owner-action flow. The browser does not contain Firebase server credentials and does not send FCM messages directly.
 
+### Updating the time from the Customer queue
+
+The booking-request screen only exists during the 60-second response window. Once a booking is accepted it lives in the **Customer queue**, and until now a salon that fell behind had no way to tell the customer. Every queue card therefore carries an **Update time** action next to **Done**.
+
+The modal (`UpdateTimeModal` in `src/components/SalonScreens.jsx`) works in **signed minutes** — negative means *earlier* — so one control covers both directions. A switch at the top picks how the salon expresses the new time, because the two situations are genuinely different: *"I'm about twenty minutes behind"* is an offset, while *"the chair frees up at quarter past seven"* is a clock time, and making the salon convert one into the other in its head is where mistakes come from.
+
+**Shift by minutes**
+
+- **Running late — push it later**: +10 / +20 / +30 / +45 / +60 / +90.
+- **Free earlier — bring it forward**: −10 / −15 / −20 / −30. Deliberately shorter than the delay options: a customer still has to travel, so pulling them in by an hour is not a reasonable one-tap action.
+- **Or enter minutes**: any whole number between −120 and +240 for anything else.
+
+**Pick exact time**
+
+- A native time input, pre-filled with the booking's current time so the salon nudges from where it already is rather than from midnight.
+- The offset is *derived* from the picked time by `offsetForTargetTime()`, so a later pick sends a positive value and an earlier pick a negative one — the rest of the pipeline never learns which control was used.
+- A late-night salon that picks `00:15` for a `23:45` booking means *thirty minutes later*, not twenty-three-and-a-half hours earlier, so a target more than 12 hours behind the booking is read as the next day. Beyond that window the literal reading wins, so an ordinary earlier pick still moves backwards.
+- Picking the time it is already booked for is not an error, just a no-op: the send button stays disabled with *"That is the current booking time"*.
+
+**Note to the customer** — an optional 200-character message (e.g. *"Previous service is running long"*) sent as `reason`, shown in both directions.
+
+**Proper timing is the point of the feature**, so the salon always sees the resolved wall-clock time before sending — `6:30 PM → 6:50 PM · 20 minutes later` — not just an offset. The maths is in `src/lib/bookingTime.js` (plain, unit-tested functions, no React):
+
+- Booking values are parsed as **local wall-clock** time. `new Date('2026-09-07T18:00:00Z')` would shift an Indian salon's 6 PM by 5h30m; a salon thinks in its own clock.
+- Hour and date rollover is handled, and a shift that crosses midnight is called out (`moves to 08 Sept 2026`) instead of silently moving the appointment to another day.
+- A new time that lands **in the past** is blocked with an explanation and the send button is disabled — notifying a customer about a slot that has already gone is worse than not notifying them.
+
+Sending calls `api.salonUpdateBookingTime()`, which posts to the **same `owner-action` endpoint with the same `DELAY` action** as the mobile app, so there is one delay pipeline rather than two, and the backend keeps dispatching the customer notification:
+
+```http
+POST /api/bookingRequest/owner-action/{bookingRequestId}/
+
+{
+  "action": "DELAY",
+  "delayMinutes": "-15",
+  "proposedTime": "6:15 PM",
+  "newBookingDate": "2026-09-07",
+  "newBookingTime": "18:15:00",
+  "reason": "Chair free early"
+}
+```
+
+`delayMinutes` stays the mobile contract's stringified number; the extra fields are additive and are ignored by a backend that only reads `action` + `delayMinutes`. The queue row updates optimistically, rolls back on failure, and reloads so the Today/Tomorrow grouping is right after a day cross. Requests are addressed by `bookingRequestId`, falling back to `bookingId` for queue payloads that only carry the latter.
+
+**Backend.** A ready-to-paste Express + Mongoose implementation of this endpoint lives in [`backend/`](../backend/README.md) — schema fields, the wall-clock maths, direction-aware FCM copy and both handlers, with 20 tests (`node --test backend/tests/*.test.js`). It is not part of the web build; copy it into the API repo. Two things it fixes that matter here: the notification copy respects the **sign** of `delayMinutes` (a negative offset reads *"Sharp Cuts can see you 15 minutes earlier"*, never *"delayed by -15 minutes"*), and when `newBookingTime` is present the server **recomputes** the offset from it rather than trusting the client's arithmetic. The proposed time is stored separately and only becomes the booked time once the customer accepts, so a customer who never replies keeps the slot they originally agreed to.
+
+The web `DelayRequestScreen` already matches that copy: a negative offset renders *"Your salon can see you earlier"* with an **Earlier time available** heading, because telling a customer their booking "needs a little more time" when it has actually been pulled forward would make them arrive late.
+
 The customer can receive the delay notification in the background or while the portal is open:
 
-1. A notification click opens `#/delay?bookingRequestId=...&delayMinutes=...&proposedTime=...`.
-2. The `DelayRequestScreen` lets the customer accept or reject the proposed delay.
+1. A notification click opens `#/delay?bookingRequestId=...&delayMinutes=...&proposedTime=...` (optionally `&reason=...`).
+2. The `DelayRequestScreen` lets the customer accept or reject the proposed time. It reads the **sign** of `delayMinutes`, so an earlier offer is worded as one, spells the shift out in words ("15 minutes earlier" — `+20`/`-20` is easy to misread on a phone) and shows the salon's optional message.
 3. The response calls `POST /api/bookingRequest/customer-delay-response/{bookingRequestId}/` with `{ "action": "ACCEPT" }` or `{ "action": "REJECT" }`.
 4. The customer is returned to `#/bookings`.
 
-## 8. Notification destinations
+## 9. Notification destinations
 
 The notification route mapping is shared by foreground JavaScript and the Firebase messaging service worker:
 
@@ -200,7 +276,7 @@ The mobile app shows a 60-second countdown on a booking-request alert and auto-c
 
 Hash query parameters are parsed by `App.jsx`, so a notification click remains actionable after a cold start or browser restart. See [FIREBASE-WEB-PUSH.md](./FIREBASE-WEB-PUSH.md) for Firebase setup and payload details.
 
-## 9. PWA service workers
+## 10. PWA service workers
 
 Two workers have separate responsibilities and scopes:
 
@@ -209,7 +285,7 @@ Two workers have separate responsibilities and scopes:
 
 They must not be merged into one worker or registered with the same scope. The PWA install prompt is captured by the app and offered during onboarding/authentication and from the workspace sidebar when the browser supports it.
 
-## 10. Device safe areas and in-app confirmations
+## 11. Device safe areas and in-app confirmations
 
 ### The top of the screen is never cut by the status bar
 
@@ -323,7 +399,7 @@ request runs a 60-second countdown that a second dialog would eat into.
 `src/components/ConfirmDialog.test.jsx` covers the dialog behaviour and fails if
 `window.confirm`, `window.alert` or `window.prompt` reappears anywhere in `src`.
 
-## 11. Important source locations
+## 12. Important source locations
 
 | File | Responsibility |
 | --- | --- |
@@ -333,6 +409,8 @@ request runs a 60-second countdown that a second dialog would eat into.
 | `src/lib/planDetails.js` | Plan catalog and active-subscription normalization |
 | `src/lib/devtoolsShield.js` | Swallows the known Chrome DevTools Performance-panel crash (also inlined in `index.html` so it runs before the bundle) |
 | `src/lib/razorpay.js` | Checkout loader, amount rules, payment outcomes, UPI hand-off tracking and pending-payment recovery |
+| `src/lib/bookingTime.js` | Signed-offset time maths for the queue time update: local wall-clock parsing, hour/date rollover, past-time and day-cross detection, exact-time→offset derivation, human offset labels |
+| `backend/` | Standalone Express + Mongoose API for the time change (model fields, clock maths, FCM copy, controllers, routes, tests). Copied into the API repo, not built with the web app |
 | `src/components/SubscriptionScreen.jsx` | Plan picker, Razorpay flow, cancellation/failure copy and payment recovery |
 | `src/components/ConfirmDialog.jsx` | Promise-based in-app confirmation sheet that replaces every native browser dialog |
 | `src/lib/push.js` | Firebase initialization, permission/token flow and notification route mapping |
@@ -344,7 +422,7 @@ request runs a 60-second countdown that a second dialog would eat into.
 | `src/main.jsx` | Root offline shell worker registration |
 | `src/styles.css` | Responsive mobile-first layout through large desktop widths, with the device safe-area padding for installed PWAs |
 
-## 12. Validation checklist
+## 13. Validation checklist
 
 Before deployment:
 
@@ -373,7 +451,7 @@ Then test on an HTTPS deployment with a real customer and salon account:
 - Load the home screen with a salon that has no photo (or block the image URLs): the card shows the My Naai tile centred on the branded gradient, never a stretched or half-cropped logo; products and barbers show their neutral placeholder tiles.
 - View the app at 320 px and 375 px: plan cards, time slots and every grid keep readable two-column chips, and tapping a login/search/profile field on an iPhone does not zoom the page.
 - Check the header wordmark: the M and the N are the same size on the login page, the mobile header and the desktop sidebar.
-## 13. Known console noise (not a MyNaai bug)
+## 14. Known console noise (not a MyNaai bug)
 
 While Chrome DevTools is open, its Performance panel injects an anonymous helper script that can throw:
 

@@ -18,6 +18,7 @@ import {
   clearPendingPayment,
   clearRedirectedPaymentParams,
   describePaymentFailure,
+  extractRazorpayOrder,
   isPendingPaymentFresh,
   loadRazorpayCheckout,
   openRazorpayCheckout,
@@ -37,9 +38,16 @@ const SUPPORT_PHONE = '8380017393';
 const CHECKOUT_IMAGE = 'https://res.cloudinary.com/dfdkzozqi/image/upload/v1773818628/my_naai_pay_gateway_ucntco.png';
 const FALLBACK_KEY = 'rzp_live_ST8yVm3RaFMiHW';
 
+// A configured value wins; the mobile app's live key is the production
+// fallback. Anything that is not a real `rzp_(test|live)_…` id (an empty var, a
+// leftover placeholder such as `your_key_here`) is rejected rather than handed
+// to Checkout, which would fail with an opaque gateway error.
 function getRazorpayKey() {
   const configured = import.meta.env?.VITE_RAZORPAY_KEY_ID;
-  return typeof configured === 'string' && configured.trim() ? configured.trim() : FALLBACK_KEY;
+  const value = typeof configured === 'string' ? configured.trim() : '';
+  if (/^rzp_(test|live)_[A-Za-z0-9]+$/.test(value)) return value;
+  if (value) console.warn('VITE_RAZORPAY_KEY_ID is not a valid Razorpay key id; using the built-in fallback key.');
+  return /^rzp_(test|live)_[A-Za-z0-9]+$/.test(FALLBACK_KEY) ? FALLBACK_KEY : '';
 }
 
 // checkout.js is loaded with `async` in index.html; this state keeps the button
@@ -123,7 +131,17 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
       onAuthComplete?.({ role: 'SALON', token, user, userId: createdSalonId, isNewSalon: false });
       return 'register';
     }
-    const response = await api.renewSalon({ planType: plan.id, paymentId: payment.paymentId, totalAmount: plan.price });
+    // `planType`, `paymentId` and `totalAmount` are the mobile contract; the
+    // order id and signature are sent alongside so a backend that verifies the
+    // Razorpay signature has everything it needs instead of rejecting a real,
+    // already-charged payment.
+    const response = await api.renewSalon({
+      planType: plan.id,
+      paymentId: payment.paymentId,
+      totalAmount: plan.price,
+      ...(payment.orderId ? { orderId: payment.orderId } : {}),
+      ...(payment.signature ? { signature: payment.signature } : {}),
+    });
     if (response?.status !== 'SUCCESS') throw new Error(response?.message || 'Renewal failed.');
     resetPlanExpiredAlert();
     clearPendingPayment();
@@ -174,24 +192,47 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
   const runPayment = useCallback(async (plan, flow, registration) => {
     setNotice(null);
     setPaymentState('opening');
+
+    // The public key is what Checkout authenticates with. An empty/placeholder
+    // value produced an opaque Razorpay error only after the sheet tried to
+    // open, so check it up front and say so plainly.
+    const key = getRazorpayKey();
+    if (!key) {
+      setPaymentState('idle');
+      setNotice({ tone: 'error', title: 'Payments are not configured', text: `This build has no Razorpay key, so payments cannot be taken here. Please call ${SUPPORT_PHONE} — do not attempt to pay.` });
+      notify?.('error', 'Razorpay is not configured for this build.');
+      return null;
+    }
+
+    // Load Checkout *before* creating the order. Creating an order first left a
+    // live unpaid order behind whenever checkout.js was blocked by the network
+    // or an ad blocker, and the partner saw a generic failure.
+    const ready = gateway.status === 'ready' ? true : await gateway.check();
+    if (!ready) {
+      setPaymentState('idle');
+      setNotice({ tone: 'error', title: 'Payment gateway unavailable', text: 'Razorpay Checkout could not load on this network. Retry below, turn off any ad/tracker blocker for this site, or switch to another connection and try again.' });
+      notify?.('error', 'Razorpay Checkout could not load. Please retry.');
+      return null;
+    }
+
     let order;
     try {
-      const response = await api.createPaymentOrder({ amount: plan.price, currency: 'INR' });
-      order = response?.order;
+      // During registration there is no persisted session yet: the temporary
+      // token from verify-otp-register is the only credential that exists, and
+      // backends that protect this route rejected the unauthenticated call with
+      // a 401 that surfaced as "could not start the payment".
+      const tempToken = String(registration?.tempToken || '').trim();
+      const response = await api.createPaymentOrder(
+        { amount: plan.price, currency: 'INR', planType: plan.id },
+        tempToken ? { headers: { Authorization: `Bearer ${tempToken}` } } : {},
+      );
+      order = extractRazorpayOrder(response);
       if (!order?.id) throw new Error(response?.message || 'The payment order came back empty.');
     } catch (error) {
       setPaymentState('idle');
       const message = getErrorMessage(error, 'Could not create the payment order.');
-      setNotice({ tone: 'error', title: 'Could not start the payment', text: `${message} Check your connection and try again.` });
+      setNotice({ tone: 'error', title: 'Could not start the payment', text: `${message} Nothing was charged. Check your connection and try again, or call ${SUPPORT_PHONE} if it keeps failing.` });
       notify?.('error', message);
-      return null;
-    }
-
-    const ready = gateway.status === 'ready' ? true : await gateway.check();
-    if (!ready) {
-      setPaymentState('idle');
-      setNotice({ tone: 'error', title: 'Payment gateway unavailable', text: 'Razorpay Checkout could not load on this network. Retry, or switch to a different connection and try again.' });
-      notify?.('error', 'Razorpay Checkout could not load. Please retry.');
       return null;
     }
 
@@ -210,9 +251,10 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
 
     setPaymentState('in-checkout');
     const result = await openRazorpayCheckout({
-      key: getRazorpayKey(),
+      key,
       orderId: order.id,
       amount: orderAmountInPaise(order, plan.price),
+      currency: order.currency || 'INR',
       description: `${plan.title} · My Naai salon partner subscription`,
       image: CHECKOUT_IMAGE,
       themeColor: GOLD,

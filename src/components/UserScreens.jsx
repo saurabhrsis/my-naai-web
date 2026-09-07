@@ -37,6 +37,7 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { normalizeAdImages } from '../lib/ads';
+import { describeOffset } from '../lib/bookingTime';
 import { getNotificationRoute, isActionableNotification } from '../lib/push';
 
 import { subscribeToLiveUpdates } from '../lib/socket';
@@ -647,9 +648,17 @@ export function DelayRequestScreen({ params, navigate, notify }) {
   const [loading, setLoading] = useState('');
   const accept = async action => {
     setLoading(action);
-    try { await api.customerDelayResponse(params.bookingRequestId, { action }); notify?.('success', action === 'ACCEPT' ? 'Delay accepted.' : 'Delay declined.'); navigate('bookings'); } catch (error) { notify?.('error', getErrorMessage(error, 'Could not update delay request.')); } finally { setLoading(''); }
+    try { await api.customerDelayResponse(params.bookingRequestId, { action }); notify?.('success', action === 'ACCEPT' ? 'New time accepted.' : 'You kept your original time.'); navigate('bookings'); } catch (error) { notify?.('error', getErrorMessage(error, 'Could not update this request.')); } finally { setLoading(''); }
   };
-  return <div className="screen delay-screen"><PageHeader title="Delay request" subtitle="A salon has suggested a new time." onBack={() => navigate(-1)} /><div className="delay-card"><div className="delay-icon"><Clock3 size={26} /></div><span className="eyebrow">ACTION NEEDED</span><h2>Your appointment needs a little more time.</h2><p>The salon has requested to delay your booking by <strong>{params.delayMinutes || 0} minutes</strong>.</p><div className="proposed-time"><span>New suggested time</span><strong>{params.proposedTime || 'Updated time'}</strong></div><small>Would you like to accept this change?</small></div><div className="delay-actions"><Button variant="success" loading={loading === 'ACCEPT'} onClick={() => accept('ACCEPT')}>Accept change <Check size={17} /></Button><Button variant="danger" loading={loading === 'REJECT'} onClick={() => accept('REJECT')}>Keep original <X size={17} /></Button></div></div>;
+  // A salon can now also offer an EARLIER slot from the queue, which arrives as
+  // a negative delayMinutes. Reading the sign here keeps the screen honest:
+  // telling a customer their appointment "needs a little more time" when it has
+  // actually been pulled forward would make them arrive late.
+  const offsetMinutes = Number(params.delayMinutes);
+  const isEarlier = Number.isFinite(offsetMinutes) && offsetMinutes < 0;
+  const offsetLabel = Number.isFinite(offsetMinutes) && offsetMinutes !== 0 ? describeOffset(offsetMinutes) : '';
+  const reason = String(params.reason || '').trim();
+  return <div className="screen delay-screen"><PageHeader title={isEarlier ? 'Earlier time available' : 'Delay request'} subtitle="The salon has suggested a new time." onBack={() => navigate(-1)} /><div className="delay-card"><div className="delay-icon"><Clock3 size={26} /></div><span className="eyebrow">ACTION NEEDED</span><h2>{isEarlier ? 'Your salon can see you earlier.' : 'Your appointment needs a little more time.'}</h2><p>{offsetLabel ? <>The salon has asked to move your booking <strong>{offsetLabel}</strong>.</> : <>The salon has asked to move your booking to a new time.</>}</p>{reason && <p className="delay-reason">“{reason}”</p>}<div className="proposed-time"><span>New suggested time</span><strong>{params.proposedTime || 'Updated time'}</strong></div><small>{isEarlier ? 'Can you make the earlier time?' : 'Would you like to accept this change?'}</small></div><div className="delay-actions"><Button variant="success" loading={loading === 'ACCEPT'} onClick={() => accept('ACCEPT')}>Accept change <Check size={17} /></Button><Button variant="danger" loading={loading === 'REJECT'} onClick={() => accept('REJECT')}>Keep original <X size={17} /></Button></div></div>;
 }
 
 const INFO_CONTENT = {

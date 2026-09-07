@@ -86,8 +86,8 @@ function saveSession(session) {
   return { ...session, role, userId: session.userId || user?.userId || user?.salon?.salonId || user?.salonId || user?.id || '' };
 }
 
-const PUSH_REQUIRED_MESSAGE = 'Notifications are required to continue. Tap Enable, allow notifications for this site, then try again.';
-const IOS_PUSH_REQUIRED_MESSAGE = 'On iPhone, add My Naai to your Home Screen first, then allow notifications and log in. Tap "Enable notifications" on this screen for the steps.';
+const PUSH_REQUIRED_MESSAGE = 'My Naai needs notification permission to sign you in — it is how booking requests and confirmations reach you. Tap Allow on the card above (or Show me how if your browser has blocked them), then try again.';
+const IOS_PUSH_REQUIRED_MESSAGE = 'On iPhone, notifications only work once My Naai is on your Home Screen. Tap Show me how on the card above for the three steps, then sign in.';
 
 async function requirePushToken() {
   const token = await getPushToken({ requestPermission: true });
@@ -131,6 +131,141 @@ function isIosDevice() {
 
 function isIosPwaInstalled() {
   return isIosDevice() && (window.matchMedia?.('(display-mode: standalone)').matches === true || navigator.standalone === true);
+}
+
+// Which browser is this, so the permission help can name the actual menu the
+// person has to open. "Open your browser settings" is not an instruction
+// anybody can follow on a phone — the path differs on every browser, and a
+// blocked permission cannot be re-requested from JavaScript (the browser only
+// shows its prompt once), so precise steps are the only way out of a block.
+function detectBrowser() {
+  if (typeof navigator === 'undefined') return 'other';
+  const agent = navigator.userAgent || '';
+  const android = /android/i.test(agent);
+  if (isIosDevice()) return /crios/i.test(agent) ? 'ios-chrome' : 'ios-safari';
+  if (/samsungbrowser/i.test(agent)) return 'samsung';
+  if (/firefox|fxios/i.test(agent)) return 'firefox';
+  if (/edg\//i.test(agent)) return 'edge';
+  if (/opr\/|opera/i.test(agent)) return 'opera';
+  if (/chrome|crios/i.test(agent)) return android ? 'chrome-android' : 'chrome-desktop';
+  if (/safari/i.test(agent)) return 'safari-desktop';
+  return android ? 'chrome-android' : 'other';
+}
+
+const BROWSER_LABELS = {
+  'chrome-android': 'Chrome on Android',
+  'chrome-desktop': 'Chrome',
+  'ios-safari': 'Safari on iPhone/iPad',
+  'ios-chrome': 'Chrome on iPhone/iPad',
+  samsung: 'Samsung Internet',
+  firefox: 'Firefox',
+  edge: 'Microsoft Edge',
+  opera: 'Opera',
+  'safari-desktop': 'Safari',
+  other: 'your browser',
+};
+
+// Step-by-step routes to the site permission screen, per browser and per
+// permission. These are the only reliable way back from a "blocked" state.
+function permissionSteps(browser, kind) {
+  const name = kind === 'location' ? 'Location' : 'Notifications';
+  const steps = {
+    'chrome-android': [
+      'Tap the lock or settings icon next to the address bar at the top of this page.',
+      'Choose Permissions (or Site settings).',
+      `Set ${name} to Allow.`,
+      'Come back here and tap Try again.',
+    ],
+    'chrome-desktop': [
+      'Click the lock, tune or info icon on the left of the address bar.',
+      `Find ${name} in the list and switch it to Allow.`,
+      'Reload the page, then tap Try again.',
+    ],
+    samsung: [
+      'Tap the lock icon next to the address bar.',
+      'Open Permissions.',
+      `Set ${name} to Allow.`,
+      'Return here and tap Try again.',
+    ],
+    firefox: [
+      'Tap the lock or shield icon next to the address bar.',
+      'Open the site permissions / Clear permissions option.',
+      `Allow ${name} for this site.`,
+      'Reload the page, then tap Try again.',
+    ],
+    edge: [
+      'Click or tap the lock icon next to the address bar.',
+      'Open Permissions for this site.',
+      `Set ${name} to Allow.`,
+      'Reload the page, then tap Try again.',
+    ],
+    opera: [
+      'Tap the lock icon next to the address bar.',
+      'Open Site settings.',
+      `Set ${name} to Allow.`,
+      'Reload the page, then tap Try again.',
+    ],
+    'ios-safari': kind === 'location'
+      ? [
+        'Open the iPhone Settings app.',
+        'Go to Privacy & Security, then Location Services, and make sure it is on.',
+        'Scroll to Safari Websites and choose While Using the App.',
+        'Come back to My Naai and tap Try again.',
+      ]
+      : [
+        'Add My Naai to your Home Screen first — iPhone only allows notifications for installed apps.',
+        'In Safari tap the Share button, then Add to Home Screen, then Add.',
+        'Open My Naai from your Home Screen.',
+        'Tap Enable and choose Allow.',
+      ],
+    'ios-chrome': kind === 'location'
+      ? [
+        'Open the iPhone Settings app.',
+        'Go to Privacy & Security, then Location Services.',
+        'Find Chrome and choose While Using the App.',
+        'Come back to My Naai and tap Try again.',
+      ]
+      : [
+        'iPhone only allows notifications for apps added to the Home Screen, and that has to be done in Safari.',
+        'Open mynaai.in in Safari, tap Share, then Add to Home Screen.',
+        'Open My Naai from your Home Screen.',
+        'Tap Enable and choose Allow.',
+      ],
+    'safari-desktop': [
+      'Open Safari > Settings > Websites.',
+      `Choose ${name} in the sidebar.`,
+      'Set My Naai to Allow.',
+      'Reload the page, then tap Try again.',
+    ],
+  };
+  return steps[browser] || [
+    'Open the site permissions for My Naai in your browser (usually the lock or settings icon next to the address bar).',
+    `Set ${name} to Allow.`,
+    'Reload the page, then tap Try again.',
+  ];
+}
+
+// One shared modal for "notifications are blocked" and "location is blocked".
+function PermissionHelp({ open, onClose, kind = 'notifications' }) {
+  const browser = detectBrowser();
+  const label = BROWSER_LABELS[browser] || BROWSER_LABELS.other;
+  const title = kind === 'location' ? 'Allow location for My Naai' : 'Allow notifications for My Naai';
+  const lede = kind === 'location'
+    ? `Location is optional — you can use My Naai without it, you just won't see how far each salon is. To turn it on in ${label}:`
+    : `A browser only asks once, so once notifications are blocked they have to be turned back on in ${label}'s settings:`;
+  return (
+    <Modal open={open} onClose={onClose} title={title} footer={<Button onClick={onClose}>Got it</Button>}>
+      <p className="modal-lede">{lede}</p>
+      <ol className="ios-install-steps">
+        {permissionSteps(browser, kind).map(step => <li key={step}>{step}</li>)}
+      </ol>
+      {kind === 'notifications' && (
+        <p className="permission-help-note">
+          My Naai uses notifications for booking requests, confirmations and delay alerts — the buzzer that tells a salon a customer is waiting. If you cannot enable them on this device, call <a href="tel:8380017393">8380017393</a> and we will help.
+        </p>
+      )}
+    </Modal>
+  );
 }
 
 // Opens the browser’s own notification and location dialogs together, from one
@@ -292,16 +427,22 @@ function NotificationSetupCard({ compact = false, notifyInstall = null, onEnable
 
   if (['checking', 'enabled'].includes(status)) return null;
   const needsIosInstall = status === 'unsupported' && isIosDevice() && !isIosPwaInstalled();
+  // Copy rule: say what the feature is for and what to do next, and never
+  // scold. "You must enable notifications" read like a wall even when the
+  // browser had simply not been asked yet. A blocked permission cannot be
+  // re-prompted from JavaScript, so that state gets step-by-step settings
+  // instructions (`PermissionHelp`) rather than an Enable button that a browser
+  // will silently ignore — the button that looked broken.
   const copy = {
-    unconfigured: { title: 'Notifications are required', body: reason || 'My Naai needs a notification token to log you in. This site is not set up for web alerts yet — contact support, or use the My Naai app.' },
-    unsupported: { title: 'Notifications are required', body: reason || 'This browser cannot create a notification token. Use Chrome, Edge or Samsung Internet, or install My Naai to your home screen on iPhone and iPad.' },
-    denied: { title: 'You must enable notifications', body: 'Login needs notification permission. Open this site’s browser settings, set Notifications to Allow, then tap Enable.' },
-    'needs-permission': { title: 'You must enable notifications', body: 'Tap Enable and choose Allow. My Naai needs this to log you in and to send booking buzzers, delay requests and appointment updates.' },
-    unavailable: { title: 'You must enable notifications', body: reason || 'We could not create a notification token yet. Tap Enable and allow notifications, then try again.' },
-  }[status] || { title: 'You must enable notifications', body: reason };
-  // The Enable action must always be visible (like the location card): on an
-  // iPhone it opens the Add-to-Home-Screen steps, and everywhere else it runs
-  // the normal permission/token flow. No browser is left without a next step.
+    unconfigured: { title: 'Notifications are unavailable', body: reason || 'This build of My Naai is not set up for web alerts yet. You can still browse; call 8380017393 if you need booking alerts on this device.' },
+    unsupported: { title: 'Notifications need a different setup', body: reason || 'This browser cannot deliver web notifications. Install My Naai to your home screen, or use Chrome, Edge or Samsung Internet.' },
+    denied: { title: 'Notifications are blocked', body: 'My Naai sends booking requests, confirmations and delay alerts. Your browser has blocked them for this site, so they have to be switched back on in its settings — tap Show me how.' },
+    'needs-permission': { title: 'Turn on booking alerts', body: 'Tap Allow so My Naai can send booking requests, confirmations and delay alerts. Your salon\u2019s buzzer needs this to reach you.' },
+    unavailable: { title: 'Notifications are not ready yet', body: reason || 'We could not finish setting up notifications on this device. Tap Try again — if it keeps failing, tap Show me how.' },
+  }[status] || { title: 'Turn on booking alerts', body: reason };
+  const blocked = status === 'denied';
+  // There is always a next step: Allow where the browser will still prompt,
+  // and instructions everywhere the prompt is no longer available.
   return (
     <section className={cx('push-setup-card', compact && 'push-setup-compact')} aria-live="polite">
       <span className="push-setup-icon"><Bell size={compact ? 15 : 18} /></span>
@@ -309,10 +450,17 @@ function NotificationSetupCard({ compact = false, notifyInstall = null, onEnable
       <div className="push-setup-actions">
         {status === 'unsupported' && notifyInstall && <Button size="small" onClick={notifyInstall}><Download size={14} /> Install app</Button>}
         {needsIosInstall
-          ? <Button size="small" onClick={() => setIosHelpOpen(true)}>Enable</Button>
-          : <Button size="small" onClick={enable} loading={busy}>Enable</Button>}
+          ? <Button size="small" onClick={() => setIosHelpOpen(true)}>Show me how</Button>
+          : blocked
+            ? <Button size="small" onClick={() => setIosHelpOpen(true)}>Show me how</Button>
+            : <>
+              <Button size="small" onClick={enable} loading={busy}>{status === 'unavailable' ? 'Try again' : 'Allow'}</Button>
+              <button type="button" className="permission-help-link" onClick={() => setIosHelpOpen(true)}>Need help?</button>
+            </>}
       </div>
-      {needsIosInstall && <IosInstallHelp open={iosHelpOpen} onClose={() => { setIosHelpOpen(false); inspect(false); }} />}
+      {needsIosInstall
+        ? <IosInstallHelp open={iosHelpOpen} onClose={() => { setIosHelpOpen(false); inspect(false); }} />
+        : <PermissionHelp open={iosHelpOpen} kind="notifications" onClose={() => { setIosHelpOpen(false); inspect(false); }} />}
     </section>
   );
 }
@@ -331,9 +479,10 @@ function IosInstallHelp({ open, onClose }) {
   );
 }
 
-function LocationSetupCard({ compact = false, onLocated }) {
+function LocationSetupCard({ compact = false, onLocated, onDismiss }) {
   const [status, setStatus] = useState('checking');
   const [busy, setBusy] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const inspect = useCallback(async () => {
     setStatus(await queryLocationPermission());
@@ -358,32 +507,43 @@ function LocationSetupCard({ compact = false, onLocated }) {
 
   if (status === 'checking' || status === 'granted') return null;
 
+  // Location has never been required, and the card now says so out loud so it
+  // does not read as another wall in front of signing in.
   const copy = status === 'unsupported'
-    ? { title: 'Location is unavailable', body: 'This browser cannot share your location. Nearby salons will still be listed without distance.' }
+    ? { title: 'Location is unavailable', body: 'This browser cannot share your location. Nearby salons are still listed — just without the distance.' }
     : status === 'denied'
-      ? { title: 'Location is blocked', body: 'You can still log in. Open this site’s permission settings, set Location to Allow, then tap Try again.' }
-      : { title: 'Allow location', body: 'Optional. Share your location so we can show nearby salons first.' };
-
-  const action = status === 'prompt'
-    ? { label: 'Allow', onClick: enable }
-    : status === 'denied'
-      ? { label: 'Try again', onClick: enable }
-      : null;
+      ? { title: 'Location is off — that is fine', body: 'Optional. Salons are still listed, only without distances. To sort by nearest, allow location in your browser settings.' }
+      : { title: 'Show nearby salons first?', body: 'Optional. Share your location and My Naai sorts salons by how close they are. You can skip this and still book.' };
 
   return (
-    <section className={cx('push-setup-card', compact && 'push-setup-compact')} aria-live="polite">
+    <section className={cx('push-setup-card', compact && 'push-setup-compact', 'push-setup-optional')} aria-live="polite">
       <span className="push-setup-icon"><MapPin size={compact ? 15 : 18} /></span>
       <div className="push-setup-copy"><strong>{copy.title}</strong><p>{copy.body}</p></div>
-      {action && <Button size="small" onClick={action.onClick} loading={busy}>{action.label}</Button>}
+      <div className="push-setup-actions">
+        {status === 'denied'
+          ? <Button size="small" variant="secondary" onClick={() => setHelpOpen(true)}>Show me how</Button>
+          : status !== 'unsupported' && <Button size="small" onClick={enable} loading={busy}>Allow</Button>}
+        {onDismiss && <button type="button" className="permission-help-link" onClick={onDismiss}>Not now</button>}
+      </div>
+      <PermissionHelp open={helpOpen} kind="location" onClose={() => { setHelpOpen(false); inspect(); }} />
     </section>
   );
 }
 
 function PermissionsPrompt({ compact = false, notifyInstall = null, onPushToken, onLocated }) {
+  // Location is optional, so "Not now" hides its card for the rest of the
+  // session instead of leaving a permanent nag above the login form.
+  const [locationDismissed, setLocationDismissed] = useState(() => {
+    try { return sessionStorage.getItem('mynaaiLocationPromptDismissed') === 'true'; } catch { return false; }
+  });
+  const dismissLocation = () => {
+    setLocationDismissed(true);
+    try { sessionStorage.setItem('mynaaiLocationPromptDismissed', 'true'); } catch { /* private mode: dismiss for this render only */ }
+  };
   return (
     <div className={cx('permission-prompt-stack', compact && 'permission-prompt-compact')}>
       <NotificationSetupCard compact={compact} notifyInstall={notifyInstall} onEnabled={onPushToken} />
-      <LocationSetupCard compact={compact} onLocated={onLocated} />
+      {!locationDismissed && <LocationSetupCard compact={compact} onLocated={onLocated} onDismiss={dismissLocation} />}
     </div>
   );
 }
@@ -954,7 +1114,7 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
     // so even if they attempt to navigate elsewhere, the paywall holds.
     const navForScreens = isSubscriptionLocked ? safeNavigate : navigate;
     const props = { session, navigate: navForScreens, notify, onSessionUpdate: handleSessionUpdate };
-    if (isSalon && session.isNewSalon && route.name !== 'editProfile') return <EditSalonProfileScreen {...props} params={{ ...(route.params || {}), isOnboarding: 'true' }} />;
+    if (isSalon && session.isNewSalon && route.name !== 'editProfile') return <EditSalonProfileScreen {...props} params={{ ...(route.params || {}), isOnboarding: 'true' }} onLogout={onLogout} />;
     if (!isSalon) {
       if (route.name === 'home') return <HomeScreen {...props} />;
       if (route.name === 'bookings') return <BookingsScreen {...props} />;
@@ -973,7 +1133,7 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
     if (route.name === 'salonProducts') return <SalonProductsScreen {...props} />;
     if (route.name === 'account') return <SalonAccountScreen {...props} onLogout={onLogout} />;
     if (route.name === 'notifications') return <NotificationsScreen {...props} />;
-    if (route.name === 'editProfile') return <EditSalonProfileScreen {...props} params={route.params} />;
+    if (route.name === 'editProfile') return <EditSalonProfileScreen {...props} params={route.params} onLogout={onLogout} />;
     if (route.name === 'bookingRequest') return <BookingRequestScreen {...props} params={route.params} />;
     if (route.name === 'subscription') return <SubscriptionScreen {...props} params={route.params} />;
     if (route.name === 'salonAbout') return <PartnerInfo type="about" navigate={navForScreens} />;

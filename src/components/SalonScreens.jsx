@@ -36,6 +36,18 @@ import { api, getFileUrl } from '../lib/api';
 import { closeNotification } from '../lib/push';
 import { DEFAULT_SERVICES } from '../lib/defaultServices';
 import { normalizePlanDetails } from '../lib/planDetails';
+import {
+  EARLIER_OFFSETS,
+  LATER_OFFSETS,
+  MAX_OFFSET_MINUTES,
+  MIN_OFFSET_MINUTES,
+  describeOffset,
+  isValidOffset,
+  offsetForTargetTime,
+  parseBookingDateTime,
+  shiftBookingTime,
+  toInputTime,
+} from '../lib/bookingTime';
 import { STATE_OPTIONS } from '../lib/stateOptions';
 import { SALON_ABOUT_CONTENT, SALON_FAQ_CONTENT, SALON_TERMS_CONTENT } from '../lib/salonContent';
 import { NotificationDiagnostics } from './NotificationDiagnostics';
@@ -97,11 +109,178 @@ function isSameDate(value, offset = 0) {
 
 
 
+// Lets a salon move a queued appointment earlier or later and notify the
+// customer, without leaving the queue. The salon reads a real clock time
+// ("6:50 PM"), not just an offset, because that is what it will say to the
+// customer on the phone and what the customer sees in the notification.
+function UpdateTimeModal({ booking, open, onClose, onSubmit, saving }) {
+  // `mode` decides which control owns the new time, so the two can never
+  // disagree about what will be sent: 'offset' = a chip or the minutes box,
+  // 'exact' = the time picker.
+  const [mode, setMode] = useState('offset');
+  const [offset, setOffset] = useState(null);
+  const [custom, setCustom] = useState('');
+  const [exactTime, setExactTime] = useState('');
+  const [reason, setReason] = useState('');
+
+  const bookingDate = booking?.bookingDate;
+  const bookingTime = booking?.bookingTime;
+
+  // Reset whenever a different booking is opened, so the previous customer's
+  // choice can never be sent for this one. The picker starts at the booking's
+  // own time, which is the sensible place to nudge from.
+  useEffect(() => {
+    if (!open) return;
+    setMode('offset');
+    setOffset(null);
+    setCustom('');
+    setReason('');
+    const start = parseBookingDateTime(bookingDate, bookingTime);
+    setExactTime(start ? toInputTime(start) : '');
+  }, [open, booking?.bookingId, bookingDate, bookingTime]);
+
+  const customOffset = custom.trim() !== '' ? Number(custom) : null;
+  const effectiveOffset = customOffset !== null ? customOffset : offset;
+  const exactOffset = mode === 'exact' && exactTime ? offsetForTargetTime(bookingDate, bookingTime, exactTime) : null;
+
+  const preview = mode === 'exact'
+    ? (isValidOffset(exactOffset) ? shiftBookingTime(bookingDate, bookingTime, exactOffset) : null)
+    : (isValidOffset(effectiveOffset) ? shiftBookingTime(bookingDate, bookingTime, effectiveOffset) : null);
+
+  const currentLabel = formatTime(bookingTime);
+  const customInvalid = mode === 'offset' && custom.trim() !== '' && !isValidOffset(customOffset);
+  // Picking the time it is already booked for is a no-op, not an error worth shouting about.
+  const exactUnchanged = mode === 'exact' && exactTime && exactOffset === 0;
+  const exactOutOfRange = mode === 'exact' && exactTime && exactOffset !== null && exactOffset !== 0 && !isValidOffset(exactOffset);
+  const blocked = Boolean(preview?.inPast);
+  const canSend = Boolean(preview) && !blocked && !saving;
+
+  const pickOffset = value => {
+    setMode('offset');
+    setOffset(value);
+    setCustom('');
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Update appointment time">
+      <p className="modal-lede">
+        Running late, or free earlier than expected? Set the new time for <strong>{booking?.userName || 'this customer'}</strong> and My Naai will notify them straight away.
+      </p>
+
+      <div className="time-update-current">
+        <Clock3 size={16} />
+        <span><small>Booked for</small><strong>{formatDate(bookingDate)} · {currentLabel}</strong></span>
+      </div>
+
+      <div className="time-mode-switch" role="tablist" aria-label="How to set the new time">
+        <button type="button" role="tab" aria-selected={mode === 'offset'} className={cx(mode === 'offset' && 'active')} onClick={() => setMode('offset')} disabled={saving}>Shift by minutes</button>
+        <button type="button" role="tab" aria-selected={mode === 'exact'} className={cx(mode === 'exact' && 'active')} onClick={() => setMode('exact')} disabled={saving}>Pick exact time</button>
+      </div>
+
+      {mode === 'offset' ? (
+        <>
+          <span className="time-update-group-label">Running late — push it later</span>
+          <div className="time-offset-grid">
+            {LATER_OFFSETS.map(value => (
+              <button
+                type="button"
+                key={value}
+                className={cx('time-offset-chip', effectiveOffset === value && 'active')}
+                onClick={() => pickOffset(value)}
+                disabled={saving}
+              >+{value} min</button>
+            ))}
+          </div>
+
+          <span className="time-update-group-label">Free earlier — bring it forward</span>
+          <div className="time-offset-grid">
+            {EARLIER_OFFSETS.map(value => (
+              <button
+                type="button"
+                key={value}
+                className={cx('time-offset-chip', 'earlier', effectiveOffset === value && 'active')}
+                onClick={() => pickOffset(value)}
+                disabled={saving}
+              >{value} min</button>
+            ))}
+          </div>
+
+          <Field label="Or enter minutes" hint={`Negative for earlier, e.g. -25. Between ${MIN_OFFSET_MINUTES} and ${MAX_OFFSET_MINUTES}.`} error={customInvalid ? 'Enter a whole number of minutes, not zero, within the allowed range.' : ''}>
+            <input
+              type="number"
+              inputMode="numeric"
+              step="5"
+              value={custom}
+              onChange={event => { setCustom(event.target.value); setOffset(null); setMode('offset'); }}
+              placeholder="e.g. 25 or -15"
+              disabled={saving}
+            />
+          </Field>
+        </>
+      ) : (
+        <Field
+          label="New start time"
+          hint="Choose the time this customer should arrive. My Naai works out the difference for you."
+          error={exactOutOfRange ? `That is more than ${MAX_OFFSET_MINUTES} minutes away from the booked time. Use a smaller change, or rebook the appointment.` : ''}
+        >
+          <input
+            type="time"
+            value={exactTime}
+            onChange={event => { setExactTime(event.target.value); setMode('exact'); }}
+            disabled={saving}
+          />
+        </Field>
+      )}
+
+      <Field label="Note to the customer" hint="Optional · sent with the notification, max 200 characters">
+        <textarea
+          className="time-update-note"
+          rows="2"
+          value={reason}
+          onChange={event => setReason(event.target.value.slice(0, 200))}
+          placeholder="e.g. Previous service is running long — sorry for the wait!"
+          maxLength={200}
+          disabled={saving}
+        />
+      </Field>
+
+      {preview && (
+        <div className={cx('time-update-preview', blocked && 'blocked')}>
+          <span className="time-update-preview-mark">{blocked ? <CircleAlert size={17} /> : <Clock3 size={17} />}</span>
+          <div>
+            <strong>{preview.originalLabel} → {preview.updatedLabel}</strong>
+            <small>
+              {describeOffset(preview.offsetMinutes)}
+              {preview.crossesDay ? ` · moves to ${formatDate(preview.apiDate)}` : ''}
+            </small>
+            {blocked && <small className="time-update-warning">That time has already passed. Pick a later time — a customer cannot be notified about a slot in the past.</small>}
+          </div>
+        </div>
+      )}
+
+      <div className="form-actions">
+        <Button type="button" variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
+        <Button
+          type="button"
+          loading={saving}
+          disabled={!canSend}
+          onClick={() => onSubmit({ preview, reason: reason.trim() })}
+        >Update &amp; notify <Check size={17} /></Button>
+      </div>
+      {!preview && !customInvalid && !exactOutOfRange && (
+        <p className="time-update-hint">{exactUnchanged ? 'That is the current booking time — pick a different one.' : 'Choose a new time to continue.'}</p>
+      )}
+    </Modal>
+  );
+}
+
 export function SalonQueueScreen({ session, navigate, notify }) {
   const confirm = useConfirm();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [doneId, setDoneId] = useState('');
+  const [timeTarget, setTimeTarget] = useState(null);
+  const [savingTime, setSavingTime] = useState(false);
   const load = useCallback(async (isRefresh = false) => {
     if (!isRefresh) setLoading(true);
     try { const response = await api.customerList({ salonId: session.userId, page: 1 }); setItems(getList(response, ['bookings', 'customers'])); } catch (error) { notify?.('error', getErrorMessage(error, 'Unable to load your queue.')); } finally { setLoading(false); }
@@ -126,8 +305,50 @@ export function SalonQueueScreen({ session, navigate, notify }) {
     setDoneId(bookingId);
     try { const response = await api.bookingDone({ salonId: session.userId, bookingId }); if (response?.status && response.status !== 'SUCCESS') throw new Error(response.message || 'Could not complete service'); setItems(current => current.filter(item => item.bookingId !== bookingId)); notify?.('success', 'Service marked as completed.'); } catch (error) { notify?.('error', getErrorMessage(error, 'Could not complete service.')); } finally { setDoneId(''); }
   };
+  // Sends the new time and lets the backend dispatch the customer notification
+  // through the stored deviceToken — the same owner-action contract the booking
+  // request screen and the mobile app use, so there is one delay pipeline, not
+  // two. The queue row is updated optimistically and rolled back on failure.
+  const submitTimeUpdate = async ({ preview, reason }) => {
+    const booking = timeTarget;
+    // The request id is what owner-action addresses; some queue payloads only
+    // carry bookingId, so fall back rather than posting to `/undefined/`.
+    const requestId = booking?.bookingRequestId || booking?.requestId || booking?.bookingId;
+    if (!booking || !preview || !requestId) {
+      notify?.('error', 'This booking cannot be updated. Refresh the queue and try again.');
+      return;
+    }
+    setSavingTime(true);
+    const previous = items;
+    try {
+      const response = await api.salonUpdateBookingTime(requestId, {
+        offsetMinutes: preview.offsetMinutes,
+        proposedTime: preview.updatedLabel,
+        bookingDate: preview.apiDate,
+        bookingTime: preview.apiTime,
+        reason,
+      });
+      if (response?.status && response.status !== 'SUCCESS') throw new Error(response.message || 'Could not update the appointment time.');
+      setItems(current => current.map(item => (item.bookingId === booking.bookingId
+        ? { ...item, bookingTime: preview.apiTime, bookingDate: preview.apiDate }
+        : item)));
+      setTimeTarget(null);
+      notify?.('success', `${booking.userName || 'Customer'} notified — new time ${preview.updatedLabel} (${describeOffset(preview.offsetMinutes)}).`);
+      // Re-read the queue so the row reflects whatever the server actually
+      // stored, and so the group (Today/Tomorrow) is right after a day cross.
+      load(true);
+    } catch (error) {
+      setItems(previous);
+      notify?.('error', getErrorMessage(error, 'Could not update the appointment time.'));
+    } finally {
+      setSavingTime(false);
+    }
+  };
+
   const grouped = [{ label: 'Today', key: 0, items: items.filter(item => isSameDate(item.bookingDate, 0)) }, { label: 'Tomorrow', key: 1, items: items.filter(item => isSameDate(item.bookingDate, 1)) }, { label: 'Day after tomorrow', key: 2, items: items.filter(item => !isSameDate(item.bookingDate, 0) && !isSameDate(item.bookingDate, 1)) }].filter(group => group.items.length);
-  return <div className="screen salon-queue-screen"><PageHeader title="Customer queue" subtitle="Keep every chair moving smoothly." action={<div className="page-actions"><button className="refresh-icon-button" onClick={load} aria-label="Refresh queue"><Zap size={17} /></button></div>} />{loading ? <div className="list-stack">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} className="queue-skeleton" />)}</div> : grouped.length ? <div className="queue-groups">{grouped.map(group => <section className="queue-group" key={group.label}><div className="queue-group-heading"><h2>{group.label}</h2><span>{group.items.length} {group.items.length === 1 ? 'booking' : 'bookings'}</span></div>{group.items.map(item => <article className="queue-card" key={item.bookingId}><div className="queue-main"><div className="queue-card-heading"><div><h3>{item.userName || 'Guest'}</h3><span>{item.bookingDate ? `${formatDate(item.bookingDate)} · ${formatTime(item.bookingTime)}` : 'Appointment time pending'}</span></div><Button size="small" onClick={() => markDone(item.bookingId)} loading={doneId === item.bookingId}>Done</Button></div><div className="queue-meta"><span><Scissors size={14} /> {item.serviceNames || item.services || 'Salon service'}</span>{item.barberName && <span><UserRound size={14} /> {item.barberName}</span>}{item.userPhone && item.userPhone !== '0000000000' && <a href={`tel:${item.userPhone}`}><Phone size={14} /> {item.userPhone}</a>}</div></div></article>)}</section>)}</div> : <EmptyState icon={UsersRound} title="No customers in queue" message="New booking requests will appear here." />}</div>;
+  return <div className="screen salon-queue-screen"><PageHeader title="Customer queue" subtitle="Keep every chair moving smoothly." action={<div className="page-actions"><button className="refresh-icon-button" onClick={load} aria-label="Refresh queue"><Zap size={17} /></button></div>} />{loading ? <div className="list-stack">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} className="queue-skeleton" />)}</div> : grouped.length ? <div className="queue-groups">{grouped.map(group => <section className="queue-group" key={group.label}><div className="queue-group-heading"><h2>{group.label}</h2><span>{group.items.length} {group.items.length === 1 ? 'booking' : 'bookings'}</span></div>{group.items.map(item => <article className="queue-card" key={item.bookingId}><div className="queue-main"><div className="queue-card-heading"><div><h3>{item.userName || 'Guest'}</h3><span>{item.bookingDate ? `${formatDate(item.bookingDate)} · ${formatTime(item.bookingTime)}` : 'Appointment time pending'}</span></div><div className="queue-card-actions"><Button size="small" variant="secondary" onClick={() => setTimeTarget(item)} disabled={!item.bookingTime}><Clock3 size={15} /> Update time</Button><Button size="small" onClick={() => markDone(item.bookingId)} loading={doneId === item.bookingId}>Done</Button></div></div><div className="queue-meta"><span><Scissors size={14} /> {item.serviceNames || item.services || 'Salon service'}</span>{item.barberName && <span><UserRound size={14} /> {item.barberName}</span>}{item.userPhone && item.userPhone !== '0000000000' && <a href={`tel:${item.userPhone}`}><Phone size={14} /> {item.userPhone}</a>}</div></div></article>)}</section>)}</div> : <EmptyState icon={UsersRound} title="No customers in queue" message="New booking requests will appear here." />}
+    <UpdateTimeModal booking={timeTarget} open={Boolean(timeTarget)} onClose={() => { if (!savingTime) setTimeTarget(null); }} onSubmit={submitTimeUpdate} saving={savingTime} />
+  </div>;
 }
 
 export function SalonHistoryScreen({ notify }) {
@@ -273,7 +494,7 @@ export function SalonAccountScreen({ session, navigate, notify, onSessionUpdate,
   const hasCachedProfile = Boolean(profile.salonName || profile.name || profile.imageUrl || profile.imagesArray?.length);
   if (loading && !hasCachedProfile) return <div className="screen salon-account-screen"><PageHeader title="Salon account" /><div className="account-loading"><Spinner label="Loading salon profile…" /></div></div>;
   const status = getSalonStatus(profile.businessHours, isOpen);
-  const menus = [{ label: 'Edit salon profile', caption: 'Photos, hours, services and specialists', icon: Edit3, route: 'editProfile' }, { label: 'About My Naai', caption: 'How My Naai helps your business', icon: Store, route: 'salonAbout' }, { label: 'Frequently asked questions', caption: 'Partner help and booking basics', icon: Bell, route: 'salonFaq' }, { label: 'Terms & conditions', caption: 'Partner terms', icon: Receipt, route: 'salonTerms' }, { label: 'Subscription plans', caption: 'Upgrade or renew your plan', icon: WalletCards, route: 'subscription', params: { isUpgrade: true } }, { label: 'Need a hand?', caption: 'Call 8380017393', icon: Phone, action: () => window.open('tel:8380017393') }];
+  const menus = [{ label: 'Edit salon profile', caption: 'Photos, hours, services and specialists', icon: Edit3, route: 'editProfile' }, { label: 'About My Naai', caption: 'How My Naai helps your business', icon: Store, route: 'salonAbout' }, { label: 'Frequently asked questions', caption: 'Partner help and booking basics', icon: Bell, route: 'salonFaq' }, { label: 'Terms & conditions', caption: 'Partner terms', icon: Receipt, route: 'salonTerms' }, { label: 'Subscription plans', caption: 'Upgrade or renew your plan', icon: WalletCards, route: 'subscription', params: { isUpgrade: true } }, { label: 'Need a help?', caption: 'Call 8380017393', icon: Phone, action: () => window.open('tel:8380017393') }];
   return <div className="screen salon-account-screen"><PageHeader title="Salon account" subtitle="Your business, in one place." action={<button className="refresh-text-button" onClick={load} disabled={loading}>{loading ? <Spinner size={14} /> : <Zap size={15} />} {loading ? 'Updating…' : 'Refresh'}</button>} /><section className="salon-profile-hero"><div className="salon-profile-photo"><ImageWithFallback src={profile.imageUrl || profile.imagesArray?.[0]} fallback="/assets/brand/naai-logo-dark.svg" alt={profile.salonName || 'Salon'} /></div><div className="salon-profile-copy"><span className="eyebrow">SALON PARTNER</span><h2>{profile.salonName || 'Your salon'}</h2><p><MapPin size={14} /> {profile.addressLine1 || profile.city || 'Add your salon address'}</p><span className={cx('account-status', status.isOpen ? 'open' : 'closed')}><i /> {status.isOpen ? 'Open for bookings' : 'Closed for bookings'}</span></div><Button size="small" variant="secondary" onClick={() => navigate('editProfile')}><Pencil size={15} /> Edit</Button></section><div className="salon-live-status"><div><span className="eyebrow">BOOKING STATUS</span><strong>{status.isOpen ? 'Customers can book you now' : 'Your salon is currently closed'}</strong><small>Toggle this when you are ready to take the next appointment.</small></div><Toggle checked={isOpen} onChange={toggleOpen} label={isOpen ? 'Open' : 'Closed'} /></div><div className="salon-profile-stats"><div><strong>{profile.services?.length || 0}</strong><span>Services</span></div><div><strong>{profile.barbers?.length || 0}</strong><span>Barbers</span></div></div>{planDetails ? <section className={cx('account-card', 'plan-card', !planDetails.isActive && 'plan-expired')}><div className="plan-card-top"><span className="plan-card-mark"><Crown size={18} /></span><div className="plan-card-title"><span className="eyebrow">{planDetails.isActive ? 'ACTIVE PLAN' : 'PLAN EXPIRED'}</span><strong>{planDetails.title}</strong><small>{planDetails.price !== null && planDetails.price > 0 ? `${formatCurrency(planDetails.price)}${planDetails.duration ? ` · ${planDetails.duration}` : ''}` : planDetails.duration || 'My Naai partner plan'}</small></div><StatusPill tone={planDetails.isActive ? 'open' : 'closed'} dot>{planDetails.isActive ? 'Active' : 'Expired'}</StatusPill></div><div className="plan-card-meta">{planDetails.startDate && <div><CalendarDays size={14} /><span><small>Started</small><strong>{formatDate(planDetails.startDate)}</strong></span></div>}{planDetails.expiryDate && <div><Clock3 size={14} /><span><small>{planDetails.isActive ? 'Expires' : 'Expired on'}</small><strong>{formatDate(planDetails.expiryDate)}</strong></span></div>}{planDetails.daysLeft !== null && <div><Zap size={14} /><span><small>Remaining</small><strong>{planDetails.daysLeft > 0 ? `${planDetails.daysLeft} day${planDetails.daysLeft === 1 ? '' : 's'} left` : 'Renewal due'}</strong></span></div>}</div><Button size="small" variant={planDetails.isActive ? 'secondary' : 'primary'} onClick={() => navigate('subscription', { isUpgrade: true })}>{planDetails.isActive ? 'Manage plan' : 'Renew plan'}</Button></section> : <section className="account-card plan-card plan-unknown"><div className="plan-card-top"><span className="plan-card-mark"><Crown size={18} /></span><div className="plan-card-title"><span className="eyebrow">SUBSCRIPTION</span><strong>Plan details unavailable</strong><small>Keep your salon visible with an active plan.</small></div></div><Button size="small" onClick={() => navigate('subscription', { isUpgrade: true })}>View plans</Button></section>}<div className="account-card partner-menu">{menus.map(item => <button className="account-menu-row" key={item.label} onClick={item.action || (() => navigate(item.route, item.params || {}))}><span className="account-menu-icon"><item.icon size={18} /></span><span><strong>{item.label}</strong><small>{item.caption}</small></span><ChevronRight size={17} /></button>)}</div>{onLogout && <button className="logout-button partner-logout" type="button" onClick={async () => { if (await confirm(LOGOUT_CONFIRM)) onLogout(); }}><LogOut size={16} /> Logout</button>}<NotificationDiagnostics /><p className="version-label">My Naai partner portal · 1.0</p></div>;
 }
 
@@ -361,7 +582,7 @@ function CollapsibleEditorCard({ idPrefix, icon, image, title, subtitle, flag, e
   );
 }
 
-export function EditSalonProfileScreen({ params, session, navigate, notify, onSessionUpdate }) {
+export function EditSalonProfileScreen({ params, session, navigate, notify, onSessionUpdate, onLogout }) {
   const confirm = useConfirm();
   const routeProfile = params?.profileData && typeof params.profileData === 'object' ? params.profileData : null;
   const initial = routeProfile || { ...(session.user || {}), ...(session.user?.salon || {}) };
@@ -832,7 +1053,48 @@ export function EditSalonProfileScreen({ params, session, navigate, notify, onSe
       : `Expired on ${formatDate(planDetails.expiryDate)}`
     : 'Active subscription';
   const goBackToAccount = () => navigate('account', {}, { replace: true });
-  return <div className="screen edit-salon-screen"><PageHeader title={isOnboarding ? 'Complete salon profile' : 'Edit salon profile'} subtitle={isOnboarding ? 'Add the details customers need before you open your dashboard.' : 'Give customers a clear picture of your business.'} onBack={isOnboarding ? undefined : goBackToAccount} action={<button className="refresh-text-button" type="button" onClick={refreshProfile} disabled={loading}><RefreshCw size={15} /> Refresh</button>} />
+  // Cancel/back out of the editor.
+  //
+  // This used to be `disabled={isOnboarding}` with the header's back arrow also
+  // hidden, so during onboarding the partner had a visible Cancel button that
+  // did nothing at all — the "cancel not working on all devices" report. It is
+  // never disabled now:
+  //  - a routine edit confirms only when there are unsaved changes, then
+  //    returns to Account;
+  //  - during onboarding Account does not exist yet, so Cancel explains that
+  //    the profile has to be completed and offers signing out instead of
+  //    silently doing nothing.
+  // Everything runs through the in-app sheet (never window.confirm, which is
+  // suppressed in some installed-PWA webviews and returns false, which is what
+  // makes a button look dead on exactly one device).
+  const cancelEdit = async () => {
+    if (saving) return;
+    if (isOnboarding) {
+      const signOut = await confirm({
+        title: 'Finish your salon profile first',
+        message: 'Your salon needs these details before the dashboard opens, so there is nothing to go back to yet. You can keep filling it in, or sign out and finish later — your saved details are kept.',
+        confirmLabel: 'Sign out',
+        cancelLabel: 'Keep editing',
+        tone: 'warning',
+        icon: LogOut,
+        defaultAction: 'cancel',
+      });
+      if (signOut) onLogout?.();
+      return;
+    }
+    const discard = await confirm({
+      title: 'Discard your changes?',
+      message: 'Any edits you have made on this screen will be lost. Your saved salon profile stays exactly as it is.',
+      confirmLabel: 'Discard changes',
+      cancelLabel: 'Keep editing',
+      tone: 'danger',
+      icon: X,
+      defaultAction: 'cancel',
+    });
+    if (!discard) return;
+    goBackToAccount();
+  };
+  return <div className="screen edit-salon-screen"><PageHeader title={isOnboarding ? 'Complete salon profile' : 'Edit salon profile'} subtitle={isOnboarding ? 'Add the details customers need before you open your dashboard.' : 'Give customers a clear picture of your business.'} onBack={cancelEdit} action={<button className="refresh-text-button" type="button" onClick={refreshProfile} disabled={loading}><RefreshCw size={15} /> Refresh</button>} />
     {planDetails && <div className={cx('editor-plan-strip', planDetails.isActive ? 'active' : 'expired')}><span className="editor-plan-mark"><Crown size={15} /></span><span className="editor-plan-copy"><strong>{planDetails.title}</strong><small>{planDetails.price !== null && planDetails.price > 0 ? `${formatCurrency(planDetails.price)} · ${planExpiryLine}` : planExpiryLine}</small></span>{!isOnboarding && <button type="button" onClick={() => navigate('subscription', { isUpgrade: true })}>Manage plan</button>}</div>}
     <div className={cx('editor-status-bar', missingCount ? 'missing' : 'ready')}>
       <span className="editor-status-mark">{missingCount ? <CircleAlert size={16} /> : <CheckCircle2 size={16} />}</span>
@@ -895,7 +1157,7 @@ export function EditSalonProfileScreen({ params, session, navigate, notify, onSe
       })}</div>
       {!barbers.length && <div className="editor-empty">No barbers added. Customers can still choose any available chair.</div>}
     </CollapsibleSection>
-    <div className="editor-actions"><Button type="button" variant="secondary" onClick={goBackToAccount} disabled={isOnboarding}>Cancel</Button><Button type="submit" loading={saving}>{needsPaymentStep ? 'Save and continue to payment' : isOnboarding ? 'Save and continue' : 'Save profile'} <Check size={17} /></Button></div>
+    <div className="editor-actions"><Button type="button" variant="secondary" onClick={cancelEdit} disabled={saving}>Cancel</Button><Button type="submit" loading={saving}>{needsPaymentStep ? 'Save and continue to payment' : isOnboarding ? 'Save and continue' : 'Save profile'} <Check size={17} /></Button></div>
   </form></div>;
 }
 
