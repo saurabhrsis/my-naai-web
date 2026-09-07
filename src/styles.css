@@ -1158,3 +1158,13 @@ img.image-fallback-tile {
 @media (pointer: coarse) {
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]), textarea, select { font-size: 16px; }
 }
+
+/* Permission cards: an optional permission must not look like a blocker, and a
+   blocked permission must always offer the way back (a browser will not show
+   its prompt a second time, so the only route is its settings screen). */
+.push-setup-optional { border-color: var(--line); background: rgba(255, 255, 255, .04); }
+.push-setup-optional .push-setup-icon { color: var(--white); background: var(--card-raised); border: 1px solid var(--line); }
+.permission-help-link { padding: 0; color: var(--gold); background: transparent; font-size: 11px; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.permission-help-link:hover { color: var(--gold-soft); }
+.permission-help-note { margin: 14px 0 0; color: var(--muted-light); font-size: 12px; line-height: 1.55; }
+.permission-help-note a { color: var(--gold); font-weight: 700; }

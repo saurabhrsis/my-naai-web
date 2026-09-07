@@ -269,7 +269,11 @@ export const api = {
 
   // Salon owner API.
   salonOwnerLogin: payload => post('/api/salons/send-register-otp', payload, { auth: false }),
-  createPaymentOrder: payload => post('/api/salons/create-payment-order', payload, { auth: false }),
+  // Auth is attached when a session exists and skipped when it does not, so one
+  // method serves both the logged-in renewal (where several backend builds
+  // reject an unauthenticated order) and the pre-session registration flow.
+  // `options.headers` carries the temporary verify-otp-register token.
+  createPaymentOrder: (payload, options = {}) => post('/api/salons/create-payment-order', payload, options),
   createSalon: (payload, options = {}) => post('/api/salons/create-salon-with-plan', payload, options),
   renewSalon: payload => post('/api/salons/renew-salon-plan', payload),
   verifySalonOwnerLogin: payload => post('/api/salons/verify-otp-register', payload, { auth: false }),

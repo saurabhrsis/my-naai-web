@@ -118,6 +118,10 @@ Sign-in, session restore and the salon account screen all force an incomplete pr
 
 Both realtime screens (salon **Customer queue** and customer **My bookings**) share one socket.io connection managed by `src/lib/socket.js`. It mirrors the mobile app's global socket approach: it joins the `join_salon`/`join_user` room for the signed-in identity, re-joins rooms after every reconnect, listens for `queue_updated`/`booking_status_updated`, and starts with polling before upgrading to WebSocket so a blocked `wss` upgrade degrades to polling instead of failing (the earlier websocket-only connections produced "WebSocket is closed before the connection is established" during React StrictMode remounts and never recovered behind proxies without an upgrade path). Local development connects same-origin through the Vite `/socket.io` ws proxy; production uses `VITE_API_BASE_URL`. The connection is rebuilt on logout and session expiry.
 
+### Plan prices
+
+One price list serves the whole portal (`PLAN_PRICES` in `src/lib/planDetails.js`): **₹199 / 1 month**, **₹299 / 2 months**, **₹499 / 3 months**. `RENEWAL_PLANS` is derived from `PARTNER_PLANS` and only overrides the supporting note, so a renewal costs exactly what a new purchase costs. The two arrays previously carried independent prices and had drifted (renewals were still on an old ₹99 / ₹179 / ₹249 ladder), which showed a partner one price on the plan card and charged another on the next screen.
+
 ### Active plan display
 
 `src/lib/planDetails.js` keeps the plan catalog (same ids, titles, prices and durations as the mobile `SubscriptionsPlan`/`RenewalSubscriptionsPlan` screens) and normalizes the subscription fields returned by `get-salon` (root fields such as `planType`/`planExpiryDate` or nested `subscription`/`plan` objects). The salon account screen shows an active-plan card (plan title, price, start/expiry dates, days remaining, status, manage/renew action) and the profile editor shows a compact plan strip. When the backend response carries no plan fields, the account screen falls back to a "Plan details unavailable" card that deep-links to the subscription picker instead of guessing.
@@ -142,10 +146,34 @@ The public Razorpay key is read from `VITE_RAZORPAY_KEY_ID` (with the mobile app
 - **Failed** — `payment.failed` shows the bank/gateway reason but leaves the sheet open so the partner can retry with another method; only a terminal validation failure resolves immediately. A failed attempt is never treated as success, and a retry that succeeds still activates the plan.
 - **UPI app redirect (GPay / PhonePe / Paytm / BHIM)** — the sheet is kept alive while the tab is hidden (`visibilitychange` / `pagehide`), the UI switches to *"Waiting for your payment app…"* and then *"Confirming your payment… — please do not pay again"* when the partner returns. If Checkout hands the result back through a redirect instead, `razorpay_payment_id` / `razorpay_order_id` / `razorpay_signature` are read from the URL (search **or** hash query), matched to the stored order, used to finish `create-salon-with-plan` / `renew-salon-plan`, and then stripped from the address bar so a refresh cannot replay them.
 - **Interrupted / killed tab** — the order, plan and (for registration) the registration payload are persisted before the sheet opens. On return the portal shows a recovery card with the order ID, **Try again** and a `tel:` link to 8380017393; a stale record (over 30 minutes) is discarded. If a payment succeeded but activation failed, the card switches to *"Payment received, plan not activated"*, hides **Try again** and shows the payment ID, so a partner is never invited to pay twice.
-- **Gateway availability** — `checkout.js` is loaded on demand if the async tag in `index.html` was blocked, and the screen shows a live status line (`Secure payments powered by Razorpay` / `Preparing…` / `could not load` with **Retry**) instead of failing only when the partner taps pay.
+- **Gateway availability** — `checkout.js` is loaded on demand if the async tag in `index.html` was blocked, and the screen shows a live status line (`Secure payments powered by Razorpay` / `Preparing…` / `could not load` with **Retry**) instead of failing only when the partner taps pay. Checkout is loaded **before** the order is created, so a blocked gateway no longer strands a live unpaid order on the backend.
+- **Order response shape** — `extractRazorpayOrder()` searches the response for a real `order_…` id instead of reading only `response.order.id`. `create-payment-order` has returned the order as `{ order }`, `{ data: { order } }`, `{ data: … }` and as the bare object, under both `id` and `orderId`; every other shape used to surface as *"the payment order came back empty"* even though the order existed. Ids that are not Razorpay order ids (a salon id, a booking id) are rejected rather than sent to Checkout.
+- **Order authorization** — during registration there is no persisted session, so the temporary `verify-otp-register` token is sent as the `Authorization` header on `create-payment-order`. Backends that protect that route were returning a 401 that surfaced as *"could not start the payment"*. A logged-in renewal uses the normal session token.
+- **Public key validation** — a `VITE_RAZORPAY_KEY_ID` that is not a real `rzp_(test|live)_…` id (empty, or a leftover placeholder) is rejected up front with a clear message and the support number, instead of being handed to Checkout and failing with an opaque gateway error.
+- **Signature passthrough** — `renew-salon-plan` receives `orderId` and `signature` alongside the mobile contract's `planType` / `paymentId` / `totalAmount`, so a backend that verifies the Razorpay signature has what it needs and cannot reject an already-charged payment.
+- **The sheet always closes** — a terminal failure or a success used to resolve the promise while the Razorpay iframe was still on screen, leaving the partner looking at a dead payment window while the app carried on underneath. `finish()` now closes Checkout explicitly on those paths.
 - **Registration token** — the temporary `verify-otp-register` token is sent only as an `Authorization` header on `create-salon-with-plan`; it is no longer written into the session before payment, so a cancelled payment cannot leave the portal holding a temporary token.
 
-## 7. Salon time update and customer notification
+### Cancelling out of the salon profile editor
+
+The editor's **Cancel** button is never disabled. It used to render `disabled={isOnboarding}` while the header back arrow was hidden on the same condition, so during onboarding a partner saw a Cancel control that did nothing at all and had no way off the screen — the "cancel button not working" report. `session.isNewSalon` can also be stale-true after a failed profile fetch, which put an ordinary partner in that dead-end.
+
+- **Routine edit** — Cancel asks *"Discard your changes?"* through the in-app sheet and returns to Account on confirm.
+- **Onboarding** — Account does not exist yet, so Cancel explains that the profile has to be finished and offers **Sign out** (saved details are kept) rather than silently doing nothing.
+- The header back arrow is always rendered and runs the same handler, so there are two ways out on every device.
+
+Both paths use `useConfirm()`, never `window.confirm` — the native dialog is suppressed in some installed-PWA webviews, where it returns `false` and makes a button look dead on exactly one device.
+
+## 7. Browser permissions
+
+Notification permission is still required to sign in (the backend requires a `deviceToken`), but the portal explains it rather than demanding it, and always offers a next step:
+
+- **Never asked yet** — *"Turn on booking alerts"* with an **Allow** button and a **Need help?** link.
+- **Blocked** — a browser will not show its prompt a second time, so an Enable button there is a button that cannot work. That state shows **Show me how** instead, opening step-by-step instructions for the actual browser in use (Chrome on Android, Chrome/Edge/Firefox/Opera desktop, Samsung Internet, Safari and Chrome on iOS, Safari desktop) plus the support number.
+- **iPhone** — web push only exists for Home Screen apps, so the card gives the Add-to-Home-Screen steps rather than pointing at a Settings toggle iOS does not have.
+- **Location is optional and says so.** The card reads *"Show nearby salons first?"*, carries a **Not now** action that hides it for the session, and when blocked explains that salons are still listed, just without distances. It never blocks login.
+
+## 8. Salon time update and customer notification
 
 When a salon cannot start a booking at the selected time, the salon can open the booking request and choose **Update time**. The web flow offers the same delay options as the mobile app:
 
@@ -175,7 +203,7 @@ The customer can receive the delay notification in the background or while the p
 3. The response calls `POST /api/bookingRequest/customer-delay-response/{bookingRequestId}/` with `{ "action": "ACCEPT" }` or `{ "action": "REJECT" }`.
 4. The customer is returned to `#/bookings`.
 
-## 8. Notification destinations
+## 9. Notification destinations
 
 The notification route mapping is shared by foreground JavaScript and the Firebase messaging service worker:
 
@@ -200,7 +228,7 @@ The mobile app shows a 60-second countdown on a booking-request alert and auto-c
 
 Hash query parameters are parsed by `App.jsx`, so a notification click remains actionable after a cold start or browser restart. See [FIREBASE-WEB-PUSH.md](./FIREBASE-WEB-PUSH.md) for Firebase setup and payload details.
 
-## 9. PWA service workers
+## 10. PWA service workers
 
 Two workers have separate responsibilities and scopes:
 
@@ -209,7 +237,7 @@ Two workers have separate responsibilities and scopes:
 
 They must not be merged into one worker or registered with the same scope. The PWA install prompt is captured by the app and offered during onboarding/authentication and from the workspace sidebar when the browser supports it.
 
-## 10. Device safe areas and in-app confirmations
+## 11. Device safe areas and in-app confirmations
 
 ### The top of the screen is never cut by the status bar
 
@@ -323,7 +351,7 @@ request runs a 60-second countdown that a second dialog would eat into.
 `src/components/ConfirmDialog.test.jsx` covers the dialog behaviour and fails if
 `window.confirm`, `window.alert` or `window.prompt` reappears anywhere in `src`.
 
-## 11. Important source locations
+## 12. Important source locations
 
 | File | Responsibility |
 | --- | --- |
@@ -344,7 +372,7 @@ request runs a 60-second countdown that a second dialog would eat into.
 | `src/main.jsx` | Root offline shell worker registration |
 | `src/styles.css` | Responsive mobile-first layout through large desktop widths, with the device safe-area padding for installed PWAs |
 
-## 12. Validation checklist
+## 13. Validation checklist
 
 Before deployment:
 
@@ -373,7 +401,7 @@ Then test on an HTTPS deployment with a real customer and salon account:
 - Load the home screen with a salon that has no photo (or block the image URLs): the card shows the My Naai tile centred on the branded gradient, never a stretched or half-cropped logo; products and barbers show their neutral placeholder tiles.
 - View the app at 320 px and 375 px: plan cards, time slots and every grid keep readable two-column chips, and tapping a login/search/profile field on an iPhone does not zoom the page.
 - Check the header wordmark: the M and the N are the same size on the login page, the mobile header and the desktop sidebar.
-## 13. Known console noise (not a MyNaai bug)
+## 14. Known console noise (not a MyNaai bug)
 
 While Chrome DevTools is open, its Performance panel injects an anonymous helper script that can throw:
 

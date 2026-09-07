@@ -37,6 +37,47 @@ export function orderAmountInPaise(order, planPrice) {
   return toPaise(planPrice);
 }
 
+// `create-payment-order` has been observed returning the Razorpay order at
+// several depths (`{ order }`, `{ data: { order } }`, `{ data: … }`, or the
+// order object itself) and under two id keys (`id`, `orderId`). Reading only
+// `response.order.id` made every one of the other shapes look like "the payment
+// order came back empty" even though the order existed — which is the failure
+// mode a partner sees as "Razorpay is not working". Search the response instead
+// and normalize to `{ id, amount, currency }`.
+export function extractRazorpayOrder(response) {
+  const seen = new Set();
+  const readId = node => {
+    for (const key of ['id', 'orderId', 'order_id', 'razorpayOrderId']) {
+      const value = node?.[key];
+      if (typeof value === 'string' && /^order_/i.test(value.trim())) return value.trim();
+    }
+    return '';
+  };
+  const walk = node => {
+    if (!node || typeof node !== 'object' || seen.has(node)) return null;
+    seen.add(node);
+    const id = readId(node);
+    if (id) {
+      const amount = Number(node.amount ?? node.amountDue ?? node.amount_due);
+      const currency = typeof node.currency === 'string' && node.currency.trim() ? node.currency.trim() : 'INR';
+      return { id, amount: Number.isFinite(amount) && amount > 0 ? Math.round(amount) : null, currency, raw: node };
+    }
+    // Depth-first over the usual envelopes, then any remaining object values.
+    for (const key of ['order', 'data', 'result', 'payload', 'response']) {
+      const found = walk(node[key]);
+      if (found) return found;
+    }
+    for (const value of Object.values(node)) {
+      if (value && typeof value === 'object') {
+        const found = walk(value);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+  return walk(response);
+}
+
 // index.html loads checkout.js with `async`; this makes the portal resilient
 // when that request is blocked (ad blockers, flaky mobile networks) by loading
 // it on demand before a payment is attempted.
@@ -208,12 +249,20 @@ export function openRazorpayCheckout({
     let failure = null;
     let switchedAway = false;
     let hidden = false;
+    let checkout = null;
 
-    const finish = result => {
+    const finish = (result, { closeSheet = false } = {}) => {
       if (settled) return;
       settled = true;
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('pagehide', onPageHide);
+      // A terminal failure used to resolve the promise while the Razorpay
+      // iframe was still on screen: the app carried on underneath and the
+      // partner was left staring at a dead payment sheet with no way back.
+      // `ondismiss` cannot fire here (we already settled), so close it by hand.
+      if (closeSheet) {
+        try { checkout?.close(); } catch (closeError) { console.debug('Razorpay Checkout could not be closed.', closeError); }
+      }
       resolve({ ...result, switchedAway });
     };
 
@@ -237,7 +286,7 @@ export function openRazorpayCheckout({
     window.addEventListener('pagehide', onPageHide);
 
     try {
-      const checkout = new window.Razorpay({
+      checkout = new window.Razorpay({
         key,
         amount: Math.round(Number(amount)),
         currency,
@@ -264,7 +313,7 @@ export function openRazorpayCheckout({
           if (!paymentId) {
             failure = { code: 'MISSING_PAYMENT_ID', description: 'Razorpay did not return a payment ID. Do not pay again — contact support.' };
             onEvent({ type: 'failed', error: failure });
-            finish({ status: 'failed', error: failure });
+            finish({ status: 'failed', error: failure }, { closeSheet: true });
             return;
           }
           finish({
@@ -274,7 +323,7 @@ export function openRazorpayCheckout({
               orderId: response?.razorpay_order_id || orderId,
               signature: response?.razorpay_signature || '',
             },
-          });
+          }, { closeSheet: true });
         },
       });
 
@@ -291,7 +340,7 @@ export function openRazorpayCheckout({
         };
         onEvent({ type: 'failed', error: failure });
         const terminal = /validation/i.test(failure.step) || /BAD_REQUEST_ERROR/i.test(failure.code);
-        if (terminal) finish({ status: 'failed', error: failure });
+        if (terminal) finish({ status: 'failed', error: failure }, { closeSheet: true });
       });
 
       checkout.open();

@@ -273,7 +273,7 @@ export function SalonAccountScreen({ session, navigate, notify, onSessionUpdate,
   const hasCachedProfile = Boolean(profile.salonName || profile.name || profile.imageUrl || profile.imagesArray?.length);
   if (loading && !hasCachedProfile) return <div className="screen salon-account-screen"><PageHeader title="Salon account" /><div className="account-loading"><Spinner label="Loading salon profile…" /></div></div>;
   const status = getSalonStatus(profile.businessHours, isOpen);
-  const menus = [{ label: 'Edit salon profile', caption: 'Photos, hours, services and specialists', icon: Edit3, route: 'editProfile' }, { label: 'About My Naai', caption: 'How My Naai helps your business', icon: Store, route: 'salonAbout' }, { label: 'Frequently asked questions', caption: 'Partner help and booking basics', icon: Bell, route: 'salonFaq' }, { label: 'Terms & conditions', caption: 'Partner terms', icon: Receipt, route: 'salonTerms' }, { label: 'Subscription plans', caption: 'Upgrade or renew your plan', icon: WalletCards, route: 'subscription', params: { isUpgrade: true } }, { label: 'Need a hand?', caption: 'Call 8380017393', icon: Phone, action: () => window.open('tel:8380017393') }];
+  const menus = [{ label: 'Edit salon profile', caption: 'Photos, hours, services and specialists', icon: Edit3, route: 'editProfile' }, { label: 'About My Naai', caption: 'How My Naai helps your business', icon: Store, route: 'salonAbout' }, { label: 'Frequently asked questions', caption: 'Partner help and booking basics', icon: Bell, route: 'salonFaq' }, { label: 'Terms & conditions', caption: 'Partner terms', icon: Receipt, route: 'salonTerms' }, { label: 'Subscription plans', caption: 'Upgrade or renew your plan', icon: WalletCards, route: 'subscription', params: { isUpgrade: true } }, { label: 'Need a help?', caption: 'Call 8380017393', icon: Phone, action: () => window.open('tel:8380017393') }];
   return <div className="screen salon-account-screen"><PageHeader title="Salon account" subtitle="Your business, in one place." action={<button className="refresh-text-button" onClick={load} disabled={loading}>{loading ? <Spinner size={14} /> : <Zap size={15} />} {loading ? 'Updating…' : 'Refresh'}</button>} /><section className="salon-profile-hero"><div className="salon-profile-photo"><ImageWithFallback src={profile.imageUrl || profile.imagesArray?.[0]} fallback="/assets/brand/naai-logo-dark.svg" alt={profile.salonName || 'Salon'} /></div><div className="salon-profile-copy"><span className="eyebrow">SALON PARTNER</span><h2>{profile.salonName || 'Your salon'}</h2><p><MapPin size={14} /> {profile.addressLine1 || profile.city || 'Add your salon address'}</p><span className={cx('account-status', status.isOpen ? 'open' : 'closed')}><i /> {status.isOpen ? 'Open for bookings' : 'Closed for bookings'}</span></div><Button size="small" variant="secondary" onClick={() => navigate('editProfile')}><Pencil size={15} /> Edit</Button></section><div className="salon-live-status"><div><span className="eyebrow">BOOKING STATUS</span><strong>{status.isOpen ? 'Customers can book you now' : 'Your salon is currently closed'}</strong><small>Toggle this when you are ready to take the next appointment.</small></div><Toggle checked={isOpen} onChange={toggleOpen} label={isOpen ? 'Open' : 'Closed'} /></div><div className="salon-profile-stats"><div><strong>{profile.services?.length || 0}</strong><span>Services</span></div><div><strong>{profile.barbers?.length || 0}</strong><span>Barbers</span></div></div>{planDetails ? <section className={cx('account-card', 'plan-card', !planDetails.isActive && 'plan-expired')}><div className="plan-card-top"><span className="plan-card-mark"><Crown size={18} /></span><div className="plan-card-title"><span className="eyebrow">{planDetails.isActive ? 'ACTIVE PLAN' : 'PLAN EXPIRED'}</span><strong>{planDetails.title}</strong><small>{planDetails.price !== null && planDetails.price > 0 ? `${formatCurrency(planDetails.price)}${planDetails.duration ? ` · ${planDetails.duration}` : ''}` : planDetails.duration || 'My Naai partner plan'}</small></div><StatusPill tone={planDetails.isActive ? 'open' : 'closed'} dot>{planDetails.isActive ? 'Active' : 'Expired'}</StatusPill></div><div className="plan-card-meta">{planDetails.startDate && <div><CalendarDays size={14} /><span><small>Started</small><strong>{formatDate(planDetails.startDate)}</strong></span></div>}{planDetails.expiryDate && <div><Clock3 size={14} /><span><small>{planDetails.isActive ? 'Expires' : 'Expired on'}</small><strong>{formatDate(planDetails.expiryDate)}</strong></span></div>}{planDetails.daysLeft !== null && <div><Zap size={14} /><span><small>Remaining</small><strong>{planDetails.daysLeft > 0 ? `${planDetails.daysLeft} day${planDetails.daysLeft === 1 ? '' : 's'} left` : 'Renewal due'}</strong></span></div>}</div><Button size="small" variant={planDetails.isActive ? 'secondary' : 'primary'} onClick={() => navigate('subscription', { isUpgrade: true })}>{planDetails.isActive ? 'Manage plan' : 'Renew plan'}</Button></section> : <section className="account-card plan-card plan-unknown"><div className="plan-card-top"><span className="plan-card-mark"><Crown size={18} /></span><div className="plan-card-title"><span className="eyebrow">SUBSCRIPTION</span><strong>Plan details unavailable</strong><small>Keep your salon visible with an active plan.</small></div></div><Button size="small" onClick={() => navigate('subscription', { isUpgrade: true })}>View plans</Button></section>}<div className="account-card partner-menu">{menus.map(item => <button className="account-menu-row" key={item.label} onClick={item.action || (() => navigate(item.route, item.params || {}))}><span className="account-menu-icon"><item.icon size={18} /></span><span><strong>{item.label}</strong><small>{item.caption}</small></span><ChevronRight size={17} /></button>)}</div>{onLogout && <button className="logout-button partner-logout" type="button" onClick={async () => { if (await confirm(LOGOUT_CONFIRM)) onLogout(); }}><LogOut size={16} /> Logout</button>}<NotificationDiagnostics /><p className="version-label">My Naai partner portal · 1.0</p></div>;
 }
 
@@ -361,7 +361,7 @@ function CollapsibleEditorCard({ idPrefix, icon, image, title, subtitle, flag, e
   );
 }
 
-export function EditSalonProfileScreen({ params, session, navigate, notify, onSessionUpdate }) {
+export function EditSalonProfileScreen({ params, session, navigate, notify, onSessionUpdate, onLogout }) {
   const confirm = useConfirm();
   const routeProfile = params?.profileData && typeof params.profileData === 'object' ? params.profileData : null;
   const initial = routeProfile || { ...(session.user || {}), ...(session.user?.salon || {}) };
@@ -832,7 +832,48 @@ export function EditSalonProfileScreen({ params, session, navigate, notify, onSe
       : `Expired on ${formatDate(planDetails.expiryDate)}`
     : 'Active subscription';
   const goBackToAccount = () => navigate('account', {}, { replace: true });
-  return <div className="screen edit-salon-screen"><PageHeader title={isOnboarding ? 'Complete salon profile' : 'Edit salon profile'} subtitle={isOnboarding ? 'Add the details customers need before you open your dashboard.' : 'Give customers a clear picture of your business.'} onBack={isOnboarding ? undefined : goBackToAccount} action={<button className="refresh-text-button" type="button" onClick={refreshProfile} disabled={loading}><RefreshCw size={15} /> Refresh</button>} />
+  // Cancel/back out of the editor.
+  //
+  // This used to be `disabled={isOnboarding}` with the header's back arrow also
+  // hidden, so during onboarding the partner had a visible Cancel button that
+  // did nothing at all — the "cancel not working on all devices" report. It is
+  // never disabled now:
+  //  - a routine edit confirms only when there are unsaved changes, then
+  //    returns to Account;
+  //  - during onboarding Account does not exist yet, so Cancel explains that
+  //    the profile has to be completed and offers signing out instead of
+  //    silently doing nothing.
+  // Everything runs through the in-app sheet (never window.confirm, which is
+  // suppressed in some installed-PWA webviews and returns false, which is what
+  // makes a button look dead on exactly one device).
+  const cancelEdit = async () => {
+    if (saving) return;
+    if (isOnboarding) {
+      const signOut = await confirm({
+        title: 'Finish your salon profile first',
+        message: 'Your salon needs these details before the dashboard opens, so there is nothing to go back to yet. You can keep filling it in, or sign out and finish later — your saved details are kept.',
+        confirmLabel: 'Sign out',
+        cancelLabel: 'Keep editing',
+        tone: 'warning',
+        icon: LogOut,
+        defaultAction: 'cancel',
+      });
+      if (signOut) onLogout?.();
+      return;
+    }
+    const discard = await confirm({
+      title: 'Discard your changes?',
+      message: 'Any edits you have made on this screen will be lost. Your saved salon profile stays exactly as it is.',
+      confirmLabel: 'Discard changes',
+      cancelLabel: 'Keep editing',
+      tone: 'danger',
+      icon: X,
+      defaultAction: 'cancel',
+    });
+    if (!discard) return;
+    goBackToAccount();
+  };
+  return <div className="screen edit-salon-screen"><PageHeader title={isOnboarding ? 'Complete salon profile' : 'Edit salon profile'} subtitle={isOnboarding ? 'Add the details customers need before you open your dashboard.' : 'Give customers a clear picture of your business.'} onBack={cancelEdit} action={<button className="refresh-text-button" type="button" onClick={refreshProfile} disabled={loading}><RefreshCw size={15} /> Refresh</button>} />
     {planDetails && <div className={cx('editor-plan-strip', planDetails.isActive ? 'active' : 'expired')}><span className="editor-plan-mark"><Crown size={15} /></span><span className="editor-plan-copy"><strong>{planDetails.title}</strong><small>{planDetails.price !== null && planDetails.price > 0 ? `${formatCurrency(planDetails.price)} · ${planExpiryLine}` : planExpiryLine}</small></span>{!isOnboarding && <button type="button" onClick={() => navigate('subscription', { isUpgrade: true })}>Manage plan</button>}</div>}
     <div className={cx('editor-status-bar', missingCount ? 'missing' : 'ready')}>
       <span className="editor-status-mark">{missingCount ? <CircleAlert size={16} /> : <CheckCircle2 size={16} />}</span>
@@ -895,7 +936,7 @@ export function EditSalonProfileScreen({ params, session, navigate, notify, onSe
       })}</div>
       {!barbers.length && <div className="editor-empty">No barbers added. Customers can still choose any available chair.</div>}
     </CollapsibleSection>
-    <div className="editor-actions"><Button type="button" variant="secondary" onClick={goBackToAccount} disabled={isOnboarding}>Cancel</Button><Button type="submit" loading={saving}>{needsPaymentStep ? 'Save and continue to payment' : isOnboarding ? 'Save and continue' : 'Save profile'} <Check size={17} /></Button></div>
+    <div className="editor-actions"><Button type="button" variant="secondary" onClick={cancelEdit} disabled={saving}>Cancel</Button><Button type="submit" loading={saving}>{needsPaymentStep ? 'Save and continue to payment' : isOnboarding ? 'Save and continue' : 'Save profile'} <Check size={17} /></Button></div>
   </form></div>;
 }
 
