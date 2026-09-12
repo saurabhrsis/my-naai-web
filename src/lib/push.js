@@ -23,6 +23,10 @@ function queryConfig() {
   return new URLSearchParams(Object.entries(firebaseConfig).filter(([, value]) => value)).toString();
 }
 
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function getMessagingClient() {
   if (!isPushConfigured() || typeof window === 'undefined' || !('serviceWorker' in navigator)) return null;
   if (!messagingPromise) {
@@ -43,10 +47,9 @@ async function getMessagingClient() {
 // getToken needs an active worker to attach the push subscription to. Waiting
 // here removes the "no active service worker" first-visit failure that shows up
 // as a silent empty token.
-function waitForActiveWorker(registration, timeout = 6000) {
+function waitForActiveWorker(registration, timeout = 8000) {
   return new Promise(resolve => {
     if (!registration) return resolve(null);
-    const active = registration.active || registration.waiting || registration.installing;
     if (registration.active) return resolve(registration);
     let settled = false;
     const finish = () => {
@@ -56,30 +59,90 @@ function waitForActiveWorker(registration, timeout = 6000) {
       resolve(registration);
     };
     const timer = setTimeout(finish, timeout);
-    [registration.installing, registration.waiting].forEach(worker => {
-      if (!worker) return;
+    const workers = [registration.installing, registration.waiting, registration.active].filter(Boolean);
+    if (!workers.length) {
+      // No worker at all yet, wait a bit for activation
+      setTimeout(finish, 800);
+      return;
+    }
+    workers.forEach(worker => {
       worker.addEventListener('statechange', () => {
         if (worker.state === 'activated' || registration.active) finish();
       });
     });
-    if (!active) finish();
-    return undefined;
   });
 }
 
 async function getPushServiceWorker() {
   if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return null;
+  // If we already tried and have a promise, reuse it
+  if (registrationPromise) {
+    try {
+      const existing = await registrationPromise;
+      if (existing) return existing;
+    } catch {
+      // fall through to re-register
+    }
+    registrationPromise = undefined;
+  }
+
+  // Try to find an existing registration first - fast path, no network
+  try {
+    if (navigator.serviceWorker.getRegistration) {
+      const existingScope = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope');
+      if (existingScope) {
+        const active = await waitForActiveWorker(existingScope, 3000);
+        if (active) return active;
+      }
+      // Also check root scope - some browsers may have it there
+      const rootReg = await navigator.serviceWorker.getRegistration('/');
+      if (rootReg) {
+        const script = rootReg.active?.scriptURL || rootReg.waiting?.scriptURL || rootReg.installing?.scriptURL || '';
+        if (String(script).includes('firebase-messaging-sw')) {
+          const active = await waitForActiveWorker(rootReg, 3000);
+          if (active) return active;
+        }
+      }
+    }
+  } catch (error) {
+    console.debug(getErrorMessage(error, 'Could not read existing service worker registration.'));
+  }
+
+  // Register fresh
   if (!registrationPromise) {
-    registrationPromise = navigator.serviceWorker
-      .register(`/firebase-messaging-sw.js?${queryConfig()}`, { scope: '/firebase-cloud-messaging-push-scope' })
-      .then(registration => waitForActiveWorker(registration))
-      .catch(error => {
+    registrationPromise = (async () => {
+      try {
+        // Ensure serviceWorker is ready before registering FCM worker - reduces race
+        try {
+          await Promise.race([
+            navigator.serviceWorker.ready,
+            delay(1500),
+          ]);
+        } catch {
+          // ignore, proceed to register
+        }
+
+        const registration = await navigator.serviceWorker.register(
+          `/firebase-messaging-sw.js?${queryConfig()}`,
+          { scope: '/firebase-cloud-messaging-push-scope' }
+        );
+        const active = await waitForActiveWorker(registration, 8000);
+        // Also wait for ready to ensure pushManager is available
+        try {
+          await Promise.race([
+            navigator.serviceWorker.ready,
+            delay(1000),
+          ]);
+        } catch {
+          // ignore
+        }
+        return active || registration;
+      } catch (error) {
         console.debug(getErrorMessage(error, 'Firebase push service worker registration failed.'));
-        // Allow the authenticated retry action to recover from a transient
-        // service-worker/Firebase setup failure instead of caching null forever.
         registrationPromise = undefined;
         return null;
-      });
+      }
+    })();
   }
   return registrationPromise;
 }
@@ -104,6 +167,42 @@ async function peekPushServiceWorker() {
   }
 }
 
+export function isIosDevice() {
+  if (typeof navigator === 'undefined') return false;
+  return /iphone|ipad|ipod/i.test(navigator.userAgent || '') || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+export function isIosPwaInstalled() {
+  return isIosDevice() && (window.matchMedia?.('(display-mode: standalone)').matches === true || navigator.standalone === true);
+}
+
+export function detectBrowser() {
+  if (typeof navigator === 'undefined') return 'other';
+  const agent = navigator.userAgent || '';
+  const android = /android/i.test(agent);
+  if (isIosDevice()) return /crios/i.test(agent) ? 'ios-chrome' : 'ios-safari';
+  if (/samsungbrowser/i.test(agent)) return 'samsung';
+  if (/firefox|fxios/i.test(agent)) return 'firefox';
+  if (/edg\//i.test(agent)) return 'edge';
+  if (/opr\/|opera/i.test(agent)) return 'opera';
+  if (/chrome|crios/i.test(agent)) return android ? 'chrome-android' : 'chrome-desktop';
+  if (/safari/i.test(agent)) return 'safari-desktop';
+  return android ? 'chrome-android' : 'other';
+}
+
+export async function requestNotificationPermission() {
+  if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
+  if (Notification.permission === 'granted') return 'granted';
+  if (Notification.permission === 'denied') return 'denied';
+  try {
+    const result = await Notification.requestPermission();
+    return result;
+  } catch (error) {
+    console.debug(getErrorMessage(error, 'Notification permission request failed.'));
+    return Notification.permission || 'default';
+  }
+}
+
 // Explains *why* push is unavailable so the UI (and support) can say something
 // useful instead of failing silently.
 export async function getPushStatus() {
@@ -117,7 +216,7 @@ export async function getPushStatus() {
   const messaging = await getMessagingClient();
   if (!messaging) {
     // iOS only exposes web push to installed PWAs (iOS 16.4+).
-    const installed = window.matchMedia?.('(display-mode: standalone)').matches === true || navigator.standalone === true;
+    const installed = isIosPwaInstalled();
     const installedHint = installed ? '' : ' On iPhone/iPad, install the My Naai app to your home screen first.';
     return { state: 'unsupported', reason: `This browser context cannot receive web notifications.${installedHint}` };
   }
@@ -132,7 +231,7 @@ export async function getPushStatus() {
   // Permission granted but token still empty — most often a transient service
   // worker or Firebase initialization race. Surface as unavailable so the UI
   // can offer a retry instead of staying silent.
-  return { state: 'unavailable', reason: 'We could not prepare notifications in this browser. Please try again.' };
+  return { state: 'unavailable', reason: 'We could not prepare notifications in this browser. Please try again. This can happen on first visit - a retry usually works.' };
 }
 
 export async function getPushToken({ requestPermission = false } = {}) {
@@ -141,34 +240,67 @@ export async function getPushToken({ requestPermission = false } = {}) {
   if (!messaging) return '';
   let permission = Notification.permission;
   if (permission === 'default' && requestPermission) {
-    try { permission = await Notification.requestPermission(); } catch (error) {
-      console.debug(getErrorMessage(error, 'Browser notification permission was not available.'));
-      return '';
-    }
+    permission = await requestNotificationPermission();
   }
   if (permission !== 'granted') {
     // Permission not granted — clear any stale token so diagnostics and login
     // do not keep using an old value that the browser can no longer deliver to.
-    try { localStorage.removeItem('FCM_TOKEN'); } catch (storageError) { /* ignore */ }
+    try { localStorage.removeItem('FCM_TOKEN'); } catch { /* ignore */ }
     return '';
   }
-  const registration = await getPushServiceWorker();
-  if (!registration) return '';
-  try {
-    const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: registration });
-    if (token) {
-      localStorage.setItem('FCM_TOKEN', token);
-      return token;
+
+  // Retry loop for token - handles transient "no active service worker" and other races
+  // that caused the "Allow -> Retry, Retry" loop reported by users.
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await delay(600 * attempt);
+
+    try {
+      const registration = await getPushServiceWorker();
+      if (!registration) {
+        // If registration failed, try to reset and re-attempt
+        registrationPromise = undefined;
+        if (attempt < 2) continue;
+        return '';
+      }
+
+      // Extra safety: wait for serviceWorker.ready if available
+      if (attempt === 1) {
+        try {
+          await Promise.race([navigator.serviceWorker.ready, delay(1000)]);
+        } catch {
+          // ignore
+        }
+      }
+
+      const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: registration });
+      if (token) {
+        try { localStorage.setItem('FCM_TOKEN', token); } catch { /* ignore */ }
+        return token;
+      }
+      // Empty token but no throw - likely transient, retry unless last attempt
+      if (attempt === 2) {
+        try { localStorage.removeItem('FCM_TOKEN'); } catch { /* ignore */ }
+        return '';
+      }
+    } catch (error) {
+      lastError = error;
+      const msg = String(error?.message || '').toLowerCase();
+      console.debug(getErrorMessage(error, 'Firebase could not generate a browser notification token.'));
+      // Specific retryable errors
+      if (msg.includes('no active service worker') || msg.includes('push subscription') || msg.includes('abort') || msg.includes('network')) {
+        registrationPromise = undefined; // force re-register next attempt
+        if (attempt < 2) continue;
+      }
+      // Non-retryable or last attempt
+      if (attempt === 2) {
+        return '';
+      }
     }
-    // No token returned — treat as unavailable and clear stale storage.
-    try { localStorage.removeItem('FCM_TOKEN'); } catch (storageError) { /* ignore */ }
-    return '';
-  } catch (error) {
-    console.debug(getErrorMessage(error, 'Firebase could not generate a browser notification token.'));
-    // Keep existing stored token for diagnostics, but signal failure to caller
-    // so the login flow can surface a retry instead of silently using stale data.
-    return '';
   }
+
+  console.debug('getPushToken failed after retries', lastError);
+  return '';
 }
 
 // Booking-request notifications expose Accept / Reject / Delay action buttons,
@@ -182,33 +314,54 @@ export function bookingRequestActions() {
   ];
 }
 
+function broadcastToClients(message) {
+  try {
+    if (typeof window !== 'undefined' && navigator.serviceWorker?.controller) {
+      navigator.serviceWorker.controller.postMessage(message);
+    }
+    // Also try BroadcastChannel for same-origin tabs
+    if (typeof BroadcastChannel !== 'undefined') {
+      const channel = new BroadcastChannel('mynaai-notifications');
+      channel.postMessage(message);
+      channel.close();
+    }
+  } catch {
+    // ignore - broadcast is best effort
+  }
+}
+
 // FCM delivers foreground web messages to the page instead of the OS, so the
 // app has to render them. Showing them through the messaging service worker
 // keeps the notificationclick deep-link routing in one place.
 export async function displayNotification({ title, body, data = {}, onClick } = {}) {
   if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return false;
   const type = String(data.type || data.notificationType || '').toUpperCase();
-  const buzzer = type === 'BOOKING_REQUEST' || type === 'DELAY_BOOKING' || type === 'DELAY_TIME_PROPOSAL';
+  const isBuzzerType = type === 'BOOKING_REQUEST' || type === 'DELAY_BOOKING' || type === 'DELAY_TIME_PROPOSAL';
   const finalTitle = title || 'My Naai update';
   const finalBody = body || 'You have a new update from My Naai.';
+  const target = notificationTarget(data);
+
   const options = {
     body: finalBody,
     icon: '/icons/icon-192.png',
     badge: '/icons/icon-192.png',
     tag: data.bookingRequestId || data.bookingId || data.type || 'mynaai-notification',
-    data: { ...data, target: notificationTarget(data) },
+    data: { ...data, target },
     requireInteraction: type === 'BOOKING_REQUEST' || type === 'DELAY_TIME_PROPOSAL',
-    // Buzzer-style vibration for time-critical alerts (Android browsers).
-    vibrate: buzzer ? [260, 120, 260, 120, 520] : undefined,
-    // Best-effort background buzzer sound. The real buzzer always plays via
-    // Web Audio while the app is open; this lets a supporting browser sound it
-    // when the tab is hidden. Web notification sound support is inconsistent.
-    sound: buzzer ? '/assets/audio/buzzer_old.wav' : 'default',
-    // Ask the browser for action buttons on booking requests. Browsers that do
-    // not support notification actions ignore this option; the notification
-    // body still opens BookingRequestScreen as the universal fallback.
-    actions: type === 'BOOKING_REQUEST' ? bookingRequestActions() : undefined,
+    // Buzzer-style vibration for time-critical alerts (Android browsers, also supported on some desktop)
+    vibrate: isBuzzerType ? [260, 120, 260, 120, 520] : undefined,
+    // Best-effort: some browsers support sound, most ignore it. Real buzzer plays via Web Audio in foreground.
+    silent: false,
+    // Ask the browser for action buttons on booking requests and delay bookings.
+    // Browsers that do not support notification actions ignore this.
+    actions: type === 'BOOKING_REQUEST' ? bookingRequestActions() : type === 'DELAY_BOOKING' ? [{ action: 'DELAY_BOOKING', title: 'View Delay' }] : undefined,
   };
+
+  // Try to trigger buzzer in all open tabs via broadcast - works even when notification is shown via SW
+  if (isBuzzerType) {
+    broadcastToClients({ type: 'MYNAAI_PLAY_BUZZER', notificationType: type, data });
+  }
+
   // Prefer the messaging service worker — its click handler is the single
   // source of truth for deep-link routing, even for foreground messages.
   try {
@@ -227,9 +380,20 @@ export async function displayNotification({ title, body, data = {}, onClick } = 
     const notification = new Notification(finalTitle, { body: finalBody, icon: options.icon, tag: options.tag });
     if (onClick) {
       notification.onclick = event => {
-        try { event?.preventDefault?.(); } catch (clickError) { /* ignore */ }
+        try { event?.preventDefault?.(); } catch { /* ignore */ }
         try { onClick(); } catch (handlerError) { console.debug(getErrorMessage(handlerError, 'Notification click handler failed.')); }
-        try { notification.close?.(); } catch (closeError) { /* ignore */ }
+        try { notification.close?.(); } catch { /* ignore */ }
+        try { window.focus(); } catch { /* ignore */ }
+      };
+    } else {
+      notification.onclick = () => {
+        try { window.focus(); } catch { /* ignore */ }
+        try {
+          if (target && target !== '/#/') {
+            window.location.hash = target.replace(/^\/#/, '#');
+          }
+        } catch { /* ignore */ }
+        try { notification.close?.(); } catch { /* ignore */ }
       };
     }
     return true;
@@ -243,7 +407,7 @@ function notificationTarget(data = {}) {
   const type = String(data.type || data.notificationType || '').toUpperCase();
   const id = encodeURIComponent(data.bookingRequestId || data.bookingId || '');
   if (type === 'DELAY_TIME_PROPOSAL') {
-    return `/#/delay?bookingRequestId=${id}&delayMinutes=${encodeURIComponent(data.delayMinutes || '')}&proposedTime=${encodeURIComponent(data.proposedTime || '')}`;
+    return `/#/delay?bookingRequestId=${id}&delayMinutes=${encodeURIComponent(data.delayMinutes || '')}&proposedTime=${encodeURIComponent(data.proposedTime || '')}${data.reason ? `&reason=${encodeURIComponent(data.reason)}` : ''}`;
   }
   if (type === 'BOOKING_CONFIRMED' || type === 'BOOKING_REJECTED' || type === 'DELAY_RESPONSE') return '/#/bookings';
   if (type === 'BOOKING_REQUEST') return `/#/bookingRequest?bookingRequestId=${id}`;
@@ -290,7 +454,7 @@ export function readForegroundMessageRecord() {
   try {
     const parsed = JSON.parse(localStorage.getItem('FCM_LAST_MESSAGE') || 'null');
     return parsed && typeof parsed === 'object' ? parsed : null;
-  } catch (parseError) {
+  } catch {
     return null;
   }
 }
@@ -386,13 +550,15 @@ export async function closeNotification(tag) {
     const registration = await getPushServiceWorker();
     const worker = registration?.active || registration?.waiting || registration?.installing;
     if (worker) worker.postMessage({ type: 'MYNAAI_CLOSE_NOTIFICATION', tag: String(tag || '') });
+    // Also broadcast to all clients to close in-page notifications
+    broadcastToClients({ type: 'MYNAAI_CLOSE_NOTIFICATION', tag: String(tag || '') });
   } catch (error) {
     console.debug(getErrorMessage(error, 'Could not close the notification.'));
   }
 }
 
 export async function deletePushToken() {
-  localStorage.removeItem('FCM_TOKEN');
+  try { localStorage.removeItem('FCM_TOKEN'); } catch { /* ignore */ }
   const messaging = await getMessagingClient();
   if (!messaging) return;
   try { await deleteToken(messaging); } catch (error) { console.debug(getErrorMessage(error, 'Could not revoke the browser notification token.')); }
@@ -413,7 +579,7 @@ export function getNotificationRoute(data = {}, role = '') {
   const query = params => Object.fromEntries(Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== ''));
 
   if (type === 'DELAY_TIME_PROPOSAL' && String(role).toUpperCase() === 'USER') {
-    return { name: 'delay', params: query({ bookingRequestId, delayMinutes: data.delayMinutes, proposedTime: data.proposedTime }) };
+    return { name: 'delay', params: query({ bookingRequestId, delayMinutes: data.delayMinutes, proposedTime: data.proposedTime, reason: data.reason }) };
   }
   if ((type === 'BOOKING_CONFIRMED' || type === 'BOOKING_REJECTED' || type === 'DELAY_RESPONSE') && String(role).toUpperCase() === 'USER') {
     return { name: 'bookings', params: {} };
@@ -425,4 +591,10 @@ export function getNotificationRoute(data = {}, role = '') {
     return { name: 'bookingRequest', params: query({ bookingRequestId, openDelayModal: 'true' }) };
   }
   return { name: String(role).toUpperCase() === 'SALON' ? 'queue' : 'home', params: {} };
+}
+
+// Helper to reset registration promise - useful when token generation fails
+export function resetPushRegistration() {
+  registrationPromise = undefined;
+  messagingPromise = undefined;
 }

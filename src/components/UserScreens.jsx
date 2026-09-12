@@ -34,8 +34,10 @@ import {
   UserRound,
   X,
   Zap,
+  Clock,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { getErrorMessage as getApiError } from './Shared';
 import { normalizeAdImages } from '../lib/ads';
 import { describeOffset } from '../lib/bookingTime';
 import { getNotificationRoute, isActionableNotification } from '../lib/push';
@@ -622,6 +624,10 @@ export function NotificationsScreen({ session, notify, navigate }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [actionLoading, setActionLoading] = useState('');
+  const [delayModal, setDelayModal] = useState(null);
+  const [delayMinutes, setDelayMinutes] = useState('15');
+
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError('');
@@ -637,11 +643,115 @@ export function NotificationsScreen({ session, notify, navigate }) {
       notify?.('error', message);
     } finally { setLoading(false); }
   }, [isSalon, notify, session.userId]);
+
   useEffect(() => { load(); }, [load]);
-  return <div className="screen notifications-screen"><PageHeader title="Notifications" subtitle={isSalon ? 'Booking requests and salon updates.' : 'Updates about your appointments.'} onBack={() => navigate(isSalon ? 'queue' : 'home')} action={<button className="icon-btn ghost" onClick={load} aria-label="Refresh notifications"><Zap size={18} /></button>} />{loadError && !loading && <div className="inline-notice notification-error"><CircleAlert size={16} /><span>{loadError}</span><button onClick={load}>Try again</button></div>}{loading ? <div className="notification-list">{[1, 2, 3].map(item => <SkeletonCard key={item} className="notification-skeleton" />)}</div> : items.length ? <div className="notification-list">{items.map((item, index) => {
-    const action = getNotificationAction(item, role);
-    return <article className={cx('notification-card', action && 'notification-actionable')} key={item.notificationId || item.id || index}><div className="notification-icon"><Bell size={17} /></div><div><div className="notification-heading"><h3>{item.title || 'My Naai update'}</h3><span>{formatDateTime(item.createdAt)}</span></div><p>{item.body || item.message || 'You have a new update from My Naai.'}</p>{action && <button className="notification-open-button" type="button" onClick={() => navigate(action.route.name, action.route.params)}>{action.label}<ArrowRight size={14} /></button>}</div></article>;
-  })}</div> : !loadError && <EmptyState icon={Bell} title="No notifications yet" message="We will keep important booking updates here." />}</div>;
+
+  const handleSalonAction = async (item, action) => {
+    const bookingRequestId = item.bookingRequestId || item.bookingId || item.booking_request_id || item.id;
+    if (!bookingRequestId) {
+      notify?.('error', 'Booking request ID not found.');
+      return;
+    }
+    if (action === 'DELAY') {
+      setDelayModal({ item, bookingRequestId });
+      return;
+    }
+    setActionLoading(`${bookingRequestId}-${action}`);
+    try {
+      const response = await api.bookingRequestOwnerAction(bookingRequestId, action);
+      if (response?.status && response.status !== 'SUCCESS') throw new Error(response.message || `${action} failed`);
+      notify?.('success', action === 'ACCEPT' ? 'Booking accepted!' : 'Booking rejected.');
+      // Refresh list
+      load();
+      // Navigate to queue if accepted
+      if (action === 'ACCEPT') {
+        setTimeout(() => navigate('queue'), 800);
+      }
+    } catch (error) {
+      notify?.('error', getErrorMessage(error, `Could not ${action.toLowerCase()} booking.`));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const handleDelayConfirm = async () => {
+    if (!delayModal) return;
+    const minutes = parseInt(delayMinutes, 10);
+    if (!minutes || minutes < 1) {
+      notify?.('error', 'Enter valid delay minutes.');
+      return;
+    }
+    setActionLoading(`${delayModal.bookingRequestId}-DELAY`);
+    try {
+      const response = await api.salonDelayBooking(delayModal.bookingRequestId, String(minutes));
+      if (response?.status && response.status !== 'SUCCESS') throw new Error(response.message || 'Delay failed');
+      notify?.('success', `Customer notified — ${minutes} min delay proposed.`);
+      setDelayModal(null);
+      load();
+    } catch (error) {
+      notify?.('error', getErrorMessage(error, 'Could not send delay request.'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const isBookingRequest = (item) => {
+    const type = String(item.type || item.notificationType || '').toUpperCase();
+    return type === 'BOOKING_REQUEST' || type === 'DELAY_BOOKING';
+  };
+
+  return <div className="screen notifications-screen">
+    <PageHeader title="Notifications" subtitle={isSalon ? 'Booking requests and salon updates — tap to act.' : 'Updates about your appointments.'} onBack={() => navigate(isSalon ? 'queue' : 'home')} action={<button className="icon-btn ghost" onClick={load} aria-label="Refresh notifications"><Zap size={18} /></button>} />
+    {loadError && !loading && <div className="inline-notice notification-error"><CircleAlert size={16} /><span>{loadError}</span><button onClick={load}>Try again</button></div>}
+    {loading ? <div className="notification-list">{[1, 2, 3].map(item => <SkeletonCard key={item} className="notification-skeleton" />)}</div> : items.length ? <div className="notification-list">{items.map((item, index) => {
+      const action = getNotificationAction(item, role);
+      const bookingType = isBookingRequest(item);
+      const bookingId = item.bookingRequestId || item.bookingId || '';
+      return <article className={cx('notification-card', action && 'notification-actionable', bookingType && isSalon && 'notification-booking-request')} key={item.notificationId || item.id || index}>
+        <div className="notification-icon"><Bell size={17} /></div>
+        <div style={{ flex: 1 }}>
+          <div className="notification-heading"><h3>{item.title || 'My Naai update'}</h3><span>{formatDateTime(item.createdAt)}</span></div>
+          <p>{item.body || item.message || 'You have a new update from My Naai.'}</p>
+          {bookingType && bookingId && <span className="notification-type-pill">{String(item.type || '').replace(/_/g, ' ')}</span>}
+          <div className="notification-card-actions">
+            {action && <button className="notification-open-button" type="button" onClick={() => navigate(action.route.name, action.route.params)}>{action.label}<ArrowRight size={14} /></button>}
+            {isSalon && bookingType && bookingId && (
+              <>
+                <button className="notification-action-btn accept" disabled={!!actionLoading} onClick={() => handleSalonAction(item, 'ACCEPT')}>
+                  {actionLoading === `${bookingId}-ACCEPT` ? '...' : <><Check size={14} /> Accept</>}
+                </button>
+                <button className="notification-action-btn reject" disabled={!!actionLoading} onClick={() => handleSalonAction(item, 'REJECT')}>
+                  {actionLoading === `${bookingId}-REJECT` ? '...' : <><X size={14} /> Reject</>}
+                </button>
+                <button className="notification-action-btn delay" disabled={!!actionLoading} onClick={() => handleSalonAction(item, 'DELAY')}>
+                  <Clock size={14} /> Delay
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </article>;
+    })}</div> : !loadError && <EmptyState icon={Bell} title="No notifications yet" message="We will keep important booking updates here. Booking requests will show Accept / Reject / Delay actions." />}
+
+    <Modal open={!!delayModal} onClose={() => setDelayModal(null)} title="Propose delay">
+      <p className="modal-lede">How many minutes delay do you need? The customer will be asked to accept the new time.</p>
+      <Field label="Delay minutes">
+        <select value={delayMinutes} onChange={e => setDelayMinutes(e.target.value)} className="select-field">
+          <option value="5">5 minutes earlier/later</option>
+          <option value="10">10 minutes</option>
+          <option value="15">15 minutes</option>
+          <option value="20">20 minutes</option>
+          <option value="30">30 minutes</option>
+          <option value="45">45 minutes</option>
+          <option value="60">60 minutes</option>
+        </select>
+      </Field>
+      <div className="form-actions">
+        <Button variant="secondary" onClick={() => setDelayModal(null)}>Cancel</Button>
+        <Button loading={!!actionLoading} onClick={handleDelayConfirm}>Send delay request</Button>
+      </div>
+    </Modal>
+  </div>;
 }
 
 export function DelayRequestScreen({ params, navigate, notify }) {
