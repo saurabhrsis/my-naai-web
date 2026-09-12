@@ -649,6 +649,67 @@ function LocationSetupCard({ compact = false, onLocated, onDismiss }) {
   );
 }
 
+
+function PWAInstallCard({ compact = false, notifyInstall = null }) {
+  const [dismissed, setDismissed] = useState(() => {
+    try { return sessionStorage.getItem('mynaaiPWAInstallDismissed') === 'true'; } catch { return false; }
+  });
+  const [isStandalone, setIsStandalone] = useState(false);
+  const [hasPrompt, setHasPrompt] = useState(() => Boolean(typeof window !== 'undefined' && window.deferredPWAInstallPrompt));
+
+  useEffect(() => {
+    const checkStandalone = () => {
+      const standalone = window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone;
+      setIsStandalone(Boolean(standalone));
+    };
+    checkStandalone();
+    const onAvailable = () => setHasPrompt(true);
+    const onInstalled = () => { setHasPrompt(false); setIsStandalone(true); };
+    window.addEventListener('pwa-install-available', onAvailable);
+    window.addEventListener('pwa-installed', onInstalled);
+    window.addEventListener('appinstalled', onInstalled);
+    // Also check deferred prompt periodically for 5 seconds (in case it fires early)
+    let checks = 0;
+    const interval = setInterval(() => {
+      if (window.deferredPWAInstallPrompt) setHasPrompt(true);
+      checks++;
+      if (checks > 10) clearInterval(interval);
+    }, 500);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('pwa-install-available', onAvailable);
+      window.removeEventListener('pwa-installed', onInstalled);
+      window.removeEventListener('appinstalled', onInstalled);
+    };
+  }, []);
+
+  if (isStandalone || dismissed) return null;
+  // Only show if we have install prompt or on iOS where prompt doesn't exist
+  const isIos = isIosDevice();
+  const showForIos = isIos && !isIosPwaInstalled();
+  if (!hasPrompt && !showForIos) return null;
+
+  const dismiss = () => {
+    setDismissed(true);
+    try { sessionStorage.setItem('mynaaiPWAInstallDismissed', 'true'); } catch {}
+  };
+
+  return (
+    <section className={cx('push-setup-card', compact && 'push-setup-compact', 'push-setup-pwa')} aria-live="polite">
+      <span className="push-setup-icon"><Download size={compact ? 15 : 18} /></span>
+      <div className="push-setup-copy">
+        <strong>{isIos ? 'Install My Naai to your Home Screen' : 'Install My Naai app'}</strong>
+        <p>{isIos ? 'Required for notifications with buzzer when app is closed. Tap Share → Add to Home Screen.' : 'Get booking alerts with buzzer even when app is not in recent. Works offline too.'}</p>
+      </div>
+      <div className="push-setup-actions">
+        {notifyInstall ? <Button size="small" onClick={notifyInstall}><Download size={14} /> Install</Button> : <Button size="small" variant="secondary" onClick={() => { if (isIos) { /* iOS has no programmatic install */ } }}><Smartphone size={14} /> {isIos ? 'How to install' : 'Install'}</Button>}
+        <button type="button" className="permission-help-link" onClick={dismiss}>Not now</button>
+      </div>
+    </section>
+  );
+}
+
+
 function PermissionsPrompt({ compact = false, prominent = false, notifyInstall = null, onPushToken, onLocated }) {
   const [locationDismissed, setLocationDismissed] = useState(() => {
     try { return sessionStorage.getItem('mynaaiLocationPromptDismissed') === 'true'; } catch { return false; }
@@ -659,6 +720,7 @@ function PermissionsPrompt({ compact = false, prominent = false, notifyInstall =
   };
   return (
     <div className={cx('permission-prompt-stack', compact && 'permission-prompt-compact')}>
+      <PWAInstallCard compact={compact} notifyInstall={notifyInstall} />
       <NotificationSetupCard compact={compact} prominent={prominent} notifyInstall={notifyInstall} onEnabled={onPushToken} />
       {!locationDismissed && <LocationSetupCard compact={compact} onLocated={onLocated} onDismiss={dismissLocation} />}
     </div>
@@ -679,11 +741,31 @@ export default function App() {
 function AppRoot() {
   const [session, setSession] = useState(readStoredSession);
   const [route, setRoute] = useState(() => getRouteFromHash(session?.role));
-  const [installPrompt, setInstallPrompt] = useState(null);
+  const [installPrompt, setInstallPrompt] = useState(() => {
+    // Check if prompt was already captured in index.html
+    if (typeof window !== 'undefined' && window.deferredPWAInstallPrompt) {
+      return window.deferredPWAInstallPrompt;
+    }
+    return null;
+  });
   useEffect(() => {
-    const onBeforeInstall = event => { event.preventDefault(); setInstallPrompt(event); };
+    const onBeforeInstall = event => { event.preventDefault(); setInstallPrompt(event); window.deferredPWAInstallPrompt = event; };
+    const onPwaAvailable = () => {
+      if (window.deferredPWAInstallPrompt) setInstallPrompt(window.deferredPWAInstallPrompt);
+    };
+    const onPwaInstalled = () => setInstallPrompt(null);
+    // Check for existing prompt on mount (in case it fired before React)
+    if (window.deferredPWAInstallPrompt) setInstallPrompt(window.deferredPWAInstallPrompt);
     window.addEventListener('beforeinstallprompt', onBeforeInstall);
-    return () => window.removeEventListener('beforeinstallprompt', onBeforeInstall);
+    window.addEventListener('pwa-install-available', onPwaAvailable);
+    window.addEventListener('pwa-installed', onPwaInstalled);
+    window.addEventListener('appinstalled', onPwaInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstall);
+      window.removeEventListener('pwa-install-available', onPwaAvailable);
+      window.removeEventListener('pwa-installed', onPwaInstalled);
+      window.removeEventListener('appinstalled', onPwaInstalled);
+    };
   }, []);
   // Unlock the Web Audio buzzer on the first user gesture so a later booking
   // buzz can actually make a sound (browsers block audio until an interaction).

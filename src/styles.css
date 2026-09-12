@@ -1343,3 +1343,9 @@ img.image-fallback-tile {
   .onboarding-copy .push-setup-card { padding: 10px 11px; }
 }
 
+
+
+.push-setup-pwa { border-color: rgba(110,209,158,.32); background: linear-gradient(135deg, rgba(110,209,158,.12), rgba(110,209,158,.04)); }
+.push-setup-pwa .push-setup-icon { background: var(--green); color: #09120d; }
+.pwa-standalone .push-setup-pwa { display: none; }
+

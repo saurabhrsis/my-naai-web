@@ -43,10 +43,6 @@ async function getMessagingClient() {
   return messagingPromise;
 }
 
-// `register()` can resolve while the worker is still installing, and FCM's
-// getToken needs an active worker to attach the push subscription to. Waiting
-// here removes the "no active service worker" first-visit failure that shows up
-// as a silent empty token.
 function waitForActiveWorker(registration, timeout = 8000) {
   return new Promise(resolve => {
     if (!registration) return resolve(null);
@@ -61,7 +57,6 @@ function waitForActiveWorker(registration, timeout = 8000) {
     const timer = setTimeout(finish, timeout);
     const workers = [registration.installing, registration.waiting, registration.active].filter(Boolean);
     if (!workers.length) {
-      // No worker at all yet, wait a bit for activation
       setTimeout(finish, 800);
       return;
     }
@@ -73,33 +68,49 @@ function waitForActiveWorker(registration, timeout = 8000) {
   });
 }
 
+// Unified push service worker registration at ROOT scope "/"
+// This is critical for PWA: when app is installed and not in recent, the root SW is woken by push
+// Old registrations at sub-scope are migrated automatically
 async function getPushServiceWorker() {
   if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return null;
-  // If we already tried and have a promise, reuse it
   if (registrationPromise) {
     try {
       const existing = await registrationPromise;
       if (existing) return existing;
     } catch {
-      // fall through to re-register
+      // fall through
     }
     registrationPromise = undefined;
   }
 
-  // Try to find an existing registration first - fast path, no network
+  // Try to find existing registration at root scope first (new unified SW)
   try {
     if (navigator.serviceWorker.getRegistration) {
-      const existingScope = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope');
-      if (existingScope) {
-        const active = await waitForActiveWorker(existingScope, 3000);
-        if (active) return active;
-      }
-      // Also check root scope - some browsers may have it there
+      // Check root scope - this is where PWA lives and where push should be for background when closed
       const rootReg = await navigator.serviceWorker.getRegistration('/');
       if (rootReg) {
         const script = rootReg.active?.scriptURL || rootReg.waiting?.scriptURL || rootReg.installing?.scriptURL || '';
-        if (String(script).includes('firebase-messaging-sw')) {
+        // If root SW is ours (contains firebase or is sw.js), use it
+        if (String(script).includes('firebase-messaging-sw') || String(script).includes('sw.js')) {
           const active = await waitForActiveWorker(rootReg, 3000);
+          if (active) return active;
+        }
+      }
+      // Fallback: check old sub-scope for migration
+      const oldScope = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope');
+      if (oldScope) {
+        const active = await waitForActiveWorker(oldScope, 2000);
+        if (active) return active;
+      }
+      // Check all registrations
+      if (navigator.serviceWorker.getRegistrations) {
+        const all = await navigator.serviceWorker.getRegistrations();
+        const ours = all.find(r => {
+          const url = r.active?.scriptURL || r.waiting?.scriptURL || r.installing?.scriptURL || '';
+          return String(url).includes('firebase-messaging-sw') || (String(url).includes('sw.js') && r.scope === location.origin + '/');
+        });
+        if (ours) {
+          const active = await waitForActiveWorker(ours, 3000);
           if (active) return active;
         }
       }
@@ -108,34 +119,43 @@ async function getPushServiceWorker() {
     console.debug(getErrorMessage(error, 'Could not read existing service worker registration.'));
   }
 
-  // Register fresh
+  // Register fresh at ROOT scope "/" - critical for PWA background notifications when not in recent
   if (!registrationPromise) {
     registrationPromise = (async () => {
       try {
-        // Ensure serviceWorker is ready before registering FCM worker - reduces race
         try {
-          await Promise.race([
-            navigator.serviceWorker.ready,
-            delay(1500),
-          ]);
-        } catch {
-          // ignore, proceed to register
+          await Promise.race([navigator.serviceWorker.ready, delay(1500)]);
+        } catch {}
+
+        // Try root scope with firebase-messaging-sw.js first (unified SW)
+        let registration;
+        try {
+          registration = await navigator.serviceWorker.register(
+            `/firebase-messaging-sw.js?${queryConfig()}`,
+            { scope: '/' }
+          );
+        } catch (rootError) {
+          console.debug('Root scope FCM registration failed, trying sw.js', rootError);
+          // Fallback to sw.js at root
+          try {
+            registration = await navigator.serviceWorker.register(
+              `/sw.js?${queryConfig()}`,
+              { scope: '/' }
+            );
+          } catch (swError) {
+            console.debug('sw.js registration also failed, trying sub-scope', swError);
+            // Last resort: sub-scope (old behavior)
+            registration = await navigator.serviceWorker.register(
+              `/firebase-messaging-sw.js?${queryConfig()}`,
+              { scope: '/firebase-cloud-messaging-push-scope' }
+            );
+          }
         }
 
-        const registration = await navigator.serviceWorker.register(
-          `/firebase-messaging-sw.js?${queryConfig()}`,
-          { scope: '/firebase-cloud-messaging-push-scope' }
-        );
         const active = await waitForActiveWorker(registration, 8000);
-        // Also wait for ready to ensure pushManager is available
         try {
-          await Promise.race([
-            navigator.serviceWorker.ready,
-            delay(1000),
-          ]);
-        } catch {
-          // ignore
-        }
+          await Promise.race([navigator.serviceWorker.ready, delay(1000)]);
+        } catch {}
         return active || registration;
       } catch (error) {
         console.debug(getErrorMessage(error, 'Firebase push service worker registration failed.'));
@@ -147,19 +167,18 @@ async function getPushServiceWorker() {
   return registrationPromise;
 }
 
-// Read-only worker lookup for the diagnostics card: registering on demand can
-// block for seconds while the script activates, and the health check should
-// describe the current state rather than change it.
 async function peekPushServiceWorker() {
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return null;
   try {
     const registrations = navigator.serviceWorker.getRegistrations ? await navigator.serviceWorker.getRegistrations() : [];
-    const isOurs = registration => [registration?.active, registration?.waiting, registration?.installing]
-      .some(worker => String(worker?.scriptURL || '').includes('firebase-messaging-sw'));
+    const isOurs = registration => {
+      const url = registration?.active?.scriptURL || registration?.waiting?.scriptURL || registration?.installing?.scriptURL || '';
+      return String(url).includes('firebase-messaging-sw') || String(url).includes('sw.js');
+    };
     const match = registrations.find(isOurs);
     if (match) return match;
     return navigator.serviceWorker.getRegistration
-      ? await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope')
+      ? await navigator.serviceWorker.getRegistration('/')
       : null;
   } catch (error) {
     console.debug(getErrorMessage(error, 'Could not read the service-worker registrations.'));
@@ -203,19 +222,12 @@ export async function requestNotificationPermission() {
   }
 }
 
-// Explains *why* push is unavailable so the UI (and support) can say something
-// useful instead of failing silently.
 export async function getPushStatus() {
   if (typeof window === 'undefined' || !('Notification' in window)) return { state: 'unsupported', reason: 'This browser cannot show notifications.' };
   if (!('serviceWorker' in navigator)) return { state: 'unsupported', reason: 'This browser cannot run web notifications. Try Chrome, Edge or Samsung Internet.' };
   if (!isPushConfigured()) return { state: 'unconfigured', reason: 'Notifications have not been enabled for this build yet — please contact My Naai support.' };
-  // Check messaging capability BEFORE the permission state: on iOS Safari the
-  // permission value is meaningless until the app is installed as a PWA, and
-  // reporting "denied" there would send iPhone users to a browser setting that
-  // does not exist. No PushManager => the install hint is the correct guidance.
   const messaging = await getMessagingClient();
   if (!messaging) {
-    // iOS only exposes web push to installed PWAs (iOS 16.4+).
     const installed = isIosPwaInstalled();
     const installedHint = installed ? '' : ' On iPhone/iPad, install the My Naai app to your home screen first.';
     return { state: 'unsupported', reason: `This browser context cannot receive web notifications.${installedHint}` };
@@ -228,9 +240,6 @@ export async function getPushStatus() {
   } catch (statusError) {
     console.debug(getErrorMessage(statusError, 'Could not check notification status.'));
   }
-  // Permission granted but token still empty — most often a transient service
-  // worker or Firebase initialization race. Surface as unavailable so the UI
-  // can offer a retry instead of staying silent.
   return { state: 'unavailable', reason: 'We could not prepare notifications in this browser. Please try again. This can happen on first visit - a retry usually works.' };
 }
 
@@ -243,69 +252,51 @@ export async function getPushToken({ requestPermission = false } = {}) {
     permission = await requestNotificationPermission();
   }
   if (permission !== 'granted') {
-    // Permission not granted — clear any stale token so diagnostics and login
-    // do not keep using an old value that the browser can no longer deliver to.
-    try { localStorage.removeItem('FCM_TOKEN'); } catch { /* ignore */ }
+    try { localStorage.removeItem('FCM_TOKEN'); } catch {}
     return '';
   }
 
-  // Retry loop for token - handles transient "no active service worker" and other races
-  // that caused the "Allow -> Retry, Retry" loop reported by users.
   let lastError = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await delay(600 * attempt);
-
     try {
       const registration = await getPushServiceWorker();
       if (!registration) {
-        // If registration failed, try to reset and re-attempt
         registrationPromise = undefined;
         if (attempt < 2) continue;
         return '';
       }
-
-      // Extra safety: wait for serviceWorker.ready if available
       if (attempt === 1) {
         try {
           await Promise.race([navigator.serviceWorker.ready, delay(1000)]);
-        } catch {
-          // ignore
-        }
+        } catch {}
       }
-
       const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: registration });
       if (token) {
-        try { localStorage.setItem('FCM_TOKEN', token); } catch { /* ignore */ }
+        try { localStorage.setItem('FCM_TOKEN', token); } catch {}
         return token;
       }
-      // Empty token but no throw - likely transient, retry unless last attempt
       if (attempt === 2) {
-        try { localStorage.removeItem('FCM_TOKEN'); } catch { /* ignore */ }
+        try { localStorage.removeItem('FCM_TOKEN'); } catch {}
         return '';
       }
     } catch (error) {
       lastError = error;
       const msg = String(error?.message || '').toLowerCase();
       console.debug(getErrorMessage(error, 'Firebase could not generate a browser notification token.'));
-      // Specific retryable errors
       if (msg.includes('no active service worker') || msg.includes('push subscription') || msg.includes('abort') || msg.includes('network')) {
-        registrationPromise = undefined; // force re-register next attempt
+        registrationPromise = undefined;
         if (attempt < 2) continue;
       }
-      // Non-retryable or last attempt
       if (attempt === 2) {
         return '';
       }
     }
   }
-
   console.debug('getPushToken failed after retries', lastError);
   return '';
 }
 
-// Booking-request notifications expose Accept / Reject / Delay action buttons,
-// mirroring the My Naai mobile app. Browsers that do not render notification
-// actions fall back to the notification body, which opens the request screen.
 export function bookingRequestActions() {
   return [
     { action: 'ACCEPT_BOOKING', title: 'Accept' },
@@ -319,20 +310,14 @@ function broadcastToClients(message) {
     if (typeof window !== 'undefined' && navigator.serviceWorker?.controller) {
       navigator.serviceWorker.controller.postMessage(message);
     }
-    // Also try BroadcastChannel for same-origin tabs
     if (typeof BroadcastChannel !== 'undefined') {
       const channel = new BroadcastChannel('mynaai-notifications');
       channel.postMessage(message);
       channel.close();
     }
-  } catch {
-    // ignore - broadcast is best effort
-  }
+  } catch {}
 }
 
-// FCM delivers foreground web messages to the page instead of the OS, so the
-// app has to render them. Showing them through the messaging service worker
-// keeps the notificationclick deep-link routing in one place.
 export async function displayNotification({ title, body, data = {}, onClick } = {}) {
   if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return false;
   const type = String(data.type || data.notificationType || '').toUpperCase();
@@ -347,23 +332,16 @@ export async function displayNotification({ title, body, data = {}, onClick } = 
     badge: '/icons/icon-192.png',
     tag: data.bookingRequestId || data.bookingId || data.type || 'mynaai-notification',
     data: { ...data, target },
-    requireInteraction: type === 'BOOKING_REQUEST' || type === 'DELAY_TIME_PROPOSAL',
-    // Buzzer-style vibration for time-critical alerts (Android browsers, also supported on some desktop)
+    requireInteraction: type === 'BOOKING_REQUEST' || type === 'DELAY_TIME_PROPOSAL' || type === 'DELAY_BOOKING',
     vibrate: isBuzzerType ? [260, 120, 260, 120, 520] : undefined,
-    // Best-effort: some browsers support sound, most ignore it. Real buzzer plays via Web Audio in foreground.
     silent: false,
-    // Ask the browser for action buttons on booking requests and delay bookings.
-    // Browsers that do not support notification actions ignore this.
     actions: type === 'BOOKING_REQUEST' ? bookingRequestActions() : type === 'DELAY_BOOKING' ? [{ action: 'DELAY_BOOKING', title: 'View Delay' }] : undefined,
   };
 
-  // Try to trigger buzzer in all open tabs via broadcast - works even when notification is shown via SW
   if (isBuzzerType) {
     broadcastToClients({ type: 'MYNAAI_PLAY_BUZZER', notificationType: type, data });
   }
 
-  // Prefer the messaging service worker — its click handler is the single
-  // source of truth for deep-link routing, even for foreground messages.
   try {
     const registration = await getPushServiceWorker();
     if (registration?.showNotification) {
@@ -373,27 +351,24 @@ export async function displayNotification({ title, body, data = {}, onClick } = 
   } catch (error) {
     console.debug(getErrorMessage(error, 'The notification service worker could not display the alert.'));
   }
-  // Fallback to the Window Notification API when the worker is unavailable
-  // (e.g. first visit race, blocked registration). The onClick handler still
-  // deep-links to the correct screen.
   try {
     const notification = new Notification(finalTitle, { body: finalBody, icon: options.icon, tag: options.tag });
     if (onClick) {
       notification.onclick = event => {
-        try { event?.preventDefault?.(); } catch { /* ignore */ }
+        try { event?.preventDefault?.(); } catch {}
         try { onClick(); } catch (handlerError) { console.debug(getErrorMessage(handlerError, 'Notification click handler failed.')); }
-        try { notification.close?.(); } catch { /* ignore */ }
-        try { window.focus(); } catch { /* ignore */ }
+        try { notification.close?.(); } catch {}
+        try { window.focus(); } catch {}
       };
     } else {
       notification.onclick = () => {
-        try { window.focus(); } catch { /* ignore */ }
+        try { window.focus(); } catch {}
         try {
           if (target && target !== '/#/') {
             window.location.hash = target.replace(/^\/#/, '#');
           }
-        } catch { /* ignore */ }
-        try { notification.close?.(); } catch { /* ignore */ }
+        } catch {}
+        try { notification.close?.(); } catch {}
       };
     }
     return true;
@@ -415,9 +390,6 @@ function notificationTarget(data = {}) {
   return '/#/';
 }
 
-// A web FCM message can arrive as `{ notification, data }`, data-only, or with an
-// empty `data` object next to a populated `notification`. Merge both so routing
-// and copy never depend on which shape the backend used.
 export function normalizePushPayload(payload = {}) {
   const notification = payload?.notification && typeof payload.notification === 'object' ? payload.notification : {};
   const raw = payload?.data && typeof payload.data === 'object' ? payload.data : {};
@@ -433,12 +405,8 @@ export function normalizePushPayload(payload = {}) {
   };
 }
 
-// Records the last foreground delivery so the in-app diagnostics can prove the
-// FCM pipeline is alive end to end (backend -> Firebase -> browser -> portal).
 export function recordForegroundMessage(message = {}) {
   try {
-    // A foreground FCM message arrives as { notification, data, from } — the
-    // booking type lives in data, not at the top level.
     const data = message.data || {};
     localStorage.setItem('FCM_LAST_MESSAGE', JSON.stringify({
       at: new Date().toISOString(),
@@ -465,8 +433,6 @@ function maskToken(token) {
   return value.length <= 24 ? `${value.slice(0, 6)}…` : `${value.slice(0, 14)}…${value.slice(-6)} (${value.length} chars)`;
 }
 
-// Step-by-step web push health, shown on both Account screens so "notifications
-// are not working" can be pinned to a specific layer on the actual device.
 export async function getPushDiagnostics() {
   const checks = [];
   const add = (label, state, value, detail = '') => checks.push({ label, state, value, detail });
@@ -503,8 +469,6 @@ export async function getPushDiagnostics() {
 
   const storedToken = typeof localStorage !== 'undefined' ? localStorage.getItem('FCM_TOKEN') || '' : '';
   let token = storedToken;
-  // Always attempt a fresh token when messaging is available — a stale stored
-  // token can hide a current worker/Firebase failure.
   if (messaging) {
     try {
       const fresh = await getPushToken({ requestPermission: false });
@@ -541,16 +505,12 @@ export async function setupPush({ onMessage: handleMessage } = {}) {
   return { token, unsubscribe };
 }
 
-// Ask the messaging service worker to close a notification by tag. Used by the
-// booking request screen once its countdown expires (mirrors the mobile app's
-// 70-second auto-cancel).
 export async function closeNotification(tag) {
   if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
   try {
     const registration = await getPushServiceWorker();
     const worker = registration?.active || registration?.waiting || registration?.installing;
     if (worker) worker.postMessage({ type: 'MYNAAI_CLOSE_NOTIFICATION', tag: String(tag || '') });
-    // Also broadcast to all clients to close in-page notifications
     broadcastToClients({ type: 'MYNAAI_CLOSE_NOTIFICATION', tag: String(tag || '') });
   } catch (error) {
     console.debug(getErrorMessage(error, 'Could not close the notification.'));
@@ -558,13 +518,12 @@ export async function closeNotification(tag) {
 }
 
 export async function deletePushToken() {
-  try { localStorage.removeItem('FCM_TOKEN'); } catch { /* ignore */ }
+  try { localStorage.removeItem('FCM_TOKEN'); } catch {}
   const messaging = await getMessagingClient();
   if (!messaging) return;
   try { await deleteToken(messaging); } catch (error) { console.debug(getErrorMessage(error, 'Could not revoke the browser notification token.')); }
 }
 
-// Deep links a notification payload onto the matching hash route.
 const ACTIONABLE_SALON_TYPES = ['BOOKING_REQUEST', 'DELAY_BOOKING'];
 const ACTIONABLE_USER_TYPES = ['DELAY_TIME_PROPOSAL'];
 
@@ -593,7 +552,6 @@ export function getNotificationRoute(data = {}, role = '') {
   return { name: String(role).toUpperCase() === 'SALON' ? 'queue' : 'home', params: {} };
 }
 
-// Helper to reset registration promise - useful when token generation fails
 export function resetPushRegistration() {
   registrationPromise = undefined;
   messagingPromise = undefined;

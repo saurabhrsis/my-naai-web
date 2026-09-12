@@ -2,37 +2,27 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <!-- viewport-fit=cover is what makes env(safe-area-inset-*) resolve. Without
-         it an installed PWA draws edge to edge but reports every inset as 0, so
-         the status bar cuts into the app name and the notification bell. -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <!-- Matches --black in src/styles.css: on Android the status bar is painted
-         with this colour, and a mismatch showed up as a lighter band above the
-         header that read as the top of the screen being "cut". -->
     <meta name="theme-color" content="#080a0a" />
-    <meta name="description" content="My Naai — book trusted salon services without the waiting." />
+    <meta name="description" content="My Naai — book trusted salon services without the waiting. Booking alerts with buzzer work even when app is closed." />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <!-- black-translucent lets the dark header run behind the iOS status bar; the
-         app then pads every top-level surface by env(safe-area-inset-top). -->
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <!-- iOS names the Home Screen icon from this tag, falling back to <title>.
-         The title below is a marketing line, so without this the iPhone icon was
-         labelled "My Naai — your s…". Android uses the manifest short_name. -->
     <meta name="apple-mobile-web-app-title" content="My Naai" />
     <meta name="application-name" content="My Naai" />
-    <link rel="icon" type="image/png" href="/icons/icon-192.png" />
-    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <meta name="msapplication-TileColor" content="#080a0a" />
+    <meta name="msapplication-TileImage" content="/icons/icon-192.png" />
+    <meta name="msapplication-config" content="none" />
+    <!-- PWA install prompt - Chrome, Edge, Samsung Internet -->
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png" />
+    <link rel="apple-touch-icon" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="512x512" href="/icons/icon-512.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- Preload critical assets for faster PWA launch -->
+    <link rel="preload" href="/icons/icon-192.png" as="image" />
     <script src="https://checkout.razorpay.com/v1/checkout.js" async></script>
     <script>
-      // Installed inline so it runs before the app bundle: Chrome DevTools'
-      // Performance panel injects an anonymous helper script that throws
-      // "Cannot read properties of undefined (reading 'startTime')" from
-      // et.reportAllChanges while DevTools is open. It is a DevTools bug (see
-      // angular/angular#70464), not My Naai code — src/lib/devtoolsShield.js
-      // documents it. Swallow only that exact signature; everything else is
-      // reported normally.
       (function () {
         if (window.__mynaaiDevToolsShieldInstalled) return;
         window.__mynaaiDevToolsShieldInstalled = true;
@@ -60,5 +50,28 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <!-- PWA install helper - show install prompt when available -->
+    <script>
+      // Store install prompt for later use
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        window.deferredPWAInstallPrompt = e;
+        console.debug('PWA install prompt available');
+        // Dispatch custom event so React can show install button
+        window.dispatchEvent(new CustomEvent('pwa-install-available'));
+      });
+      
+      window.addEventListener('appinstalled', () => {
+        console.debug('PWA installed successfully');
+        window.deferredPWAInstallPrompt = null;
+        window.dispatchEvent(new CustomEvent('pwa-installed'));
+      });
+
+      // For iOS PWA - detect standalone mode
+      if (window.navigator.standalone || window.matchMedia('(display-mode: standalone)').matches) {
+        console.debug('Running as installed PWA');
+        document.documentElement.classList.add('pwa-standalone');
+      }
+    </script>
   </body>
 </html>
