@@ -1,28 +1,30 @@
-/*
- * Firebase Messaging service worker for My Naai web push.
- * The main app adds the public Firebase config as query parameters when it
- * registers this worker, so no environment values need to be committed here.
- *
- * LISTENER ORDER MATTERS. `firebase.messaging()` (below) makes the Firebase SDK
- * register its own `push` and `notificationclick` handlers, and its click
- * handler calls `event.stopImmediatePropagation()` for every notification the
- * SDK displayed itself — i.e. any message that carried a `notification` block.
- * It then only opens `webpush.fcm_options.link` / `notification.click_action`
- * and does nothing at all when no link is set, which is why such notifications
- * used to be un-clickable on the web. Registering My Naai's click handler FIRST
- * keeps deep links working for both payload shapes:
- *   - data-only message  -> onBackgroundMessage below builds it, we route it
- *   - notification block -> the SDK builds it, we unwrap data.FCM_MSG and route
- * and still defers to the SDK when the backend does configure a link.
- *
- * BOOKING ACTION BUTTONS. A booking-request notification carries Accept /
- * Reject / Delay buttons (mirroring the My Naai mobile app). The worker calls the
- * owner-action API directly for Accept/Reject so it works even when the PWA is
- * closed, and opens the request screen with the delay modal for Delay. The
- * session token is mirrored into IndexedDB by the app (src/lib/api.js) so the
- * worker can authenticate; the audible background sound comes from the server's
- * push payload, and vibration/buzzer is best-effort.
+/* My Naai Firebase Messaging Service Worker - Unified with App Shell
+ * This is the FCM SW that handles background pushes when app is closed / not in recent
+ * It also handles app shell caching to ensure PWA works properly
+ * 
+ * For PWA to receive notifications when not in recent:
+ * - Must be registered at scope "/" (root)
+ * - Must have push subscription
+ * - Must handle notificationclick with actions
+ * - Works on Android Chrome, Edge, Samsung Internet, Firefox, iOS Safari (PWA), Chrome on iOS (PWA)
  */
+
+const CACHE_NAME = 'mynaai-shell-v5';
+const APP_SHELL = [
+  '/',
+  '/index.html',
+  '/manifest.webmanifest',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/assets/brand/naai-mark.svg',
+  '/assets/brand/naai-logo-dark.svg',
+  '/assets/my_naai_circle.png',
+  '/assets/my_naai.png',
+  '/assets/new_background.jpeg',
+  '/assets/salon_page_bg.png',
+  '/assets/audio/buzzer.wav',
+  '/assets/audio/buzzer_old.wav'
+];
 
 importScripts('https://www.gstatic.com/firebasejs/11.10.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/11.10.0/firebase-messaging-compat.js');
@@ -40,7 +42,6 @@ const firebaseConfig = {
 const ACTION_ACCEPT = 'ACCEPT_BOOKING';
 const ACTION_REJECT = 'REJECT_BOOKING';
 const ACTION_DELAY = 'DELAY_BOOKING';
-
 const AUTH_DB_NAME = 'mynaai-notification-actions';
 const AUTH_DB_STORE = 'auth';
 const AUTH_DB_ID = 'auth';
@@ -73,21 +74,55 @@ function readNotificationAuth() {
     .catch(() => null);
 }
 
-// Reuse/focus an existing window, or open a new one at `destination`.
+function broadcastBuzzerToClients(type, data) {
+  return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clientList => {
+    clientList.forEach(client => {
+      try {
+        client.postMessage({ type: 'MYNAAI_PLAY_BUZZER', notificationType: type, data });
+      } catch (e) {}
+    });
+  }).catch(() => {});
+}
+
+function broadcastViaChannel(type, data) {
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const channel = new BroadcastChannel('mynaai-notifications');
+      channel.postMessage({ type: 'MYNAAI_PLAY_BUZZER', notificationType: type, data });
+      channel.close();
+    }
+  } catch (e) {}
+}
+
 function openOrFocus(destination) {
   return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clientList => {
-    const windows = clientList.filter(client => 'navigate' in client && client.url.startsWith(self.location.origin));
+    const windows = clientList.filter(client => {
+      try {
+        return 'navigate' in client && client.url.startsWith(self.location.origin);
+      } catch {
+        return false;
+      }
+    });
     const current = windows.find(client => client.visibilityState === 'visible')
       || windows.find(client => client.focused)
       || windows[0];
-    if (current) return current.navigate(destination).then(client => client.focus());
+    if (current) {
+      return current.navigate(destination).then(client => {
+        try { return client.focus(); } catch { return client; }
+      }).catch(() => {
+        try {
+          current.postMessage({ type: 'MYNAAI_NAVIGATE', target: destination });
+          return current.focus();
+        } catch {
+          return current.focus();
+        }
+      });
+    }
     if (self.clients.openWindow) return self.clients.openWindow(destination);
     return undefined;
   });
 }
 
-// Calls the mobile owner-action endpoint so Accept/Reject work from the
-// notification without the app being open.
 async function ownerAction(bookingRequestId, action, delayMinutes) {
   const auth = await readNotificationAuth();
   const apiBase = (auth?.apiBaseUrl || DEFAULT_API_BASE).replace(/\/$/, '');
@@ -116,8 +151,89 @@ function salonActionDestination(result) {
     : new URL('/#/queue', self.location.origin).href;
 }
 
-// ACTION BUTTONS: Accept / Reject / Delay are handled first so a closed app can
-// still act. Body clicks fall through to the deep-link routing below.
+function notificationRoute(data) {
+  const type = String(data.type || data.notificationType || '').toUpperCase();
+  const id = encodeURIComponent(data.bookingRequestId || data.bookingId || '');
+  if (type === 'DELAY_TIME_PROPOSAL') {
+    return `/#/delay?bookingRequestId=${id}&delayMinutes=${encodeURIComponent(data.delayMinutes || '')}&proposedTime=${encodeURIComponent(data.proposedTime || '')}${data.reason ? `&reason=${encodeURIComponent(data.reason)}` : ''}`;
+  }
+  if (type === 'BOOKING_CONFIRMED' || type === 'BOOKING_REJECTED' || type === 'DELAY_RESPONSE') return '/#/bookings';
+  if (type === 'BOOKING_REQUEST' || type === 'DELAY_BOOKING') return `/#/bookingRequest?bookingRequestId=${id}${type === 'DELAY_BOOKING' ? '&openDelayModal=true' : ''}`;
+  return '/#/';
+}
+
+// App Shell - Install (also for FCM SW to make PWA work)
+self.addEventListener('install', event => {
+  event.waitUntil(
+    caches.open(CACHE_NAME)
+      .then(cache => cache.addAll(APP_SHELL).catch(() => {}))
+      .then(() => self.skipWaiting())
+  );
+});
+
+self.addEventListener('activate', event => {
+  event.waitUntil(
+    caches.keys().then(keys => Promise.all(
+      keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key))
+    )).then(() => self.clients.claim())
+  );
+});
+
+function shouldBypass(request) {
+  const url = request.url;
+  return (
+    request.method !== 'GET' ||
+    url.includes('/api/') ||
+    url.includes('/socket.io') ||
+    url.includes('fcm') ||
+    url.includes('googleapis') ||
+    url.includes('gstatic') ||
+    url.includes('__vite') ||
+    url.includes('/@') ||
+    url.includes('chrome-extension')
+  );
+}
+
+self.addEventListener('fetch', event => {
+  if (shouldBypass(event.request)) return;
+
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request)
+        .then(response => {
+          if (response.ok && new URL(event.request.url).origin === self.location.origin) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy)).catch(() => {});
+          }
+          return response;
+        })
+        .catch(() => caches.match(event.request).then(cached => cached || caches.match('/index.html')))
+    );
+    return;
+  }
+
+  event.respondWith(
+    caches.match(event.request).then(cached => {
+      if (cached) return cached;
+      return fetch(event.request)
+        .then(response => {
+          if (response.ok && new URL(event.request.url).origin === self.location.origin) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy)).catch(() => {});
+          }
+          return response;
+        })
+        .catch(() => {
+          if (event.request.destination === 'image') {
+            return caches.match('/assets/brand/naai-logo-dark.svg');
+          }
+          return caches.match('/index.html');
+        });
+    })
+  );
+});
+
+// Notification click with actions - works even when app not in recent / closed
 self.addEventListener('notificationclick', event => {
   const action = event.action || '';
 
@@ -130,22 +246,17 @@ self.addEventListener('notificationclick', event => {
     const bookingRequestId = data.bookingRequestId || data.bookingId || '';
 
     if (action === ACTION_DELAY) {
-      // Let the app open the request screen with the delay modal (no cancel,
-      // matching the mobile handler).
       const destination = new URL(`/#/bookingRequest?bookingRequestId=${encodeURIComponent(bookingRequestId)}&openDelayModal=true`, self.location.origin).href;
       event.waitUntil(openOrFocus(destination));
       return;
     }
 
-    // ACCEPT / REJECT: hit the API, close the alert, then surface the queue.
     const value = action === ACTION_ACCEPT ? 'ACCEPT' : 'REJECT';
     event.notification.close();
     event.waitUntil(ownerAction(bookingRequestId, value).then(result => openOrFocus(salonActionDestination(result))));
     return;
   }
 
-  // Plain body click on a notification the SDK displayed (notification block):
-  // defer to the SDK when it configured a link, otherwise route ourselves.
   const internal = event.notification?.data?.FCM_MSG || null;
   const configuredLink = internal?.fcmOptions?.link || internal?.notification?.click_action || '';
   if (internal && configuredLink) return;
@@ -160,9 +271,6 @@ self.addEventListener('notificationclick', event => {
   event.waitUntil(openOrFocus(destination));
 });
 
-// Lets the open app close a notification once its countdown expires (the web
-// Notification API cannot render a live chronometer like Notifee's, so the app
-// owns the timer and asks the worker to clear the alert).
 self.addEventListener('message', event => {
   const data = event.data || {};
   if (data.type === 'MYNAAI_CLOSE_NOTIFICATION' && data.tag) {
@@ -170,73 +278,112 @@ self.addEventListener('message', event => {
       notifications.forEach(notification => notification.close());
     }));
   }
+  if (data.type === 'MYNAAI_PLAY_BUZZER') {
+    event.waitUntil(broadcastBuzzerToClients(data.notificationType || 'BOOKING_REQUEST', data.data || {}));
+  }
+  if (data.type === 'MYNAAI_NAVIGATE' && data.target) {
+    try {
+      const destination = new URL(data.target, self.location.origin).href;
+      event.waitUntil(openOrFocus(destination));
+    } catch {}
+  }
 });
+
+self.addEventListener('notificationclose', event => {});
 
 if (firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagingSenderId && firebaseConfig.appId) {
   firebase.initializeApp(firebaseConfig);
   const messaging = firebase.messaging();
 
-  // The SDK calls this handler for *every* background message, but when the
-  // payload carries a `notification` block it has already displayed that
-  // notification itself (wrapped as data.FCM_MSG). Building a second one here
-  // would normally produce duplicate alerts, so only data-only messages are
-  // rendered by us — except for booking requests, where we *must* show our own
-  // notification with Accept/Reject/Delay action buttons. Using the same tag
-  // replaces the SDK's notification instead of duplicating it, so the partner
-  // always gets the actionable version.
   messaging.onBackgroundMessage(payload => {
     const data = payload.data || {};
     const type = String(data.type || data.notificationType || '').toUpperCase();
     const isBookingRequest = type === 'BOOKING_REQUEST';
+    const isDelayBooking = type === 'DELAY_BOOKING';
     const hasNotificationBlock = Boolean(payload.notification?.title || payload.notification?.body);
-    if (hasNotificationBlock && !isBookingRequest) return;
+    if (hasNotificationBlock && !isBookingRequest && !isDelayBooking) return;
+
     const title = payload.notification?.title || data.title || 'My Naai update';
     const body = payload.notification?.body || data.body || 'You have a new update from My Naai.';
     const target = notificationRoute(data);
-    // Time-critical alerts vibrate like the mobile app's buzzer. The OS decides
-    // the audible notification sound (set on the server's push payload); a
-    // closed service worker cannot synthesize a custom tone.
     const buzzer = type === 'BOOKING_REQUEST' || type === 'DELAY_BOOKING' || type === 'DELAY_TIME_PROPOSAL';
-    // Best-effort background sound: the worker passes the buzzer file to the
-    // browser so it can play it when the PWA is closed. Web notification sound
-    // support is inconsistent (Android largely uses the OS/channel sound and
-    // ignores a custom URL), so this is the same limit the mobile-vs-web split
-    // imposes — the real buzzer always plays via Web Audio while the app is open.
-    const sound = buzzer ? new URL('/assets/audio/buzzer_old.wav', self.location.origin).href : 'default';
 
-    // Returning the promise matters: the SDK awaits this handler inside the
-    // push event's waitUntil(), so the worker stays alive long enough to show
-    // the alert (an unreturned promise can be killed mid-display).
+    if (buzzer) {
+      broadcastBuzzerToClients(type, data);
+      broadcastViaChannel(type, data);
+    }
+
+    // This notification will show even when app is not in recent / closed
+    // because SW is woken by push event
     return self.registration.showNotification(title, {
       body,
       icon: '/icons/icon-192.png',
       badge: '/icons/icon-192.png',
-      tag: data.bookingRequestId || data.type || 'mynaai-notification',
+      tag: data.bookingRequestId || data.bookingId || data.type || 'mynaai-notification',
       data: { ...data, target },
-      requireInteraction: isBookingRequest,
-      // "Buzzer" vibration for booking alerts on supporting Android browsers.
+      requireInteraction: isBookingRequest || type === 'DELAY_TIME_PROPOSAL' || isDelayBooking,
       vibrate: buzzer ? [260, 120, 260, 120, 520] : undefined,
-      sound,
-      // Accept / Reject / Delay buttons ONLY on booking requests. Every other
-      // notification type carries no action buttons and just opens the app.
+      silent: false,
       actions: isBookingRequest
         ? [
             { action: ACTION_ACCEPT, title: 'Accept' },
             { action: ACTION_REJECT, title: 'Reject' },
             { action: ACTION_DELAY, title: 'Delay' },
           ]
-        : undefined,
+        : isDelayBooking
+          ? [
+            { action: ACTION_DELAY, title: 'View & Delay' },
+          ]
+          : undefined,
     });
   });
 }
 
-function notificationRoute(data) {
-  const type = String(data.type || data.notificationType || '').toUpperCase();
-  const id = encodeURIComponent(data.bookingRequestId || data.bookingId || '');
-  if (type === 'DELAY_TIME_PROPOSAL') {
-    return `/#/delay?bookingRequestId=${id}&delayMinutes=${encodeURIComponent(data.delayMinutes || '')}&proposedTime=${encodeURIComponent(data.proposedTime || '')}`;
-  }
-  if (type === 'BOOKING_CONFIRMED' || type === 'BOOKING_REJECTED' || type === 'DELAY_RESPONSE') return '/#/bookings';
-  if (type === 'BOOKING_REQUEST' || type === 'DELAY_BOOKING') return `/#/bookingRequest?bookingRequestId=${id}${type === 'DELAY_BOOKING' ? '&openDelayModal=true' : ''}`;
-  return '/#/';
-}
+self.addEventListener('push', event => {
+  try {
+    if (!event.data) return;
+    let payload = {};
+    try {
+      payload = event.data.json();
+    } catch {
+      const text = event.data.text();
+      if (!text) return;
+      payload = { notification: { title: 'My Naai update', body: text }, data: {} };
+    }
+    const data = payload.data || {};
+    const type = String(data.type || data.notificationType || '').toUpperCase();
+    const isBookingRequest = type === 'BOOKING_REQUEST' || type === 'DELAY_BOOKING';
+    const hasNotificationBlock = Boolean(payload.notification?.title || payload.notification?.body);
+    if (hasNotificationBlock && !isBookingRequest) {
+      if (payload.from && String(payload.from).includes('fcm')) return;
+    }
+    if (!payload.notification && !Object.keys(data).length) return;
+    const title = payload.notification?.title || data.title || 'My Naai update';
+    const body = payload.notification?.body || data.body || 'You have a new update from My Naai.';
+    const target = notificationRoute(data);
+    const buzzer = type === 'BOOKING_REQUEST' || type === 'DELAY_BOOKING' || type === 'DELAY_TIME_PROPOSAL';
+    if (buzzer) {
+      event.waitUntil(
+        Promise.all([
+          broadcastBuzzerToClients(type, data),
+          broadcastViaChannel(type, data),
+          self.registration.showNotification(title, {
+            body,
+            icon: '/icons/icon-192.png',
+            badge: '/icons/icon-192.png',
+            tag: data.bookingRequestId || data.bookingId || data.type || 'mynaai-notification',
+            data: { ...data, target },
+            requireInteraction: true,
+            vibrate: [260, 120, 260, 120, 520],
+            silent: false,
+            actions: isBookingRequest ? [
+              { action: ACTION_ACCEPT, title: 'Accept' },
+              { action: ACTION_REJECT, title: 'Reject' },
+              { action: ACTION_DELAY, title: 'Delay' },
+            ] : undefined,
+          })
+        ])
+      );
+    }
+  } catch (e) {}
+});

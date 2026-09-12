@@ -18,6 +18,11 @@ import {
   Store,
   UsersRound,
   X,
+  Settings,
+  Volume2,
+  Smartphone,
+  BellRing,
+  ShieldCheck,
 } from 'lucide-react';
 import { api, clearSession, getToken, setToken } from './lib/api';
 import { closeNotification, deletePushToken, displayNotification, getNotificationRoute, getPushStatus, getPushToken, isActionableNotification, normalizePushPayload, recordForegroundMessage, setupPush } from './lib/push';
@@ -86,8 +91,9 @@ function saveSession(session) {
   return { ...session, role, userId: session.userId || user?.userId || user?.salon?.salonId || user?.salonId || user?.id || '' };
 }
 
-const PUSH_REQUIRED_MESSAGE = 'My Naai needs notification permission to sign you in — it is how booking requests and confirmations reach you. Tap Allow on the card above (or Show me how if your browser has blocked them), then try again.';
-const IOS_PUSH_REQUIRED_MESSAGE = 'On iPhone, notifications only work once My Naai is on your Home Screen. Tap Show me how on the card above for the three steps, then sign in.';
+const PUSH_REQUIRED_MESSAGE = 'My Naai needs notification permission to sign you in — it is how booking requests and confirmations reach you. Please allow notifications to continue.';
+const IOS_PUSH_REQUIRED_MESSAGE = 'On iPhone, notifications only work once My Naai is on your Home Screen. Install the app to your Home Screen, then allow notifications.';
+const PUSH_BLOCKED_MESSAGE = 'Notifications are blocked for My Naai in your browser. You need to allow them in browser settings to sign in and receive booking alerts.';
 
 async function requirePushToken() {
   const token = await getPushToken({ requestPermission: true });
@@ -268,7 +274,7 @@ function PermissionHelp({ open, onClose, kind = 'notifications' }) {
   );
 }
 
-// Opens the browser’s own notification and location dialogs together, from one
+// Opens the browser's own notification and location dialogs together, from one
 // tap — the same pattern as a native app. Cards stay as a fallback if the
 // person dismisses or blocks either prompt.
 async function promptBrowserPermissions() {
@@ -296,65 +302,174 @@ async function promptBrowserPermissions() {
   return token || '';
 }
 
-function flagIsTrue(value) {
-  return value === true || String(value).toLowerCase() === 'true';
-}
+// NEW: Prominent permission gate modal that appears when login requires notification permission
+// This is the "Permission pop should get the user" - a clear modal with message and settings
+function PermissionGateModal({ open, onClose, onGranted, errorMessage = '', permissionState = 'needs-permission' }) {
+  const [busy, setBusy] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [localState, setLocalState] = useState(permissionState);
+  const [retryCount, setRetryCount] = useState(0);
+  const browser = detectBrowser();
+  const browserLabel = BROWSER_LABELS[browser] || BROWSER_LABELS.other;
+  const isIos = isIosDevice();
+  const isPwa = isIosPwaInstalled();
+  const needsInstall = isIos && !isPwa;
 
-function flagIsFalse(value) {
-  return value === false || String(value).toLowerCase() === 'false';
-}
+  useEffect(() => {
+    if (open) {
+      setLocalState(permissionState);
+      setRetryCount(0);
+    }
+  }, [open, permissionState]);
 
-function hasCoordinate(value) {
-  return value !== '' && value !== null && value !== undefined && Number.isFinite(Number(value));
-}
+  const handleAllow = async () => {
+    setBusy(true);
+    try {
+      const token = await getPushToken({ requestPermission: true });
+      if (token) {
+        setLocalState('enabled');
+        onGranted?.(token);
+        onClose?.();
+        return;
+      }
+      const status = await getPushStatus();
+      setLocalState(status.state);
+      if (status.state === 'enabled' && status.token) {
+        onGranted?.(status.token);
+        onClose?.();
+        return;
+      }
+      setRetryCount(c => c + 1);
+    } catch (e) {
+      console.debug(getErrorMessage(e, 'Permission request failed'));
+      setRetryCount(c => c + 1);
+      try {
+        const status = await getPushStatus();
+        setLocalState(status.state);
+      } catch {}
+    } finally {
+      setBusy(false);
+    }
+  };
 
-function getSalonSubscriptionProfile(session = {}) {
-  const user = session.user || {};
-  return { ...user, ...(user.salon || {}) };
-}
+  const handleTryAgain = async () => {
+    setBusy(true);
+    try {
+      const status = await getPushStatus();
+      setLocalState(status.state);
+      if (status.state === 'enabled' && status.token) {
+        onGranted?.(status.token);
+        onClose?.();
+        return;
+      }
+      if (status.state === 'needs-permission') {
+        const token = await getPushToken({ requestPermission: true });
+        if (token) {
+          onGranted?.(token);
+          onClose?.();
+          return;
+        }
+        const newStatus = await getPushStatus();
+        setLocalState(newStatus.state);
+      }
+      setRetryCount(c => c + 1);
+    } catch {
+      setRetryCount(c => c + 1);
+    } finally {
+      setBusy(false);
+    }
+  };
 
-function getSalonSubscriptionState(session = {}) {
-  return getSubscriptionState(getSalonSubscriptionProfile(session));
-}
+  if (!open) return null;
 
-function isPlanExpiredResponse(result) {
-  const candidates = [result?.status, result?.error, result?.code, result?.errorCode, result?.data?.status, result?.data?.error, result?.data?.code, result?.data?.errorCode];
-  return candidates.some(value => String(value || '').toUpperCase() === 'PLAN_EXPIRED');
-}
+  const isBlocked = localState === 'denied';
+  const showRetry = retryCount > 0 && !isBlocked && !needsInstall;
 
-function isUnknownSalonResponse(result) {
-  const source = result?.data && typeof result.data === 'object' && !Array.isArray(result.data) ? result.data : result;
-  const code = `${result?.status || result?.code || result?.errorCode || source?.status || source?.code || source?.errorCode || ''}`.toUpperCase();
-  const message = `${result?.message || result?.error || source?.message || source?.error || ''}`.toLowerCase();
-  return /not[_ -]?found|not[_ -]?registered|no salon|does not exist|register as|sign up/.test(`${code} ${message}`);
-}
+  return (
+    <div className="permission-gate-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose?.(); }}>
+      <div className="permission-gate-sheet" role="dialog" aria-modal="true" aria-label="Enable notifications">
+        <span className="permission-gate-grip" />
+        <div className="permission-gate-icon">
+          {isBlocked ? <Settings size={26} /> : needsInstall ? <Smartphone size={26} /> : <BellRing size={26} />}
+        </div>
+        <span className="permission-gate-browser"><Bell size={12} /> {browserLabel}</span>
+        <h2 style={{ marginTop: '12px' }}>
+          {needsInstall ? 'Install My Naai to enable alerts' : isBlocked ? 'Notifications are blocked' : showRetry ? 'Still setting up notifications' : 'Enable booking alerts to sign in'}
+        </h2>
+        <p className="permission-gate-lede">
+          {needsInstall ? (
+            <>On iPhone, web notifications only work after My Naai is added to your Home Screen. This is an Apple requirement — once installed, you can receive booking requests, confirmations and the salon buzzer just like the mobile app.</>
+          ) : isBlocked ? (
+            <>{PUSH_BLOCKED_MESSAGE} Your browser has blocked them for this site, so they must be turned back on in {browserLabel} settings.</>
+          ) : showRetry ? (
+            <>We tried to enable notifications but couldn&apos;t get a token yet. This can happen on first visit. Please try again — it usually works on the second attempt.</>
+          ) : (
+            <>{errorMessage || PUSH_REQUIRED_MESSAGE} My Naai uses notifications for booking requests, confirmations and delay alerts — plus the buzzer sound that tells a salon a customer is waiting. This works in background on Android, iOS (PWA), and all browsers.</>
+          )}
+        </p>
 
-function salonNeedsProfileCompletion(profile = {}) {
-  if (flagIsFalse(profile.profileCompleted) || flagIsTrue(profile.isNewSalon)) return true;
-  const hasProfileShape = ['salonName', 'ownerName', 'addressLine1', 'genderType', 'latitude', 'longitude', 'services', 'businessHours'].some(key => Object.prototype.hasOwnProperty.call(profile, key));
-  if (!hasProfileShape) return true;
-  const businessHours = Array.isArray(profile.businessHours) ? profile.businessHours[0] : profile.businessHours;
-  return !String(profile.ownerName || '').trim() || !String(profile.salonName || '').trim() || !String(profile.addressLine1 || '').trim() || !profile.genderType || !hasCoordinate(profile.latitude) || !hasCoordinate(profile.longitude) || !Array.isArray(profile.services) || profile.services.length === 0 || !businessHours?.openingTime || !businessHours?.closingTime;
-}
+        <div className="permission-gate-benefits">
+          <span><BellRing size={14} /> Booking requests reach salon instantly — even when app is in background</span>
+          <span><Volume2 size={14} /> Buzzer sound + vibration for time-critical alerts on all devices</span>
+          <span><ShieldCheck size={14} /> Works on Chrome, Edge, Firefox, Samsung Internet, Safari, iOS Safari & Chrome (PWA)</span>
+        </div>
 
-function getRouteFromHash(role) {
-  const hash = window.location.hash.replace(/^#\/?/, '');
-  const [path, query = ''] = hash.split('?');
-  const value = path.split('/')[0];
-  const needsSalonProfile = String(role).toUpperCase() === 'SALON' && localStorage.getItem('isNewSalon') === 'true';
-  const defaultRoute = needsSalonProfile ? 'editProfile' : role === 'SALON' ? 'queue' : 'home';
-  if (!value || (needsSalonProfile && value !== 'editProfile')) return { name: defaultRoute, params: needsSalonProfile ? { isOnboarding: 'true' } : {} };
-  return { name: value, params: Object.fromEntries(new URLSearchParams(query).entries()) };
+        {isBlocked || needsInstall ? (
+          <div className="permission-gate-steps">
+            <span className="time-update-group-label" style={{ marginBottom: '8px' }}>How to enable in {browserLabel}:</span>
+            <ol className="ios-install-steps">
+              {permissionSteps(browser, 'notifications').map(step => <li key={step}>{step}</li>)}
+            </ol>
+          </div>
+        ) : null}
+
+        <div className="permission-gate-actions">
+          {needsInstall ? (
+            <>
+              <Button onClick={() => setHelpOpen(true)}><Smartphone size={16} /> Show me how to install</Button>
+              <div className="permission-gate-secondary">
+                <button className="ghost" onClick={handleTryAgain} disabled={busy}>{busy ? 'Checking…' : 'I installed — Try again'}</button>
+                <button className="ghost" onClick={onClose}>Close</button>
+              </div>
+            </>
+          ) : isBlocked ? (
+            <>
+              <Button onClick={() => setHelpOpen(true)}><Settings size={16} /> Show me how to allow</Button>
+              <div className="permission-gate-secondary">
+                <button className="ghost" onClick={handleTryAgain} disabled={busy}>{busy ? 'Checking…' : 'I allowed — Try again'}</button>
+                <button className="ghost" onClick={onClose}>Close</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <Button onClick={handleAllow} loading={busy}><Bell size={16} /> {showRetry ? 'Try again — Allow notifications' : 'Allow notifications'}</Button>
+              <div className="permission-gate-secondary">
+                <button className="ghost" onClick={() => setHelpOpen(true)}>Need help?</button>
+                <button className="ghost" onClick={onClose}>Not now</button>
+              </div>
+            </>
+          )}
+        </div>
+
+        <p className="permission-gate-note">
+          Having trouble? Call <a href="tel:8380017393">8380017393</a> — we will help you enable notifications on {browserLabel}. Your booking alerts and buzzer will work in background once enabled.
+        </p>
+
+        <PermissionHelp open={helpOpen} kind="notifications" onClose={() => { setHelpOpen(false); handleTryAgain(); }} />
+      </div>
+    </div>
+  );
 }
 
 // The backend requires deviceToken on login and registration. Ask for
 // notification permission on splash and login, with a clear Enable control,
 // and do not continue until a token exists. Location stays optional.
-function NotificationSetupCard({ compact = false, notifyInstall = null, onEnabled }) {
+function NotificationSetupCard({ compact = false, prominent = false, notifyInstall = null, onEnabled }) {
   const [status, setStatus] = useState('checking');
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [iosHelpOpen, setIosHelpOpen] = useState(false);
+  const [retryAttempts, setRetryAttempts] = useState(0);
   const onEnabledRef = useRef(onEnabled);
   onEnabledRef.current = onEnabled;
 
@@ -365,6 +480,7 @@ function NotificationSetupCard({ compact = false, notifyInstall = null, onEnable
         if (token) {
           setStatus('enabled');
           setReason('');
+          setRetryAttempts(0);
           onEnabledRef.current?.(token);
           return;
         }
@@ -376,11 +492,17 @@ function NotificationSetupCard({ compact = false, notifyInstall = null, onEnable
       const result = await getPushStatus();
       setStatus(result.state);
       setReason(result.reason || '');
-      if (result.state === 'enabled' && result.token) onEnabledRef.current?.(result.token);
+      if (result.state === 'enabled' && result.token) {
+        onEnabledRef.current?.(result.token);
+        setRetryAttempts(0);
+      } else if (result.state === 'unavailable') {
+        setRetryAttempts(c => c + 1);
+      }
     } catch (statusError) {
       console.debug(getErrorMessage(statusError, 'Could not check notification status.'));
       setStatus('unavailable');
       setReason('We could not check notification status. Please try again.');
+      setRetryAttempts(c => c + 1);
     }
   }, []);
 
@@ -402,11 +524,6 @@ function NotificationSetupCard({ compact = false, notifyInstall = null, onEnable
     return () => { active = false; };
   }, []);
 
-  // Re-check whenever the tab regains focus or visibility. This is what picks
-  // up a permission that was just granted — in the browser's site settings, in
-  // another tab, or after returning to the installed PWA — without a manual
-  // reload, so the card (and login) stops saying "Enable" the moment the
-  // browser actually allows notifications.
   useEffect(() => {
     const recheck = () => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
@@ -425,26 +542,24 @@ function NotificationSetupCard({ compact = false, notifyInstall = null, onEnable
     try { await inspect(true); } finally { setBusy(false); }
   };
 
+  const tryAgain = async () => {
+    setBusy(true);
+    try { await inspect(false); } finally { setBusy(false); }
+  };
+
   if (['checking', 'enabled'].includes(status)) return null;
   const needsIosInstall = status === 'unsupported' && isIosDevice() && !isIosPwaInstalled();
-  // Copy rule: say what the feature is for and what to do next, and never
-  // scold. "You must enable notifications" read like a wall even when the
-  // browser had simply not been asked yet. A blocked permission cannot be
-  // re-prompted from JavaScript, so that state gets step-by-step settings
-  // instructions (`PermissionHelp`) rather than an Enable button that a browser
-  // will silently ignore — the button that looked broken.
   const copy = {
     unconfigured: { title: 'Notifications are unavailable', body: reason || 'This build of My Naai is not set up for web alerts yet. You can still browse; call 8380017393 if you need booking alerts on this device.' },
     unsupported: { title: 'Notifications need a different setup', body: reason || 'This browser cannot deliver web notifications. Install My Naai to your home screen, or use Chrome, Edge or Samsung Internet.' },
     denied: { title: 'Notifications are blocked', body: 'My Naai sends booking requests, confirmations and delay alerts. Your browser has blocked them for this site, so they have to be switched back on in its settings — tap Show me how.' },
-    'needs-permission': { title: 'Turn on booking alerts', body: 'Tap Allow so My Naai can send booking requests, confirmations and delay alerts. Your salon\u2019s buzzer needs this to reach you.' },
-    unavailable: { title: 'Notifications are not ready yet', body: reason || 'We could not finish setting up notifications on this device. Tap Try again — if it keeps failing, tap Show me how.' },
+    'needs-permission': { title: 'Turn on booking alerts', body: 'Tap Allow so My Naai can send booking requests, confirmations and delay alerts. Your salon\u2019s buzzer needs this to reach you in background too.' },
+    unavailable: { title: retryAttempts > 1 ? 'Still setting up — try again' : 'Notifications are not ready yet', body: reason || (retryAttempts > 1 ? 'First-time setup sometimes needs a second try. Tap Try again — it usually works.' : 'We could not finish setting up notifications on this device. Tap Try again — if it keeps failing, tap Show me how.') },
   }[status] || { title: 'Turn on booking alerts', body: reason };
   const blocked = status === 'denied';
-  // There is always a next step: Allow where the browser will still prompt,
-  // and instructions everywhere the prompt is no longer available.
+  const isUnavailable = status === 'unavailable';
   return (
-    <section className={cx('push-setup-card', compact && 'push-setup-compact')} aria-live="polite">
+    <section className={cx('push-setup-card', compact && 'push-setup-compact', prominent && 'push-setup-prominent', status === 'unavailable' && 'push-setup-retry')} aria-live="polite">
       <span className="push-setup-icon"><Bell size={compact ? 15 : 18} /></span>
       <div className="push-setup-copy"><strong>{copy.title}</strong><p>{copy.body}</p></div>
       <div className="push-setup-actions">
@@ -453,7 +568,12 @@ function NotificationSetupCard({ compact = false, notifyInstall = null, onEnable
           ? <Button size="small" onClick={() => setIosHelpOpen(true)}>Show me how</Button>
           : blocked
             ? <Button size="small" onClick={() => setIosHelpOpen(true)}>Show me how</Button>
-            : <>
+            : isUnavailable
+              ? <>
+                <Button size="small" onClick={tryAgain} loading={busy}>Try again</Button>
+                <button type="button" className="permission-help-link" onClick={() => setIosHelpOpen(true)}>Need help?</button>
+              </>
+              : <>
               <Button size="small" onClick={enable} loading={busy}>{status === 'unavailable' ? 'Try again' : 'Allow'}</Button>
               <button type="button" className="permission-help-link" onClick={() => setIosHelpOpen(true)}>Need help?</button>
             </>}
@@ -475,6 +595,7 @@ function IosInstallHelp({ open, onClose }) {
         <li>Tap <strong>Add</strong>, then open <strong>My Naai</strong> from your Home Screen.</li>
         <li>Tap <strong>Enable</strong> and choose <strong>Allow</strong> when asked, then log in.</li>
       </ol>
+      <p className="permission-help-note">Once installed, notifications and buzzer work in background just like the mobile app — on Safari and Chrome on iOS (when opened from Home Screen).</p>
     </Modal>
   );
 }
@@ -507,8 +628,6 @@ function LocationSetupCard({ compact = false, onLocated, onDismiss }) {
 
   if (status === 'checking' || status === 'granted') return null;
 
-  // Location has never been required, and the card now says so out loud so it
-  // does not read as another wall in front of signing in.
   const copy = status === 'unsupported'
     ? { title: 'Location is unavailable', body: 'This browser cannot share your location. Nearby salons are still listed — just without the distance.' }
     : status === 'denied'
@@ -530,9 +649,68 @@ function LocationSetupCard({ compact = false, onLocated, onDismiss }) {
   );
 }
 
-function PermissionsPrompt({ compact = false, notifyInstall = null, onPushToken, onLocated }) {
-  // Location is optional, so "Not now" hides its card for the rest of the
-  // session instead of leaving a permanent nag above the login form.
+
+function PWAInstallCard({ compact = false, notifyInstall = null }) {
+  const [dismissed, setDismissed] = useState(() => {
+    try { return sessionStorage.getItem('mynaaiPWAInstallDismissed') === 'true'; } catch { return false; }
+  });
+  const [isStandalone, setIsStandalone] = useState(false);
+  const [hasPrompt, setHasPrompt] = useState(() => Boolean(typeof window !== 'undefined' && window.deferredPWAInstallPrompt));
+
+  useEffect(() => {
+    const checkStandalone = () => {
+      const standalone = window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone;
+      setIsStandalone(Boolean(standalone));
+    };
+    checkStandalone();
+    const onAvailable = () => setHasPrompt(true);
+    const onInstalled = () => { setHasPrompt(false); setIsStandalone(true); };
+    window.addEventListener('pwa-install-available', onAvailable);
+    window.addEventListener('pwa-installed', onInstalled);
+    window.addEventListener('appinstalled', onInstalled);
+    // Also check deferred prompt periodically for 5 seconds (in case it fires early)
+    let checks = 0;
+    const interval = setInterval(() => {
+      if (window.deferredPWAInstallPrompt) setHasPrompt(true);
+      checks++;
+      if (checks > 10) clearInterval(interval);
+    }, 500);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('pwa-install-available', onAvailable);
+      window.removeEventListener('pwa-installed', onInstalled);
+      window.removeEventListener('appinstalled', onInstalled);
+    };
+  }, []);
+
+  if (isStandalone || dismissed) return null;
+  // Only show if we have install prompt or on iOS where prompt doesn't exist
+  const isIos = isIosDevice();
+  const showForIos = isIos && !isIosPwaInstalled();
+  if (!hasPrompt && !showForIos) return null;
+
+  const dismiss = () => {
+    setDismissed(true);
+    try { sessionStorage.setItem('mynaaiPWAInstallDismissed', 'true'); } catch {}
+  };
+
+  return (
+    <section className={cx('push-setup-card', compact && 'push-setup-compact', 'push-setup-pwa')} aria-live="polite">
+      <span className="push-setup-icon"><Download size={compact ? 15 : 18} /></span>
+      <div className="push-setup-copy">
+        <strong>{isIos ? 'Install My Naai to your Home Screen' : 'Install My Naai app'}</strong>
+        <p>{isIos ? 'Required for notifications with buzzer when app is closed. Tap Share → Add to Home Screen.' : 'Get booking alerts with buzzer even when app is not in recent. Works offline too.'}</p>
+      </div>
+      <div className="push-setup-actions">
+        {notifyInstall ? <Button size="small" onClick={notifyInstall}><Download size={14} /> Install</Button> : <Button size="small" variant="secondary" onClick={() => { if (isIos) { /* iOS has no programmatic install */ } }}><Smartphone size={14} /> {isIos ? 'How to install' : 'Install'}</Button>}
+        <button type="button" className="permission-help-link" onClick={dismiss}>Not now</button>
+      </div>
+    </section>
+  );
+}
+
+
+function PermissionsPrompt({ compact = false, prominent = false, notifyInstall = null, onPushToken, onLocated }) {
   const [locationDismissed, setLocationDismissed] = useState(() => {
     try { return sessionStorage.getItem('mynaaiLocationPromptDismissed') === 'true'; } catch { return false; }
   });
@@ -542,11 +720,13 @@ function PermissionsPrompt({ compact = false, notifyInstall = null, onPushToken,
   };
   return (
     <div className={cx('permission-prompt-stack', compact && 'permission-prompt-compact')}>
-      <NotificationSetupCard compact={compact} notifyInstall={notifyInstall} onEnabled={onPushToken} />
+      <PWAInstallCard compact={compact} notifyInstall={notifyInstall} />
+      <NotificationSetupCard compact={compact} prominent={prominent} notifyInstall={notifyInstall} onEnabled={onPushToken} />
       {!locationDismissed && <LocationSetupCard compact={compact} onLocated={onLocated} onDismiss={dismissLocation} />}
     </div>
   );
 }
+
 
 // The provider sits above the auth flow *and* the signed-in shell: logout is
 // confirmed from both, and no screen may fall back to a blocking browser dialog.
@@ -561,11 +741,31 @@ export default function App() {
 function AppRoot() {
   const [session, setSession] = useState(readStoredSession);
   const [route, setRoute] = useState(() => getRouteFromHash(session?.role));
-  const [installPrompt, setInstallPrompt] = useState(null);
+  const [installPrompt, setInstallPrompt] = useState(() => {
+    // Check if prompt was already captured in index.html
+    if (typeof window !== 'undefined' && window.deferredPWAInstallPrompt) {
+      return window.deferredPWAInstallPrompt;
+    }
+    return null;
+  });
   useEffect(() => {
-    const onBeforeInstall = event => { event.preventDefault(); setInstallPrompt(event); };
+    const onBeforeInstall = event => { event.preventDefault(); setInstallPrompt(event); window.deferredPWAInstallPrompt = event; };
+    const onPwaAvailable = () => {
+      if (window.deferredPWAInstallPrompt) setInstallPrompt(window.deferredPWAInstallPrompt);
+    };
+    const onPwaInstalled = () => setInstallPrompt(null);
+    // Check for existing prompt on mount (in case it fired before React)
+    if (window.deferredPWAInstallPrompt) setInstallPrompt(window.deferredPWAInstallPrompt);
     window.addEventListener('beforeinstallprompt', onBeforeInstall);
-    return () => window.removeEventListener('beforeinstallprompt', onBeforeInstall);
+    window.addEventListener('pwa-install-available', onPwaAvailable);
+    window.addEventListener('pwa-installed', onPwaInstalled);
+    window.addEventListener('appinstalled', onPwaInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstall);
+      window.removeEventListener('pwa-install-available', onPwaAvailable);
+      window.removeEventListener('pwa-installed', onPwaInstalled);
+      window.removeEventListener('appinstalled', onPwaInstalled);
+    };
   }, []);
   // Unlock the Web Audio buzzer on the first user gesture so a later booking
   // buzz can actually make a sound (browsers block audio until an interaction).
@@ -708,13 +908,16 @@ function AuthFlow({ onComplete, notifyInstall }) {
   const [pushToken, setPushToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [permissionGate, setPermissionGate] = useState({ open: false, message: '', state: 'needs-permission' });
   const askedBrowserPermissions = useRef(false);
+
   const askBrowserPermissions = useCallback(async () => {
     if (askedBrowserPermissions.current) return;
     askedBrowserPermissions.current = true;
     const token = await promptBrowserPermissions();
     if (token) setPushToken(token);
   }, []);
+
   useEffect(() => {
     if (view !== 'onboarding' && view !== 'login') return undefined;
     const onGesture = () => { askBrowserPermissions(); };
@@ -725,19 +928,56 @@ function AuthFlow({ onComplete, notifyInstall }) {
       window.removeEventListener('keydown', onGesture);
     };
   }, [askBrowserPermissions, view]);
-  const onboarding = [{ image: '/assets/naai/naai3.jpg', kicker: 'THE PROFESSIONAL SPECIALISTS', title: 'Your next good look is closer than you think.', text: 'Find trusted barbers and salons around your location.' }, { image: '/assets/naai/naai2.jpeg', kicker: 'A LITTLE MORE YOU', title: 'Book the service. Skip the waiting room.', text: 'Haircut, beard, spa and more — choose a time that works for you.' }, { image: '/assets/naai/naai1.jpg', kicker: 'MADE FOR YOUR TIME', title: 'Good style, without the guesswork.', text: 'See availability, pick your specialist and arrive ready.' }];
+
+  const onboarding = [
+    { image: '/assets/naai/naai3.jpg', kicker: 'THE PROFESSIONAL SPECIALISTS', title: 'Your next good look is closer than you think.', text: 'Find trusted barbers and salons around your location.' },
+    { image: '/assets/naai/naai2.jpeg', kicker: 'A LITTLE MORE YOU', title: 'Book the service. Skip the waiting room.', text: 'Haircut, beard, spa and more — choose a time that works for you.' },
+    { image: '/assets/naai/naai1.jpg', kicker: 'MADE FOR YOUR TIME', title: 'Good style, without the guesswork.', text: 'See availability, pick your specialist and arrive ready.' }
+  ];
+
   const finishOnboarding = async () => {
     localStorage.setItem('hasSeenOnboarding', 'true');
     await askBrowserPermissions();
     setView('login');
   };
+
+  const requirePushTokenWithGate = useCallback(async () => {
+    try {
+      const token = await getPushToken({ requestPermission: false });
+      if (token) {
+        setPushToken(token);
+        return token;
+      }
+    } catch (e) {
+      console.debug(getErrorMessage(e, 'Could not check token'));
+    }
+    if (pushToken) return pushToken;
+    try {
+      const status = await getPushStatus();
+      const message = status.state === 'denied' ? PUSH_BLOCKED_MESSAGE : isIosDevice() && !isIosPwaInstalled() && status.state === 'unsupported' ? IOS_PUSH_REQUIRED_MESSAGE : PUSH_REQUIRED_MESSAGE;
+      setPermissionGate({ open: true, message, state: status.state });
+      throw new Error(message);
+    } catch (err) {
+      if (err.message && err.message.includes('notification') || err.message?.includes('iPhone') || err.message?.includes('blocked')) throw err;
+      setPermissionGate({ open: true, message: PUSH_REQUIRED_MESSAGE, state: 'needs-permission' });
+      throw new Error(PUSH_REQUIRED_MESSAGE);
+    }
+  }, [pushToken]);
+
+  const handlePermissionGranted = (token) => {
+    if (token) {
+      setPushToken(token);
+      setError('');
+    }
+  };
+
   const requestOtp = async event => {
     event.preventDefault();
     if (!/^\d{10}$/.test(mobile)) return setError('Enter a valid 10-digit mobile number.');
     setBusy(true);
     setError('');
     try {
-      const token = await requirePushToken();
+      const token = await requirePushTokenWithGate();
       setPushToken(token);
       let response;
       let nextSalonAuthMode = 'login';
@@ -764,12 +1004,13 @@ function AuthFlow({ onComplete, notifyInstall }) {
       setError(getErrorMessage(requestError, 'Could not send OTP. Please try again.'));
     } finally { setBusy(false); }
   };
+
   const verify = async event => {
     event.preventDefault();
     if (!/^\d{6}$/.test(otp)) return setError('Enter the 6-digit OTP.');
     setBusy(true); setError('');
     try {
-      const deviceToken = pushToken || await requirePushToken();
+      const deviceToken = pushToken || await requirePushTokenWithGate();
       setPushToken(deviceToken);
       const payload = withDeviceToken({ phoneNumber: mobile, otp }, deviceToken);
       let verifyMode = salonAuthMode;
@@ -807,16 +1048,31 @@ function AuthFlow({ onComplete, notifyInstall }) {
       onComplete({ role, token: user.token, user, userId, isNewSalon });
     } catch (verifyError) { setError(getErrorMessage(verifyError, 'That code did not work. Please try again.')); } finally { setBusy(false); }
   };
+
   const createAccount = async event => {
     event.preventDefault();
     if (!name.trim()) return setError('Tell us your name to finish setting up.');
     setBusy(true); setError('');
-    try { const deviceToken = pushToken || await requirePushToken(); setPushToken(deviceToken); const response = await api.userOnBoard(withDeviceToken({ phoneNumber: mobile, fullName: name.trim() }, deviceToken)); if (response?.status !== 'SUCCESS') throw new Error(response?.message || 'Could not create account.'); if (!response.data?.token) throw new Error('Your account was created, but no login session was returned. Please try again.'); onComplete({ role: 'USER', token: response.data.token, user: response.data, userId: response.data?.userId }); } catch (createError) { setError(getErrorMessage(createError, 'Could not create your account.')); } finally { setBusy(false); }
+    try {
+      const deviceToken = pushToken || await requirePushTokenWithGate();
+      setPushToken(deviceToken);
+      const response = await api.userOnBoard(withDeviceToken({ phoneNumber: mobile, fullName: name.trim() }, deviceToken));
+      if (response?.status !== 'SUCCESS') throw new Error(response?.message || 'Could not create account.');
+      if (!response.data?.token) throw new Error('Your account was created, but no login session was returned. Please try again.');
+      onComplete({ role: 'USER', token: response.data.token, user: response.data, userId: response.data?.userId });
+    } catch (createError) { setError(getErrorMessage(createError, 'Could not create your account.')); } finally { setBusy(false); }
   };
-  if (view === 'onboarding') return <div className="auth-page onboarding-page"><div className="onboarding-slide" style={{ backgroundImage: `url(${onboarding[slide].image})` }}><div className="auth-image-shade" /><div className="onboarding-top"><Brand light /><div className="onboarding-top-actions">{notifyInstall && <button className="install-auth-button" onClick={notifyInstall}><Download size={14} /> Install app</button>}<button className="skip-button" onClick={finishOnboarding}>Skip</button></div></div><div className="onboarding-copy"><span className="eyebrow">{onboarding[slide].kicker}</span><h1>{onboarding[slide].title}</h1><p>{onboarding[slide].text}</p><PermissionsPrompt compact notifyInstall={notifyInstall} onPushToken={token => { if (token) setPushToken(token); }} /><div className="onboarding-controls"><div className="onboarding-dots">{onboarding.map((item, index) => <button key={item.kicker} className={index === slide ? 'active' : ''} onClick={() => setSlide(index)} aria-label={`Slide ${index + 1}`} />)}</div>{slide === onboarding.length - 1 ? <Button size="large" className="lets-start-button" onClick={finishOnboarding}><Sparkles size={18} /> Let's Start</Button> : <button className="next-circle" onClick={() => setSlide(current => current + 1)} aria-label="Next"><ChevronRight size={22} /></button>}</div></div></div></div>;
+
+  if (view === 'onboarding') return <div className="auth-page onboarding-page"><div className="onboarding-slide" style={{ backgroundImage: `url(${onboarding[slide].image})` }}><div className="auth-image-shade" /><div className="onboarding-top"><Brand light /><div className="onboarding-top-actions">{notifyInstall && <button className="install-auth-button" onClick={notifyInstall}><Download size={14} /> Install app</button>}<button className="skip-button" onClick={finishOnboarding}>Skip</button></div></div><div className="onboarding-copy"><span className="eyebrow">{onboarding[slide].kicker}</span><h1>{onboarding[slide].title}</h1><p>{onboarding[slide].text}</p><PermissionsPrompt compact notifyInstall={notifyInstall} onPushToken={token => { if (token) setPushToken(token); }} /><div className="onboarding-controls"><div className="onboarding-dots">{onboarding.map((item, index) => <button key={item.kicker} className={index === slide ? 'active' : ''} onClick={() => setSlide(index)} aria-label={`Slide ${index + 1}`} />)}</div>{slide === onboarding.length - 1 ? <Button size="large" className="lets-start-button" onClick={finishOnboarding}><Sparkles size={18} /> Let&apos;s Start</Button> : <button className="next-circle" onClick={() => setSlide(current => current + 1)} aria-label="Next"><ChevronRight size={22} /></button>}</div></div></div></div>;
+
   if (view === 'register') return <SalonRegistration initialData={salonRegistrationData} onBack={() => { setSalonRegistrationData(null); setView('login'); }} onComplete={onComplete} notifyInstall={notifyInstall} />;
-  return <div className="auth-page login-page"><div className="auth-visual"><div className="auth-visual-image" /><div className="auth-image-shade" /><div className="auth-visual-content"><Brand light /><div><span className="eyebrow">SALON & GROOMING, REIMAGINED</span><h1>Less waiting.<br /><em>More you.</em></h1><p>Book a great salon nearby and make the time yours.</p></div><div className="visual-quote"><span></span><p>Your time is valuable. We’re here to give it back.</p></div></div></div><div className="auth-form-panel"><div className="mobile-auth-brand"><Brand /></div><div className="auth-form-wrap"><span className="eyebrow">WELCOME TO MY NAAI</span><h1>{step === 'phone' ? role === 'USER' ? 'Ready when you are.' : 'Welcome, salon partner.' : step === 'new-user' ? 'One last thing.' : 'Check your phone.'}</h1><p className="auth-subtitle">{step === 'phone' ? role === 'USER' ? 'Find your next appointment without the wait.' : 'Manage your queue and grow your local business.' : step === 'new-user' ? `Let’s create your My Naai profile for +91 ${mobile}.` : `Enter the 6-digit code sent to +91 ${mobile}.`}</p>{step === 'phone' && notifyInstall && <button className="install-auth-button install-login-button" onClick={notifyInstall}><Download size={14} /> Install app</button>}<PermissionsPrompt notifyInstall={notifyInstall} onPushToken={token => { if (token) setPushToken(token); }} />{step === 'phone' && <div className="role-switch"><button className={role === 'USER' ? 'active' : ''} onClick={() => { setRole('USER'); setError(''); }}><CircleUserRound size={16} /> Customer</button><button className={role === 'SALON' ? 'active' : ''} onClick={() => { setRole('SALON'); setError(''); }}><Store size={16} /> Salon partner</button></div>}{error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}{step === 'phone' && <form onSubmit={requestOtp}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" autoComplete="tel" maxLength="10" value={mobile} onChange={event => setMobile(event.target.value.replace(/\D/g, ''))} placeholder="Enter 10-digit number" autoFocus /></div></Field><Button type="submit" loading={busy}>Continue with OTP <ChevronRight size={17} /></Button></form>}{step === 'otp' && <form onSubmit={verify}><Field label="One-time password"><input className="otp-input" inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="· · · · · ·" autoFocus /></Field><Button type="submit" loading={busy}>Verify code <ChevronRight size={17} /></Button><button className="resend-link" type="button" onClick={requestOtp}>Resend code</button><button className="back-form-link" type="button" onClick={() => { setStep('phone'); setOtp(''); setError(''); }}>Use a different number</button></form>}{step === 'new-user' && <form onSubmit={createAccount}><Field label="Your name"><input value={name} onChange={event => setName(event.target.value)} placeholder="How should we call you?" autoFocus /></Field><Button type="submit" loading={busy}>Create my account <ChevronRight size={17} /></Button></form>}</div><p className="auth-legal">By continuing, you agree to My Naai’s terms and privacy policy.</p></div></div>;
+
+  return <div className="auth-page login-page"><div className="auth-visual"><div className="auth-visual-image" /><div className="auth-image-shade" /><div className="auth-visual-content"><Brand light /><div><span className="eyebrow">SALON & GROOMING, REIMAGINED</span><h1>Less waiting.<br /><em>More you.</em></h1><p>Book a great salon nearby and make the time yours.</p></div><div className="visual-quote"><span></span><p>Your time is valuable. We’re here to give it back.</p></div></div></div><div className="auth-form-panel"><div className="mobile-auth-brand"><Brand /></div><div className="auth-form-wrap"><span className="eyebrow">WELCOME TO MY NAAI</span><span className="login-hero-badge"><Sparkles size={12} /> {role === 'USER' ? 'Customer login' : 'Salon partner'}</span><h1>{step === 'phone' ? role === 'USER' ? 'Login to book your favorite salon' : 'Grow your salon with My Naai' : step === 'new-user' ? 'One last thing.' : 'Check your phone.'}</h1><p className="auth-subtitle">{step === 'phone' ? role === 'USER' ? 'Welcome back! Sign in to book appointments, track your visits, and get instant confirmations with buzzer alerts.' : 'Receive booking requests instantly with buzzer + vibration, even when app is in background. Works on Android, iOS, Chrome, Edge, Safari and more.' : step === 'new-user' ? `Let\u2019s create your My Naai profile for +91 ${mobile}.` : `Enter the 6-digit code sent to +91 ${mobile}.`}</p>{step === 'phone' && notifyInstall && <button className="install-auth-button install-login-button" onClick={notifyInstall}><Download size={14} /> Install app</button>}<PermissionsPrompt prominent notifyInstall={notifyInstall} onPushToken={token => { if (token) setPushToken(token); }} />{step === 'phone' && <div className="role-switch"><button className={role === 'USER' ? 'active' : ''} onClick={() => { setRole('USER'); setError(''); }}><CircleUserRound size={16} /> Customer</button><button className={role === 'SALON' ? 'active' : ''} onClick={() => { setRole('SALON'); setError(''); }}><Store size={16} /> Salon partner</button></div>}{error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}{step === 'phone' && <form onSubmit={requestOtp}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" autoComplete="tel" maxLength="10" value={mobile} onChange={event => setMobile(event.target.value.replace(/\D/g, ''))} placeholder="Enter 10-digit number" autoFocus /></div></Field><Button type="submit" loading={busy}>Continue with OTP <ChevronRight size={17} /></Button></form>}{step === 'otp' && <form onSubmit={verify}><Field label="One-time password"><input className="otp-input" inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="· · · · · ·" autoFocus /></Field><Button type="submit" loading={busy}>Verify code <ChevronRight size={17} /></Button><button className="resend-link" type="button" onClick={requestOtp}>Resend code</button><button className="back-form-link" type="button" onClick={() => { setStep('phone'); setOtp(''); setError(''); }}>Use a different number</button></form>}{step === 'new-user' && <form onSubmit={createAccount}><Field label="Your name"><input value={name} onChange={event => setName(event.target.value)} placeholder="How should we call you?" autoFocus /></Field><Button type="submit" loading={busy}>Create my account <ChevronRight size={17} /></Button></form>}</div><p className="auth-legal">By continuing, you agree to My Naai’s terms and privacy policy.</p></div>
+      <PermissionGateModal open={permissionGate.open} onClose={() => setPermissionGate(prev => ({ ...prev, open: false }))} onGranted={handlePermissionGranted} errorMessage={permissionGate.message} permissionState={permissionGate.state} />
+    </div>;
 }
+
+
 
 function SalonRegistration({ initialData, onBack, onComplete, notifyInstall }) {
   const [step, setStep] = useState('profile');
