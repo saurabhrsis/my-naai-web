@@ -77,6 +77,10 @@ import {
   getSalonStatus,
 } from './Shared';
 
+// The incomplete-profile gate is shared with the auth flow in src/App.jsx: one
+// predicate decides whether a partner sees onboarding or the dashboard.
+import { hasCoordinate, salonProfileNeedsCompletion } from '../lib/salonProfile';
+
 function getList(response, keys = []) {
   if (Array.isArray(response?.data)) return response.data;
   for (const key of keys) if (Array.isArray(response?.data?.[key])) return response.data[key];
@@ -90,14 +94,6 @@ function getSalonData(response) {
     ...(data.profileCompleted === undefined && response?.profileCompleted !== undefined ? { profileCompleted: response.profileCompleted } : {}),
     ...(data.isNewSalon === undefined && response?.isNewSalon !== undefined ? { isNewSalon: response.isNewSalon } : {}),
   };
-}
-
-function salonProfileNeedsCompletion(profile = {}) {
-  if (profile.profileCompleted === false || String(profile.profileCompleted).toLowerCase() === 'false' || profile.isNewSalon === true || String(profile.isNewSalon).toLowerCase() === 'true') return true;
-  const hasProfileShape = ['salonName', 'ownerName', 'addressLine1', 'genderType', 'latitude', 'longitude', 'services', 'businessHours'].some(key => Object.prototype.hasOwnProperty.call(profile, key));
-  if (!hasProfileShape) return true;
-  const businessHours = Array.isArray(profile.businessHours) ? profile.businessHours[0] : profile.businessHours;
-  return !String(profile.ownerName || '').trim() || !String(profile.salonName || '').trim() || !String(profile.addressLine1 || '').trim() || !profile.genderType || !hasCoordinate(profile.latitude) || !hasCoordinate(profile.longitude) || !Array.isArray(profile.services) || profile.services.length === 0 || !businessHours?.openingTime || !businessHours?.closingTime;
 }
 
 function isSameDate(value, offset = 0) {
@@ -500,10 +496,6 @@ export function SalonAccountScreen({ session, navigate, notify, onSessionUpdate,
 
 function getEditorBusinessHour(value = {}) {
   return Array.isArray(value) ? value[0] || {} : value || {};
-}
-
-function hasCoordinate(value) {
-  return value !== '' && value !== null && value !== undefined && Number.isFinite(Number(value));
 }
 
 function editorTime(value, fallback) {
