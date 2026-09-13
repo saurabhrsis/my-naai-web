@@ -24,12 +24,14 @@ import {
   BellRing,
   ShieldCheck,
 } from 'lucide-react';
-import { api, clearSession, getToken, setToken } from './lib/api';
+import { api, clearSession, getToken, isPlanExpiredResponse, isUnknownSalonResponse, setToken } from './lib/api';
 import { closeNotification, deletePushToken, displayNotification, getNotificationRoute, getPushStatus, getPushToken, isActionableNotification, normalizePushPayload, recordForegroundMessage, setupPush } from './lib/push';
 import { playBuzzer, unlockBuzzer } from './lib/buzzer';
 import { resetLiveUpdatesSocket } from './lib/socket';
 import { DEFAULT_SERVICES } from './lib/defaultServices';
 import { getSubscriptionState } from './lib/planDetails';
+import { getSalonSubscriptionProfile, getSalonSubscriptionState, salonProfileNeedsCompletion as salonNeedsProfileCompletion } from './lib/salonProfile';
+import { flagIsFalse, flagIsTrue } from './lib/flags';
 import { STATE_OPTIONS } from './lib/stateOptions';
 import {
   AccountScreen,
@@ -89,6 +91,40 @@ function saveSession(session) {
   localStorage.setItem('isLoggedIn', 'true');
   localStorage.setItem('isNewSalon', session.isNewSalon ? 'true' : 'false');
   return { ...session, role, userId: session.userId || user?.userId || user?.salon?.salonId || user?.salonId || user?.id || '' };
+}
+
+// Hash routing. `navigate` writes `#/<screen>?<query>`, and `getRouteFromHash`
+// is its inverse: it turns the current hash back into `{ name, params }`. It runs
+// on first paint (so a refresh keeps you on the screen you were on), on
+// popstate/hashchange (browser back/forward), and when another tab rewrites the
+// stored session. It also has to accept the deep links notifications open —
+// `/#/bookingRequest?bookingRequestId=…` for a partner, `/#/delay?…` for a
+// customer — which is why an unknown or role-mismatched screen falls back to the
+// role's home instead of rendering a screen the shell has no branch for.
+const USER_ROUTE_NAMES = ['home', 'bookings', 'products', 'account', 'detail', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms'];
+const SALON_ROUTE_NAMES = ['queue', 'history', 'salonProducts', 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
+
+function defaultRouteForRole(role) {
+  return { name: String(role || '').toUpperCase() === 'SALON' ? 'queue' : 'home', params: {} };
+}
+
+export function getRouteFromHash(role) {
+  const fallback = defaultRouteForRole(role);
+  if (typeof window === 'undefined') return fallback;
+  const hash = String(window.location.hash || '').replace(/^#/, '');
+  const [rawName, rawQuery = ''] = hash.split('?');
+  let name = '';
+  try { name = decodeURIComponent(rawName); } catch { name = rawName; }
+  name = name.replace(/^\/+|\/+$/g, '');
+  const knownRoutes = String(role || '').toUpperCase() === 'SALON' ? SALON_ROUTE_NAMES : USER_ROUTE_NAMES;
+  if (!knownRoutes.includes(name)) return fallback;
+  const params = {};
+  try {
+    for (const [key, value] of new URLSearchParams(rawQuery).entries()) params[key] = value;
+  } catch (parseError) {
+    console.debug(getErrorMessage(parseError, 'Ignored an unreadable route query string.'));
+  }
+  return { name, params };
 }
 
 const PUSH_REQUIRED_MESSAGE = 'My Naai needs notification permission to sign you in — it is how booking requests and confirmations reach you. Please allow notifications to continue.';

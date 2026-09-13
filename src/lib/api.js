@@ -172,6 +172,54 @@ function isPlanExpiredPayload(data, httpStatus) {
   return candidates.some(value => String(value || '').toUpperCase() === 'PLAN_EXPIRED');
 }
 
+// Public form of the PLAN_EXPIRED check for callers that hold either a response
+// payload or a thrown ApiError. `request()` already fires the global
+// `mynaai:plan-expired` event for any response; the salon shell additionally
+// needs to classify the value it was handed so a rejected profile preflight can
+// be treated as authoritative ("plan expired") instead of falling back to the
+// generic "send this partner to onboarding" path.
+export function isPlanExpiredResponse(value) {
+  if (!value) return false;
+  if (value instanceof ApiError) return isPlanExpiredPayload(value.data, value.status);
+  if (value instanceof Error) return false;
+  return isPlanExpiredPayload(value, value.status);
+}
+
+// The salon login endpoints only know salons that already exist. When the number
+// belongs to a partner who registered as an owner but has no salon record yet,
+// `/api/salons/send-otp` and `/api/salons/login` answer with a "not found /
+// not registered" style failure, and the portal must retry against the owner
+// registration endpoints instead. Anything else (a bad OTP, a network failure, a
+// 500) must NOT be reinterpreted as "unknown salon", or a partner with a real
+// salon would be pushed into re-registering.
+const UNKNOWN_SALON_CODES = ['SALON_NOT_FOUND', 'SALON_NOT_REGISTERED', 'SALON_DOES_NOT_EXIST', 'SALON_UNAVAILABLE', 'NOT_FOUND', 'NOT_REGISTERED'];
+// A message is only trusted when it is actually about the salon or the partner
+// account. A bare "not found" is not enough: "OTP not found" must not send an
+// existing partner down the registration path.
+const UNKNOWN_SALON_MESSAGE = /\b(salon|partner|account|business)\b[^.]{0,60}?\b(not\s+(found|registered|exist|existing)|does\s*n[o']?t\s+exist|unregistered|unavailable)\b|\b(not\s+found|not\s+registered|unregistered|no)\s+(salon|partner)\b/i;
+
+export function isUnknownSalonResponse(value) {
+  if (!value) return false;
+  const payload = value instanceof Error ? value.data : value;
+  const codes = [
+    payload?.status,
+    payload?.error,
+    payload?.code,
+    payload?.errorCode,
+    payload?.data?.status,
+    payload?.data?.error,
+    payload?.data?.code,
+    payload?.data?.errorCode,
+  ];
+  if (codes.some(code => UNKNOWN_SALON_CODES.includes(String(code || '').toUpperCase()))) return true;
+  // A bare 404 with no machine-readable code is still an unknown salon, but only
+  // for a thrown API error — a 404 payload without a status field is not enough
+  // to redirect a partner into registration.
+  if (value instanceof ApiError && value.status === 404) return true;
+  const message = value?.message || payload?.message || payload?.error;
+  return typeof message === 'string' && UNKNOWN_SALON_MESSAGE.test(message);
+}
+
 function dispatchPlanExpired(data, httpStatus) {
   if (typeof window === 'undefined' || isPlanAlertShown || !isPlanExpiredPayload(data, httpStatus)) return;
   isPlanAlertShown = true;

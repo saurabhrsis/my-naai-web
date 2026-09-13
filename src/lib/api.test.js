@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Avoid importing the whole network chain; test the token helpers that back the
 // service-worker auth mirror and the session shape used across the app.
-import { api, getFileUrl, getToken, setToken, getServerUrl, resetPlanExpiredAlert } from './api';
+import { api, ApiError, getFileUrl, getToken, isPlanExpiredResponse, isUnknownSalonResponse, setToken, getServerUrl, resetPlanExpiredAlert } from './api';
 
 beforeEach(() => {
   localStorage.clear();
@@ -92,5 +92,49 @@ describe('plan expiry response handling', () => {
     expect(expired).toHaveBeenCalledTimes(1);
     expect(expired.mock.calls[0][0].detail.data.error).toBe('PLAN_EXPIRED');
     window.removeEventListener('mynaai:plan-expired', expired);
+  });
+});
+
+// The salon shell and the sign-in preflight classify raw API values with these
+// two predicates. Both were referenced from src/App.jsx without existing, which
+// is what crashed the signed-in shell, so their real behaviour is pinned here.
+describe('isPlanExpiredResponse', () => {
+  it('recognises PLAN_EXPIRED in every place the backend puts it', () => {
+    expect(isPlanExpiredResponse({ status: 'PLAN_EXPIRED' })).toBe(true);
+    expect(isPlanExpiredResponse({ code: 'plan_expired' })).toBe(true);
+    expect(isPlanExpiredResponse({ data: { errorCode: 'PLAN_EXPIRED' } })).toBe(true);
+    expect(isPlanExpiredResponse(new ApiError('Renew to continue', 403, { status: 'PLAN_EXPIRED' }))).toBe(true);
+  });
+
+  it('is false for any other failure, including network and JWT errors', () => {
+    expect(isPlanExpiredResponse(null)).toBe(false);
+    expect(isPlanExpiredResponse({ status: 'SUCCESS' })).toBe(false);
+    expect(isPlanExpiredResponse({ status: 'JWT_FAILED' })).toBe(false);
+    expect(isPlanExpiredResponse(new Error('Failed to fetch'))).toBe(false);
+    expect(isPlanExpiredResponse(new ApiError('Server error', 500, null))).toBe(false);
+  });
+});
+
+describe('isUnknownSalonResponse', () => {
+  it('recognises a salon the login endpoint does not know', () => {
+    expect(isUnknownSalonResponse({ status: 'SALON_NOT_FOUND' })).toBe(true);
+    expect(isUnknownSalonResponse({ status: 'NOT_REGISTERED' })).toBe(true);
+    expect(isUnknownSalonResponse({ data: { code: 'salon_not_found' } })).toBe(true);
+    expect(isUnknownSalonResponse(new ApiError('Salon not found for this number', 404, null))).toBe(true);
+    expect(isUnknownSalonResponse(new ApiError('No salon registered yet', 400, null))).toBe(true);
+    expect(isUnknownSalonResponse(new ApiError('Request failed (404)', 404, null))).toBe(true);
+  });
+
+  // The dangerous false positive: a wrong OTP or an outage must not be read as
+  // "this partner has no salon", which would push an existing salon into the
+  // registration flow.
+  it('is false for unrelated failures', () => {
+    expect(isUnknownSalonResponse(null)).toBe(false);
+    expect(isUnknownSalonResponse({ status: 'SUCCESS' })).toBe(false);
+    expect(isUnknownSalonResponse({ message: 'OTP did not match' })).toBe(false);
+    expect(isUnknownSalonResponse({ message: 'OTP not found or expired' })).toBe(false);
+    expect(isUnknownSalonResponse(new ApiError('Too many requests', 429, null))).toBe(false);
+    expect(isUnknownSalonResponse(new ApiError('Server error', 500, null))).toBe(false);
+    expect(isUnknownSalonResponse(new Error('Failed to fetch'))).toBe(false);
   });
 });
