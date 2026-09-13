@@ -578,21 +578,79 @@ img { display: block; max-width: 100%; }
 .schedule-total strong { color: var(--gold); font-size: 15px; }
 
 /* Partner dashboard */
-.queue-group { margin-bottom: 21px; }
-.queue-group-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; }
-.queue-group-heading h2 { margin: 0; color: var(--gold); font-size: 14px; }
-.queue-group-heading span { color: var(--muted); font-size: 10px; }
-.queue-card { display: flex; gap: 10px; margin-bottom: 9px; padding: 11px; border: 1px solid var(--line); border-radius: 15px; background: var(--card); }
+.queue-group { display: grid; gap: 10px; }
+.queue-group-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.queue-group-heading h2 { margin: 0; color: var(--gold); font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.queue-group-heading span { flex: none; padding: 4px 9px; border-radius: 999px; color: var(--muted-light); background: rgba(255, 255, 255, .06); font-size: 11px; font-weight: 700; }
+
+/* Salon customer queue card. Mobile-first, and deliberately single-column: the
+   old card shared one flex row between the customer name and the Update time /
+   Done buttons, so on a 320-430px iPhone the buttons claimed the whole row and
+   the name, date and time were squeezed to nothing. Who / when / what / how to
+   call each get the full width of the card, and the actions get their own row,
+   which is also the reading order the salon needs at the chair. */
 /* Queue token numbers are intentionally not shown in the salon portal. */
-.queue-main { min-width: 0; flex: 1; }
-.queue-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
-.queue-card-heading > div:first-child { min-width: 0; }
-.queue-card-heading h3 { overflow: hidden; margin: 0 0 4px; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.queue-card-heading span { color: var(--muted); font-size: 9px; }
-.queue-card-heading .btn { flex: none; }
-.queue-meta { display: flex; flex-wrap: wrap; gap: 7px 11px; margin-top: 10px; color: var(--muted-light); font-size: 9px; }
-.queue-meta span, .queue-meta a { display: inline-flex; align-items: center; gap: 5px; color: inherit; text-decoration: none; }
-.queue-meta svg { color: var(--gold); }
+.queue-list { display: grid; gap: 11px; }
+.queue-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 13px 13px 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid rgba(232, 185, 126, .42);
+  border-radius: 18px;
+  background: linear-gradient(155deg, rgba(232, 185, 126, .05), rgba(255, 255, 255, .015) 46%), var(--card);
+}
+/* The left accent repeats the urgency chip's colour, so a customer already
+   waiting is findable while scrolling without reading a single word. */
+.queue-card-soon { border-left-color: rgba(110, 209, 158, .62); }
+.queue-card-now { border-left-color: var(--gold); background: linear-gradient(155deg, rgba(232, 185, 126, .13), rgba(255, 255, 255, .02) 50%), var(--card); }
+.queue-card-late { border-left-color: var(--red); background: linear-gradient(155deg, rgba(242, 123, 116, .12), rgba(255, 255, 255, .02) 50%), var(--card); }
+
+.queue-card-top { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.queue-avatar {
+  width: 42px;
+  height: 42px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  color: #111;
+  background: var(--gold);
+  font-size: 15px;
+  font-weight: 700;
+}
+.queue-identity { min-width: 0; flex: 1; }
+/* No ellipsis here: a truncated "Asha Sha…" is the failure this card is meant
+   to stop, and a two-line wrap costs less than a wrong customer. */
+.queue-identity h3 { margin: 0 0 5px; font-size: 16px; font-weight: 700; line-height: 1.25; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.queue-when { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 10px; min-width: 0; color: var(--muted-light); font-size: 12px; }
+.queue-when > span { display: inline-flex; align-items: center; gap: 5px; }
+.queue-when svg { flex: none; color: var(--gold); }
+.queue-urgency { flex: none; padding: 4px 8px; border-radius: 999px; color: var(--muted-light); background: rgba(255, 255, 255, .07); font-size: 11px; font-weight: 700; font-style: normal; line-height: 1.2; }
+.queue-urgency-soon { color: var(--green); background: rgba(110, 209, 158, .12); }
+.queue-urgency-now { color: #111; background: var(--gold); }
+.queue-urgency-late { color: #ffd0cc; background: rgba(242, 123, 116, .18); }
+
+.queue-facts { display: grid; grid-template-columns: 1fr; gap: 9px; padding-top: 12px; border-top: 1px solid var(--line); }
+.queue-fact { display: flex; align-items: flex-start; gap: 9px; min-width: 0; color: inherit; text-decoration: none; }
+.queue-fact > svg { flex: none; margin-top: 2px; color: var(--gold); }
+.queue-fact span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.queue-fact small { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.queue-fact strong { font-size: 13.5px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+/* A phone number a salon owner can actually hit with a thumb, at a glance. */
+.queue-fact-call { padding: 9px 10px; border: 1px solid rgba(232, 185, 126, .26); border-radius: 12px; background: var(--gold-wash); transition: background .18s, border-color .18s; }
+.queue-fact-call:hover { border-color: var(--gold); background: rgba(232, 185, 126, .18); }
+.queue-fact-call strong { color: var(--gold); font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+
+.queue-card-actions { display: flex; flex-wrap: wrap; gap: 9px; }
+/* Full-width halves, not the 34px chip the desktop table uses: this is the tap
+   a salon makes one-handed mid-service, so it gets the iOS 44px target. */
+.queue-card-actions .btn { flex: 1 1 0; min-width: 0; min-height: 46px; padding: 0 10px; font-size: 13.5px; white-space: normal; }
+.queue-card-actions .btn:disabled { opacity: .55; }
+
 .history-card { display: flex; align-items: center; gap: 11px; padding: 13px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
 .history-avatar { width: 40px; height: 40px; border-radius: 13px; font-size: 13px; }
 .history-copy { min-width: 0; flex: 1; }
@@ -940,7 +998,9 @@ img { display: block; max-width: 100%; }
 /* Skeletons and modals */
 .list-stack { display: flex; flex-direction: column; gap: 12px; }
 .skeleton-card { min-height: 250px; overflow: hidden; border-radius: 20px; background: var(--card); }
-.skeleton-card.booking-skeleton, .skeleton-card.queue-skeleton, .skeleton-card.history-skeleton, .skeleton-card.notification-skeleton { min-height: 135px; }
+.skeleton-card.booking-skeleton, .skeleton-card.history-skeleton, .skeleton-card.notification-skeleton { min-height: 135px; }
+/* The queue card carries an identity row, three details and an action row. */
+.skeleton-card.queue-skeleton { min-height: 236px; }
 .skeleton-media { height: 155px; }
 .skeleton-lines { display: flex; flex-direction: column; gap: 9px; padding: 15px; }
 .skeleton-lines i { display: block; width: 75%; height: 12px; border-radius: 8px; }
@@ -1049,7 +1109,12 @@ img { display: block; max-width: 100%; }
   .schedule-screen { max-width: 850px; }
   .time-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); max-height: 380px; }
   .schedule-total { max-width: 850px; }
-  .queue-card { max-width: 850px; }
+  .queue-card { max-width: 850px; padding: 15px 17px; }
+  .queue-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 18px; }
+  .queue-avatar { width: 46px; height: 46px; }
+  .queue-identity h3 { font-size: 17px; }
+  .queue-card-actions { justify-content: flex-end; }
+  .queue-card-actions .btn { flex: 0 0 auto; min-width: 168px; }
   .history-card, .notification-card { max-width: 850px; }
   .salon-profile-hero { max-width: 800px; padding: 24px; }
   .salon-profile-photo { width: 90px; height: 94px; }
@@ -1181,6 +1246,14 @@ img { display: block; max-width: 100%; }
   .type-option-grid button { padding: 0 4px; font-size: 11px; }
   .sticky-continue, .schedule-total { align-items: stretch; flex-direction: column; }
   .sticky-continue .btn, .schedule-total .btn { width: 100%; }
+  /* Queue card on the narrowest iPhones: the row still carries every detail, so
+     it tightens the chrome (avatar, padding, label size) instead of dropping it. */
+  .queue-card { gap: 11px; padding: 12px 11px 11px 12px; }
+  .queue-card-top { gap: 9px; }
+  .queue-avatar { width: 38px; height: 38px; border-radius: 12px; font-size: 13.5px; }
+  .queue-identity h3 { font-size: 15px; }
+  .queue-card-actions { gap: 7px; }
+  .queue-card-actions .btn { padding: 0 8px; font-size: 12.5px; }
 }
 
 /* A missing photo falls back to the official logo, which is a square tile with
@@ -1218,7 +1291,6 @@ img.image-fallback-tile {
 .permission-help-note a { color: var(--gold); font-weight: 700; }
 
 /* Salon queue: update an appointment time and notify the customer */
-.queue-card-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 7px; flex: none; }
 .time-update-current { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 12px; color: var(--gold); background: var(--card); }
 .time-update-current > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .time-update-current small { color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
@@ -1248,10 +1320,11 @@ img.image-fallback-tile {
 .time-update-preview.blocked .time-update-preview-mark { color: var(--red); }
 .time-update-warning { color: #ffb3ad !important; }
 .time-update-hint { margin: 10px 0 0; color: var(--muted); font-size: 11px; text-align: center; }
-@media (max-width: 420px) {
-  .queue-card-actions { width: 100%; justify-content: stretch; }
-  .queue-card-actions .btn { flex: 1; }
-}
+/* No 420px override for the queue actions any more. There used to be one that
+   gave the action row `width: 100%` inside a heading row that could not wrap,
+   which is what pushed the customer name, the date and the time off an iPhone
+   screen. The card is single-column at every width now, so the row is already
+   full-width and nothing competes with it. */
 .delay-reason { margin: 8px 0 0; color: var(--muted-light); font-size: 12.5px; font-style: italic; line-height: 1.5; }
 
 /* === FIX: Permission gate modal & improved permission UX === */

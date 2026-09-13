@@ -41,6 +41,7 @@ import {
   LATER_OFFSETS,
   MAX_OFFSET_MINUTES,
   MIN_OFFSET_MINUTES,
+  describeBookingUrgency,
   describeOffset,
   isValidOffset,
   offsetForTargetTime,
@@ -270,6 +271,57 @@ function UpdateTimeModal({ booking, open, onClose, onSubmit, saving }) {
   );
 }
 
+// One queued booking. Mobile-first on purpose: on a 320-430px iPhone the old
+// card put the customer name and the two action buttons in the same flex row,
+// so the buttons won the space and the name, the date and the time were
+// squeezed to nothing. Identity, details and actions now stack, each block
+// taking the full width of the card, and the same order reads on a tablet where
+// the details sit side by side.
+export function QueueCardItem({ item, now, completing, onUpdateTime, onComplete }) {
+  const urgency = describeBookingUrgency(item.bookingDate, item.bookingTime, now);
+  const hasPhone = Boolean(item.userPhone) && item.userPhone !== '0000000000';
+  return (
+    <article className={cx('queue-card', urgency && `queue-card-${urgency.tone}`)}>
+      <div className="queue-card-top">
+        <div className="queue-avatar" aria-hidden="true">{getInitials(item.userName || 'Guest')}</div>
+        <div className="queue-identity">
+          <h3>{item.userName || 'Guest'}</h3>
+          <div className="queue-when">
+            <span><CalendarDays size={13} /> {item.bookingDate ? formatDate(item.bookingDate) : 'Date pending'}</span>
+            <span><Clock3 size={13} /> {item.bookingTime ? formatTime(item.bookingTime) : 'Time pending'}</span>
+            {urgency && <em className={cx('queue-urgency', `queue-urgency-${urgency.tone}`)}>{urgency.label}</em>}
+          </div>
+        </div>
+      </div>
+      <div className="queue-facts">
+        <div className="queue-fact">
+          <Scissors size={15} />
+          <span><small>Services</small><strong>{item.serviceNames || item.services || 'Salon service'}</strong></span>
+        </div>
+        <div className="queue-fact">
+          <UserRound size={15} />
+          <span><small>Specialist</small><strong>{item.barberName || 'Any specialist'}</strong></span>
+        </div>
+        {hasPhone ? (
+          <a className="queue-fact queue-fact-call" href={`tel:${item.userPhone}`}>
+            <Phone size={15} />
+            <span><small>Call customer</small><strong>{item.userPhone}</strong></span>
+          </a>
+        ) : (
+          <div className="queue-fact">
+            <Phone size={15} />
+            <span><small>Phone</small><strong>Not provided</strong></span>
+          </div>
+        )}
+      </div>
+      <div className="queue-card-actions">
+        <Button size="small" variant="secondary" onClick={() => onUpdateTime(item)} disabled={!item.bookingTime}><Clock3 size={15} /> Update time</Button>
+        <Button size="small" loading={completing} onClick={() => onComplete(item.bookingId)}>Done <Check size={16} /></Button>
+      </div>
+    </article>
+  );
+}
+
 export function SalonQueueScreen({ session, navigate, notify }) {
   const confirm = useConfirm();
   const [items, setItems] = useState([]);
@@ -277,6 +329,14 @@ export function SalonQueueScreen({ session, navigate, notify }) {
   const [doneId, setDoneId] = useState('');
   const [timeTarget, setTimeTarget] = useState(null);
   const [savingTime, setSavingTime] = useState(false);
+  // The "Due now" / "Overdue by 20 min" chips are only worth showing if they
+  // stay honest while a salon works through the list: the queue itself reloads on
+  // a socket event or a manual refresh, which can be several minutes apart.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const tick = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(tick);
+  }, []);
   const load = useCallback(async (isRefresh = false) => {
     if (!isRefresh) setLoading(true);
     try { const response = await api.customerList({ salonId: session.userId, page: 1 }); setItems(getList(response, ['bookings', 'customers'])); } catch (error) { notify?.('error', getErrorMessage(error, 'Unable to load your queue.')); } finally { setLoading(false); }
@@ -342,7 +402,7 @@ export function SalonQueueScreen({ session, navigate, notify }) {
   };
 
   const grouped = [{ label: 'Today', key: 0, items: items.filter(item => isSameDate(item.bookingDate, 0)) }, { label: 'Tomorrow', key: 1, items: items.filter(item => isSameDate(item.bookingDate, 1)) }, { label: 'Day after tomorrow', key: 2, items: items.filter(item => !isSameDate(item.bookingDate, 0) && !isSameDate(item.bookingDate, 1)) }].filter(group => group.items.length);
-  return <div className="screen salon-queue-screen"><PageHeader title="Customer queue" subtitle="Keep every chair moving smoothly." action={<div className="page-actions"><button className="refresh-icon-button" onClick={load} aria-label="Refresh queue"><Zap size={17} /></button></div>} />{loading ? <div className="list-stack">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} className="queue-skeleton" />)}</div> : grouped.length ? <div className="queue-groups">{grouped.map(group => <section className="queue-group" key={group.label}><div className="queue-group-heading"><h2>{group.label}</h2><span>{group.items.length} {group.items.length === 1 ? 'booking' : 'bookings'}</span></div>{group.items.map(item => <article className="queue-card" key={item.bookingId}><div className="queue-main"><div className="queue-card-heading"><div><h3>{item.userName || 'Guest'}</h3><span>{item.bookingDate ? `${formatDate(item.bookingDate)} · ${formatTime(item.bookingTime)}` : 'Appointment time pending'}</span></div><div className="queue-card-actions"><Button size="small" variant="secondary" onClick={() => setTimeTarget(item)} disabled={!item.bookingTime}><Clock3 size={15} /> Update time</Button><Button size="small" onClick={() => markDone(item.bookingId)} loading={doneId === item.bookingId}>Done</Button></div></div><div className="queue-meta"><span><Scissors size={14} /> {item.serviceNames || item.services || 'Salon service'}</span>{item.barberName && <span><UserRound size={14} /> {item.barberName}</span>}{item.userPhone && item.userPhone !== '0000000000' && <a href={`tel:${item.userPhone}`}><Phone size={14} /> {item.userPhone}</a>}</div></div></article>)}</section>)}</div> : <EmptyState icon={UsersRound} title="No customers in queue" message="New booking requests will appear here." />}
+  return <div className="screen salon-queue-screen"><PageHeader title="Customer queue" subtitle="Keep every chair moving smoothly." action={<div className="page-actions"><button className="refresh-icon-button" onClick={load} aria-label="Refresh queue"><Zap size={17} /></button></div>} />{loading ? <div className="list-stack">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} className="queue-skeleton" />)}</div> : grouped.length ? <div className="queue-groups">{grouped.map(group => <section className="queue-group" key={group.label}><div className="queue-group-heading"><h2>{group.label}</h2><span>{group.items.length} {group.items.length === 1 ? 'booking' : 'bookings'}</span></div><div className="queue-list">{group.items.map(item => <QueueCardItem key={item.bookingId} item={item} now={now} completing={doneId === item.bookingId} onUpdateTime={setTimeTarget} onComplete={markDone} />)}</div></section>)}</div> : <EmptyState icon={UsersRound} title="No customers in queue" message="New booking requests will appear here." />}
     <UpdateTimeModal booking={timeTarget} open={Boolean(timeTarget)} onClose={() => { if (!savingTime) setTimeTarget(null); }} onSubmit={submitTimeUpdate} saving={savingTime} />
   </div>;
 }
