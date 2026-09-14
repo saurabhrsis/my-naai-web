@@ -314,7 +314,10 @@ export async function getPushStatus() {
   } catch (statusError) {
     console.debug(getErrorMessage(statusError, 'Could not check notification status.'));
   }
-  return { state: 'unavailable', reason: 'We could not prepare notifications in this browser. Please try again. This can happen on first visit - a retry usually works.' };
+  // Reaching here means the permission IS granted — the browser just could not
+  // finish minting/collecting the token yet. Say so: the user just allowed
+  // notifications and must see that the app registered exactly that.
+  return { state: 'unavailable', reason: 'Notifications are allowed in this browser — the final connection step did not finish yet. Tap Try again; one retry usually completes it.' };
 }
 
 export async function getPushToken({ requestPermission = false } = {}) {

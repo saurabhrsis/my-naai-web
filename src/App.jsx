@@ -501,24 +501,38 @@ function PermissionGateModal({ open, onClose, onGranted, state: initialState = '
       </>
     );
   } else if (state === 'denied') {
+    const embedded = isEmbeddedFrame();
     title = 'Notifications are blocked';
-    lede = `A browser only asks once, so blocked notifications are switched back on in ${browserLabel} settings. It takes about 15 seconds:`;
+    lede = embedded
+      ? 'You are viewing My Naai inside another page, so the browser will not show its Allow popup here. Open it in a normal browser tab to allow notifications:'
+      : `A browser only asks once, so blocked notifications are switched back on in ${browserLabel} settings. It takes about 15 seconds:`;
     body = (
       <>
-        <ol className="ios-install-steps permission-gate-steps">
-          {permissionSteps(browser, 'notifications').map(step => <li key={step}>{step}</li>)}
-        </ol>
+        {embedded ? (
+          <ol className="ios-install-steps permission-gate-steps">
+            <li>Tap <strong>Open My Naai in a new tab</strong> below.</li>
+            <li>Tap <strong>Allow notifications</strong> there and choose <strong>Allow</strong> in the browser popup.</li>
+            <li>Sign in from that tab — alerts reach you there.</li>
+          </ol>
+        ) : (
+          <ol className="ios-install-steps permission-gate-steps">
+            {permissionSteps(browser, 'notifications').map(step => <li key={step}>{step}</li>)}
+          </ol>
+        )}
         {checkFailed && (
           <div className="permission-gate-warn">
             <p>Still blocked. The site must be exactly <strong>{siteHost()}</strong> and the setting must be <strong>Notifications</strong> — not Location. Then tap <strong>Reload page</strong>; some browsers need one fresh load.{androidAppNotificationHint(browser)}</p>
-            {isEmbeddedFrame() && <p>This page is open inside another app, and browsers hide the permission popup there. Open My Naai in a new tab and allow it there.</p>}
           </div>
         )}
         <div className="permission-gate-actions">
-          <Button onClick={check} loading={busy}><Check size={16} /> I allowed it — Check</Button>
+          {embedded ? (
+            <Button onClick={openStandalone}><ExternalLink size={16} /> Open My Naai in a new tab</Button>
+          ) : (
+            <Button onClick={check} loading={busy}><Check size={16} /> I allowed it — Check</Button>
+          )}
           <div className="permission-gate-secondary">
+            {embedded && <button className="ghost" onClick={check}>I allowed it — Check</button>}
             <button className="ghost" onClick={() => window.location.reload()}><RotateCw size={14} /> Reload page</button>
-            {isEmbeddedFrame() && <button className="ghost" onClick={openStandalone}><ExternalLink size={14} /> Open My Naai in a new tab</button>}
             <button className="ghost" onClick={onClose}>Not now</button>
             <a className="ghost" href="tel:8380017393">Need help? Call</a>
           </div>
@@ -972,10 +986,25 @@ function LoginPermissionsPanel({ onPushToken, onLocated }) {
     setSoundTested(true);
   };
 
+  // First visits sometimes lose the race with the service worker: permission is
+  // granted but the token mint fails once. One quiet automatic retry (capped at
+  // two) closes that gap without the user having to notice or tap anything —
+  // this is the "grant permission → app syncs by itself" path.
+  const autoRetriedRef = useRef(0);
+  useEffect(() => {
+    if (notif.state !== 'unavailable' || autoRetriedRef.current >= 2) return undefined;
+    const timer = setTimeout(() => {
+      autoRetriedRef.current += 1;
+      refreshNotif();
+    }, 1800);
+    return () => clearTimeout(timer);
+  }, [notif.state, refreshNotif]);
+
   const browser = detectBrowser();
   const browserLabel = BROWSER_LABELS[browser] || BROWSER_LABELS.other;
   const needsInstall = isIosDevice() && !isIosPwaInstalled();
   const notifDone = notif.state === 'enabled';
+  const embeddedBlocked = notif.state === 'denied' && isEmbeddedFrame();
   const showLoc = !locDismissed && (loc === 'prompt' || loc === 'denied');
   if (notifDone && !showLoc) return null;
 
@@ -983,8 +1012,10 @@ function LoginPermissionsPanel({ onPushToken, onLocated }) {
     checking: 'Checking this browser…',
     enabled: 'Booking requests, confirmations and the salon buzzer will reach you here.',
     'needs-permission': 'One tap opens your browser\u2019s Allow popup — choose Allow.',
-    denied: `Blocked in ${browserLabel}. Tap Allow notifications — if nothing pops up, open How to allow.`,
-    unavailable: 'Setup did not finish — a first visit sometimes needs a second try.',
+    denied: embeddedBlocked
+      ? 'This page is open inside another app, and browsers will not show the Allow popup here. Open My Naai in a normal browser tab to allow notifications.'
+      : `Blocked in ${browserLabel}. Tap Allow notifications — if nothing pops up, open How to allow.`,
+    unavailable: 'The browser allowed notifications — the last setup step did not finish. Tap Try again.',
     unsupported: needsInstall
       ? 'iPhone shows notifications only for apps on the Home Screen. Install My Naai first — it takes 20 seconds.'
       : 'This browser cannot show web notifications. Use Chrome, Edge or Samsung Internet.',
@@ -994,14 +1025,18 @@ function LoginPermissionsPanel({ onPushToken, onLocated }) {
   // The unblock steps stay collapsed behind "How to allow" so the card reads
   // like a clean permission ask. They open on demand, and by themselves after
   // a failed Allow/Check — the moment they are actually needed. The iPhone
-  // install steps are the only path forward there, so those stay open.
+  // install steps and the embedded-page fix are the only path forward there,
+  // so those stay open.
   const showNotifFix = !notifDone && (notif.state === 'denied' || needsInstall);
-  const fixOpen = Boolean(showNotifFix && (needsInstall || showSteps || (checkFailed && notif.state === 'denied')));
+  const fixOpen = Boolean(showNotifFix && (needsInstall || embeddedBlocked || showSteps || (checkFailed && notif.state === 'denied')));
 
   let notifAction;
   if (notif.state === 'checking') notifAction = <Spinner size={15} />;
   else if (notifDone) notifAction = <span className="perm-chip perm-chip-on"><Check size={12} /> On</span>;
   else if (needsInstall) notifAction = <span className="perm-chip perm-chip-warn">Install first</span>;
+  else if (embeddedBlocked) notifAction = (
+    <Button size="small" onClick={openStandalone}><ExternalLink size={13} /> Open My Naai in a new tab</Button>
+  );
   else if (notif.state === 'needs-permission' || notif.state === 'denied') notifAction = (
     <>
       <Button size="small" onClick={enableNotifs} loading={busy.notif}><Bell size={13} /> Allow notifications</Button>
@@ -1048,6 +1083,20 @@ function LoginPermissionsPanel({ onPushToken, onLocated }) {
                 <Button size="small" variant="secondary" onClick={checkNotif} loading={busy.check}><Check size={13} /> I installed — Check</Button>
               </div>
             </>
+          ) : embeddedBlocked ? (
+            <>
+              <span className="perm-fix-label">Browsers hide the Allow popup inside embedded pages:</span>
+              <ol className="ios-install-steps">
+                <li>Tap <strong>Open My Naai in a new tab</strong> below — the app opens in a full browser tab.</li>
+                <li>Tap <strong>Allow notifications</strong> there and choose <strong>Allow</strong> in the browser popup.</li>
+                <li>Sign in from that tab — the popup cannot appear inside this embedded view.</li>
+              </ol>
+              <div className="perm-fix-actions">
+                <Button size="small" onClick={openStandalone}><ExternalLink size={13} /> Open My Naai in a new tab</Button>
+                <Button size="small" variant="secondary" onClick={checkNotif} loading={busy.check}><Check size={13} /> I allowed — Check</Button>
+                <a href="tel:8380017393">Need help? Call us</a>
+              </div>
+            </>
           ) : (
             <>
               <span className="perm-fix-label">How to unblock notifications in {browserLabel} (a browser only asks once):</span>
@@ -1058,13 +1107,11 @@ function LoginPermissionsPanel({ onPushToken, onLocated }) {
                 <div className="permission-gate-warn">
                   <p>Still blocked. The site must be exactly <strong>{siteHost()}</strong> and the setting must be <strong>Notifications</strong> — not Location.</p>
                   <p>Then tap <strong>Reload page</strong> — some browsers need one fresh load to see the change.{androidAppNotificationHint(browser)}</p>
-                  {isEmbeddedFrame() && <p>Still nothing? This page is open inside another app, and browsers hide the permission popup there. Tap <strong>Open My Naai in a new tab</strong> below and allow it there.</p>}
                 </div>
               )}
               <div className="perm-fix-actions">
                 <Button size="small" onClick={checkNotif} loading={busy.check}><Check size={13} /> I allowed — Check</Button>
                 <button type="button" className="ghost-link" onClick={() => window.location.reload()}>Reload page</button>
-                {isEmbeddedFrame() && <Button size="small" variant="secondary" onClick={openStandalone}><ExternalLink size={13} /> Open My Naai in a new tab</Button>}
                 <a href="tel:8380017393">Need help? Call us</a>
               </div>
             </>

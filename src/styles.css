@@ -51,9 +51,12 @@
   /* Full-height surfaces. `100vh` first so browsers without small-viewport units
      (iOS Safari < 15.4, Chrome < 108, older Android WebView) still get a
      full-height page; `100svh` overrides where supported and keeps the iOS
-     address bar from pushing the bottom of a screen out of reach. */
+     address bar from pushing the bottom of a screen out of reach.
+     NOTE: this override used to read `var(--viewport-height)` — a self-cycle,
+     which makes the custom property invalid at computed-value time and silently
+     zeroes every min-height that uses it (login, shell, registration). */
   --viewport-height: 100vh;
-  --viewport-height: var(--viewport-height);
+  --viewport-height: 100svh;
 }
 
 * { box-sizing: border-box; }
