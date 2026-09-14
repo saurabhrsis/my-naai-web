@@ -53,6 +53,7 @@ vi.mock('./lib/socket', () => ({
 vi.mock('./lib/buzzer', () => ({ playBuzzer: vi.fn(), unlockBuzzer: vi.fn() }));
 
 import App, { getRouteFromHash } from './App';
+import * as push from './lib/push';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -211,5 +212,133 @@ describe('App routing on mount', () => {
     await act(async () => { window.location.hash = '#/notifications'; });
     await flush();
     expect(headings()).toContain('Notifications');
+  });
+});
+
+// Login permission flow: one setup card on the login screen, direct browser
+// popups from the Continue tap, and a real way out when the browser has
+// blocked notifications (the "followed the steps but it still shows blocked"
+// dead end).
+describe('Login permission flow', () => {
+  let container;
+  let root;
+
+  const setNotificationPermission = permission => {
+    globalThis.Notification = { permission, requestPermission: vi.fn().mockResolvedValue(permission) };
+  };
+
+  const typeMobile = value => {
+    const input = container.querySelector('.phone-input input');
+    // React tracks the value of controlled inputs, so the native setter has to
+    // be used before the input event or onChange never fires.
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
+  const submitPhone = () => {
+    const form = container.querySelector('form');
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  };
+
+  const buttonByText = text => Array.from(container.querySelectorAll('button')).find(node => node.textContent.trim().includes(text));
+
+  const headings = () => Array.from(container.querySelectorAll('h1')).map(node => node.textContent);
+
+  const mount = async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => { root.render(<App />); });
+    await flush();
+  };
+
+  beforeEach(() => {
+    // A returning user goes straight to the login screen, past the splash.
+    localStorage.setItem('hasSeenOnboarding', 'true');
+    vi.mocked(push.getPushStatus).mockReset().mockResolvedValue({ state: 'needs-permission', reason: '' });
+    vi.mocked(push.getPushToken).mockReset().mockResolvedValue('');
+  });
+
+  afterEach(() => {
+    if (root) act(() => root.unmount());
+    container?.remove();
+    root = null;
+    container = null;
+    delete globalThis.Notification;
+    vi.clearAllMocks();
+  });
+
+  it('asks the browser directly when Continue is tapped, then sends the OTP', async () => {
+    setNotificationPermission('default');
+    vi.mocked(push.getPushToken).mockImplementation(async options => (options?.requestPermission ? 'push-token-1' : ''));
+    await mount();
+
+    // The login screen shows the single setup card, not a stack of cards.
+    expect(container.querySelector('.perm-panel')).not.toBeNull();
+    expect(buttonByText('Turn on')).not.toBeNull();
+
+    await act(async () => { typeMobile('9876543210'); });
+    await act(async () => { submitPhone(); });
+    await flush();
+
+    // The browser's own popup was requested straight from the Continue tap.
+    expect(push.getPushToken).toHaveBeenCalledWith({ requestPermission: true });
+    // And the flow continued to the OTP step.
+    expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
+  });
+
+  it('shows the blocked fix inline, and Check again ends the dead end', async () => {
+    setNotificationPermission('denied');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
+    await mount();
+
+    // Blocked state explains itself with the steps and a Check button.
+    expect(container.querySelector('.perm-fix')).not.toBeNull();
+    expect(buttonByText('I allowed — Check')).not.toBeNull();
+
+    // Still blocked after a first Check — the fix stays visible.
+    await act(async () => { buttonByText('I allowed — Check').click(); });
+    await flush();
+    expect(container.querySelector('.perm-fix')).not.toBeNull();
+
+    // The user unblocks in the browser and Checks again — the card is gone.
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'enabled', token: 'push-token-2' });
+    await act(async () => { buttonByText('I allowed — Check').click(); });
+    await flush();
+    expect(container.querySelector('.perm-panel')).toBeNull();
+
+    // Sign-in now proceeds without asking again.
+    await act(async () => { typeMobile('9876543210'); });
+    await act(async () => { submitPhone(); });
+    await flush();
+    expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
+  });
+
+  it('opens the gate with the inline fix when a blocked browser cannot pop up', async () => {
+    setNotificationPermission('denied');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
+    await mount();
+
+    await act(async () => { typeMobile('9876543210'); });
+    await act(async () => { submitPhone(); });
+    await flush();
+
+    // The gate (not a nested help modal) carries the steps itself.
+    const gate = container.querySelector('.permission-gate-sheet');
+    expect(gate).not.toBeNull();
+    expect(gate.textContent).toContain('Notifications are blocked');
+    expect(gate.querySelectorAll('.modal-backdrop').length).toBe(0);
+
+    // The user unblocks in the browser and taps Check — the sheet closes and
+    // the token is wired into the flow for the next Continue tap.
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'enabled', token: 'push-token-3' });
+    vi.mocked(push.getPushToken).mockResolvedValue('push-token-3');
+    await act(async () => { buttonByText('I allowed it — Check').click(); });
+    await flush();
+    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+
+    await act(async () => { submitPhone(); });
+    await flush();
+    expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
   });
 });
