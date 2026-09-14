@@ -54,6 +54,8 @@ The app listens for relevant `localStorage` changes, so signing out or changing 
 
 The first-load onboarding/login experience offers a visible **Enable alerts** action only when notification permission or token setup needs attention. Authenticated pages stay focused on their work; a retry action is available from the Account screen when permission is missing or blocked. Technical Firebase configuration details are never shown to users. The action can be retried after the user changes the site permission in browser settings.
 
+The login screen is built for scanning rather than reading: a one-line subtitle, then three glance chips (`login-perks`) carry the pitch — *Book, skip the wait* / *Buzzer + vibration alerts* / *Works even when app closed* for customers, and *Bookings buzz you instantly* / *Buzzer + vibration* / *Works even when app closed* for partners — with the permission panel directly beneath. An install action is always one tap away on login: while the richer PWA install card is on screen it owns the CTA (native prompt where the browser offers one, Add-to-Home-Screen guide on iPhone); otherwise `InstallAppButton` stays visible and opens a 2–3 step guide for the detected browser (`INSTALL_STEPS`) instead of silently hiding install until `beforeinstallprompt` fires. Once the app runs standalone, install UI disappears by itself.
+
 Real customer and salon authentication is blocked until Firebase Web Push returns a non-empty registration token. That token is sent as `deviceToken` in the OTP verification/onboarding contract and is cached as `FCM_TOKEN`.
 
 ### Incomplete salon profile guard

@@ -1381,6 +1381,18 @@ img.image-fallback-tile {
 
 /* Login improvements */
 .login-hero-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 20px; background: rgba(232,185,126,.12); border: 1px solid rgba(232,185,126,.22); color: var(--gold); font-size: 10px; font-weight: 700; letter-spacing: .04em; margin-bottom: 10px; }
+/* The login benefits as glance chips, not a paragraph — a phone user scans
+   these in under two seconds (skip the wait, buzzer + vibration, works when
+   closed) and moves on to Allow. A wrapped two-line paragraph was never read. */
+.login-perks { display: flex; flex-wrap: wrap; gap: 7px; margin: -12px 0 16px; }
+.login-perks .login-perk { display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; border: 1px solid rgba(232,185,126,.3); border-radius: 30px; background: rgba(232,185,126,.08); color: var(--white); font-size: 10.5px; font-weight: 700; line-height: 1.2; white-space: nowrap; }
+.login-perk svg { flex: none; color: var(--gold); }
+@media (max-width: 380px) {
+  .login-perks { gap: 6px; margin-bottom: 14px; }
+  .login-perks .login-perk { padding: 6px 9px; font-size: 10px; gap: 5px; }
+}
+/* The short install guide opened from the login Install button. */
+.install-steps strong { color: var(--white); }
 .auth-form-wrap h1.login-title { font-size: clamp(28px, 7vw, 40px); line-height: 1.05; }
 .auth-form-wrap .auth-subtitle.login-subtitle { font-size: 13.5px; color: #a9b2b1; line-height: 1.5; }
 .auth-form-wrap .auth-subtitle.login-subtitle strong { color: var(--white); font-weight: 700; }

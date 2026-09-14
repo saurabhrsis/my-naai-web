@@ -27,6 +27,7 @@ import {
   ShieldCheck,
   ExternalLink,
   RotateCw,
+  Zap,
 } from 'lucide-react';
 import { api, clearSession, getToken, isPlanExpiredResponse, isUnknownSalonResponse, setToken } from './lib/api';
 import { closeNotification, deletePushToken, displayNotification, getNotificationRoute, getPushStatus, getPushToken, isActionableNotification, isEmbeddedFrame, normalizePushPayload, recordForegroundMessage, setupPush, watchNotificationPermission } from './lib/push';
@@ -837,6 +838,8 @@ function PWAInstallCard({ compact = false, notifyInstall = null }) {
   const dismiss = () => {
     setDismissed(true);
     try { sessionStorage.setItem('mynaaiPWAInstallDismissed', 'true'); } catch {}
+    // Let anything offering a fallback install CTA (InstallAppButton) take over.
+    try { window.dispatchEvent(new CustomEvent('pwa-install-dismissed')); } catch { /* event support is universal in practice */ }
   };
 
   return (
@@ -851,6 +854,135 @@ function PWAInstallCard({ compact = false, notifyInstall = null }) {
         <button type="button" className="permission-help-link" onClick={dismiss}>Not now</button>
       </div>
     </section>
+  );
+}
+
+// The browser has not offered its own install prompt (first visits, or a
+// browser that never does), so the Install button opens these instead. Steps
+// are written for a glance — three taps max, named after the detected browser,
+// key words bolded — because finding "Add to Home Screen" inside a browser
+// menu is the one part a page cannot do for the user.
+const INSTALL_STEPS = {
+  'chrome-android': [
+    <>Tap the <strong>⋮ menu</strong> (top right).</>,
+    <>Tap <strong>Add to Home screen</strong> (or <strong>Install app</strong>).</>,
+    <>Tap <strong>Add</strong> — done.</>,
+  ],
+  samsung: [
+    <>Tap the <strong>≡ menu</strong> (bottom right).</>,
+    <>Tap <strong>Add page to</strong> → <strong>Home screen</strong>.</>,
+    <>Tap <strong>Add</strong> — done.</>,
+  ],
+  firefox: [
+    <>Tap the <strong>⋮ menu</strong>.</>,
+    <>Tap <strong>Install</strong> (or <strong>Add to Home screen</strong>).</>,
+    <>Tap <strong>Add</strong> — done.</>,
+  ],
+  edge: [
+    <>Tap the <strong>menu</strong> at the bottom.</>,
+    <>Tap <strong>Add to phone</strong> → <strong>Home screen</strong>.</>,
+    <>Tap <strong>Add</strong> — done.</>,
+  ],
+  opera: [
+    <>Tap the <strong>menu</strong>.</>,
+    <>Tap <strong>Home screen</strong>.</>,
+    <>Tap <strong>Add</strong> — done.</>,
+  ],
+  'chrome-desktop': [
+    <>Click the <strong>install icon</strong> at the right of the address bar — or the <strong>⋮ menu</strong> → <strong>Save &amp; share / Install My Naai</strong>.</>,
+    <>Click <strong>Install</strong> — done.</>,
+  ],
+  'safari-desktop': [
+    <>Choose <strong>File → Add to Dock</strong> (macOS Sonoma or later).</>,
+  ],
+  other: [
+    <>Open the <strong>browser menu</strong>.</>,
+    <>Choose <strong>Install app</strong> or <strong>Add to Home Screen</strong>.</>,
+  ],
+};
+
+function InstallStepsHelp({ open, onClose }) {
+  const browser = detectBrowser();
+  const browserLabel = BROWSER_LABELS[browser] || BROWSER_LABELS.other;
+  const steps = INSTALL_STEPS[browser] || INSTALL_STEPS.other;
+  return (
+    <Modal open={open} onClose={onClose} title="Install My Naai" footer={<Button onClick={onClose}>Got it</Button>}>
+      <p className="modal-lede">A few taps in {browserLabel}:</p>
+      <ol className="ios-install-steps install-steps">{steps.map((step, index) => { const key = `${browser}-${index + 1}`; return <li key={key}>{step}</li>; })}</ol>
+      <p className="permission-help-note">Once installed: full-screen app, one-tap launch, and booking alerts with buzzer even when the browser is closed.</p>
+    </Modal>
+  );
+}
+
+// The login page always offers a way to install — hiding install UI until the
+// browser fires beforeinstallprompt meant most first-time mobile visitors
+// never saw the easiest way to get background alerts. When the richer
+// PWAInstallCard is already on screen it owns the CTA (native prompt or iOS
+// guide); this button is the fallback for every other case — no prompt yet,
+// card dismissed — so an Install action is always one tap away. Without a
+// prompt it opens the shortest possible guide for the detected browser.
+// Already installed (standalone) → nothing renders.
+function InstallAppButton({ onInstall = null }) {
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [standalone, setStandalone] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return Boolean(window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone);
+  });
+  const [cardDismissed, setCardDismissed] = useState(() => {
+    try { return sessionStorage.getItem('mynaaiPWAInstallDismissed') === 'true'; } catch { return false; }
+  });
+  useEffect(() => {
+    const check = () => setStandalone(Boolean(window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone));
+    const onDismissed = () => setCardDismissed(true);
+    window.addEventListener('pwa-installed', check);
+    window.addEventListener('appinstalled', check);
+    window.addEventListener('pwa-install-dismissed', onDismissed);
+    return () => {
+      window.removeEventListener('pwa-installed', check);
+      window.removeEventListener('appinstalled', check);
+      window.removeEventListener('pwa-install-dismissed', onDismissed);
+    };
+  }, []);
+  if (standalone) return null;
+  const iosNeedsGuide = isIosDevice() && !isIosPwaInstalled();
+  const cardOwnsInstallCta = !cardDismissed && (Boolean(onInstall) || iosNeedsGuide);
+  if (cardOwnsInstallCta) return null;
+  const open = () => { if (onInstall) onInstall(); else setHelpOpen(true); };
+  return (
+    <>
+      <button type="button" className="install-auth-button install-login-button" onClick={open}>
+        <Download size={14} /> Install app
+      </button>
+      {iosNeedsGuide
+        ? <IosInstallHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+        : <InstallStepsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />}
+    </>
+  );
+}
+
+// What the login subtitle used to say in a sentence nobody on a phone reads.
+// The same facts — book without waiting, alerts buzz and vibrate, and they
+// keep arriving when the app is closed — as three glance chips instead. Kept
+// to 4 words per chip on purpose: scan, allow, sign in.
+const LOGIN_PERKS = {
+  USER: [
+    { icon: Zap, label: 'Book, skip the wait' },
+    { icon: BellRing, label: 'Buzzer + vibration alerts' },
+    { icon: Smartphone, label: 'Works even when app closed' },
+  ],
+  SALON: [
+    { icon: BellRing, label: 'Bookings buzz you instantly' },
+    { icon: Volume2, label: 'Buzzer + vibration' },
+    { icon: Smartphone, label: 'Works even when app closed' },
+  ],
+};
+
+function LoginPerks({ role }) {
+  const perks = LOGIN_PERKS[role] || LOGIN_PERKS.USER;
+  return (
+    <div className="login-perks" aria-label="What you get with My Naai">
+      {perks.map(({ icon: Icon, label }) => <span className="login-perk" key={label}><Icon size={13} aria-hidden="true" /> {label}</span>)}
+    </div>
   );
 }
 
@@ -1544,7 +1676,7 @@ function AuthFlow({ onComplete, notifyInstall }) {
 
   if (view === 'register') return <SalonRegistration initialData={salonRegistrationData} onBack={() => { setSalonRegistrationData(null); setView('login'); }} onComplete={onComplete} notifyInstall={notifyInstall} />;
 
-  return <div className="auth-page login-page"><div className="auth-visual"><div className="auth-visual-image" /><div className="auth-image-shade" /><div className="auth-visual-content"><Brand light /><div><span className="eyebrow">SALON & GROOMING, REIMAGINED</span><h1>Less waiting.<br /><em>More you.</em></h1><p>Book a great salon nearby and make the time yours.</p></div><div className="visual-quote"><span></span><p>Your time is valuable. We’re here to give it back.</p></div></div></div><div className="auth-form-panel"><div className="mobile-auth-brand"><Brand /></div><div className="auth-form-wrap"><span className="eyebrow">WELCOME TO MY NAAI</span><span className="login-hero-badge"><Sparkles size={12} /> {role === 'USER' ? 'Customer login' : 'Salon partner'}</span><h1>{step === 'phone' ? role === 'USER' ? 'Login to book your favorite salon' : 'Grow your salon with My Naai' : step === 'new-user' ? 'One last thing.' : 'Check your phone.'}</h1><p className="auth-subtitle">{step === 'phone' ? role === 'USER' ? 'Welcome back! Sign in to book appointments, track your visits, and get instant confirmations with buzzer alerts.' : 'Receive booking requests instantly with buzzer + vibration, even when app is in background. Works on Android, iOS, Chrome, Edge, Safari and more.' : step === 'new-user' ? `Let\u2019s create your My Naai profile for +91 ${mobile}.` : `Enter the 6-digit code sent to +91 ${mobile}.`}</p>{step === 'phone' && notifyInstall && <button className="install-auth-button install-login-button" onClick={notifyInstall}><Download size={14} /> Install app</button>}{!isIosDevice() && <PWAInstallCard compact notifyInstall={notifyInstall} />}<LoginPermissionsPanel onPushToken={token => { if (token) setPushToken(token); }} />{step === 'phone' && <div className="role-switch"><button className={role === 'USER' ? 'active' : ''} onClick={() => { setRole('USER'); setError(''); }}><CircleUserRound size={16} /> Customer</button><button className={role === 'SALON' ? 'active' : ''} onClick={() => { setRole('SALON'); setError(''); }}><Store size={16} /> Salon partner</button></div>}{error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}{step === 'phone' && <form onSubmit={requestOtp}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" autoComplete="tel" maxLength="10" value={mobile} onChange={event => setMobile(event.target.value.replace(/\D/g, ''))} placeholder="Enter 10-digit number" autoFocus /></div></Field><Button type="submit" loading={busy}>Continue with OTP <ChevronRight size={17} /></Button></form>}{step === 'otp' && <form onSubmit={verify}><Field label="One-time password"><input className="otp-input" inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="· · · · · ·" autoFocus /></Field><Button type="submit" loading={busy}>Verify code <ChevronRight size={17} /></Button><button className="resend-link" type="button" onClick={requestOtp}>Resend code</button><button className="back-form-link" type="button" onClick={() => { setStep('phone'); setOtp(''); setError(''); }}>Use a different number</button></form>}{step === 'new-user' && <form onSubmit={createAccount}><Field label="Your name"><input value={name} onChange={event => setName(event.target.value)} placeholder="How should we call you?" autoFocus /></Field><Button type="submit" loading={busy}>Create my account <ChevronRight size={17} /></Button></form>}</div><p className="auth-legal">By continuing, you agree to My Naai’s terms and privacy policy.</p></div>
+  return <div className="auth-page login-page"><div className="auth-visual"><div className="auth-visual-image" /><div className="auth-image-shade" /><div className="auth-visual-content"><Brand light /><div><span className="eyebrow">SALON & GROOMING, REIMAGINED</span><h1>Less waiting.<br /><em>More you.</em></h1><p>Book a great salon nearby and make the time yours.</p></div><div className="visual-quote"><span></span><p>Your time is valuable. We’re here to give it back.</p></div></div></div><div className="auth-form-panel"><div className="mobile-auth-brand"><Brand /></div><div className="auth-form-wrap"><span className="eyebrow">WELCOME TO MY NAAI</span><span className="login-hero-badge"><Sparkles size={12} /> {role === 'USER' ? 'Customer login' : 'Salon partner'}</span><h1>{step === 'phone' ? role === 'USER' ? 'Login to book your favorite salon' : 'Grow your salon with My Naai' : step === 'new-user' ? 'One last thing.' : 'Check your phone.'}</h1><p className="auth-subtitle">{step === 'phone' ? role === 'USER' ? 'Sign in and book your next visit.' : 'Sign in and never miss a booking.' : step === 'new-user' ? `Let\u2019s create your My Naai profile for +91 ${mobile}.` : `Enter the 6-digit code sent to +91 ${mobile}.`}</p>{step === 'phone' && <LoginPerks role={role} />}{step === 'phone' && <InstallAppButton onInstall={notifyInstall} />}{!isIosDevice() && <PWAInstallCard compact notifyInstall={notifyInstall} />}<LoginPermissionsPanel onPushToken={token => { if (token) setPushToken(token); }} />{step === 'phone' && <div className="role-switch"><button className={role === 'USER' ? 'active' : ''} onClick={() => { setRole('USER'); setError(''); }}><CircleUserRound size={16} /> Customer</button><button className={role === 'SALON' ? 'active' : ''} onClick={() => { setRole('SALON'); setError(''); }}><Store size={16} /> Salon partner</button></div>}{error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}{step === 'phone' && <form onSubmit={requestOtp}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" autoComplete="tel" maxLength="10" value={mobile} onChange={event => setMobile(event.target.value.replace(/\D/g, ''))} placeholder="Enter 10-digit number" autoFocus /></div></Field><Button type="submit" loading={busy}>Continue with OTP <ChevronRight size={17} /></Button></form>}{step === 'otp' && <form onSubmit={verify}><Field label="One-time password"><input className="otp-input" inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="· · · · · ·" autoFocus /></Field><Button type="submit" loading={busy}>Verify code <ChevronRight size={17} /></Button><button className="resend-link" type="button" onClick={requestOtp}>Resend code</button><button className="back-form-link" type="button" onClick={() => { setStep('phone'); setOtp(''); setError(''); }}>Use a different number</button></form>}{step === 'new-user' && <form onSubmit={createAccount}><Field label="Your name"><input value={name} onChange={event => setName(event.target.value)} placeholder="How should we call you?" autoFocus /></Field><Button type="submit" loading={busy}>Create my account <ChevronRight size={17} /></Button></form>}</div><p className="auth-legal">By continuing, you agree to My Naai’s terms and privacy policy.</p></div>
       <PermissionGateModal open={permissionGate.open} onClose={() => setPermissionGate(current => ({ ...current, open: false }))} onGranted={handlePermissionGranted} state={permissionGate.state} />
     </div>;
 }

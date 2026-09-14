@@ -386,4 +386,51 @@ describe('Login permission flow', () => {
     await flush();
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
   });
+
+  it('shows the glance chips, a one-line subtitle and an always-on Install button above the permission panel', async () => {
+    setNotificationPermission('default');
+    await mount();
+
+    // Three chips carry the "why" — skip the wait, buzzer + vibration, works
+    // even when the app is closed — instead of a paragraph nobody reads.
+    const perks = container.querySelector('.login-perks');
+    expect(perks).not.toBeNull();
+    expect(perks.querySelectorAll('.login-perk').length).toBe(3);
+    expect(perks.textContent).toContain('skip the wait');
+    expect(perks.textContent).toContain('Buzzer + vibration');
+    expect(perks.textContent).toContain('Works even when app closed');
+
+    // The subtitle stays one short line; details live in the chips.
+    expect(container.querySelector('.auth-subtitle').textContent).toBe('Sign in and book your next visit.');
+
+    // The chips sit above the permission panel — the why before the ask.
+    const panel = container.querySelector('.perm-panel');
+    expect(panel).not.toBeNull();
+    expect(perks.compareDocumentPosition(panel) & window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // No native prompt was captured (jsdom), so the Install button is visible
+    // and opens the short per-browser guide instead of nothing at all.
+    const installButton = buttonByText('Install app');
+    expect(installButton).not.toBeNull();
+    await act(async () => { installButton.click(); });
+    await flush();
+    const guide = container.querySelector('.modal-card');
+    expect(guide).not.toBeNull();
+    expect(guide.querySelectorAll('.ios-install-steps li').length).toBeGreaterThan(0);
+    await act(async () => { buttonByText('Got it').click(); });
+    await flush();
+    expect(container.querySelector('.modal-card')).toBeNull();
+  });
+
+  it('swaps the chips for the partner pitch when the Salon partner role is picked', async () => {
+    setNotificationPermission('default');
+    await mount();
+
+    await act(async () => { buttonByText('Salon partner').click(); });
+    await flush();
+    const perks = container.querySelector('.login-perks');
+    expect(perks.textContent).toContain('Bookings buzz you instantly');
+    expect(perks.textContent).not.toContain('skip the wait');
+    expect(container.querySelector('.auth-subtitle').textContent).toBe('Sign in and never miss a booking.');
+  });
 });
