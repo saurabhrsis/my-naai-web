@@ -1429,6 +1429,8 @@ img.image-fallback-tile {
 .perm-fix-actions a { color: var(--gold); font-size: 11px; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
 .permission-gate-secondary a.ghost { display: flex; align-items: center; justify-content: center; background: var(--card-raised); color: var(--white); border: 1px solid var(--line); }
 .permission-gate-warn { margin: 10px 0 0; padding: 9px 11px; border-radius: 10px; background: rgba(242,123,116,.10); border: 1px solid rgba(242,123,116,.25); color: #ffb3ad; font-size: 11.5px; line-height: 1.5; }
+.permission-gate-warn p { margin: 0 0 6px; }
+.permission-gate-warn p:last-child { margin-bottom: 0; }
 @media (max-width: 460px) {
   .perm-row { flex-wrap: wrap; }
   .perm-actions { flex-direction: row; flex-wrap: wrap; width: 100%; justify-content: flex-start; }

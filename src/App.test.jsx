@@ -259,6 +259,7 @@ describe('Login permission flow', () => {
     localStorage.setItem('hasSeenOnboarding', 'true');
     vi.mocked(push.getPushStatus).mockReset().mockResolvedValue({ state: 'needs-permission', reason: '' });
     vi.mocked(push.getPushToken).mockReset().mockResolvedValue('');
+    vi.mocked(push.isEmbeddedFrame).mockReset().mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -337,6 +338,27 @@ describe('Login permission flow', () => {
     await act(async () => { submitPhone(); });
     await flush();
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
+  });
+
+  it('offers an Open My Naai in a new tab button when an embedded page stays blocked', async () => {
+    setNotificationPermission('denied');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
+    vi.mocked(push.isEmbeddedFrame).mockReturnValue(true);
+    await mount();
+
+    // Open the steps, run a Check that still fails — the embedded hint and its
+    // actionable escape hatch appear (never shown on a normal mynaai.in visit).
+    await act(async () => { buttonByText('How to allow').click(); });
+    await act(async () => { buttonByText('I allowed — Check').click(); });
+    await flush();
+    expect(container.querySelector('.perm-fix .permission-gate-warn').textContent).toContain('inside another app');
+
+    const openButton = buttonByText('Open My Naai in a new tab');
+    expect(openButton).not.toBeNull();
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await act(async () => { openButton.click(); });
+    expect(openSpy).toHaveBeenCalledWith(window.location.href, '_blank', 'noopener');
+    openSpy.mockRestore();
   });
 
   it('opens the gate with the inline fix when a blocked browser cannot pop up', async () => {

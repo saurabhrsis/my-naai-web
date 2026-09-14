@@ -25,6 +25,7 @@ import {
   Smartphone,
   BellRing,
   ShieldCheck,
+  ExternalLink,
   RotateCw,
 } from 'lucide-react';
 import { api, clearSession, getToken, isPlanExpiredResponse, isUnknownSalonResponse, setToken } from './lib/api';
@@ -426,6 +427,13 @@ function PermissionGateModal({ open, onClose, onGranted, state: initialState = '
     });
   }, [open, readStatus, succeed]);
 
+  // Only for pages embedded inside another app/preview (never for a normal
+  // mynaai.in visit): browsers hide the permission popup inside embedded
+  // frames, so the one working path is a real browser tab.
+  const openStandalone = () => {
+    try { window.open(window.location.href, '_blank', 'noopener'); } catch (openError) { console.debug(getErrorMessage(openError, 'Could not open My Naai in a new tab.')); }
+  };
+
   // The normal path: the browser's own popup appears, the user chooses Allow,
   // and the sheet closes the moment a token exists.
   const allow = async () => {
@@ -500,11 +508,17 @@ function PermissionGateModal({ open, onClose, onGranted, state: initialState = '
         <ol className="ios-install-steps permission-gate-steps">
           {permissionSteps(browser, 'notifications').map(step => <li key={step}>{step}</li>)}
         </ol>
-        {checkFailed && <p className="permission-gate-warn">Still blocked. Make sure the site in the address bar is exactly <strong>{siteHost()}</strong> — not a different spelling — and that the steps changed <strong>Notifications</strong>, not Location. Some browsers only see the change after a reload, so tap Reload page and try once more.{androidAppNotificationHint(browser)}</p>}
+        {checkFailed && (
+          <div className="permission-gate-warn">
+            <p>Still blocked. The site must be exactly <strong>{siteHost()}</strong> and the setting must be <strong>Notifications</strong> — not Location. Then tap <strong>Reload page</strong>; some browsers need one fresh load.{androidAppNotificationHint(browser)}</p>
+            {isEmbeddedFrame() && <p>This page is open inside another app, and browsers hide the permission popup there. Open My Naai in a new tab and allow it there.</p>}
+          </div>
+        )}
         <div className="permission-gate-actions">
           <Button onClick={check} loading={busy}><Check size={16} /> I allowed it — Check</Button>
           <div className="permission-gate-secondary">
             <button className="ghost" onClick={() => window.location.reload()}><RotateCw size={14} /> Reload page</button>
+            {isEmbeddedFrame() && <button className="ghost" onClick={openStandalone}><ExternalLink size={14} /> Open My Naai in a new tab</button>}
             <button className="ghost" onClick={onClose}>Not now</button>
             <a className="ghost" href="tel:8380017393">Need help? Call</a>
           </div>
@@ -941,6 +955,12 @@ function LoginPermissionsPanel({ onPushToken, onLocated }) {
     setBusy(current => ({ ...current, check: true }));
     try { setCheckFailed(!(await refreshNotif())); } finally { setBusy(current => ({ ...current, check: false })); }
   };
+  // Only for pages embedded inside another app/preview (never for a normal
+  // mynaai.in visit): browsers hide the permission popup inside embedded
+  // frames, so the one working path is a real browser tab.
+  const openStandalone = () => {
+    try { window.open(window.location.href, '_blank', 'noopener'); } catch (openError) { console.debug(getErrorMessage(openError, 'Could not open My Naai in a new tab.')); }
+  };
   const checkLoc = () => refreshLoc();
   const dismissLoc = () => {
     setLocDismissed(true);
@@ -1030,18 +1050,21 @@ function LoginPermissionsPanel({ onPushToken, onLocated }) {
             </>
           ) : (
             <>
-              <span className="perm-fix-label">How to unblock notifications in {browserLabel}:</span>
+              <span className="perm-fix-label">How to unblock notifications in {browserLabel} (a browser only asks once):</span>
               <ol className="ios-install-steps">
                 {permissionSteps(browser, 'notifications').map(step => <li key={step}>{step}</li>)}
               </ol>
               {checkFailed && (
-                <p className="permission-gate-warn">
-                  Still blocked. The address bar must say exactly <strong>{siteHost()}</strong> — not a different spelling — and the steps must set <strong>Notifications</strong> to Allow, not Location. After changing it, tap <strong>Reload page</strong> once: some browsers only pick the new setting up on a fresh load.{androidAppNotificationHint(browser)}{isEmbeddedFrame() ? ` This page looks open inside another app or preview — open ${siteHost()} in its own browser tab and allow notifications there; browsers do not show the permission prompt inside embedded pages.` : ''}
-                </p>
+                <div className="permission-gate-warn">
+                  <p>Still blocked. The site must be exactly <strong>{siteHost()}</strong> and the setting must be <strong>Notifications</strong> — not Location.</p>
+                  <p>Then tap <strong>Reload page</strong> — some browsers need one fresh load to see the change.{androidAppNotificationHint(browser)}</p>
+                  {isEmbeddedFrame() && <p>Still nothing? This page is open inside another app, and browsers hide the permission popup there. Tap <strong>Open My Naai in a new tab</strong> below and allow it there.</p>}
+                </div>
               )}
               <div className="perm-fix-actions">
                 <Button size="small" onClick={checkNotif} loading={busy.check}><Check size={13} /> I allowed — Check</Button>
                 <button type="button" className="ghost-link" onClick={() => window.location.reload()}>Reload page</button>
+                {isEmbeddedFrame() && <Button size="small" variant="secondary" onClick={openStandalone}><ExternalLink size={13} /> Open My Naai in a new tab</Button>}
                 <a href="tel:8380017393">Need help? Call us</a>
               </div>
             </>
