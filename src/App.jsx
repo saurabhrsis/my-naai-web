@@ -25,11 +25,10 @@ import {
   Smartphone,
   BellRing,
   ShieldCheck,
-  ExternalLink,
   RotateCw,
 } from 'lucide-react';
 import { api, clearSession, getToken, isPlanExpiredResponse, isUnknownSalonResponse, setToken } from './lib/api';
-import { closeNotification, deletePushToken, displayNotification, getNotificationRoute, getPushStatus, getPushToken, isActionableNotification, normalizePushPayload, recordForegroundMessage, setupPush, watchNotificationPermission } from './lib/push';
+import { closeNotification, deletePushToken, displayNotification, getNotificationRoute, getPushStatus, getPushToken, isActionableNotification, isEmbeddedFrame, normalizePushPayload, recordForegroundMessage, setupPush, watchNotificationPermission } from './lib/push';
 import { playBuzzer, unlockBuzzer } from './lib/buzzer';
 import { resetLiveUpdatesSocket } from './lib/socket';
 import { DEFAULT_SERVICES } from './lib/defaultServices';
@@ -134,7 +133,6 @@ export function getRouteFromHash(role) {
 const PUSH_REQUIRED_MESSAGE = 'My Naai needs notification permission to sign you in — it is how booking requests and confirmations reach you. Please allow notifications to continue.';
 const IOS_PUSH_REQUIRED_MESSAGE = 'On iPhone, notifications only work once My Naai is on your Home Screen. Install the app to your Home Screen, then allow notifications.';
 const PUSH_BLOCKED_MESSAGE = 'Notifications are blocked for My Naai in your browser. You need to allow them in browser settings to sign in and receive booking alerts.';
-const PUSH_EMBEDDED_MESSAGE = 'Notifications cannot be turned on while My Naai is shown inside another page. Open My Naai in its own browser tab, allow notifications there, and sign in from that tab.';
 
 // The exact host the user must have in the address bar when they unblock the
 // site. Allowing notifications for www.mynaai.in does nothing for mynaai.in
@@ -363,7 +361,11 @@ async function promptBrowserPermissions() {
     console.debug(getErrorMessage(error, 'Browser notification permission was not available.'));
   }
   try {
-    const state = await queryLocationPermission();
+    // Respect an explicit Skip on the login card — the first tap that fires
+    // this handler can be the Skip tap itself.
+    let locationDismissed = false;
+    try { locationDismissed = sessionStorage.getItem('mynaaiLocationPromptDismissed') === 'true'; } catch {}
+    const state = locationDismissed ? 'denied' : await queryLocationPermission();
     if (state !== 'denied' && state !== 'unsupported') {
       await getBrowserLocation({ timeout: 60000 });
     }
@@ -423,10 +425,6 @@ function PermissionGateModal({ open, onClose, onGranted, state: initialState = '
       if (status.state === 'enabled' && status.token) succeed(status.token);
     });
   }, [open, readStatus, succeed]);
-
-  const openStandalone = () => {
-    try { window.open(window.location.href, '_blank', 'noopener'); } catch (openError) { console.debug(getErrorMessage(openError, 'Could not open My Naai in a new tab.')); }
-  };
 
   // The normal path: the browser's own popup appears, the user chooses Allow,
   // and the sheet closes the moment a token exists.
@@ -513,25 +511,6 @@ function PermissionGateModal({ open, onClose, onGranted, state: initialState = '
         </div>
       </>
     );
-  } else if (state === 'embedded') {
-    title = 'Open My Naai in its own tab';
-    lede = 'You are viewing My Naai inside another page, and browsers switch notifications off for pages embedded that way. Open it in a normal browser tab to allow them:';
-    body = (
-      <>
-        <div className="permission-gate-benefits">
-          <span><ExternalLink size={14} /> Tap below — My Naai opens in a full browser tab</span>
-          <span><Bell size={14} /> Tap Turn on there and choose Allow in the browser popup</span>
-          <span><ShieldCheck size={14} /> Sign in from that tab — booking alerts reach you there</span>
-        </div>
-        <div className="permission-gate-actions">
-          <Button onClick={openStandalone}><ExternalLink size={16} /> Open My Naai in a new tab</Button>
-          <div className="permission-gate-secondary">
-            <button className="ghost" onClick={onClose}>Not now</button>
-            <a className="ghost" href="tel:8380017393">Need help? Call</a>
-          </div>
-        </div>
-      </>
-    );
   } else if (state === 'needs-permission') {
     title = 'Enable booking alerts to sign in';
     lede = PUSH_REQUIRED_MESSAGE;
@@ -571,7 +550,7 @@ function PermissionGateModal({ open, onClose, onGranted, state: initialState = '
       <div className="permission-gate-sheet" role="dialog" aria-modal="true" aria-label="Enable notifications">
         <span className="permission-gate-grip" />
         <div className="permission-gate-icon">
-          {needsInstall ? <Smartphone size={26} /> : state === 'denied' ? <Settings size={26} /> : state === 'embedded' ? <ExternalLink size={26} /> : <BellRing size={26} />}
+          {needsInstall ? <Smartphone size={26} /> : state === 'denied' ? <Settings size={26} /> : <BellRing size={26} />}
         </div>
         <span className="permission-gate-browser"><Bell size={12} /> {browserLabel}</span>
         <h2 style={{ marginTop: '12px' }}>{title}</h2>
@@ -681,16 +660,11 @@ function NotificationSetupCard({ compact = false, prominent = false, notifyInsta
     unconfigured: { title: 'Notifications are unavailable', body: reason || 'This build of My Naai is not set up for web alerts yet. You can still browse; call 8380017393 if you need booking alerts on this device.' },
     unsupported: { title: 'Notifications need a different setup', body: reason || 'This browser cannot deliver web notifications. Install My Naai to your home screen, or use Chrome, Edge or Samsung Internet.' },
     denied: { title: 'Notifications are blocked', body: 'My Naai sends booking requests, confirmations and delay alerts. Your browser has blocked them for this site — tap How to allow, then Check again. If Check keeps saying blocked, tap Reload once.' },
-    embedded: { title: 'Open My Naai in its own tab', body: reason || 'Notifications are switched off by browsers for pages shown inside other pages. Open My Naai in a normal browser tab to allow them.' },
     'needs-permission': { title: 'Turn on booking alerts', body: 'Tap Allow so My Naai can send booking requests, confirmations and delay alerts. Your salon\u2019s buzzer needs this to reach you in background too.' },
     unavailable: { title: retryAttempts > 1 ? 'Still setting up — try again' : 'Notifications are not ready yet', body: reason || (retryAttempts > 1 ? 'First-time setup sometimes needs a second try. Tap Try again — it usually works.' : 'We could not finish setting up notifications on this device. Tap Try again — if it keeps failing, tap Show me how.') },
   }[status] || { title: 'Turn on booking alerts', body: reason };
   const blocked = status === 'denied';
-  const isEmbedded = status === 'embedded';
   const isUnavailable = status === 'unavailable';
-  const openStandalone = () => {
-    try { window.open(window.location.href, '_blank', 'noopener'); } catch (openError) { console.debug(getErrorMessage(openError, 'Could not open My Naai in a new tab.')); }
-  };
   return (
     <section className={cx('push-setup-card', compact && 'push-setup-compact', prominent && 'push-setup-prominent', status === 'unavailable' && 'push-setup-retry')} aria-live="polite">
       <span className="push-setup-icon"><Bell size={compact ? 15 : 18} /></span>
@@ -702,11 +676,6 @@ function NotificationSetupCard({ compact = false, prominent = false, notifyInsta
             <Button size="small" onClick={() => setIosHelpOpen(true)}>How to install</Button>
             <button type="button" className="permission-help-link" onClick={tryAgain}>I installed — Check</button>
           </>
-          : isEmbedded
-            ? <>
-              <Button size="small" onClick={openStandalone}><ExternalLink size={13} /> Open in new tab</Button>
-              <button type="button" className="permission-help-link" onClick={tryAgain}>Check again</button>
-            </>
           : blocked
             ? <>
             <Button size="small" onClick={tryAgain} loading={busy}><Check size={13} /> Check again</Button>
@@ -879,6 +848,7 @@ function LoginPermissionsPanel({ onPushToken, onLocated }) {
   const [busy, setBusy] = useState({ notif: false, loc: false, check: false });
   const [soundTested, setSoundTested] = useState(false);
   const [checkFailed, setCheckFailed] = useState(false);
+  const [showSteps, setShowSteps] = useState(false);
   const [iosHelpOpen, setIosHelpOpen] = useState(false);
   const [locHelpOpen, setLocHelpOpen] = useState(false);
   const onPushTokenRef = useRef(onPushToken);
@@ -971,11 +941,6 @@ function LoginPermissionsPanel({ onPushToken, onLocated }) {
     setBusy(current => ({ ...current, check: true }));
     try { setCheckFailed(!(await refreshNotif())); } finally { setBusy(current => ({ ...current, check: false })); }
   };
-  // The embedded-frame escape hatch: notifications can never be allowed from
-  // inside another page's iframe, so send the user to a real browser tab.
-  const openStandalone = () => {
-    try { window.open(window.location.href, '_blank', 'noopener'); } catch (openError) { console.debug(getErrorMessage(openError, 'Could not open My Naai in a new tab.')); }
-  };
   const checkLoc = () => refreshLoc();
   const dismissLoc = () => {
     setLocDismissed(true);
@@ -998,8 +963,7 @@ function LoginPermissionsPanel({ onPushToken, onLocated }) {
     checking: 'Checking this browser…',
     enabled: 'Booking requests, confirmations and the salon buzzer will reach you here.',
     'needs-permission': 'One tap opens your browser\u2019s Allow popup — choose Allow.',
-    denied: `Blocked in ${browserLabel}. Tap Allow notifications, or unblock with the steps below, then tap Check.`,
-    embedded: 'My Naai is open inside another page, and browsers switch notifications off there. Open it in its own tab to allow them.',
+    denied: `Blocked in ${browserLabel}. Tap Allow notifications — if nothing pops up, open How to allow.`,
     unavailable: 'Setup did not finish — a first visit sometimes needs a second try.',
     unsupported: needsInstall
       ? 'iPhone shows notifications only for apps on the Home Screen. Install My Naai first — it takes 20 seconds.'
@@ -1007,17 +971,27 @@ function LoginPermissionsPanel({ onPushToken, onLocated }) {
     unconfigured: 'Notifications are not set up for this build yet. Call 8380017393 for booking alerts on this device.',
   }[notif.state] || 'Turn on booking alerts so requests and confirmations reach you.';
 
+  // The unblock steps stay collapsed behind "How to allow" so the card reads
+  // like a clean permission ask. They open on demand, and by themselves after
+  // a failed Allow/Check — the moment they are actually needed. The iPhone
+  // install steps are the only path forward there, so those stay open.
+  const showNotifFix = !notifDone && (notif.state === 'denied' || needsInstall);
+  const fixOpen = Boolean(showNotifFix && (needsInstall || showSteps || (checkFailed && notif.state === 'denied')));
+
   let notifAction;
   if (notif.state === 'checking') notifAction = <Spinner size={15} />;
   else if (notifDone) notifAction = <span className="perm-chip perm-chip-on"><Check size={12} /> On</span>;
-  else if (notif.state === 'needs-permission' && !needsInstall) notifAction = <Button size="small" onClick={enableNotifs} loading={busy.notif}><Bell size={13} /> Turn on</Button>;
-  else if (notif.state === 'denied') notifAction = <span className="perm-chip perm-chip-bad"><CircleAlert size={12} /> Blocked</span>;
-  else if (notif.state === 'embedded') notifAction = <Button size="small" onClick={openStandalone}><ExternalLink size={13} /> Open in new tab</Button>;
-  else if (notif.state === 'unavailable') notifAction = <Button size="small" variant="secondary" onClick={enableNotifs} loading={busy.notif}>Try again</Button>;
   else if (needsInstall) notifAction = <span className="perm-chip perm-chip-warn">Install first</span>;
+  else if (notif.state === 'needs-permission' || notif.state === 'denied') notifAction = (
+    <>
+      <Button size="small" onClick={enableNotifs} loading={busy.notif}><Bell size={13} /> Allow notifications</Button>
+      {notif.state === 'denied' && (
+        <button type="button" className="ghost-link" onClick={() => setShowSteps(value => !value)}>{fixOpen ? 'Hide steps' : 'How to allow'}</button>
+      )}
+    </>
+  );
+  else if (notif.state === 'unavailable') notifAction = <Button size="small" variant="secondary" onClick={enableNotifs} loading={busy.notif}>Try again</Button>;
   else notifAction = <span className="perm-chip perm-chip-mute">{notif.state === 'unconfigured' ? 'Not set up' : 'Not supported'}</span>;
-
-  const showNotifFix = !notifDone && (notif.state === 'denied' || notif.state === 'embedded' || needsInstall);
 
   return (
     <section className={cx('perm-panel', !notifDone && 'perm-panel-attention')} aria-live="polite">
@@ -1028,7 +1002,7 @@ function LoginPermissionsPanel({ onPushToken, onLocated }) {
       </div>
 
       {!notifDone && (
-        <div className={cx('perm-row', showNotifFix && 'perm-row-attention')}>
+        <div className={cx('perm-row', notif.state === 'denied' && 'perm-row-attention')}>
           <span className="perm-ico"><Bell size={15} /></span>
           <div className="perm-copy">
             <strong>Booking notifications <em className="perm-tag">Required</em></strong>
@@ -1038,7 +1012,7 @@ function LoginPermissionsPanel({ onPushToken, onLocated }) {
         </div>
       )}
 
-      {showNotifFix && (
+      {showNotifFix && fixOpen && (
         <div className="perm-fix" role="note">
           {needsInstall ? (
             <>
@@ -1046,25 +1020,12 @@ function LoginPermissionsPanel({ onPushToken, onLocated }) {
               <ol className="ios-install-steps">
                 <li>Tap the <strong>Share</strong> button (the square with an arrow) at the bottom.</li>
                 <li>Choose <strong>Add to Home Screen</strong>, then <strong>Add</strong>.</li>
-                <li>Open My Naai from the Home Screen and tap <strong>Turn on</strong>.</li>
+                <li>Open My Naai from the Home Screen and tap <strong>Allow notifications</strong>.</li>
               </ol>
               {checkFailed && <p className="permission-gate-warn">Not detected yet. Make sure you opened My Naai from the Home Screen icon — not from Safari — then tap Check again.</p>}
               <div className="perm-fix-actions">
                 <Button size="small" onClick={() => setIosHelpOpen(true)}><Smartphone size={13} /> Show me how</Button>
                 <Button size="small" variant="secondary" onClick={checkNotif} loading={busy.check}><Check size={13} /> I installed — Check</Button>
-              </div>
-            </>
-          ) : notif.state === 'embedded' ? (
-            <>
-              <span className="perm-fix-label">My Naai is embedded inside another page:</span>
-              <ol className="ios-install-steps">
-                <li>Tap <strong>Open My Naai in a new tab</strong> below — the app opens in a full browser tab.</li>
-                <li>Tap <strong>Turn on</strong> there and choose <strong>Allow</strong> in the browser popup.</li>
-                <li>Sign in from that tab — notifications cannot be turned on inside this embedded view.</li>
-              </ol>
-              <div className="perm-fix-actions">
-                <Button size="small" onClick={openStandalone}><ExternalLink size={13} /> Open My Naai in a new tab</Button>
-                <a href="tel:8380017393">Need help? Call us</a>
               </div>
             </>
           ) : (
@@ -1075,12 +1036,11 @@ function LoginPermissionsPanel({ onPushToken, onLocated }) {
               </ol>
               {checkFailed && (
                 <p className="permission-gate-warn">
-                  Still blocked. The address bar must say exactly <strong>{siteHost()}</strong> — not a different spelling — and the steps must set <strong>Notifications</strong> to Allow, not Location. After changing it, tap <strong>Reload page</strong> once: some browsers only pick the new setting up on a fresh load.{androidAppNotificationHint(browser)}
+                  Still blocked. The address bar must say exactly <strong>{siteHost()}</strong> — not a different spelling — and the steps must set <strong>Notifications</strong> to Allow, not Location. After changing it, tap <strong>Reload page</strong> once: some browsers only pick the new setting up on a fresh load.{androidAppNotificationHint(browser)}{isEmbeddedFrame() ? ` This page looks open inside another app or preview — open ${siteHost()} in its own browser tab and allow notifications there; browsers do not show the permission prompt inside embedded pages.` : ''}
                 </p>
               )}
               <div className="perm-fix-actions">
-                <Button size="small" onClick={enableNotifs} loading={busy.notif}><Bell size={13} /> Allow notifications</Button>
-                <Button size="small" variant="secondary" onClick={checkNotif} loading={busy.check}><Check size={13} /> I allowed — Check</Button>
+                <Button size="small" onClick={checkNotif} loading={busy.check}><Check size={13} /> I allowed — Check</Button>
                 <button type="button" className="ghost-link" onClick={() => window.location.reload()}>Reload page</button>
                 <a href="tel:8380017393">Need help? Call us</a>
               </div>
@@ -1337,12 +1297,15 @@ function AuthFlow({ onComplete, notifyInstall }) {
     if (token) setPushToken(token);
   }, []);
 
-  // The splash is the one place the app opens the browser popups on its own
-  // (any tap counts as the user gesture). The login screen never pops dialogs
-  // uninvited: its setup card and the Continue button own the prompts, one at
-  // a time, so a skipped splash is not punished with a double popup.
+  // The splash AND the login screen both open the browser's own permission
+  // popups on the first tap (any tap counts as the user gesture) —
+  // notifications first (sign-in depends on them), then location while the tap
+  // is still fresh. A returning customer who lands straight on the login page —
+  // from Google, a bookmark or a notification — gets the exact same one-tap
+  // permission flow as the splash, instead of a card that only describes it.
+  // `askedBrowserPermissions` keeps it to one ask per visit.
   useEffect(() => {
-    if (view !== 'onboarding') return undefined;
+    if (view !== 'onboarding' && view !== 'login') return undefined;
     const onGesture = () => { askBrowserPermissions(); };
     window.addEventListener('pointerdown', onGesture, { once: true });
     window.addEventListener('keydown', onGesture, { once: true });
@@ -1403,7 +1366,7 @@ function AuthFlow({ onComplete, notifyInstall }) {
     } catch (statusError) {
       console.debug(getErrorMessage(statusError, 'Could not read the notification status.'));
     }
-    const message = state === 'denied' ? PUSH_BLOCKED_MESSAGE : state === 'embedded' ? PUSH_EMBEDDED_MESSAGE : iosNotInstalled ? IOS_PUSH_REQUIRED_MESSAGE : PUSH_REQUIRED_MESSAGE;
+    const message = state === 'denied' ? PUSH_BLOCKED_MESSAGE : iosNotInstalled ? IOS_PUSH_REQUIRED_MESSAGE : PUSH_REQUIRED_MESSAGE;
     setPermissionGate({ open: true, state });
     throw new Error(message);
   }, [pushToken]);

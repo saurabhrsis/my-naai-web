@@ -298,10 +298,14 @@ export async function getPushStatus() {
   // page reload. See readNotificationPermission for why the static value lies.
   const permission = await readNotificationPermission();
   if (permission === 'denied') {
-    if (isEmbeddedFrame()) {
-      return { state: 'embedded', reason: 'My Naai is open inside another page, and browsers switch notifications off for pages embedded that way. Open My Naai in its own browser tab, then allow notifications and sign in from there.' };
-    }
-    return { state: 'denied', reason: 'Notifications are blocked in the browser permissions for this site.' };
+    // Embedded pages (an iframe inside another site or a preview tool) get their
+    // notification permission force-denied by the browser, so the normal unblock
+    // steps can never work there. Keep the state "denied" — every user sees the
+    // same familiar card — and carry the embedded explanation in the reason.
+    const reason = isEmbeddedFrame()
+      ? 'Notifications are blocked for this site. This page appears to be open inside another page, and browsers switch notifications off for those — open My Naai in its own browser tab, then allow notifications.'
+      : 'Notifications are blocked in the browser permissions for this site.';
+    return { state: 'denied', reason };
   }
   if (permission === 'default') return { state: 'needs-permission', reason: 'Notification permission has not been granted yet.' };
   try {

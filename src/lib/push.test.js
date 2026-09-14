@@ -203,7 +203,7 @@ describe('getPushStatus permission reads', () => {
     expect(status.state).toBe('denied');
   });
 
-  it('reports the embedded state when a denied page runs inside an iframe', async () => {
+  it('keeps the familiar denied state inside an iframe, with the embedded explanation in the reason', async () => {
     const { isSupported } = await import('firebase/messaging');
     vi.mocked(isSupported).mockResolvedValueOnce(true);
     window.navigator.serviceWorker = {};
@@ -212,7 +212,7 @@ describe('getPushStatus permission reads', () => {
     Object.defineProperty(window, 'top', { value: { framed: true }, configurable: true });
     try {
       const status = await getPushStatus();
-      expect(status.state).toBe('embedded');
+      expect(status.state).toBe('denied');
       expect(String(status.reason)).toContain('own browser tab');
     } finally {
       if (original) Object.defineProperty(window, 'top', original);
