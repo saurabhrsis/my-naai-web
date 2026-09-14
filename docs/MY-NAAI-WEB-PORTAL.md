@@ -66,6 +66,17 @@ After salon login, `isNewSalon` or `profileCompleted: false` routes to **Complet
 
 The walk-in customer flow is not exposed in the web portal. The legacy `walkInBooking` API method remains only because the REST client must preserve the mobile API surface; no screen calls it.
 
+### The queue card is single-column, on purpose
+
+An iPhone was showing the customer name, the appointment date and time as nothing at all — only **Update time** and **Done** rendered. Two faults stacked up in the old markup:
+
+1. The heading row was `display: flex` with the identity block and the action buttons as siblings, and the buttons were `flex: none`.
+2. The `@media (max-width: 420px)` rule then gave the button row `width: 100%` — inside a row that could not wrap. The identity block was the only child allowed to shrink (`min-width: 0`), so on every iPhone (375–430px, and 320px SE) it collapsed against its own `text-overflow: ellipsis`, and the 9px date line wrapped into an unreadable sliver.
+
+`.queue-card` is now a single column: identity (initials tile, name, date + time + urgency chip), a details block (services, specialist, tap-to-call number), then the action row. Nothing competes with the buttons any more, so no width override is needed and the same order reads top to bottom on a tablet and a desktop table (details go three-across from 760px). Body copy moved from 9px to 11–13.5px, names wrap instead of truncating, and both actions are 46px tall.
+
+The queue payload is unchanged — this is layout, not data. `queueNumber` is still returned and still not rendered (see above).
+
 ### Token number is no longer displayed
 
 Queue token numbers are not shown in the portal. The queue now focuses on the customer name, appointment date/time, services, specialist and phone action. The summary card shows the next appointment time and customer instead of a token number. The API may still return `queueNumber`; it is simply not rendered by the web UI.
@@ -409,7 +420,7 @@ request runs a 60-second countdown that a second dialog would eat into.
 | `src/lib/planDetails.js` | Plan catalog and active-subscription normalization |
 | `src/lib/devtoolsShield.js` | Swallows the known Chrome DevTools Performance-panel crash (also inlined in `index.html` so it runs before the bundle) |
 | `src/lib/razorpay.js` | Checkout loader, amount rules, payment outcomes, UPI hand-off tracking and pending-payment recovery |
-| `src/lib/bookingTime.js` | Signed-offset time maths for the queue time update: local wall-clock parsing, hour/date rollover, past-time and day-cross detection, exact-time→offset derivation, human offset labels |
+| `src/lib/bookingTime.js` | Signed-offset time maths for the queue time update: local wall-clock parsing, hour/date rollover, past-time and day-cross detection, exact-time→offset derivation, human offset labels, and the `Due now`/`Overdue by` countdown chips on a queue card |
 | `backend/` | Standalone Express + Mongoose API for the time change (model fields, clock maths, FCM copy, controllers, routes, tests). Copied into the API repo, not built with the web app |
 | `src/components/SubscriptionScreen.jsx` | Plan picker, Razorpay flow, cancellation/failure copy and payment recovery |
 | `src/components/ConfirmDialog.jsx` | Promise-based in-app confirmation sheet that replaces every native browser dialog |
@@ -449,6 +460,7 @@ Then test on an HTTPS deployment with a real customer and salon account:
 - Install to the Home Screen on an iPhone and an Android phone: the app name and the notification bell sit **below** the status bar (not cut in half), the bottom tab bar clears the gesture bar, and the Home Screen icon is labelled "My Naai".
 - Tap Logout, Cancel booking, Mark done and Delete service/product: the confirmation is the app's own sheet, with the same dark theme, on both iPhone (Safari and Chrome) and Android.
 - Load the home screen with a salon that has no photo (or block the image URLs): the card shows the My Naai tile centred on the branded gradient, never a stretched or half-cropped logo; products and barbers show their neutral placeholder tiles.
+- Open **Customer queue** on an iPhone (or narrow any window to 320–375 px): every card shows the customer name, the date, the time, the services, the specialist and the call link, with **Update time** and **Done** on their own row below — the buttons must never push a detail off the card.
 - View the app at 320 px and 375 px: plan cards, time slots and every grid keep readable two-column chips, and tapping a login/search/profile field on an iPhone does not zoom the page.
 - Check the header wordmark: the M and the N are the same size on the login page, the mobile header and the desktop sidebar.
 ## 14. Known console noise (not a MyNaai bug)

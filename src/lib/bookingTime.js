@@ -146,3 +146,45 @@ export function isValidOffset(offsetMinutes) {
     && minutes >= MIN_OFFSET_MINUTES
     && minutes <= MAX_OFFSET_MINUTES;
 }
+
+// Whole minutes from `now` until a booking (negative once its slot has gone).
+export function minutesUntilBooking(date, time, now = new Date()) {
+  const when = parseBookingDateTime(date, time);
+  if (!when || !(now instanceof Date) || Number.isNaN(now.getTime())) return null;
+  return Math.round((when.getTime() - now.getTime()) / 60000);
+}
+
+function formatDuration(minutes) {
+  const value = Math.max(0, Math.round(minutes));
+  if (value < 60) return `${value} min`;
+  const hours = Math.floor(value / 60);
+  const rest = value % 60;
+  return rest ? `${hours}h ${rest}m` : `${hours}h`;
+}
+
+// The queue is read at a glance, standing up, on a phone — so a row has to say
+// whether the chair is being kept waiting. Only the near-term window gets a
+// chip: a booking two days out reads as a date, not a countdown, and a row that
+// ran hours ago has no useful remaining time to count.
+export const DUE_NOW_WINDOW_MINUTES = 10;
+export const DUE_COUNTDOWN_WINDOW_MINUTES = 6 * 60;
+export const OVERDUE_LABEL_LIMIT_MINUTES = 6 * 60;
+
+export function describeBookingUrgency(date, time, now = new Date()) {
+  const minutes = minutesUntilBooking(date, time, now);
+  if (minutes === null) return null;
+  if (minutes < 0) {
+    const late = -minutes;
+    return {
+      tone: 'late',
+      label: late > OVERDUE_LABEL_LIMIT_MINUTES
+        ? 'Slot passed'
+        : `Overdue by ${formatDuration(late)}`,
+    };
+  }
+  if (minutes <= DUE_NOW_WINDOW_MINUTES) return { tone: 'now', label: 'Due now' };
+  if (minutes <= DUE_COUNTDOWN_WINDOW_MINUTES) {
+    return { tone: 'soon', label: `In ${formatDuration(minutes)}` };
+  }
+  return null;
+}

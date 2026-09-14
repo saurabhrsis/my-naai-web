@@ -1,7 +1,9 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import {
+  describeBookingUrgency,
   describeOffset,
   formatClockTime,
+  minutesUntilBooking,
   isValidOffset,
   offsetForTargetTime,
   parseBookingDateTime,
@@ -166,5 +168,49 @@ describe('toInputTime', () => {
   it('renders HH:mm for an input type=time', () => {
     expect(toInputTime(parseBookingDateTime('2026-09-07', '09:05'))).toBe('09:05');
     expect(toInputTime(null)).toBe('');
+  });
+});
+
+describe('minutesUntilBooking', () => {
+  const now = new Date(2026, 8, 7, 18, 0, 0, 0); // 07 Sep 2026, 6:00 PM local
+
+  it('counts forward to a later slot and backwards from a missed one', () => {
+    expect(minutesUntilBooking('2026-09-07', '18:30', now)).toBe(30);
+    expect(minutesUntilBooking('2026-09-07', '17:40', now)).toBe(-20);
+  });
+
+  it('returns null instead of a countdown for a booking with no usable time', () => {
+    expect(minutesUntilBooking('2026-09-07', '', now)).toBeNull();
+    expect(minutesUntilBooking('2026-09-07', 'later', now)).toBeNull();
+  });
+});
+
+describe('describeBookingUrgency', () => {
+  const now = new Date(2026, 8, 7, 18, 0, 0, 0);
+
+  it('names the time a waiting customer is being kept to', () => {
+    expect(describeBookingUrgency('2026-09-07', '17:35', now)).toEqual({ tone: 'late', label: 'Overdue by 25 min' });
+    expect(describeBookingUrgency('2026-09-07', '15:00', now)).toEqual({ tone: 'late', label: 'Overdue by 3h' });
+  });
+
+  it('stops quoting a duration for a slot that is already history', () => {
+    expect(describeBookingUrgency('2026-09-07', '06:00', now)).toEqual({ tone: 'late', label: 'Slot passed' });
+  });
+
+  it('calls the next hour of the chair "due now"', () => {
+    expect(describeBookingUrgency('2026-09-07', '18:00', now)).toEqual({ tone: 'now', label: 'Due now' });
+    expect(describeBookingUrgency('2026-09-07', '18:10', now)).toEqual({ tone: 'now', label: 'Due now' });
+  });
+
+  it('counts down a slot that is still coming', () => {
+    expect(describeBookingUrgency('2026-09-07', '18:45', now)).toEqual({ tone: 'soon', label: 'In 45 min' });
+    expect(describeBookingUrgency('2026-09-07', '19:20', now)).toEqual({ tone: 'soon', label: 'In 1h 20m' });
+  });
+
+  it('says nothing when a countdown would only add noise', () => {
+    // Tomorrow morning is a date, not a number to watch, and an unset time has
+    // no countdown at all — the card shows "Time pending" for that instead.
+    expect(describeBookingUrgency('2026-09-09', '09:00', now)).toBeNull();
+    expect(describeBookingUrgency('2026-09-07', '', now)).toBeNull();
   });
 });
