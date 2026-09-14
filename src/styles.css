@@ -1356,7 +1356,7 @@ img.image-fallback-tile {
 .permission-gate-steps { margin: 0 0 14px; }
 .permission-gate-actions { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 16px; }
 .permission-gate-actions .btn { width: 100%; min-height: 48px; }
-.permission-gate-secondary { display: flex; gap: 8px; margin-top: 8px; }
+.permission-gate-secondary { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .permission-gate-secondary button { flex: 1; min-height: 40px; border-radius: 11px; font-size: 12px; font-weight: 700; }
 .permission-gate-secondary .ghost { background: var(--card-raised); color: var(--white); border: 1px solid var(--line); }
 .permission-gate-browser { display: inline-flex; align-items: center; gap: 6px; margin: 0 auto; padding: 6px 10px; border-radius: 20px; background: rgba(232,185,126,.12); color: var(--gold); font-size: 11px; font-weight: 700; }

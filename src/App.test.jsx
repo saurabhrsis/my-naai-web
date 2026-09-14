@@ -44,6 +44,7 @@ vi.mock('./lib/push', () => {
     isActionableNotification: vi.fn(() => false),
     normalizePushPayload: vi.fn(payload => ({ title: '', body: '', data: {}, type: '', hasData: false, ...payload })),
     recordForegroundMessage: noop,
+    watchNotificationPermission: vi.fn(() => () => {}),
   };
 });
 vi.mock('./lib/socket', () => ({
@@ -292,14 +293,18 @@ describe('Login permission flow', () => {
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
     await mount();
 
-    // Blocked state explains itself with the steps and a Check button.
+    // Blocked state explains itself with the steps, an Allow button and a Check.
     expect(container.querySelector('.perm-fix')).not.toBeNull();
+    expect(buttonByText('Allow notifications')).not.toBeNull();
     expect(buttonByText('I allowed — Check')).not.toBeNull();
+    expect(buttonByText('Reload page')).not.toBeNull();
 
-    // Still blocked after a first Check — the fix stays visible.
+    // Still blocked after a first Check — the fix stays visible and names the
+    // exact site + reload, the two classic "allowed but still blocked" traps.
     await act(async () => { buttonByText('I allowed — Check').click(); });
     await flush();
     expect(container.querySelector('.perm-fix')).not.toBeNull();
+    expect(container.querySelector('.perm-fix .permission-gate-warn').textContent).toContain(window.location.host);
 
     // The user unblocks in the browser and Checks again — the card is gone.
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'enabled', token: 'push-token-2' });
@@ -312,6 +317,24 @@ describe('Login permission flow', () => {
     await act(async () => { submitPhone(); });
     await flush();
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
+  });
+
+  it('offers the open-in-new-tab fix when My Naai is embedded inside another page', async () => {
+    setNotificationPermission('denied');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'embedded', reason: 'My Naai is open inside another page.' });
+    await mount();
+
+    // The embedded fix explains that browsers switch notifications off inside
+    // frames, and its action is to open a real browser tab — not more steps.
+    expect(container.querySelector('.perm-fix')).not.toBeNull();
+    expect(container.textContent).toContain('embedded inside another page');
+    const openButton = buttonByText('Open My Naai in a new tab');
+    expect(openButton).not.toBeNull();
+
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await act(async () => { openButton.click(); });
+    expect(openSpy).toHaveBeenCalledWith(window.location.href, '_blank', 'noopener');
+    openSpy.mockRestore();
   });
 
   it('opens the gate with the inline fix when a blocked browser cannot pop up', async () => {

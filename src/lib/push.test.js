@@ -18,11 +18,22 @@ import {
   isActionableNotification,
   getNotificationRoute,
   formatPushDiagnostics,
+  readNotificationPermission,
+  watchNotificationPermission,
+  isEmbeddedFrame,
+  getPushStatus,
+  resetPushRegistration,
 } from './push';
 
 beforeEach(() => {
   localStorage.clear();
   window.Notification.permission = 'granted';
+});
+
+afterEach(() => {
+  resetPushRegistration();
+  try { delete window.navigator.permissions; } catch { /* never assigned */ }
+  try { delete window.navigator.serviceWorker; } catch { /* never assigned */ }
 });
 
 describe('isPushConfigured', () => {
@@ -115,5 +126,97 @@ describe('formatPushDiagnostics', () => {
     ]});
     expect(out).toContain('OK · HTTPS: Yes');
     expect(out).toContain('FAIL · Token: Empty — missing');
+  });
+});
+
+// The whole reason "I allowed it — Check" used to keep saying Blocked:
+// `Notification.permission` is a snapshot from page load, while the
+// Permissions API carries the live value the browser settings UI writes to.
+describe('readNotificationPermission', () => {
+  it('prefers the live Permissions API value and maps prompt to default', async () => {
+    window.Notification.permission = 'granted';
+    window.navigator.permissions = { query: vi.fn(() => Promise.resolve({ state: 'prompt' })) };
+    await expect(readNotificationPermission()).resolves.toBe('default');
+  });
+
+  it('reports the live granted state even when the static snapshot is still denied', async () => {
+    window.Notification.permission = 'denied';
+    window.navigator.permissions = { query: vi.fn(() => Promise.resolve({ state: 'granted' })) };
+    await expect(readNotificationPermission()).resolves.toBe('granted');
+  });
+
+  it('falls back to Notification.permission when the Permissions API is missing', async () => {
+    window.Notification.permission = 'denied';
+    await expect(readNotificationPermission()).resolves.toBe('denied');
+  });
+
+  it('falls back when the Permissions API query rejects', async () => {
+    window.Notification.permission = 'granted';
+    window.navigator.permissions = { query: vi.fn(() => Promise.reject(new Error('unsupported name'))) };
+    await expect(readNotificationPermission()).resolves.toBe('granted');
+  });
+});
+
+describe('watchNotificationPermission', () => {
+  it('calls back on a live change and detaches on unsubscribe', async () => {
+    const status = { onchange: null };
+    window.navigator.permissions = { query: vi.fn(() => Promise.resolve(status)) };
+    const callback = vi.fn();
+    const unsubscribe = watchNotificationPermission(callback);
+    await Promise.resolve(); // let the query promise settle and attach onchange
+    status.onchange?.();
+    expect(callback).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    expect(status.onchange).toBeNull();
+  });
+
+  it('returns a no-op unsubscribe when the Permissions API is unavailable', () => {
+    expect(typeof watchNotificationPermission(() => {})).toBe('function');
+  });
+});
+
+describe('isEmbeddedFrame', () => {
+  it('is false in a normal top-level page', () => {
+    expect(isEmbeddedFrame()).toBe(false);
+  });
+
+  it('is true when the page is inside an iframe', () => {
+    const original = Object.getOwnPropertyDescriptor(window, 'top');
+    Object.defineProperty(window, 'top', { value: { notTheSameWindow: true }, configurable: true });
+    try {
+      expect(isEmbeddedFrame()).toBe(true);
+    } finally {
+      if (original) Object.defineProperty(window, 'top', original);
+      else delete window.top;
+    }
+  });
+});
+
+describe('getPushStatus permission reads', () => {
+  it('reports denied from the live permission while the static snapshot still says granted', async () => {
+    const { isSupported } = await import('firebase/messaging');
+    vi.mocked(isSupported).mockResolvedValueOnce(true);
+    window.navigator.serviceWorker = {};
+    window.Notification.permission = 'granted';
+    window.navigator.permissions = { query: vi.fn(() => Promise.resolve({ state: 'denied' })) };
+    const status = await getPushStatus();
+    expect(status.state).toBe('denied');
+  });
+
+  it('reports the embedded state when a denied page runs inside an iframe', async () => {
+    const { isSupported } = await import('firebase/messaging');
+    vi.mocked(isSupported).mockResolvedValueOnce(true);
+    window.navigator.serviceWorker = {};
+    window.Notification.permission = 'denied';
+    const original = Object.getOwnPropertyDescriptor(window, 'top');
+    Object.defineProperty(window, 'top', { value: { framed: true }, configurable: true });
+    try {
+      const status = await getPushStatus();
+      expect(status.state).toBe('embedded');
+      expect(String(status.reason)).toContain('own browser tab');
+    } finally {
+      if (original) Object.defineProperty(window, 'top', original);
+      else delete window.top;
+    }
   });
 });

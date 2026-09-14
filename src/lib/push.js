@@ -209,16 +209,77 @@ export function detectBrowser() {
   return android ? 'chrome-android' : 'other';
 }
 
+// `Notification.permission` is a snapshot from when the page loaded, so it can
+// keep reading "denied" after the user has just switched notifications back on
+// in the browser's own settings (Chrome and Samsung Internet on Android are the
+// usual offenders — the fresh value only arrives after a reload). The
+// Permissions API is the live source of truth: it is what the browser's
+// settings UI writes to, and it fires change events. Read it first and fall
+// back to the static snapshot only when it is unavailable.
+export async function readNotificationPermission() {
+  if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
+  try {
+    if (navigator.permissions?.query) {
+      const status = await navigator.permissions.query({ name: 'notifications' });
+      if (status && ['granted', 'denied', 'prompt'].includes(status.state)) {
+        return status.state === 'prompt' ? 'default' : status.state;
+      }
+    }
+  } catch (permissionError) {
+    console.debug(getErrorMessage(permissionError, 'Live notification permission was not available.'));
+  }
+  return Notification.permission || 'default';
+}
+
+// Calls back the moment the browser reports a permission change: the
+// Permissions API fires `change` when the user flips the setting in the
+// browser's own UI (lock icon, site settings, Android app settings). This is
+// what lets the login card flip from "Blocked" to "On" by itself, without
+// waiting for a tap on Check. Returns an unsubscribe function.
+export function watchNotificationPermission(callback) {
+  if (typeof window === 'undefined' || !navigator.permissions?.query) return () => {};
+  let stopped = false;
+  let status = null;
+  navigator.permissions
+    .query({ name: 'notifications' })
+    .then(result => {
+      if (stopped) return;
+      status = result;
+      status.onchange = () => {
+        try { callback(); } catch (callbackError) { console.debug(getErrorMessage(callbackError, 'Permission change handler failed.')); }
+      };
+    })
+    .catch(() => { /* older browsers: the focus re-check still covers this */ });
+  return () => {
+    stopped = true;
+    try { if (status) status.onchange = null; } catch {}
+  };
+}
+
+// True when My Naai is rendered inside another page's <iframe> (an embedded
+// preview, a web view, a portal). Browsers force notification permission to
+// "denied" for embedded frames, so the lock-icon unblock steps can never fix
+// the block from inside the frame — the only honest advice is to open My Naai
+// in its own browser tab.
+export function isEmbeddedFrame() {
+  try {
+    return typeof window !== 'undefined' && window.top !== window.self;
+  } catch {
+    return true; // reading window.top threw: a cross-origin frame for sure
+  }
+}
+
 export async function requestNotificationPermission() {
   if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
-  if (Notification.permission === 'granted') return 'granted';
-  if (Notification.permission === 'denied') return 'denied';
+  const current = await readNotificationPermission();
+  if (current === 'granted') return 'granted';
+  if (current === 'denied') return 'denied';
   try {
     const result = await Notification.requestPermission();
-    return result;
+    return result || 'default';
   } catch (error) {
     console.debug(getErrorMessage(error, 'Notification permission request failed.'));
-    return Notification.permission || 'default';
+    return (await readNotificationPermission()) || 'default';
   }
 }
 
@@ -232,8 +293,17 @@ export async function getPushStatus() {
     const installedHint = installed ? '' : ' On iPhone/iPad, install the My Naai app to your home screen first.';
     return { state: 'unsupported', reason: `This browser context cannot receive web notifications.${installedHint}` };
   }
-  if (Notification.permission === 'denied') return { state: 'denied', reason: 'Notifications are blocked in the browser permissions for this site.' };
-  if (Notification.permission === 'default') return { state: 'needs-permission', reason: 'Notification permission has not been granted yet.' };
+  // Live read (Permissions API first): a user who has just unblocked the site in
+  // the browser's settings expects "Check" to see it immediately, not after a
+  // page reload. See readNotificationPermission for why the static value lies.
+  const permission = await readNotificationPermission();
+  if (permission === 'denied') {
+    if (isEmbeddedFrame()) {
+      return { state: 'embedded', reason: 'My Naai is open inside another page, and browsers switch notifications off for pages embedded that way. Open My Naai in its own browser tab, then allow notifications and sign in from there.' };
+    }
+    return { state: 'denied', reason: 'Notifications are blocked in the browser permissions for this site.' };
+  }
+  if (permission === 'default') return { state: 'needs-permission', reason: 'Notification permission has not been granted yet.' };
   try {
     const token = await getPushToken({ requestPermission: false });
     if (token) return { state: 'enabled', token };
@@ -446,7 +516,15 @@ export async function getPushDiagnostics() {
   add('Firebase web config', missingRequired.length ? 'fail' : 'ok',
     missingRequired.length ? `Missing ${missingRequired.join(', ')}` : missingOptional.length ? `Complete (${missingOptional.join(', ')} not set — not needed for push)` : 'Complete',
     missingRequired.length ? 'Set the VITE_FIREBASE_* build variables and redeploy.' : '');
-  add('Notification permission', Notification.permission === 'granted' ? 'ok' : Notification.permission === 'denied' ? 'fail' : 'warn', Notification.permission, Notification.permission === 'denied' ? 'Allow notifications for this site in browser settings, then retry.' : Notification.permission === 'default' ? 'Not requested yet.' : '');
+  const permission = await readNotificationPermission();
+  add('Notification permission', permission === 'granted' ? 'ok' : permission === 'denied' ? 'fail' : 'warn', permission,
+    permission === 'denied'
+      ? (isEmbeddedFrame()
+        ? 'Blocked because this page is embedded inside another page. Open My Naai in its own browser tab, then allow notifications.'
+        : 'Allow notifications for this site in browser settings, then retry — a reload helps on browsers that cache the old value.')
+      : permission === 'default' ? 'Not requested yet.' : '');
+  add('Page context', isEmbeddedFrame() ? 'warn' : 'ok', isEmbeddedFrame() ? 'Embedded inside another page' : 'Normal browser tab',
+    isEmbeddedFrame() ? 'Browsers force notification permission to blocked inside embedded frames. Open My Naai in its own tab to allow them.' : '');
 
   let messaging = null;
   try { messaging = await getMessagingClient(); } catch (error) { console.debug(getErrorMessage(error, 'Messaging client unavailable.')); }
@@ -480,7 +558,7 @@ export async function getPushDiagnostics() {
   if (!token) token = storedToken;
   add('FCM device token', token ? 'ok' : 'fail', token ? maskToken(token) : 'Empty', token
     ? 'This is the value sent to the API as deviceToken.'
-    : Notification.permission === 'granted'
+    : permission === 'granted'
       ? 'Permission is granted but no token exists yet — the worker or Firebase config is the problem, not the browser.'
       : 'Sign-in needs a token: tap Enable, allow notifications, then sign in again.');
 
