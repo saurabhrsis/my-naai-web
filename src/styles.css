@@ -51,9 +51,12 @@
   /* Full-height surfaces. `100vh` first so browsers without small-viewport units
      (iOS Safari < 15.4, Chrome < 108, older Android WebView) still get a
      full-height page; `100svh` overrides where supported and keeps the iOS
-     address bar from pushing the bottom of a screen out of reach. */
+     address bar from pushing the bottom of a screen out of reach.
+     NOTE: this override used to read `var(--viewport-height)` — a self-cycle,
+     which makes the custom property invalid at computed-value time and silently
+     zeroes every min-height that uses it (login, shell, registration). */
   --viewport-height: 100vh;
-  --viewport-height: var(--viewport-height);
+  --viewport-height: 100svh;
 }
 
 * { box-sizing: border-box; }
@@ -1356,7 +1359,7 @@ img.image-fallback-tile {
 .permission-gate-steps { margin: 0 0 14px; }
 .permission-gate-actions { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 16px; }
 .permission-gate-actions .btn { width: 100%; min-height: 48px; }
-.permission-gate-secondary { display: flex; gap: 8px; margin-top: 8px; }
+.permission-gate-secondary { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .permission-gate-secondary button { flex: 1; min-height: 40px; border-radius: 11px; font-size: 12px; font-weight: 700; }
 .permission-gate-secondary .ghost { background: var(--card-raised); color: var(--white); border: 1px solid var(--line); }
 .permission-gate-browser { display: inline-flex; align-items: center; gap: 6px; margin: 0 auto; padding: 6px 10px; border-radius: 20px; background: rgba(232,185,126,.12); color: var(--gold); font-size: 11px; font-weight: 700; }
@@ -1429,6 +1432,8 @@ img.image-fallback-tile {
 .perm-fix-actions a { color: var(--gold); font-size: 11px; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
 .permission-gate-secondary a.ghost { display: flex; align-items: center; justify-content: center; background: var(--card-raised); color: var(--white); border: 1px solid var(--line); }
 .permission-gate-warn { margin: 10px 0 0; padding: 9px 11px; border-radius: 10px; background: rgba(242,123,116,.10); border: 1px solid rgba(242,123,116,.25); color: #ffb3ad; font-size: 11.5px; line-height: 1.5; }
+.permission-gate-warn p { margin: 0 0 6px; }
+.permission-gate-warn p:last-child { margin-bottom: 0; }
 @media (max-width: 460px) {
   .perm-row { flex-wrap: wrap; }
   .perm-actions { flex-direction: row; flex-wrap: wrap; width: 100%; justify-content: flex-start; }

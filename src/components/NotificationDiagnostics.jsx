@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell, CheckCircle2, ChevronDown, CircleAlert, Copy, RefreshCw } from 'lucide-react';
-import { formatPushDiagnostics, getPushDiagnostics, getPushToken } from '../lib/push';
+import { formatPushDiagnostics, getPushDiagnostics, getPushToken, isEmbeddedFrame, readNotificationPermission } from '../lib/push';
 import { Button, Modal, cx } from './Shared';
 
 // "Notifications are not working" can come from several layers — browser
@@ -15,12 +15,16 @@ export function NotificationDiagnostics({ onEnabled }) {
   const [copied, setCopied] = useState(false);
   const [diagnostics, setDiagnostics] = useState(null);
   const [report, setReport] = useState(null);
+  const [permission, setPermission] = useState(() => (typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'));
   const reportRef = useRef(null);
 
   const run = useCallback(async () => {
     setBusy(true);
     try {
       setDiagnostics(await getPushDiagnostics());
+      // Live read (Permissions API first): `Notification.permission` can keep
+      // saying "denied" after the user has just allowed the site again.
+      setPermission(await readNotificationPermission());
     } finally {
       setBusy(false);
     }
@@ -28,7 +32,6 @@ export function NotificationDiagnostics({ onEnabled }) {
 
   useEffect(() => { if (open && !diagnostics && !busy) run(); }, [busy, diagnostics, open, run]);
 
-  const permission = typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported';
   const failing = (diagnostics?.checks || []).filter(check => check.state === 'fail');
   const working = permission === 'granted' && failing.length === 0;
   const canRequestPermission = permission === 'default';
@@ -101,7 +104,9 @@ export function NotificationDiagnostics({ onEnabled }) {
   };
 
   const note = permission === 'denied'
-    ? 'Notifications are blocked in this browser. Open the site’s permission settings and set Notifications to Allow, so booking buzzers, delay requests and appointment updates can reach you.'
+    ? (isEmbeddedFrame()
+      ? 'My Naai is open inside another page, and browsers switch notifications off for embedded pages. Open My Naai in its own browser tab, tap Turn on there and choose Allow.'
+      : 'Notifications are blocked in this browser. Open the site’s permission settings and set Notifications to Allow, so booking buzzers, delay requests and appointment updates can reach you. If it still says blocked after allowing, reload this page once.')
     : permission === 'unsupported'
       ? 'This browser cannot show notifications. Use Chrome, Edge or Samsung Internet — or install the My Naai app on iPhone/iPad.'
       : permission === 'default'

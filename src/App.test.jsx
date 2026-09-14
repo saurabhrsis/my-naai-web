@@ -42,8 +42,10 @@ vi.mock('./lib/push', () => {
     closeNotification: noop,
     getNotificationRoute: vi.fn(() => ({ name: 'home', params: {} })),
     isActionableNotification: vi.fn(() => false),
+    isEmbeddedFrame: vi.fn(() => false),
     normalizePushPayload: vi.fn(payload => ({ title: '', body: '', data: {}, type: '', hasData: false, ...payload })),
     recordForegroundMessage: noop,
+    watchNotificationPermission: vi.fn(() => () => {}),
   };
 });
 vi.mock('./lib/socket', () => ({
@@ -257,6 +259,7 @@ describe('Login permission flow', () => {
     localStorage.setItem('hasSeenOnboarding', 'true');
     vi.mocked(push.getPushStatus).mockReset().mockResolvedValue({ state: 'needs-permission', reason: '' });
     vi.mocked(push.getPushToken).mockReset().mockResolvedValue('');
+    vi.mocked(push.isEmbeddedFrame).mockReset().mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -273,9 +276,9 @@ describe('Login permission flow', () => {
     vi.mocked(push.getPushToken).mockImplementation(async options => (options?.requestPermission ? 'push-token-1' : ''));
     await mount();
 
-    // The login screen shows the single setup card, not a stack of cards.
+    // The login screen shows the single setup card with one clear Allow button.
     expect(container.querySelector('.perm-panel')).not.toBeNull();
-    expect(buttonByText('Turn on')).not.toBeNull();
+    expect(buttonByText('Allow notifications')).not.toBeNull();
 
     await act(async () => { typeMobile('9876543210'); });
     await act(async () => { submitPhone(); });
@@ -287,19 +290,42 @@ describe('Login permission flow', () => {
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
   });
 
-  it('shows the blocked fix inline, and Check again ends the dead end', async () => {
+  it('asks for notification permission on the first tap of the login page, like the splash', async () => {
+    setNotificationPermission('default');
+    vi.mocked(push.getPushToken).mockResolvedValue('');
+    await mount();
+
+    // A returning user lands straight on login (no splash) and taps anything —
+    // the browser's own permission popup opens, exactly like the splash did.
+    await act(async () => { window.dispatchEvent(new Event('pointerdown')); });
+    await flush();
+    expect(push.getPushToken).toHaveBeenCalledWith({ requestPermission: true });
+  });
+
+  it('shows the blocked fix behind How to allow, and Check again ends the dead end', async () => {
     setNotificationPermission('denied');
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
     await mount();
 
-    // Blocked state explains itself with the steps and a Check button.
+    // The blocked card stays clean: one Allow button plus a collapsed "How to
+    // allow" — no wall of steps until the user asks for them.
+    expect(container.querySelector('.perm-panel')).not.toBeNull();
+    expect(buttonByText('Allow notifications')).not.toBeNull();
+    expect(container.querySelector('.perm-fix')).toBeNull();
+
+    // "How to allow" opens the per-browser steps with the recovery actions.
+    await act(async () => { buttonByText('How to allow').click(); });
+    await flush();
     expect(container.querySelector('.perm-fix')).not.toBeNull();
     expect(buttonByText('I allowed — Check')).not.toBeNull();
+    expect(buttonByText('Reload page')).not.toBeNull();
 
-    // Still blocked after a first Check — the fix stays visible.
+    // Still blocked after a first Check — the fix stays up and names the exact
+    // site + reload, the two classic "allowed but still blocked" traps.
     await act(async () => { buttonByText('I allowed — Check').click(); });
     await flush();
     expect(container.querySelector('.perm-fix')).not.toBeNull();
+    expect(container.querySelector('.perm-fix .permission-gate-warn').textContent).toContain(window.location.host);
 
     // The user unblocks in the browser and Checks again — the card is gone.
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'enabled', token: 'push-token-2' });
@@ -312,6 +338,25 @@ describe('Login permission flow', () => {
     await act(async () => { submitPhone(); });
     await flush();
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
+  });
+
+  it('puts the open-in-new-tab escape hatch first when an embedded page is blocked', async () => {
+    setNotificationPermission('denied');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
+    vi.mocked(push.isEmbeddedFrame).mockReturnValue(true);
+    await mount();
+
+    // Embedded + blocked: the escape hatch is the row's primary action and the
+    // fix panel explains it immediately — no failed Check needed to discover it.
+    const openButton = buttonByText('Open My Naai in a new tab');
+    expect(openButton).not.toBeNull();
+    expect(container.querySelector('.perm-fix')).not.toBeNull();
+    expect(container.textContent).toContain('embedded pages');
+
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await act(async () => { openButton.click(); });
+    expect(openSpy).toHaveBeenCalledWith(window.location.href, '_blank', 'noopener');
+    openSpy.mockRestore();
   });
 
   it('opens the gate with the inline fix when a blocked browser cannot pop up', async () => {
