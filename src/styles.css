@@ -1381,15 +1381,20 @@ img.image-fallback-tile {
 
 /* Login improvements */
 .login-hero-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 20px; background: rgba(232,185,126,.12); border: 1px solid rgba(232,185,126,.22); color: var(--gold); font-size: 10px; font-weight: 700; letter-spacing: .04em; margin-bottom: 10px; }
-/* The login benefits as glance chips, not a paragraph — a phone user scans
-   these in under two seconds (skip the wait, buzzer + vibration, works when
-   closed) and moves on to Allow. A wrapped two-line paragraph was never read. */
-.login-perks { display: flex; flex-wrap: wrap; gap: 7px; margin: -12px 0 16px; }
-.login-perks .login-perk { display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; border: 1px solid rgba(232,185,126,.3); border-radius: 30px; background: rgba(232,185,126,.08); color: var(--white); font-size: 10.5px; font-weight: 700; line-height: 1.2; white-space: nowrap; }
-.login-perk svg { flex: none; color: var(--gold); }
+/* The login setup — Allow alerts + Install app — as compact pills on one row.
+   Phone users tap buttons; they do not read cards, so this row replaced both
+   the old three-card stack and the later text panel. */
+.login-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: -10px 0 20px; }
+/* The permission ask is the step sign-in depends on, so its pill carries the
+   gold fill; the install pill keeps the outline style of .install-auth-button. */
+.allow-alerts-button { border-color: transparent; background: var(--gold); color: #0d0e0e; }
+.allow-alerts-button:hover { background: #f0cd96; }
+.allow-alerts-button:disabled { opacity: .75; }
+.allow-alerts-attention { background: var(--red); color: #fff; }
+.allow-alerts-attention:hover { background: #ed8881; }
+.login-action-loading { color: var(--muted); pointer-events: none; }
 @media (max-width: 380px) {
-  .login-perks { gap: 6px; margin-bottom: 14px; }
-  .login-perks .login-perk { padding: 6px 9px; font-size: 10px; gap: 5px; }
+  .login-actions { gap: 7px; margin-bottom: 18px; }
 }
 /* The short install guide opened from the login Install button. */
 .install-steps strong { color: var(--white); }
@@ -1411,46 +1416,10 @@ img.image-fallback-tile {
 .push-setup-retry { border-color: rgba(243,200,110,.32); background: rgba(243,200,110,.08); animation: push-retry-glow 2s ease-in-out infinite; }
 @keyframes push-retry-glow { 0%,100% { border-color: rgba(243,200,110,.32); } 50% { border-color: rgba(243,200,110,.55); } }
 
-/* Login permission panel — one card, one tap per browser popup, and the fix
-   for a blocked permission inline instead of behind another modal. */
-.perm-panel { max-width: 670px; margin: 0 0 16px; padding: 12px 14px 4px; border: 1px solid var(--line-strong); border-radius: 16px; background: linear-gradient(135deg, rgba(232,185,126,.10), rgba(232,185,126,.02)); }
-.perm-panel-attention { border-color: rgba(232,185,126,.45); box-shadow: 0 8px 28px rgba(0,0,0,.22); }
-.perm-panel-head { display: flex; align-items: center; gap: 7px; padding: 2px 0 9px; }
-.perm-panel-head svg { color: var(--gold); flex: none; }
-.perm-panel-head strong { font-size: 12.5px; color: var(--white); }
-.perm-panel-hint { margin-left: auto; font-size: 9.5px; font-weight: 700; letter-spacing: .03em; color: var(--muted); text-align: right; }
-.perm-row { display: flex; align-items: flex-start; gap: 10px; padding: 9px 0; border-top: 1px solid rgba(255,255,255,.06); }
-.perm-ico { width: 28px; height: 28px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 9px; color: #111; background: var(--gold); }
-.perm-row-optional .perm-ico, .perm-row-sound .perm-ico { color: var(--white); background: var(--card-raised); border: 1px solid var(--line); }
-.perm-row-attention .perm-ico { background: var(--red); }
-.perm-copy { min-width: 0; flex: 1; }
-.perm-copy strong { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--white); }
-.perm-tag { padding: 2px 6px; border-radius: 10px; background: rgba(232,185,126,.16); color: var(--gold); font-size: 8.5px; font-style: normal; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
-.perm-tag-optional { background: rgba(255,255,255,.08); color: var(--muted-light); }
-.perm-copy p { margin: 3px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.45; }
-.perm-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
-.perm-actions .btn { min-height: 32px; }
-.perm-chip { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 12px; font-size: 10px; font-weight: 800; }
-.perm-chip-on { background: rgba(110,209,158,.14); color: var(--green); }
-.perm-chip-warn { background: rgba(232,185,126,.16); color: var(--gold); }
-.perm-chip-bad { background: rgba(242,123,116,.14); color: var(--red); }
-.perm-chip-mute { background: rgba(255,255,255,.06); color: var(--muted); }
-.ghost-link { padding: 0; border: 0; background: none; color: var(--gold); cursor: pointer; font-size: 10.5px; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
-.ghost-link:hover { color: var(--gold-soft); }
-.perm-fix { margin: 0 0 8px; padding: 11px 12px; border: 1px solid rgba(242,123,116,.30); border-radius: 12px; background: rgba(242,123,116,.06); }
-.perm-fix-label { display: block; margin: 0 0 8px; font-size: 11px; font-weight: 800; color: #ffb3ad; }
-.perm-fix .ios-install-steps { margin: 0 0 10px; font-size: 11.5px; }
-.perm-fix-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
-.perm-fix-actions a { color: var(--gold); font-size: 11px; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
 .permission-gate-secondary a.ghost { display: flex; align-items: center; justify-content: center; background: var(--card-raised); color: var(--white); border: 1px solid var(--line); }
 .permission-gate-warn { margin: 10px 0 0; padding: 9px 11px; border-radius: 10px; background: rgba(242,123,116,.10); border: 1px solid rgba(242,123,116,.25); color: #ffb3ad; font-size: 11.5px; line-height: 1.5; }
 .permission-gate-warn p { margin: 0 0 6px; }
 .permission-gate-warn p:last-child { margin-bottom: 0; }
-@media (max-width: 460px) {
-  .perm-row { flex-wrap: wrap; }
-  .perm-actions { flex-direction: row; flex-wrap: wrap; width: 100%; justify-content: flex-start; }
-  .perm-panel-hint { display: none; }
-}
 
 /* Actionable notifications */
 .notification-card-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }

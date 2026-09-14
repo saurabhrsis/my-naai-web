@@ -276,9 +276,9 @@ describe('Login permission flow', () => {
     vi.mocked(push.getPushToken).mockImplementation(async options => (options?.requestPermission ? 'push-token-1' : ''));
     await mount();
 
-    // The login screen shows the single setup card with one clear Allow button.
-    expect(container.querySelector('.perm-panel')).not.toBeNull();
-    expect(buttonByText('Allow notifications')).not.toBeNull();
+    // The login screen shows the compact setup pills with one clear Allow button.
+    expect(container.querySelector('.login-actions')).not.toBeNull();
+    expect(buttonByText('Allow alerts')).not.toBeNull();
 
     await act(async () => { typeMobile('9876543210'); });
     await act(async () => { submitPhone(); });
@@ -302,36 +302,38 @@ describe('Login permission flow', () => {
     expect(push.getPushToken).toHaveBeenCalledWith({ requestPermission: true });
   });
 
-  it('shows the blocked fix behind How to allow, and Check again ends the dead end', async () => {
+  it('opens the permission gate from the Fix alerts pill and Check again ends the dead end', async () => {
     setNotificationPermission('denied');
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
     await mount();
 
-    // The blocked card stays clean: one Allow button plus a collapsed "How to
-    // allow" — no wall of steps until the user asks for them.
-    expect(container.querySelector('.perm-panel')).not.toBeNull();
-    expect(buttonByText('Allow notifications')).not.toBeNull();
-    expect(container.querySelector('.perm-fix')).toBeNull();
+    // Blocked state is one honest pill — no Wall-of-text card on the login page.
+    expect(container.querySelector('.perm-panel')).toBeNull();
+    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+    const fixButton = buttonByText('Fix alerts');
+    expect(fixButton).not.toBeNull();
 
-    // "How to allow" opens the per-browser steps with the recovery actions.
-    await act(async () => { buttonByText('How to allow').click(); });
+    // The pill opens the gate, which carries the per-browser steps and the
+    // recovery actions.
+    await act(async () => { fixButton.click(); });
     await flush();
-    expect(container.querySelector('.perm-fix')).not.toBeNull();
-    expect(buttonByText('I allowed — Check')).not.toBeNull();
+    const gate = container.querySelector('.permission-gate-sheet');
+    expect(gate).not.toBeNull();
+    expect(gate.textContent).toContain('Notifications are blocked');
+    expect(buttonByText('I allowed it — Check')).not.toBeNull();
     expect(buttonByText('Reload page')).not.toBeNull();
 
     // Still blocked after a first Check — the fix stays up and names the exact
     // site + reload, the two classic "allowed but still blocked" traps.
-    await act(async () => { buttonByText('I allowed — Check').click(); });
+    await act(async () => { buttonByText('I allowed it — Check').click(); });
     await flush();
-    expect(container.querySelector('.perm-fix')).not.toBeNull();
-    expect(container.querySelector('.perm-fix .permission-gate-warn').textContent).toContain(window.location.host);
+    expect(container.querySelector('.permission-gate-sheet .permission-gate-warn').textContent).toContain(window.location.host);
 
-    // The user unblocks in the browser and Checks again — the card is gone.
+    // The user unblocks in the browser and Checks again — the sheet closes.
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'enabled', token: 'push-token-2' });
-    await act(async () => { buttonByText('I allowed — Check').click(); });
+    await act(async () => { buttonByText('I allowed it — Check').click(); });
     await flush();
-    expect(container.querySelector('.perm-panel')).toBeNull();
+    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
 
     // Sign-in now proceeds without asking again.
     await act(async () => { typeMobile('9876543210'); });
@@ -346,12 +348,15 @@ describe('Login permission flow', () => {
     vi.mocked(push.isEmbeddedFrame).mockReturnValue(true);
     await mount();
 
-    // Embedded + blocked: the escape hatch is the row's primary action and the
-    // fix panel explains it immediately — no failed Check needed to discover it.
+    // Embedded + blocked: the pill opens the gate, whose primary action is the
+    // escape hatch — no failed Check needed to discover it.
+    await act(async () => { buttonByText('Fix alerts').click(); });
+    await flush();
+    const gate = container.querySelector('.permission-gate-sheet');
+    expect(gate).not.toBeNull();
+    expect(gate.textContent).toContain('inside another page');
     const openButton = buttonByText('Open My Naai in a new tab');
     expect(openButton).not.toBeNull();
-    expect(container.querySelector('.perm-fix')).not.toBeNull();
-    expect(container.textContent).toContain('embedded pages');
 
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
     await act(async () => { openButton.click(); });
@@ -387,31 +392,35 @@ describe('Login permission flow', () => {
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
   });
 
-  it('shows the glance chips, a one-line subtitle and an always-on Install button above the permission panel', async () => {
+  it('keeps the login screen light: one-line subtitle, no perk chips, just the setup pills', async () => {
     setNotificationPermission('default');
     await mount();
 
-    // Three chips carry the "why" — skip the wait, buzzer + vibration, works
-    // even when the app is closed — instead of a paragraph nobody reads.
-    const perks = container.querySelector('.login-perks');
-    expect(perks).not.toBeNull();
-    expect(perks.querySelectorAll('.login-perk').length).toBe(3);
-    expect(perks.textContent).toContain('skip the wait');
-    expect(perks.textContent).toContain('Buzzer + vibration');
-    expect(perks.textContent).toContain('Works even when app closed');
+    // No glance chips, no text panel — a phone user taps buttons, not paragraphs.
+    expect(container.querySelector('.login-perks')).toBeNull();
+    expect(container.querySelector('.perm-panel')).toBeNull();
 
-    // The subtitle stays one short line; details live in the chips.
+    // The subtitle stays one short line.
     expect(container.querySelector('.auth-subtitle').textContent).toBe('Sign in and book your next visit.');
 
-    // The chips sit above the permission panel — the why before the ask.
-    const panel = container.querySelector('.perm-panel');
-    expect(panel).not.toBeNull();
-    expect(perks.compareDocumentPosition(panel) & window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-
-    // No native prompt was captured (jsdom), so the Install button is visible
-    // and opens the short per-browser guide instead of nothing at all.
+    // The two compact pills are the whole setup: Allow alerts (fires the
+    // browser popup or the gate) and Install app (prompt or the short guide).
+    const actions = container.querySelector('.login-actions');
+    expect(actions).not.toBeNull();
+    expect(buttonByText('Allow alerts')).not.toBeNull();
     const installButton = buttonByText('Install app');
     expect(installButton).not.toBeNull();
+
+    // Allowed directly from the pill: the tap asks the browser and the pill
+    // disappears once permission is granted.
+    vi.mocked(push.getPushToken).mockImplementation(async options => (options?.requestPermission ? 'push-token-pill' : ''));
+    await act(async () => { buttonByText('Allow alerts').click(); });
+    await flush();
+    expect(push.getPushToken).toHaveBeenCalledWith({ requestPermission: true });
+    expect(container.querySelector('.allow-alerts-button')).toBeNull();
+
+    // No native prompt was captured (jsdom), so Install opens the short
+    // per-browser guide instead of nothing at all.
     await act(async () => { installButton.click(); });
     await flush();
     const guide = container.querySelector('.modal-card');
@@ -422,15 +431,12 @@ describe('Login permission flow', () => {
     expect(container.querySelector('.modal-card')).toBeNull();
   });
 
-  it('swaps the chips for the partner pitch when the Salon partner role is picked', async () => {
+  it('swaps the login subtitle for the partner pitch when the Salon partner role is picked', async () => {
     setNotificationPermission('default');
     await mount();
 
     await act(async () => { buttonByText('Salon partner').click(); });
     await flush();
-    const perks = container.querySelector('.login-perks');
-    expect(perks.textContent).toContain('Bookings buzz you instantly');
-    expect(perks.textContent).not.toContain('skip the wait');
     expect(container.querySelector('.auth-subtitle').textContent).toBe('Sign in and never miss a booking.');
   });
 });

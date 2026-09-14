@@ -15,7 +15,6 @@ import {
   MapPin,
   Package,
   Scissors,
-  Settings2,
   Sparkles,
   Store,
   UsersRound,
@@ -27,7 +26,6 @@ import {
   ShieldCheck,
   ExternalLink,
   RotateCw,
-  Zap,
 } from 'lucide-react';
 import { api, clearSession, getToken, isPlanExpiredResponse, isUnknownSalonResponse, setToken } from './lib/api';
 import { closeNotification, deletePushToken, displayNotification, getNotificationRoute, getPushStatus, getPushToken, isActionableNotification, isEmbeddedFrame, normalizePushPayload, recordForegroundMessage, setupPush, watchNotificationPermission } from './lib/push';
@@ -914,6 +912,101 @@ function InstallStepsHelp({ open, onClose }) {
   );
 }
 
+// What used to be a three-card stack, then a big text panel on the login
+// screen, is now one pill button — phone users tap, they do not read. The
+// button behaviour matches the browser's real state:
+//   · never asked  → the tap opens the browser's own Allow popup directly
+//   · blocked/iOS → the permission gate opens with the exact fix for THIS
+//                    device (steps for the detected browser, or Add to Home
+//                    Screen on iPhone), with the live-permission watch that
+//                    closes it the moment the user flips the setting
+//   · enabled      → the button removes itself; login carries no dead weight
+// Location stays on the first-gesture flow (promptBrowserPermissions); the
+// button only ever deals with the notification permission sign-in depends on.
+function AllowAlertsButton({ onToken }) {
+  const [state, setState] = useState('checking');
+  const [busy, setBusy] = useState(false);
+  const [gate, setGate] = useState({ open: false, state: 'needs-permission' });
+  const onTokenRef = useRef(onToken);
+  onTokenRef.current = onToken;
+
+  const read = useCallback(async () => {
+    try {
+      const status = await getPushStatus();
+      setState(status.state);
+      if (status.state === 'enabled' && status.token) onTokenRef.current?.(status.token);
+      return status.state;
+    } catch (statusError) {
+      console.debug(getErrorMessage(statusError, 'Could not read the notification status.'));
+      setState('unavailable');
+      return 'unavailable';
+    }
+  }, []);
+
+  useEffect(() => { read(); }, [read]);
+
+  // The browser's Permissions API fires the instant the user flips the setting
+  // in its own UI — the pill updates itself with no tap at all.
+  useEffect(() => watchNotificationPermission(() => { read(); }), [read]);
+
+  // Coming back from the browser settings: pick the new state up automatically.
+  useEffect(() => {
+    const recheck = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      read();
+    };
+    window.addEventListener('focus', recheck);
+    document.addEventListener('visibilitychange', recheck);
+    return () => {
+      window.removeEventListener('focus', recheck);
+      document.removeEventListener('visibilitychange', recheck);
+    };
+  }, [read]);
+
+  const needsIosInstall = isIosDevice() && !isIosPwaInstalled();
+
+  const tap = async () => {
+    setBusy(true);
+    try {
+      // The normal path: the browser has never been asked, so this tap IS the
+      // gesture the browser needs — its own Allow popup appears right here and
+      // sign in can continue immediately after Allow. Regular iPhone Safari
+      // has no such popup until installed, so it goes to the install gate.
+      if (state === 'needs-permission' && !needsIosInstall && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        const token = await getPushToken({ requestPermission: true });
+        if (token) {
+          onTokenRef.current?.(token);
+          setState('enabled');
+          return;
+        }
+      }
+      await read().catch(() => {});
+      // Everything else — blocked, iPhone install, or a retry state — opens
+      // the permission gate, which owns the exact fix for that state.
+      setGate({ open: true, state });
+    } finally { setBusy(false); }
+  };
+
+  if (state === 'enabled') return null;
+  if (state === 'checking') {
+    return <span className="install-auth-button login-action-loading" aria-live="polite"><Spinner size={13} /> Checking alerts…</span>;
+  }
+  const label = state === 'denied' ? 'Fix alerts' : 'Allow alerts';
+  return (
+    <>
+      <button type="button" className={cx('install-auth-button', 'allow-alerts-button', state === 'denied' && 'allow-alerts-attention')} onClick={tap} disabled={busy} aria-live="polite">
+        {busy ? <Spinner size={14} /> : state === 'denied' ? <CircleAlert size={14} /> : <BellRing size={14} />} {label}
+      </button>
+      <PermissionGateModal
+        open={gate.open}
+        state={gate.state}
+        onClose={() => { setGate(current => ({ ...current, open: false })); read(); }}
+        onGranted={token => { if (token) { onTokenRef.current?.(token); setState('enabled'); } }}
+      />
+    </>
+  );
+}
+
 // The login page always offers a way to install — hiding install UI until the
 // browser fires beforeinstallprompt meant most first-time mobile visitors
 // never saw the easiest way to get background alerts. When the richer
@@ -957,336 +1050,6 @@ function InstallAppButton({ onInstall = null }) {
         ? <IosInstallHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
         : <InstallStepsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />}
     </>
-  );
-}
-
-// What the login subtitle used to say in a sentence nobody on a phone reads.
-// The same facts — book without waiting, alerts buzz and vibrate, and they
-// keep arriving when the app is closed — as three glance chips instead. Kept
-// to 4 words per chip on purpose: scan, allow, sign in.
-const LOGIN_PERKS = {
-  USER: [
-    { icon: Zap, label: 'Book, skip the wait' },
-    { icon: BellRing, label: 'Buzzer + vibration alerts' },
-    { icon: Smartphone, label: 'Works even when app closed' },
-  ],
-  SALON: [
-    { icon: BellRing, label: 'Bookings buzz you instantly' },
-    { icon: Volume2, label: 'Buzzer + vibration' },
-    { icon: Smartphone, label: 'Works even when app closed' },
-  ],
-};
-
-function LoginPerks({ role }) {
-  const perks = LOGIN_PERKS[role] || LOGIN_PERKS.USER;
-  return (
-    <div className="login-perks" aria-label="What you get with My Naai">
-      {perks.map(({ icon: Icon, label }) => <span className="login-perk" key={label}><Icon size={13} aria-hidden="true" /> {label}</span>)}
-    </div>
-  );
-}
-
-
-// The single permission card on the login screen — replaces the old
-// three-card stack. One row per thing, one tap per browser popup:
-//   · notifications → the browser's own Allow popup (required to sign in)
-//   · location      → the browser's own Allow popup (optional)
-//   · buzzer        → plays the real booking buzz so the user can hear it
-// A blocked permission cannot be re-asked by a browser, so instead of another
-// modal the fix is inline: exact steps for the detected browser plus a one-tap
-// "I allowed — Check" that re-reads the real permission. The card also
-// re-checks itself whenever the tab regains focus, so fixing the setting in
-// the browser and coming back updates it without any tap at all. When
-// notifications are on and location is settled, the card removes itself and
-// the login form is all that is left.
-function LoginPermissionsPanel({ onPushToken, onLocated }) {
-  const [notif, setNotif] = useState({ state: 'checking', token: '' });
-  const [loc, setLoc] = useState('checking');
-  const [locDismissed, setLocDismissed] = useState(() => {
-    try { return sessionStorage.getItem('mynaaiLocationPromptDismissed') === 'true'; } catch { return false; }
-  });
-  const [busy, setBusy] = useState({ notif: false, loc: false, check: false });
-  const [soundTested, setSoundTested] = useState(false);
-  const [checkFailed, setCheckFailed] = useState(false);
-  const [showSteps, setShowSteps] = useState(false);
-  const [iosHelpOpen, setIosHelpOpen] = useState(false);
-  const [locHelpOpen, setLocHelpOpen] = useState(false);
-  const onPushTokenRef = useRef(onPushToken);
-  onPushTokenRef.current = onPushToken;
-  const onLocatedRef = useRef(onLocated);
-  onLocatedRef.current = onLocated;
-
-  const applyPushStatus = useCallback(result => {
-    setNotif({ state: result.state, token: result.token || '' });
-    if (result.state === 'enabled' && result.token) onPushTokenRef.current?.(result.token);
-    return result.state === 'enabled' && Boolean(result.token);
-  }, []);
-
-  const refreshNotif = useCallback(async ({ requestPermission = false } = {}) => {
-    if (requestPermission) {
-      try {
-        const token = await getPushToken({ requestPermission: true });
-        if (token) {
-          setNotif({ state: 'enabled', token });
-          onPushTokenRef.current?.(token);
-          return true;
-        }
-      } catch (askError) {
-        console.debug(getErrorMessage(askError, 'Notification permission request failed.'));
-      }
-    }
-    try {
-      return applyPushStatus(await getPushStatus());
-    } catch (statusError) {
-      console.debug(getErrorMessage(statusError, 'Could not check notification status.'));
-      setNotif({ state: 'unavailable', token: '' });
-      return false;
-    }
-  }, [applyPushStatus]);
-
-  const refreshLoc = useCallback(() => {
-    queryLocationPermission().then(setLoc).catch(() => setLoc('unsupported'));
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    getPushStatus()
-      .then(result => { if (active) applyPushStatus(result); })
-      .catch(() => { if (active) setNotif({ state: 'unavailable', token: '' }); });
-    refreshLoc();
-    return () => { active = false; };
-  }, [applyPushStatus, refreshLoc]);
-
-  // The user leaves to change a setting in the browser and comes back: pick the
-  // new state up automatically instead of waiting for a tap.
-  useEffect(() => {
-    const recheck = () => {
-      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-      getPushStatus().then(result => { if (applyPushStatus(result)) setCheckFailed(false); }).catch(() => {});
-      refreshLoc();
-    };
-    window.addEventListener('focus', recheck);
-    document.addEventListener('visibilitychange', recheck);
-    return () => {
-      window.removeEventListener('focus', recheck);
-      document.removeEventListener('visibilitychange', recheck);
-    };
-  }, [applyPushStatus, refreshLoc]);
-
-  // The browser's Permissions API fires the instant the user flips the
-  // notification setting in its own UI — refresh the row right away, before the
-  // tab even regains focus. This is what makes "I allowed it" reflect without a
-  // Check tap on browsers that report the change live.
-  useEffect(() => watchNotificationPermission(() => {
-    refreshNotif().then(enabled => { if (enabled) setCheckFailed(false); }).catch(() => {});
-  }), [refreshNotif]);
-
-  const enableNotifs = async () => {
-    setBusy(current => ({ ...current, notif: true }));
-    try { setCheckFailed(!(await refreshNotif({ requestPermission: true }))); } finally { setBusy(current => ({ ...current, notif: false })); }
-  };
-  const enableLoc = async () => {
-    setBusy(current => ({ ...current, loc: true }));
-    try {
-      const current = await getBrowserLocation();
-      if (current) {
-        setLoc('granted');
-        onLocatedRef.current?.(current);
-        return;
-      }
-      setLoc((await queryLocationPermission()) === 'denied' ? 'denied' : 'prompt');
-    } finally { setBusy(current => ({ ...current, loc: false })); }
-  };
-  const checkNotif = async () => {
-    setBusy(current => ({ ...current, check: true }));
-    try { setCheckFailed(!(await refreshNotif())); } finally { setBusy(current => ({ ...current, check: false })); }
-  };
-  // Only for pages embedded inside another app/preview (never for a normal
-  // mynaai.in visit): browsers hide the permission popup inside embedded
-  // frames, so the one working path is a real browser tab.
-  const openStandalone = () => {
-    try { window.open(window.location.href, '_blank', 'noopener'); } catch (openError) { console.debug(getErrorMessage(openError, 'Could not open My Naai in a new tab.')); }
-  };
-  const checkLoc = () => refreshLoc();
-  const dismissLoc = () => {
-    setLocDismissed(true);
-    try { sessionStorage.setItem('mynaaiLocationPromptDismissed', 'true'); } catch { /* private mode: skip this session only */ }
-  };
-  const testBuzz = () => {
-    unlockBuzzer();
-    playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1 });
-    setSoundTested(true);
-  };
-
-  // First visits sometimes lose the race with the service worker: permission is
-  // granted but the token mint fails once. One quiet automatic retry (capped at
-  // two) closes that gap without the user having to notice or tap anything —
-  // this is the "grant permission → app syncs by itself" path.
-  const autoRetriedRef = useRef(0);
-  useEffect(() => {
-    if (notif.state !== 'unavailable' || autoRetriedRef.current >= 2) return undefined;
-    const timer = setTimeout(() => {
-      autoRetriedRef.current += 1;
-      refreshNotif();
-    }, 1800);
-    return () => clearTimeout(timer);
-  }, [notif.state, refreshNotif]);
-
-  const browser = detectBrowser();
-  const browserLabel = BROWSER_LABELS[browser] || BROWSER_LABELS.other;
-  const needsInstall = isIosDevice() && !isIosPwaInstalled();
-  const notifDone = notif.state === 'enabled';
-  const embeddedBlocked = notif.state === 'denied' && isEmbeddedFrame();
-  const showLoc = !locDismissed && (loc === 'prompt' || loc === 'denied');
-  if (notifDone && !showLoc) return null;
-
-  const notifCopy = {
-    checking: 'Checking this browser…',
-    enabled: 'Booking requests, confirmations and the salon buzzer will reach you here.',
-    'needs-permission': 'One tap opens your browser\u2019s Allow popup — choose Allow.',
-    denied: embeddedBlocked
-      ? 'This page is open inside another app, and browsers will not show the Allow popup here. Open My Naai in a normal browser tab to allow notifications.'
-      : `Blocked in ${browserLabel}. Tap Allow notifications — if nothing pops up, open How to allow.`,
-    unavailable: 'The browser allowed notifications — the last setup step did not finish. Tap Try again.',
-    unsupported: needsInstall
-      ? 'iPhone shows notifications only for apps on the Home Screen. Install My Naai first — it takes 20 seconds.'
-      : 'This browser cannot show web notifications. Use Chrome, Edge or Samsung Internet.',
-    unconfigured: 'Notifications are not set up for this build yet. Call 8380017393 for booking alerts on this device.',
-  }[notif.state] || 'Turn on booking alerts so requests and confirmations reach you.';
-
-  // The unblock steps stay collapsed behind "How to allow" so the card reads
-  // like a clean permission ask. They open on demand, and by themselves after
-  // a failed Allow/Check — the moment they are actually needed. The iPhone
-  // install steps and the embedded-page fix are the only path forward there,
-  // so those stay open.
-  const showNotifFix = !notifDone && (notif.state === 'denied' || needsInstall);
-  const fixOpen = Boolean(showNotifFix && (needsInstall || embeddedBlocked || showSteps || (checkFailed && notif.state === 'denied')));
-
-  let notifAction;
-  if (notif.state === 'checking') notifAction = <Spinner size={15} />;
-  else if (notifDone) notifAction = <span className="perm-chip perm-chip-on"><Check size={12} /> On</span>;
-  else if (needsInstall) notifAction = <span className="perm-chip perm-chip-warn">Install first</span>;
-  else if (embeddedBlocked) notifAction = (
-    <Button size="small" onClick={openStandalone}><ExternalLink size={13} /> Open My Naai in a new tab</Button>
-  );
-  else if (notif.state === 'needs-permission' || notif.state === 'denied') notifAction = (
-    <>
-      <Button size="small" onClick={enableNotifs} loading={busy.notif}><Bell size={13} /> Allow notifications</Button>
-      {notif.state === 'denied' && (
-        <button type="button" className="ghost-link" onClick={() => setShowSteps(value => !value)}>{fixOpen ? 'Hide steps' : 'How to allow'}</button>
-      )}
-    </>
-  );
-  else if (notif.state === 'unavailable') notifAction = <Button size="small" variant="secondary" onClick={enableNotifs} loading={busy.notif}>Try again</Button>;
-  else notifAction = <span className="perm-chip perm-chip-mute">{notif.state === 'unconfigured' ? 'Not set up' : 'Not supported'}</span>;
-
-  return (
-    <section className={cx('perm-panel', !notifDone && 'perm-panel-attention')} aria-live="polite">
-      <div className="perm-panel-head">
-        <BellRing size={15} />
-        <strong>{notifDone ? 'Booking alerts are on' : 'One-time setup · about 20 seconds'}</strong>
-        <span className="perm-panel-hint">{notifDone ? 'You are all set' : 'Notifications are required to sign in'}</span>
-      </div>
-
-      {!notifDone && (
-        <div className={cx('perm-row', notif.state === 'denied' && 'perm-row-attention')}>
-          <span className="perm-ico"><Bell size={15} /></span>
-          <div className="perm-copy">
-            <strong>Booking notifications <em className="perm-tag">Required</em></strong>
-            <p>{notifCopy}</p>
-          </div>
-          <div className="perm-actions">{notifAction}</div>
-        </div>
-      )}
-
-      {showNotifFix && fixOpen && (
-        <div className="perm-fix" role="note">
-          {needsInstall ? (
-            <>
-              <span className="perm-fix-label">How to install on iPhone (20 seconds):</span>
-              <ol className="ios-install-steps">
-                <li>Tap the <strong>Share</strong> button (the square with an arrow) at the bottom.</li>
-                <li>Choose <strong>Add to Home Screen</strong>, then <strong>Add</strong>.</li>
-                <li>Open My Naai from the Home Screen and tap <strong>Allow notifications</strong>.</li>
-              </ol>
-              {checkFailed && <p className="permission-gate-warn">Not detected yet. Make sure you opened My Naai from the Home Screen icon — not from Safari — then tap Check again.</p>}
-              <div className="perm-fix-actions">
-                <Button size="small" onClick={() => setIosHelpOpen(true)}><Smartphone size={13} /> Show me how</Button>
-                <Button size="small" variant="secondary" onClick={checkNotif} loading={busy.check}><Check size={13} /> I installed — Check</Button>
-              </div>
-            </>
-          ) : embeddedBlocked ? (
-            <>
-              <span className="perm-fix-label">Browsers hide the Allow popup inside embedded pages:</span>
-              <ol className="ios-install-steps">
-                <li>Tap <strong>Open My Naai in a new tab</strong> below — the app opens in a full browser tab.</li>
-                <li>Tap <strong>Allow notifications</strong> there and choose <strong>Allow</strong> in the browser popup.</li>
-                <li>Sign in from that tab — the popup cannot appear inside this embedded view.</li>
-              </ol>
-              <div className="perm-fix-actions">
-                <Button size="small" onClick={openStandalone}><ExternalLink size={13} /> Open My Naai in a new tab</Button>
-                <Button size="small" variant="secondary" onClick={checkNotif} loading={busy.check}><Check size={13} /> I allowed — Check</Button>
-                <a href="tel:8380017393">Need help? Call us</a>
-              </div>
-            </>
-          ) : (
-            <>
-              <span className="perm-fix-label">How to unblock notifications in {browserLabel} (a browser only asks once):</span>
-              <ol className="ios-install-steps">
-                {permissionSteps(browser, 'notifications').map(step => <li key={step}>{step}</li>)}
-              </ol>
-              {checkFailed && (
-                <div className="permission-gate-warn">
-                  <p>Still blocked. The site must be exactly <strong>{siteHost()}</strong> and the setting must be <strong>Notifications</strong> — not Location.</p>
-                  <p>Then tap <strong>Reload page</strong> — some browsers need one fresh load to see the change.{androidAppNotificationHint(browser)}</p>
-                </div>
-              )}
-              <div className="perm-fix-actions">
-                <Button size="small" onClick={checkNotif} loading={busy.check}><Check size={13} /> I allowed — Check</Button>
-                <button type="button" className="ghost-link" onClick={() => window.location.reload()}>Reload page</button>
-                <a href="tel:8380017393">Need help? Call us</a>
-              </div>
-            </>
-          )}
-        </div>
-      )}
-
-      {showLoc && (
-        <div className="perm-row perm-row-optional">
-          <span className="perm-ico"><MapPin size={15} /></span>
-          <div className="perm-copy">
-            <strong>Nearby salons <em className="perm-tag perm-tag-optional">Optional</em></strong>
-            <p>{loc === 'denied' ? 'Blocked — salons still show, just without distance.' : 'Share your location and salons sort by distance.'}</p>
-          </div>
-          <div className="perm-actions">
-            {loc === 'prompt' && <Button size="small" variant="secondary" onClick={enableLoc} loading={busy.loc}><MapPin size={13} /> Allow</Button>}
-            {loc === 'denied' && (
-              <>
-                <Button size="small" variant="secondary" onClick={() => setLocHelpOpen(true)}>How to allow</Button>
-                <button type="button" className="ghost-link" onClick={checkLoc}>Check again</button>
-              </>
-            )}
-            <button type="button" className="ghost-link" onClick={dismissLoc}>Skip</button>
-          </div>
-        </div>
-      )}
-
-      <div className="perm-row perm-row-sound">
-        <span className="perm-ico"><Volume2 size={15} /></span>
-        <div className="perm-copy">
-          <strong>Buzzer sound + vibration</strong>
-          <p>{soundTested ? 'The booking buzz works on this device.' : 'Hear the booking buzz now — it plays and vibrates once.'}</p>
-        </div>
-        <div className="perm-actions">
-          {soundTested
-            ? <span className="perm-chip perm-chip-on"><Check size={12} /> Works</span>
-            : <Button size="small" variant="secondary" onClick={testBuzz}><Volume2 size={13} /> Test buzz</Button>}
-        </div>
-      </div>
-
-      <IosInstallHelp open={iosHelpOpen} onClose={() => { setIosHelpOpen(false); checkNotif(); }} />
-      <PermissionHelp open={locHelpOpen} kind="location" onClose={() => { setLocHelpOpen(false); refreshLoc(); }} />
-    </section>
   );
 }
 
@@ -1676,7 +1439,7 @@ function AuthFlow({ onComplete, notifyInstall }) {
 
   if (view === 'register') return <SalonRegistration initialData={salonRegistrationData} onBack={() => { setSalonRegistrationData(null); setView('login'); }} onComplete={onComplete} notifyInstall={notifyInstall} />;
 
-  return <div className="auth-page login-page"><div className="auth-visual"><div className="auth-visual-image" /><div className="auth-image-shade" /><div className="auth-visual-content"><Brand light /><div><span className="eyebrow">SALON & GROOMING, REIMAGINED</span><h1>Less waiting.<br /><em>More you.</em></h1><p>Book a great salon nearby and make the time yours.</p></div><div className="visual-quote"><span></span><p>Your time is valuable. We’re here to give it back.</p></div></div></div><div className="auth-form-panel"><div className="mobile-auth-brand"><Brand /></div><div className="auth-form-wrap"><span className="eyebrow">WELCOME TO MY NAAI</span><span className="login-hero-badge"><Sparkles size={12} /> {role === 'USER' ? 'Customer login' : 'Salon partner'}</span><h1>{step === 'phone' ? role === 'USER' ? 'Login to book your favorite salon' : 'Grow your salon with My Naai' : step === 'new-user' ? 'One last thing.' : 'Check your phone.'}</h1><p className="auth-subtitle">{step === 'phone' ? role === 'USER' ? 'Sign in and book your next visit.' : 'Sign in and never miss a booking.' : step === 'new-user' ? `Let\u2019s create your My Naai profile for +91 ${mobile}.` : `Enter the 6-digit code sent to +91 ${mobile}.`}</p>{step === 'phone' && <LoginPerks role={role} />}{step === 'phone' && <InstallAppButton onInstall={notifyInstall} />}{!isIosDevice() && <PWAInstallCard compact notifyInstall={notifyInstall} />}<LoginPermissionsPanel onPushToken={token => { if (token) setPushToken(token); }} />{step === 'phone' && <div className="role-switch"><button className={role === 'USER' ? 'active' : ''} onClick={() => { setRole('USER'); setError(''); }}><CircleUserRound size={16} /> Customer</button><button className={role === 'SALON' ? 'active' : ''} onClick={() => { setRole('SALON'); setError(''); }}><Store size={16} /> Salon partner</button></div>}{error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}{step === 'phone' && <form onSubmit={requestOtp}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" autoComplete="tel" maxLength="10" value={mobile} onChange={event => setMobile(event.target.value.replace(/\D/g, ''))} placeholder="Enter 10-digit number" autoFocus /></div></Field><Button type="submit" loading={busy}>Continue with OTP <ChevronRight size={17} /></Button></form>}{step === 'otp' && <form onSubmit={verify}><Field label="One-time password"><input className="otp-input" inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="· · · · · ·" autoFocus /></Field><Button type="submit" loading={busy}>Verify code <ChevronRight size={17} /></Button><button className="resend-link" type="button" onClick={requestOtp}>Resend code</button><button className="back-form-link" type="button" onClick={() => { setStep('phone'); setOtp(''); setError(''); }}>Use a different number</button></form>}{step === 'new-user' && <form onSubmit={createAccount}><Field label="Your name"><input value={name} onChange={event => setName(event.target.value)} placeholder="How should we call you?" autoFocus /></Field><Button type="submit" loading={busy}>Create my account <ChevronRight size={17} /></Button></form>}</div><p className="auth-legal">By continuing, you agree to My Naai’s terms and privacy policy.</p></div>
+  return <div className="auth-page login-page"><div className="auth-visual"><div className="auth-visual-image" /><div className="auth-image-shade" /><div className="auth-visual-content"><Brand light /><div><span className="eyebrow">SALON & GROOMING, REIMAGINED</span><h1>Less waiting.<br /><em>More you.</em></h1><p>Book a great salon nearby and make the time yours.</p></div><div className="visual-quote"><span></span><p>Your time is valuable. We’re here to give it back.</p></div></div></div><div className="auth-form-panel"><div className="mobile-auth-brand"><Brand /></div><div className="auth-form-wrap"><span className="eyebrow">WELCOME TO MY NAAI</span><span className="login-hero-badge"><Sparkles size={12} /> {role === 'USER' ? 'Customer login' : 'Salon partner'}</span><h1>{step === 'phone' ? role === 'USER' ? 'Login to book your favorite salon' : 'Grow your salon with My Naai' : step === 'new-user' ? 'One last thing.' : 'Check your phone.'}</h1><p className="auth-subtitle">{step === 'phone' ? role === 'USER' ? 'Sign in and book your next visit.' : 'Sign in and never miss a booking.' : step === 'new-user' ? `Let\u2019s create your My Naai profile for +91 ${mobile}.` : `Enter the 6-digit code sent to +91 ${mobile}.`}</p>{step === 'phone' && <div className="login-actions"><AllowAlertsButton onToken={token => { if (token) setPushToken(token); }} /><InstallAppButton onInstall={notifyInstall} /></div>}{step === 'phone' && <div className="role-switch"><button className={role === 'USER' ? 'active' : ''} onClick={() => { setRole('USER'); setError(''); }}><CircleUserRound size={16} /> Customer</button><button className={role === 'SALON' ? 'active' : ''} onClick={() => { setRole('SALON'); setError(''); }}><Store size={16} /> Salon partner</button></div>}{error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}{step === 'phone' && <form onSubmit={requestOtp}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" autoComplete="tel" maxLength="10" value={mobile} onChange={event => setMobile(event.target.value.replace(/\D/g, ''))} placeholder="Enter 10-digit number" autoFocus /></div></Field><Button type="submit" loading={busy}>Continue with OTP <ChevronRight size={17} /></Button></form>}{step === 'otp' && <form onSubmit={verify}><Field label="One-time password"><input className="otp-input" inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="· · · · · ·" autoFocus /></Field><Button type="submit" loading={busy}>Verify code <ChevronRight size={17} /></Button><button className="resend-link" type="button" onClick={requestOtp}>Resend code</button><button className="back-form-link" type="button" onClick={() => { setStep('phone'); setOtp(''); setError(''); }}>Use a different number</button></form>}{step === 'new-user' && <form onSubmit={createAccount}><Field label="Your name"><input value={name} onChange={event => setName(event.target.value)} placeholder="How should we call you?" autoFocus /></Field><Button type="submit" loading={busy}>Create my account <ChevronRight size={17} /></Button></form>}</div><p className="auth-legal">By continuing, you agree to My Naai’s terms and privacy policy.</p></div>
       <PermissionGateModal open={permissionGate.open} onClose={() => setPermissionGate(current => ({ ...current, open: false }))} onGranted={handlePermissionGranted} state={permissionGate.state} />
     </div>;
 }
