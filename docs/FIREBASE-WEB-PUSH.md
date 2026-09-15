@@ -49,7 +49,7 @@ All `VITE_` values are bundled into browser JavaScript. That is expected for Fir
 
 The implementation is in `src/lib/push.js`:
 
-1. `isPushConfigured()` checks that the Firebase web config and VAPID key exist. If they do not, push is safely disabled and the rest of the portal still works.
+1. `isPushConfigured()` checks that the Firebase web config and VAPID key exist. If they do not, push is safely disabled and the rest of the portal still works — the login page hides every alerts control instead of warning the user, and OTP sign-in is sent without a `deviceToken` so an unconfigured build never blocks anyone.
 2. The Firebase Messaging SDK checks whether this browser supports messaging and service workers.
 3. When the user verifies OTP or finishes customer onboarding, the app requests browser notification permission. Salon registration requests permission before the plan/registration submission.
 4. After permission is granted, the app registers `public/firebase-messaging-sw.js` with the separate scope `/firebase-cloud-messaging-push-scope`.

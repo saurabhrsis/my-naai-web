@@ -140,76 +140,24 @@ img { display: block; max-width: 100%; }
 .status-completed { color: #d5b485; background: rgba(232, 185, 126, .09); }
 .status-neutral { color: var(--muted-light); background: rgba(255, 255, 255, .08); }
 
-/* Authentication / onboarding - fully responsive splash */
+/* Authentication - fully responsive splash */
 .auth-page { min-height: var(--viewport-height); width: 100%; background: var(--black); display: flex; flex-direction: column; }
-.onboarding-page {
-  min-height: var(--viewport-height);
-  display: flex;
-  align-items: stretch;
-  justify-content: center;
-  padding: max(8px, var(--safe-top)) max(8px, var(--safe-right)) max(8px, var(--safe-bottom)) max(8px, var(--safe-left));
-  background: var(--black);
-}
-.onboarding-slide {
-  position: relative;
-  width: 100%;
-  max-width: 100%;
-  min-height: calc(var(--viewport-height) - 16px);
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  overflow: hidden;
-  border-radius: 25px;
-  background-position: center;
-  background-size: cover;
-  isolation: isolate;
-}
+
+/* One-time startup permission setup — the visual language of the original
+   splash screen (full-bleed photo, shaded gradient, bottom-anchored copy),
+   trimmed to the three permission buttons and one Continue. */
+.setup-row-cta { flex: none; padding: 7px 13px; border-radius: 9px; background: var(--gold); color: #0d0e0e; font-size: 11px; font-weight: 800; }
+.setup-continue { width: 100%; min-height: 50px; border-radius: 14px; font-size: 15px; font-weight: 800; box-shadow: 0 14px 40px rgba(0,0,0,.35); }
 .auth-image-shade { position: absolute; inset: 0; z-index: 0; background: linear-gradient(180deg, rgba(5, 7, 7, .72) 0%, rgba(5, 7, 7, .18) 38%, rgba(5, 7, 7, .92) 100%); }
-.onboarding-top {
-  position: relative; z-index: 1; flex: none;
-  display: flex; justify-content: space-between; align-items: center; gap: 10px;
-  padding: max(18px, calc(var(--safe-top) + 12px)) max(18px, var(--safe-right)) 0 max(18px, var(--safe-left));
-}
-.onboarding-top-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-.skip-button { border: 1px solid rgba(232, 185, 126, .42); background: rgba(0, 0, 0, .35); color: var(--gold); padding: 9px 14px; border-radius: 30px; font-size: 12px; font-weight: 700; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .install-auth-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 11px; border: 1px solid rgba(232, 185, 126, .4); border-radius: 30px; background: rgba(232, 185, 126, .12); color: var(--gold); font-size: 11px; font-weight: 700; white-space: nowrap; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .install-auth-button:hover { background: rgba(232, 185, 126, .2); }
 .install-login-button { margin: 0 0 14px; align-self: flex-start; }
 .registration-install-button { margin-left: auto; }
-.onboarding-copy {
-  position: relative; z-index: 1;
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  gap: 12px;
-  width: 100%;
-  max-width: 100%;
-  padding: 20px max(22px, var(--safe-right)) max(22px, calc(var(--safe-bottom) + 14px)) max(22px, var(--safe-left));
-  margin-top: auto;
-}
-.onboarding-copy h1 { max-width: 590px; margin: 0; color: var(--white); font-size: clamp(26px, 6.5vw, 52px); line-height: 1.06; letter-spacing: -.04em; overflow-wrap: break-word; }
-.onboarding-copy p { max-width: 440px; margin: 0; color: #c6cbca; font-size: clamp(12px, 3.5vw, 14px); line-height: 1.55; overflow-wrap: break-word; }
-.onboarding-copy .eyebrow { margin: 0; }
-.onboarding-controls { display: flex; align-items: center; justify-content: space-between; margin-top: 20px; gap: 14px; flex-wrap: wrap; }
-.onboarding-dots { display: flex; gap: 7px; align-items: center; }
-.onboarding-dots button { width: 25px; height: 4px; border-radius: 10px; background: rgba(255,255,255,.32); padding: 0; transition: width .2s, background .2s; flex: none; }
-.onboarding-dots button.active { width: 44px; background: var(--gold); }
-.next-circle { width: 55px; height: 55px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--gold); color: #0d0e0e; flex: none; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
-.lets-start-button { min-height: 52px; padding: 0 26px; border-radius: 30px; font-size: 15px; letter-spacing: .01em; box-shadow: 0 14px 40px rgba(0, 0, 0, .35); }
-@media (max-height: 600px) {
-  .onboarding-slide { min-height: calc(var(--viewport-height) - 12px); border-radius: 18px; }
-  .onboarding-top { padding-top: max(12px, calc(var(--safe-top) + 8px)); }
-  .onboarding-copy { padding-top: 12px; padding-bottom: max(14px, calc(var(--safe-bottom) + 10px)); gap: 8px; }
-  .onboarding-copy h1 { font-size: clamp(22px, 5.5vw, 36px); }
-  .onboarding-controls { margin-top: 12px; }
-}
-@media (max-width: 360px) {
-  .onboarding-top { padding-left: max(14px, var(--safe-left)); padding-right: max(14px, var(--safe-right)); }
-  .onboarding-copy { padding-left: max(14px, var(--safe-left)); padding-right: max(14px, var(--safe-right)); }
-  .lets-start-button { min-height: 48px; padding: 0 20px; font-size: 14px; }
-  .next-circle { width: 48px; height: 48px; }
-}
+/* Thin, low-noise "back to salons" escape on the login page — the guest shell
+   promises browse-first, so the login page must never feel like a wall. */
+.login-back { display: inline-flex; align-items: center; gap: 5px; margin: 0 0 18px; padding: 0; background: none; border: 0; color: var(--muted); font-size: 12px; font-weight: 600; }
+.login-back:hover { color: var(--gold); }
+
 /* Official My Naai mark (`my_naai.png` — the white geometric M) plus the
    wordmark. The M of "My" is drawn larger so the name reads clearly next to
    the logo tile. */
@@ -395,8 +343,12 @@ img { display: block; max-width: 100%; }
 .salon-address svg { flex: none; margin-top: 1px; }
 .salon-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .wait-copy { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; }
+.salon-card-cta { display: flex; align-items: center; gap: 7px; flex: none; }
+.card-share-button { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 9px; border: 1px solid var(--line); background: rgba(255,255,255,.05); color: var(--gold); }
+.card-share-button:hover { background: rgba(232,185,126,.12); }
 .card-book-button { min-height: 32px; padding: 0 12px; border-radius: 9px; color: #111; background: var(--gold); font-size: 10px; font-weight: 700; }
 .card-book-button.disabled { color: #969b9a; background: #2b3030; }
+.detail-header-actions { display: flex; align-items: center; gap: 4px; }
 .home-trust-row { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 7px; margin: 26px 0 7px; color: #71807c; font-size: 9px; }
 .home-trust-row svg { color: var(--gold); }
 .home-trust-row i { width: 3px; height: 3px; border-radius: 50%; background: #58605f; }
@@ -474,6 +426,14 @@ img { display: block; max-width: 100%; }
 .account-menu-row strong { color: var(--white); font-size: 12px; font-weight: 500; }
 .account-menu-row small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .account-menu-row > svg { color: #687171; }
+/* Booking-reminders toggle (Account): iOS-style switch, gold when on. Tapping
+   it while the browser permission is still neutral is the permission prompt. */
+.reminder-toggle-row { cursor: default; }
+.reminder-toggle-row:hover { background: transparent; }
+.switch-toggle { position: relative; width: 44px; height: 26px; flex: none; border: 0; border-radius: 999px; background: #3a4242; transition: background .2s ease; }
+.switch-toggle > span { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: transform .2s ease; box-shadow: 0 2px 5px rgba(0,0,0,.35); }
+.switch-toggle.on { background: var(--gold); }
+.switch-toggle.on > span { transform: translateX(18px); }
 /* Logout sits below a scrolling settings list with a fixed bottom nav over it,
    so it needs its own hit target, a defined edge, and clearance (see
    .workspace-content padding-bottom). The old rule used `space-between` with a
@@ -770,11 +730,143 @@ img { display: block; max-width: 100%; }
 .push-setup-compact .push-setup-copy p { color: #c6cbca; }
 .ios-install-steps { display: flex; flex-direction: column; gap: 9px; margin: 0 0 6px; padding-left: 19px; color: var(--muted-light); font-size: 12px; line-height: 1.55; }
 .ios-install-steps strong { color: var(--white); }
-.permission-prompt-stack { display: flex; flex-direction: column; gap: 8px; margin: 0 0 16px; }
-.permission-prompt-stack:empty { display: none; margin: 0; }
-.permission-prompt-stack .push-setup-card { margin: 0; }
-.permission-prompt-compact { margin: 18px 0 0; max-width: 520px; }
-.permission-prompt-compact .push-setup-card { margin: 0; }
+/* Public site navbar (guest shell): logo left, route links centre, Install +
+   Login right. Sticky with a blurred backdrop so the salon list scrolls under
+   it like a modern website header; aligns with the 1460px .screen rail on
+   wide laptops. */
+.guest-shell { min-height: var(--viewport-height); display: flex; flex-direction: column; background: var(--black); }
+.site-navbar { position: sticky; top: 0; z-index: 40; flex: none; display: flex; align-items: center; gap: 12px; padding: calc(9px + var(--safe-top)) max(14px, var(--safe-right)) 9px max(14px, var(--safe-left)); background: rgba(15, 17, 17, .9); border-bottom: 1px solid var(--line); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.site-navbar-brand { flex: none; display: flex; align-items: center; padding: 0; border: 0; background: none; }
+.site-navbar .brand-mark { width: 38px; height: 38px; border-radius: 11px; }
+.site-navbar .brand-cap { font-size: 24px; }
+.site-navbar .brand-lower { font-size: 19px; }
+.site-nav-links { flex: 1; display: flex; justify-content: center; gap: 2px; }
+.site-nav-links button { position: relative; padding: 9px 10px; border: 0; border-radius: 9px; background: none; color: var(--muted-light); font-size: 13px; font-weight: 600; }
+.site-nav-links button:hover { color: var(--white); background: rgba(255,255,255,.04); }
+.site-nav-links button.active { color: var(--gold); }
+.site-nav-links button.active::after { content: ''; position: absolute; left: 12px; right: 12px; bottom: 3px; height: 2px; border-radius: 2px; background: var(--gold); }
+.site-navbar-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+@media (max-width: 620px) {
+  .site-navbar { gap: 8px; }
+  .site-navbar .brand-wordmark { display: none; } /* phones: the mark alone, links get the room */
+  .site-nav-links button { padding: 8px 8px; font-size: 12px; }
+  .site-navbar .install-auth-button { width: 34px; height: 34px; gap: 0; padding: 0; font-size: 0; justify-content: center; }
+  .site-navbar .install-auth-button svg { flex: none; }
+}
+.site-navbar .install-login-button { margin: 0; } /* pill margin is only for the login page context */
+
+/* Login page legal line: the terms/privacy agreements are links that look
+   like the sentence they sit in. */
+.auth-legal button { display: inline; padding: 0; border: 0; background: none; color: var(--gold); font: inherit; text-decoration: underline; cursor: pointer; }
+.auth-legal button:hover { color: var(--white); }
+
+/* Legal pages (Terms, Privacy Policy): a document read, a touch narrower and
+   calmer than the marketing info pages. */
+.legal-screen { max-width: 860px; }
+.legal-screen .info-sections section h2 { font-size: 14px; }
+@media (min-width: 1490px) {
+  .site-navbar { padding-left: calc((100% - 1460px) / 2 + 15px); padding-right: calc((100% - 1460px) / 2 + 15px); }
+}
+.guest-login-button { display: inline-flex; align-items: center; gap: 6px; padding: 9px 14px; border: 0; border-radius: 30px; background: var(--gold); color: #0d0e0e; font-size: 12px; font-weight: 800; box-shadow: 0 6px 18px rgba(232, 185, 126, .22); }
+.guest-login-button:active { transform: scale(.97); }
+.guest-content { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 14px max(15px, var(--safe-right)) calc(24px + var(--safe-bottom)) max(15px, var(--safe-left)); }
+
+/* Website-style footer on the public pages (home #/, salon page, About/FAQ /
+   Terms). Dark-compact on phones; the top row splits on wide screens. All
+   links are hash routes, so they work identically for guests and signed-in
+   customers. */
+/* ── Website footer (reference: multi-column business-site footer) ──
+   Brand + store badges, then three link columns — Explore / Salon partners /
+   Support & legal — and a bottom bar. Columns stack on phones. */
+.site-footer { margin: 26px 0 0; padding: 26px 4px calc(20px + var(--safe-bottom)); border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 20px; }
+.info-screen .site-footer { padding-bottom: 8px; }
+.site-footer-grid { display: grid; grid-template-columns: 1fr; gap: 22px; }
+.site-footer-brand strong { display: block; color: var(--white); font-size: 17px; font-weight: 800; letter-spacing: -.02em; }
+.site-footer-brand p { margin: 3px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.store-badges { display: flex; flex-wrap: wrap; gap: 9px; margin: 12px 0; }
+.store-badge { display: inline-flex; align-items: center; gap: 10px; padding: 9px 13px; background: #0b0d0c; border: 1px solid rgba(232, 185, 126, .38); border-radius: 12px; color: var(--white); text-decoration: none; line-height: 1; box-shadow: 0 1px 0 rgba(255,255,255,.05) inset; }
+a.store-badge:hover { border-color: var(--gold); background: #121512; }
+.store-badge-icon { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 9px; background: rgba(232, 185, 126, .14); color: var(--gold); flex: none; }
+.store-badge-text { display: flex; flex-direction: column; gap: 3px; text-align: left; }
+.store-badge-text small { color: var(--muted); font-size: 8.5px; font-weight: 700; letter-spacing: .16em; }
+.store-badge-text strong { color: var(--white); font-size: 13px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; }
+.store-badge > svg:last-child { color: var(--muted); }
+.store-badge-soon { opacity: .6; cursor: not-allowed; border-style: dashed; }
+.site-footer-apps { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 12px; }
+.site-footer-webnote { display: flex; align-items: flex-start; gap: 6px; margin: 12px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
+.site-footer-webnote svg { flex: none; margin-top: 1px; }
+.site-footer-col { display: flex; flex-direction: column; gap: 8px; }
+.site-footer-col h3 { margin: 0 0 4px; color: #8b9194; font-size: 10.5px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+.site-footer-col a { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-light); font-size: 11.5px; font-weight: 600; text-decoration: none; }
+.site-footer-col a:hover { color: var(--gold); }
+.site-footer-col a svg { color: var(--gold); flex: none; }
+.site-footer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); color: #5a6363; font-size: 10px; }
+.site-footer-bottom a { color: #5a6363; text-decoration: none; }
+.site-footer-bottom a:hover { color: var(--gold); }
+@media (min-width: 560px) {
+  .site-footer-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (min-width: 900px) {
+  .site-footer-grid { grid-template-columns: 1.6fr 1fr 1fr 1fr; }
+}
+
+/* ── Testimonials (above the footer on public pages): a swipeable carousel
+   with arrow controls + gentle auto-advance — any number of reviews works. */
+.testimonial-section { margin: 30px 0 0; }
+.testimonial-nav { display: flex; gap: 6px; }
+.testimonial-nav button { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; background: var(--card); border: 1px solid var(--line); border-radius: 50%; color: var(--muted-light); }
+.testimonial-nav button:hover { color: var(--gold); border-color: rgba(232, 185, 126, .4); }
+.testimonial-nav .rotate-180 { transform: rotate(180deg); }
+.testimonial-track { display: flex; gap: 12px; margin-top: 14px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; -ms-overflow-style: none; padding-bottom: 4px; }
+.testimonial-track::-webkit-scrollbar { display: none; }
+.testimonial-card { margin: 0; flex: 0 0 min(84vw, 320px); scroll-snap-align: start; padding: 15px 15px 13px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; display: flex; flex-direction: column; gap: 8px; position: relative; }
+.testimonial-quote { position: absolute; top: 12px; right: 13px; color: rgba(232, 185, 126, .35); }
+.testimonial-stars { display: inline-flex; gap: 2px; color: var(--gold); }
+.testimonial-card blockquote { margin: 0; color: #d7dbda; font-size: 12.5px; line-height: 1.55; }
+.testimonial-card figcaption { display: flex; flex-direction: column; gap: 1px; margin-top: 2px; }
+.testimonial-card figcaption strong { color: var(--white); font-size: 12px; }
+.testimonial-card figcaption small { color: var(--muted); font-size: 10.5px; }
+@media (min-width: 900px) {
+  .testimonial-card { flex-basis: calc((100% - 24px) / 3); }
+}
+
+/* ── Salon partner landing page (/salon-partner) ── */
+.partner-screen { padding-top: 4px; }
+.partner-hero { display: grid; grid-template-columns: 1fr; gap: 18px; align-items: center; margin: 6px 0 4px; padding: 22px 18px; background: linear-gradient(155deg, #17211d 0%, #0b0f0d 70%); border: 1px solid var(--line); border-radius: 22px; overflow: hidden; }
+.partner-hero-copy h1 { margin: 8px 0 10px; color: var(--white); font-size: clamp(30px, 7vw, 46px); line-height: 1.02; letter-spacing: -.045em; }
+.partner-hero-copy h1 em { color: var(--gold); font-style: normal; }
+.partner-hero-copy p { margin: 0 0 16px; color: var(--muted-light); font-size: 13px; line-height: 1.6; max-width: 400px; }
+.partner-hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.partner-signin { background: none; border: 0; padding: 0; color: var(--gold); font-size: 12px; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.partner-hero-card { justify-self: center; width: min(260px, 100%); padding: 18px; background: #0e1211; border: 1px solid var(--line); border-radius: 18px; display: flex; flex-direction: column; gap: 6px; color: var(--muted-light); }
+.partner-hero-card svg { color: var(--gold); }
+.partner-hero-card strong { color: var(--white); font-size: 13px; }
+.partner-hero-card > span { font-size: 11.5px; }
+.partner-hero-card-actions { display: flex; gap: 8px; margin-top: 6px; }
+.partner-hero-card-actions i { font-style: normal; flex: 1; padding: 8px 0; border-radius: 10px; font-size: 11px; font-weight: 800; text-align: center; background: rgba(232, 185, 126, .16); color: var(--gold); }
+.partner-hero-card-actions i:last-child { background: rgba(255, 255, 255, .06); color: var(--muted-light); }
+.partner-benefits, .partner-steps { margin-top: 30px; }
+.partner-benefit-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 14px; }
+.partner-benefit { padding: 15px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; display: flex; flex-direction: column; gap: 6px; }
+.partner-benefit svg { color: var(--gold); }
+.partner-benefit strong { color: var(--white); font-size: 13px; }
+.partner-benefit p { margin: 0; color: var(--muted-light); font-size: 12px; line-height: 1.55; }
+.partner-step-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 14px; }
+.partner-step { position: relative; padding: 15px 15px 15px 60px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; display: flex; flex-direction: column; gap: 4px; }
+.partner-step-num { position: absolute; left: 15px; top: 15px; width: 32px; height: 32px; border-radius: 50%; background: rgba(232, 185, 126, .14); color: var(--gold); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; }
+.partner-step strong { color: var(--white); font-size: 13px; }
+.partner-step p { margin: 0; color: var(--muted-light); font-size: 12px; line-height: 1.55; }
+.partner-cta-band { margin-top: 30px; padding: 20px 18px; background: linear-gradient(135deg, rgba(232, 185, 126, .14), rgba(232, 185, 126, .05)); border: 1px solid rgba(232, 185, 126, .35); border-radius: 20px; display: flex; flex-direction: column; gap: 14px; }
+.partner-cta-band h2 { margin: 6px 0 4px; color: var(--white); font-size: 21px; letter-spacing: -.03em; }
+.partner-cta-band p { margin: 0; color: var(--muted-light); font-size: 12px; line-height: 1.55; }
+@media (min-width: 560px) {
+  .partner-benefit-grid { grid-template-columns: repeat(2, 1fr); }
+  .partner-step-grid { grid-template-columns: repeat(3, 1fr); }
+  .partner-cta-band { flex-direction: row; align-items: center; justify-content: space-between; }
+}
+@media (min-width: 900px) {
+  .partner-hero { grid-template-columns: 1.5fr 1fr; padding: 34px 30px; }
+}
 
 /* Salon editor and subscription */
 .subscription-gate-shell { display: block; }
@@ -1080,11 +1172,7 @@ img { display: block; max-width: 100%; }
 }
 
 @media (min-width: 760px) {
-  .onboarding-page { padding: 18px; }
-  .onboarding-slide { min-height: calc(var(--viewport-height) - 36px); }
-  .onboarding-copy { padding-left: 7%; padding-right: 7%; padding-bottom: 5%; }
-  .onboarding-top { padding-left: 7%; padding-right: 7%; }
-  .login-page { grid-template-columns: minmax(0, 1.05fr) minmax(440px, .95fr); }
+      .login-page { grid-template-columns: minmax(0, 1.05fr) minmax(440px, .95fr); }
   .auth-visual { display: block; min-height: var(--viewport-height); }
   .mobile-auth-brand { display: none; }
   .auth-form-panel { padding: calc(40px + var(--safe-top)) clamp(35px, 6vw, 92px) calc(40px + var(--safe-bottom)); }
@@ -1381,6 +1469,23 @@ img.image-fallback-tile {
 
 /* Login improvements */
 .login-hero-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 20px; background: rgba(232,185,126,.12); border: 1px solid rgba(232,185,126,.22); color: var(--gold); font-size: 10px; font-weight: 700; letter-spacing: .04em; margin-bottom: 10px; }
+/* The login setup — Allow alerts + Install app — as compact pills on one row.
+   Phone users tap buttons; they do not read cards, so this row replaced both
+   the old three-card stack and the later text panel. */
+.login-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: -10px 0 20px; }
+/* The permission ask is the step sign-in depends on, so its pill carries the
+   gold fill; the install pill keeps the outline style of .install-auth-button. */
+.allow-alerts-button { border-color: transparent; background: var(--gold); color: #0d0e0e; }
+.allow-alerts-button:hover { background: #f0cd96; }
+.allow-alerts-button:disabled { opacity: .75; }
+.allow-alerts-attention { background: var(--red); color: #fff; }
+.allow-alerts-attention:hover { background: #ed8881; }
+.login-action-loading { color: var(--muted); pointer-events: none; }
+@media (max-width: 380px) {
+  .login-actions { gap: 7px; margin-bottom: 18px; }
+}
+/* The short install guide opened from the login Install button. */
+.install-steps strong { color: var(--white); }
 .auth-form-wrap h1.login-title { font-size: clamp(28px, 7vw, 40px); line-height: 1.05; }
 .auth-form-wrap .auth-subtitle.login-subtitle { font-size: 13.5px; color: #a9b2b1; line-height: 1.5; }
 .auth-form-wrap .auth-subtitle.login-subtitle strong { color: var(--white); font-weight: 700; }
@@ -1399,46 +1504,10 @@ img.image-fallback-tile {
 .push-setup-retry { border-color: rgba(243,200,110,.32); background: rgba(243,200,110,.08); animation: push-retry-glow 2s ease-in-out infinite; }
 @keyframes push-retry-glow { 0%,100% { border-color: rgba(243,200,110,.32); } 50% { border-color: rgba(243,200,110,.55); } }
 
-/* Login permission panel — one card, one tap per browser popup, and the fix
-   for a blocked permission inline instead of behind another modal. */
-.perm-panel { max-width: 670px; margin: 0 0 16px; padding: 12px 14px 4px; border: 1px solid var(--line-strong); border-radius: 16px; background: linear-gradient(135deg, rgba(232,185,126,.10), rgba(232,185,126,.02)); }
-.perm-panel-attention { border-color: rgba(232,185,126,.45); box-shadow: 0 8px 28px rgba(0,0,0,.22); }
-.perm-panel-head { display: flex; align-items: center; gap: 7px; padding: 2px 0 9px; }
-.perm-panel-head svg { color: var(--gold); flex: none; }
-.perm-panel-head strong { font-size: 12.5px; color: var(--white); }
-.perm-panel-hint { margin-left: auto; font-size: 9.5px; font-weight: 700; letter-spacing: .03em; color: var(--muted); text-align: right; }
-.perm-row { display: flex; align-items: flex-start; gap: 10px; padding: 9px 0; border-top: 1px solid rgba(255,255,255,.06); }
-.perm-ico { width: 28px; height: 28px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 9px; color: #111; background: var(--gold); }
-.perm-row-optional .perm-ico, .perm-row-sound .perm-ico { color: var(--white); background: var(--card-raised); border: 1px solid var(--line); }
-.perm-row-attention .perm-ico { background: var(--red); }
-.perm-copy { min-width: 0; flex: 1; }
-.perm-copy strong { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--white); }
-.perm-tag { padding: 2px 6px; border-radius: 10px; background: rgba(232,185,126,.16); color: var(--gold); font-size: 8.5px; font-style: normal; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
-.perm-tag-optional { background: rgba(255,255,255,.08); color: var(--muted-light); }
-.perm-copy p { margin: 3px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.45; }
-.perm-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
-.perm-actions .btn { min-height: 32px; }
-.perm-chip { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 12px; font-size: 10px; font-weight: 800; }
-.perm-chip-on { background: rgba(110,209,158,.14); color: var(--green); }
-.perm-chip-warn { background: rgba(232,185,126,.16); color: var(--gold); }
-.perm-chip-bad { background: rgba(242,123,116,.14); color: var(--red); }
-.perm-chip-mute { background: rgba(255,255,255,.06); color: var(--muted); }
-.ghost-link { padding: 0; border: 0; background: none; color: var(--gold); cursor: pointer; font-size: 10.5px; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
-.ghost-link:hover { color: var(--gold-soft); }
-.perm-fix { margin: 0 0 8px; padding: 11px 12px; border: 1px solid rgba(242,123,116,.30); border-radius: 12px; background: rgba(242,123,116,.06); }
-.perm-fix-label { display: block; margin: 0 0 8px; font-size: 11px; font-weight: 800; color: #ffb3ad; }
-.perm-fix .ios-install-steps { margin: 0 0 10px; font-size: 11.5px; }
-.perm-fix-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
-.perm-fix-actions a { color: var(--gold); font-size: 11px; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
 .permission-gate-secondary a.ghost { display: flex; align-items: center; justify-content: center; background: var(--card-raised); color: var(--white); border: 1px solid var(--line); }
 .permission-gate-warn { margin: 10px 0 0; padding: 9px 11px; border-radius: 10px; background: rgba(242,123,116,.10); border: 1px solid rgba(242,123,116,.25); color: #ffb3ad; font-size: 11.5px; line-height: 1.5; }
 .permission-gate-warn p { margin: 0 0 6px; }
 .permission-gate-warn p:last-child { margin-bottom: 0; }
-@media (max-width: 460px) {
-  .perm-row { flex-wrap: wrap; }
-  .perm-actions { flex-direction: row; flex-wrap: wrap; width: 100%; justify-content: flex-start; }
-  .perm-panel-hint { display: none; }
-}
 
 /* Actionable notifications */
 .notification-card-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
@@ -1451,16 +1520,6 @@ img.image-fallback-tile {
 /* Buzzer visual feedback */
 .buzzer-pulse { animation: buzzer-pulse 1.2s ease-in-out infinite; }
 @keyframes buzzer-pulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.08); opacity: .9; } }
-
-/* Ensure onboarding permission cards don't overflow on tiny screens */
-.onboarding-copy .permission-prompt-stack { margin-top: 14px; }
-.onboarding-copy .push-setup-card { backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
-@media (max-height: 700px) {
-  .onboarding-copy .permission-prompt-stack { margin-top: 8px; }
-  .onboarding-copy .push-setup-card { padding: 10px 11px; }
-}
-
-
 
 .push-setup-pwa { border-color: rgba(110,209,158,.32); background: linear-gradient(135deg, rgba(110,209,158,.12), rgba(110,209,158,.04)); }
 .push-setup-pwa .push-setup-icon { background: var(--green); color: #09120d; }

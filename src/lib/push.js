@@ -1,6 +1,7 @@
 import { getApps, initializeApp } from 'firebase/app';
 import { deleteToken, getMessaging, getToken, isSupported, onMessage } from 'firebase/messaging';
 import { getErrorMessage } from '../components/Shared';
+import { softNavigate } from './routes';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -441,8 +442,8 @@ export async function displayNotification({ title, body, data = {}, onClick } = 
       notification.onclick = () => {
         try { window.focus(); } catch {}
         try {
-          if (target && target !== '/#/') {
-            window.location.hash = target.replace(/^\/#/, '#');
+          if (target && target !== '/') {
+            softNavigate(target);
           }
         } catch {}
         try { notification.close?.(); } catch {}
@@ -459,12 +460,12 @@ function notificationTarget(data = {}) {
   const type = String(data.type || data.notificationType || '').toUpperCase();
   const id = encodeURIComponent(data.bookingRequestId || data.bookingId || '');
   if (type === 'DELAY_TIME_PROPOSAL') {
-    return `/#/delay?bookingRequestId=${id}&delayMinutes=${encodeURIComponent(data.delayMinutes || '')}&proposedTime=${encodeURIComponent(data.proposedTime || '')}${data.reason ? `&reason=${encodeURIComponent(data.reason)}` : ''}`;
+    return `/delay?bookingRequestId=${id}&delayMinutes=${encodeURIComponent(data.delayMinutes || '')}&proposedTime=${encodeURIComponent(data.proposedTime || '')}${data.reason ? `&reason=${encodeURIComponent(data.reason)}` : ''}`;
   }
-  if (type === 'BOOKING_CONFIRMED' || type === 'BOOKING_REJECTED' || type === 'DELAY_RESPONSE') return '/#/bookings';
-  if (type === 'BOOKING_REQUEST') return `/#/bookingRequest?bookingRequestId=${id}`;
-  if (type === 'DELAY_BOOKING') return `/#/bookingRequest?bookingRequestId=${id}&openDelayModal=true`;
-  return '/#/';
+  if (type === 'BOOKING_CONFIRMED' || type === 'BOOKING_REJECTED' || type === 'DELAY_RESPONSE') return '/bookings';
+  if (type === 'BOOKING_REQUEST') return `/bookingRequest?bookingRequestId=${id}`;
+  if (type === 'DELAY_BOOKING') return `/bookingRequest?bookingRequestId=${id}&openDelayModal=true`;
+  return '/';
 }
 
 export function normalizePushPayload(payload = {}) {

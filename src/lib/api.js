@@ -285,6 +285,9 @@ export const api = {
   userProfile: ({ userId }) => get('/api/users/profile', { params: { userId } }),
   updateProfile: payload => post('/api/users/update', payload),
   userSalonList: payload => post('/api/salons/salon-list', payload),
+  // Same payload, no bearer token required — the public twin for guests
+  // browsing before login (request() simply sends no Authorization header).
+  userSalonListPublic: payload => post('/api/salons/salon-list-public', payload),
   bookedSalonList: ({ userId }) => post('/api/booking/get-list', { userId }),
   userAds: () => get('/api/advertisement/get-advertisement'),
   toggleSaveSalon: payload => post('/api/users/toggle-saved-salon', payload),

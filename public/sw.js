@@ -7,7 +7,7 @@
  * - Works on Android, iOS (PWA), Chrome, Edge, Firefox, Samsung Internet, Safari
  */
 
-const CACHE_NAME = 'mynaai-shell-v5';
+const CACHE_NAME = 'mynaai-shell-v7';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -173,19 +173,19 @@ function isPlanExpiredResponse(data) {
 
 function salonActionDestination(result) {
   return isPlanExpiredResponse(result?.data)
-    ? new URL('/#/subscription?mode=RENEW&forceRenewal=true', self.location.origin).href
-    : new URL('/#/queue', self.location.origin).href;
+    ? new URL('/subscription?mode=RENEW&forceRenewal=true', self.location.origin).href
+    : new URL('/queue', self.location.origin).href;
 }
 
 function notificationRoute(data) {
   const type = String(data.type || data.notificationType || '').toUpperCase();
   const id = encodeURIComponent(data.bookingRequestId || data.bookingId || '');
   if (type === 'DELAY_TIME_PROPOSAL') {
-    return `/#/delay?bookingRequestId=${id}&delayMinutes=${encodeURIComponent(data.delayMinutes || '')}&proposedTime=${encodeURIComponent(data.proposedTime || '')}${data.reason ? `&reason=${encodeURIComponent(data.reason)}` : ''}`;
+    return `/delay?bookingRequestId=${id}&delayMinutes=${encodeURIComponent(data.delayMinutes || '')}&proposedTime=${encodeURIComponent(data.proposedTime || '')}${data.reason ? `&reason=${encodeURIComponent(data.reason)}` : ''}`;
   }
-  if (type === 'BOOKING_CONFIRMED' || type === 'BOOKING_REJECTED' || type === 'DELAY_RESPONSE') return '/#/bookings';
-  if (type === 'BOOKING_REQUEST' || type === 'DELAY_BOOKING') return `/#/bookingRequest?bookingRequestId=${id}${type === 'DELAY_BOOKING' ? '&openDelayModal=true' : ''}`;
-  return '/#/';
+  if (type === 'BOOKING_CONFIRMED' || type === 'BOOKING_REJECTED' || type === 'DELAY_RESPONSE') return '/bookings';
+  if (type === 'BOOKING_REQUEST' || type === 'DELAY_BOOKING') return `/bookingRequest?bookingRequestId=${id}${type === 'DELAY_BOOKING' ? '&openDelayModal=true' : ''}`;
+  return '/';
 }
 
 // App Shell - Install
@@ -219,9 +219,22 @@ function shouldBypass(request) {
     url.includes('firebase') ||
     url.includes('__vite') ||
     url.includes('/@') ||
-    url.includes('chrome-extension')
+    url.includes('chrome-extension') ||
+    // The worker scripts themselves must always come from the network, or a
+    // cache-first hit can pin an old worker that can never update.
+    url.endsWith('/sw.js') ||
+    url.includes('/firebase-messaging-sw.js')
   );
 }
+
+// Only the genuine static buckets are cache-first: icons, images, fonts,
+// audio, and (in production) the hash-named JS/CSS bundles under /assets/.
+// Everything else — dev-server modules (/src/*), HTML, anything without a
+// content hash — goes straight to the network. This is load-bearing: the old
+// catch-all cache-first served a stale module set (or, when the server was
+// briefly down, an /index.html fallback with the wrong MIME type) and left
+// users on a dead black page after a deploy or dev-server restart.
+const CACHE_FIRST_PATH = /^\/(assets|icons)\//;
 
 self.addEventListener('fetch', event => {
   if (shouldBypass(event.request)) return;
@@ -241,12 +254,15 @@ self.addEventListener('fetch', event => {
     return;
   }
 
+  const { origin, pathname } = new URL(event.request.url);
+  if (origin !== self.location.origin || !CACHE_FIRST_PATH.test(pathname)) return;
+
   event.respondWith(
     caches.match(event.request).then(cached => {
       if (cached) return cached;
       return fetch(event.request)
         .then(response => {
-          if (response.ok && new URL(event.request.url).origin === self.location.origin) {
+          if (response.ok) {
             const copy = response.clone();
             caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy)).catch(() => {});
           }
@@ -256,7 +272,9 @@ self.addEventListener('fetch', event => {
           if (event.request.destination === 'image') {
             return caches.match('/assets/brand/naai-logo-dark.svg');
           }
-          return caches.match('/index.html');
+          // Never hand an HTML fallback to a script/style import — that exact
+          // mismatch is the black-screen failure this handler now prevents.
+          return new Response('My Naai is offline for this file.', { status: 504 });
         });
     })
   );
@@ -275,7 +293,7 @@ self.addEventListener('notificationclick', event => {
     const bookingRequestId = data.bookingRequestId || data.bookingId || '';
 
     if (action === ACTION_DELAY) {
-      const destination = new URL(`/#/bookingRequest?bookingRequestId=${encodeURIComponent(bookingRequestId)}&openDelayModal=true`, self.location.origin).href;
+      const destination = new URL(`/bookingRequest?bookingRequestId=${encodeURIComponent(bookingRequestId)}&openDelayModal=true`, self.location.origin).href;
       event.waitUntil(openOrFocus(destination));
       return;
     }

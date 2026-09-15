@@ -15,7 +15,6 @@ import {
   MapPin,
   Package,
   Scissors,
-  Settings2,
   Sparkles,
   Store,
   UsersRound,
@@ -29,9 +28,12 @@ import {
   RotateCw,
 } from 'lucide-react';
 import { api, clearSession, getToken, isPlanExpiredResponse, isUnknownSalonResponse, setToken } from './lib/api';
-import { closeNotification, deletePushToken, displayNotification, getNotificationRoute, getPushStatus, getPushToken, isActionableNotification, isEmbeddedFrame, normalizePushPayload, recordForegroundMessage, setupPush, watchNotificationPermission } from './lib/push';
+import { closeNotification, deletePushToken, displayNotification, getNotificationRoute, getPushStatus, getPushToken, isActionableNotification, isEmbeddedFrame, isPushConfigured, normalizePushPayload, recordForegroundMessage, setupPush, watchNotificationPermission } from './lib/push';
 import { playBuzzer, unlockBuzzer } from './lib/buzzer';
 import { resetLiveUpdatesSocket } from './lib/socket';
+import { armStoredReminders } from './lib/reminders';
+import { popPendingRoute, stashPendingRoute } from './lib/pendingRoute';
+import { legacyHashToRoute, parseRoutePath, routeToPath, softNavigate } from './lib/routes';
 import { DEFAULT_SERVICES } from './lib/defaultServices';
 import { getSubscriptionState } from './lib/planDetails';
 import { getSalonSubscriptionProfile, getSalonSubscriptionState, salonProfileNeedsCompletion as salonNeedsProfileCompletion } from './lib/salonProfile';
@@ -48,6 +50,7 @@ import {
   SalonDetailScreen,
   ScheduleScreen,
   ServicesScreen,
+  PartnerScreen,
 } from './components/UserScreens';
 import {
   BookingRequestScreen,
@@ -97,38 +100,71 @@ function saveSession(session) {
   return { ...session, role, userId: session.userId || user?.userId || user?.salon?.salonId || user?.salonId || user?.id || '' };
 }
 
-// Hash routing. `navigate` writes `#/<screen>?<query>`, and `getRouteFromHash`
-// is its inverse: it turns the current hash back into `{ name, params }`. It runs
-// on first paint (so a refresh keeps you on the screen you were on), on
-// popstate/hashchange (browser back/forward), and when another tab rewrites the
-// stored session. It also has to accept the deep links notifications open —
-// `/#/bookingRequest?bookingRequestId=…` for a partner, `/#/delay?…` for a
-// customer — which is why an unknown or role-mismatched screen falls back to the
-// role's home instead of rendering a screen the shell has no branch for.
-const USER_ROUTE_NAMES = ['home', 'bookings', 'products', 'account', 'detail', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms'];
+// History routing (real paths, no hashes, in src/lib/routes.js): `/` is the
+// home page, `/salon/<id>` a salon's public page, `/<screen>?<query>` the rest
+// — `/privacy-policy` maps to the `privacy` route via segment aliases.
+// `navigate` writes paths, `getRouteFromPath` reads them back into
+// `{ name, params }`. It runs on first paint (refresh keeps your screen), on
+// popstate (browser back/forward) and when another tab rewrites the stored
+// session. It also accepts notification deep links — `/bookingRequest?…` for a
+// partner, `/delay?…` for a customer — and upgrades legacy `#/...` links in
+// place (readLocationRoute), which is why an unknown or role-mismatched screen
+// falls back to the role's home instead of rendering a screen the shell has
+// no branch for.
+const USER_ROUTE_NAMES = ['home', 'bookings', 'products', 'account', 'detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'privacy', 'contact'];
 const SALON_ROUTE_NAMES = ['queue', 'history', 'salonProducts', 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
+// Every route a visitor may open WITHOUT an account — salons are browsable
+// first, login only appears when they try to book (the client's headline
+// ask). The info pages are public too: the site footer links About/FAQ/Terms/
+// Privacy and a website's legal pages must never sit behind a login. `login`
+// is handled by AppRoot itself, not by the guest shell.
+const GUEST_ROUTE_NAMES = ['home', 'salon', 'about', 'faq', 'terms', 'privacy', 'contact', 'partner'];
+const PUBLIC_ROUTE_NAMES = [...GUEST_ROUTE_NAMES, 'login'];
 
 function defaultRouteForRole(role) {
   return { name: String(role || '').toUpperCase() === 'SALON' ? 'queue' : 'home', params: {} };
 }
 
-export function getRouteFromHash(role) {
+// Accepts both the classic `#/<screen>?<query>` shape and the shareable
+// per-salon link `#/salon/<id>?<query>` — the id nests in the path so the URL
+// reads like a real link someone can paste into WhatsApp.
+// parseRoutePath / routeToPath live in src/lib/routes.js (shared, no React
+// cycle) and are re-exported here so existing imports keep working.
+export { parseRoutePath, routeToPath };
+
+// Read the browser location as a route, with legacy-hash upgrade: an old
+// shared `#/salon/<id>` link (or a notification tap written in the hash era)
+// still resolves, and the address bar is rewritten to the clean path so
+// refreshes and the back button stay consistent.
+function readLocationRoute() {
+  const path = parseRoutePath(`${window.location.pathname}${window.location.search}`);
+  if (!path.name) {
+    const legacy = legacyHashToRoute(window.location.hash);
+    if (legacy?.name) {
+      window.history.replaceState({}, '', routeToPath(legacy.name, legacy.params));
+      return legacy;
+    }
+  }
+  return path;
+}
+
+export function getRouteFromPath(role) {
   const fallback = defaultRouteForRole(role);
   if (typeof window === 'undefined') return fallback;
-  const hash = String(window.location.hash || '').replace(/^#/, '');
-  const [rawName, rawQuery = ''] = hash.split('?');
-  let name = '';
-  try { name = decodeURIComponent(rawName); } catch { name = rawName; }
-  name = name.replace(/^\/+|\/+$/g, '');
+  const route = readLocationRoute();
+  const roleKey = String(role || '').toUpperCase();
+  const knownRoutes = !roleKey ? PUBLIC_ROUTE_NAMES : roleKey === 'SALON' ? SALON_ROUTE_NAMES : USER_ROUTE_NAMES;
+  if (!knownRoutes.includes(route.name)) return fallback;
+  return route;
+}
+
+// Validate a stashed resume path for the role that just logged in (the salon
+// deep link a customer was browsing means nothing to a partner account).
+export function resolveResumeRoute(role, hash) {
+  if (!hash) return null;
+  const parsed = parseRoutePath(hash.startsWith('#') ? hash.replace(/^#+/, '') : hash);
   const knownRoutes = String(role || '').toUpperCase() === 'SALON' ? SALON_ROUTE_NAMES : USER_ROUTE_NAMES;
-  if (!knownRoutes.includes(name)) return fallback;
-  const params = {};
-  try {
-    for (const [key, value] of new URLSearchParams(rawQuery).entries()) params[key] = value;
-  } catch (parseError) {
-    console.debug(getErrorMessage(parseError, 'Ignored an unreadable route query string.'));
-  }
-  return { name, params };
+  return knownRoutes.includes(parsed.name) ? parsed : null;
 }
 
 const PUSH_REQUIRED_MESSAGE = 'My Naai needs notification permission to sign you in — it is how booking requests and confirmations reach you. Please allow notifications to continue.';
@@ -154,6 +190,9 @@ function androidAppNotificationHint(browser) {
 }
 
 async function requirePushToken() {
+  // Unconfigured build (Firebase env not wired yet): never brick the flow —
+  // proceed without a device token; alerts come alive the moment it is set.
+  if (!isPushConfigured()) return '';
   const token = await getPushToken({ requestPermission: true });
   if (!token) {
     // A token can never be created in regular iOS Safari (web push only exists
@@ -167,7 +206,13 @@ async function requirePushToken() {
 
 function withDeviceToken(payload, token) {
   const value = typeof token === 'string' ? token.trim() : '';
-  if (!value) throw new Error(PUSH_REQUIRED_MESSAGE);
+  if (!value) {
+    // The backend accepts logins without a device token; alerts attach as
+    // soon as the push config is wired. A configured build keeps the strict
+    // requirement, so real permission problems still surface honestly.
+    if (isPushConfigured()) throw new Error(PUSH_REQUIRED_MESSAGE);
+    return { ...payload };
+  }
   return { ...payload, deviceToken: value };
 }
 
@@ -353,14 +398,18 @@ function PermissionHelp({ open, onClose, kind = 'notifications' }) {
 // does this on its own; its setup card and the Continue button own the prompts.
 async function promptBrowserPermissions() {
   let token = '';
-  try {
-    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      token = await getPushToken({ requestPermission: true });
+  if (isPushConfigured()) {
+    try {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        token = await getPushToken({ requestPermission: true });
+      }
+      if (!token) token = await getPushToken({ requestPermission: false });
+    } catch (error) {
+      console.debug(getErrorMessage(error, 'Browser notification permission was not available.'));
     }
-    if (!token) token = await getPushToken({ requestPermission: false });
-  } catch (error) {
-    console.debug(getErrorMessage(error, 'Browser notification permission was not available.'));
   }
+  // Location is separate from the alerts config — the home screen needs it
+  // either way, so it is still nudged from this gesture.
   try {
     // Respect an explicit Skip on the login card — the first tap that fires
     // this handler can be the Skip tap itself.
@@ -558,10 +607,8 @@ function PermissionGateModal({ open, onClose, onGranted, state: initialState = '
       </>
     );
   } else {
-    title = 'Notifications need a second try';
-    lede = state === 'unconfigured'
-      ? 'This build of My Naai is not set up for web alerts yet. You can still browse; call 8380017393 if you need booking alerts on this device.'
-      : 'Setup did not finish on this device — first visits sometimes need one more try.';
+    title = 'Alerts need one more try';
+    lede = 'Setting up notifications did not finish on this device. Tap Try again — if it keeps failing, we will take a call at 8380017393.';
     body = (
       <div className="permission-gate-actions">
         <Button onClick={allow} loading={busy}><RefreshCw size={16} /> Try again</Button>
@@ -593,8 +640,10 @@ function PermissionGateModal({ open, onClose, onGranted, state: initialState = '
 }
 
 // The backend requires deviceToken on login and registration. Ask for
-// notification permission on splash and login, with a clear Enable control,
-// and do not continue until a token exists. Location stays optional.
+// notification permission on the login page, with a clear Enable control,
+// and do not continue until a token exists — unless alerts are not yet
+// configured in this build (then the card/pill stay hidden and flows proceed
+// without a token). Location stays optional.
 function NotificationSetupCard({ compact = false, prominent = false, notifyInstall = null, onEnabled }) {
   const [status, setStatus] = useState('checking');
   const [reason, setReason] = useState('');
@@ -682,10 +731,9 @@ function NotificationSetupCard({ compact = false, prominent = false, notifyInsta
     try { await inspect(false); } finally { setBusy(false); }
   };
 
-  if (['checking', 'enabled'].includes(status)) return null;
+  if (['checking', 'enabled', 'unconfigured'].includes(status)) return null;
   const needsIosInstall = status === 'unsupported' && isIosDevice() && !isIosPwaInstalled();
   const copy = {
-    unconfigured: { title: 'Notifications are unavailable', body: reason || 'This build of My Naai is not set up for web alerts yet. You can still browse; call 8380017393 if you need booking alerts on this device.' },
     unsupported: { title: 'Notifications need a different setup', body: reason || 'This browser cannot deliver web notifications. Install My Naai to your home screen, or use Chrome, Edge or Samsung Internet.' },
     denied: { title: 'Notifications are blocked', body: 'My Naai sends booking requests, confirmations and delay alerts. Your browser has blocked them for this site — tap How to allow, then Check again. If Check keeps saying blocked, tap Reload once.' },
     'needs-permission': { title: 'Turn on booking alerts', body: 'Tap Allow so My Naai can send booking requests, confirmations and delay alerts. Your salon\u2019s buzzer needs this to reach you in background too.' },
@@ -742,196 +790,106 @@ function IosInstallHelp({ open, onClose }) {
   );
 }
 
-function LocationSetupCard({ compact = false, onLocated, onDismiss }) {
-  const [status, setStatus] = useState('checking');
+
+// The browser has not offered its own install prompt (first visits, or a
+// browser that never does), so the Install button opens these instead. Steps
+// are written for a glance — three taps max, named after the detected browser,
+// key words bolded — because finding "Add to Home Screen" inside a browser
+// menu is the one part a page cannot do for the user.
+const INSTALL_STEPS = {
+  'chrome-android': [
+    <>Tap the <strong>⋮ menu</strong> (top right).</>,
+    <>Tap <strong>Add to Home screen</strong> (or <strong>Install app</strong>).</>,
+    <>Tap <strong>Add</strong> — done.</>,
+  ],
+  samsung: [
+    <>Tap the <strong>≡ menu</strong> (bottom right).</>,
+    <>Tap <strong>Add page to</strong> → <strong>Home screen</strong>.</>,
+    <>Tap <strong>Add</strong> — done.</>,
+  ],
+  firefox: [
+    <>Tap the <strong>⋮ menu</strong>.</>,
+    <>Tap <strong>Install</strong> (or <strong>Add to Home screen</strong>).</>,
+    <>Tap <strong>Add</strong> — done.</>,
+  ],
+  edge: [
+    <>Tap the <strong>menu</strong> at the bottom.</>,
+    <>Tap <strong>Add to phone</strong> → <strong>Home screen</strong>.</>,
+    <>Tap <strong>Add</strong> — done.</>,
+  ],
+  opera: [
+    <>Tap the <strong>menu</strong>.</>,
+    <>Tap <strong>Home screen</strong>.</>,
+    <>Tap <strong>Add</strong> — done.</>,
+  ],
+  'chrome-desktop': [
+    <>Click the <strong>install icon</strong> at the right of the address bar — or the <strong>⋮ menu</strong> → <strong>Save &amp; share / Install My Naai</strong>.</>,
+    <>Click <strong>Install</strong> — done.</>,
+  ],
+  'safari-desktop': [
+    <>Choose <strong>File → Add to Dock</strong> (macOS Sonoma or later).</>,
+  ],
+  other: [
+    <>Open the <strong>browser menu</strong>.</>,
+    <>Choose <strong>Install app</strong> or <strong>Add to Home Screen</strong>.</>,
+  ],
+};
+
+function InstallStepsHelp({ open, onClose }) {
+  const browser = detectBrowser();
+  const browserLabel = BROWSER_LABELS[browser] || BROWSER_LABELS.other;
+  const steps = INSTALL_STEPS[browser] || INSTALL_STEPS.other;
+  return (
+    <Modal open={open} onClose={onClose} title="Install My Naai" footer={<Button onClick={onClose}>Got it</Button>}>
+      <p className="modal-lede">A few taps in {browserLabel}:</p>
+      <ol className="ios-install-steps install-steps">{steps.map((step, index) => { const key = `${browser}-${index + 1}`; return <li key={key}>{step}</li>; })}</ol>
+      <p className="permission-help-note">Once installed: full-screen app, one-tap launch, and booking alerts with buzzer even when the browser is closed.</p>
+    </Modal>
+  );
+}
+
+// What used to be a three-card stack, then a big text panel on the login
+// screen, is now one pill button — phone users tap, they do not read. The
+// button behaviour matches the browser's real state:
+//   · never asked  → the tap opens the browser's own Allow popup directly
+//   · blocked/iOS → the permission gate opens with the exact fix for THIS
+//                    device (steps for the detected browser, or Add to Home
+//                    Screen on iPhone), with the live-permission watch that
+//                    closes it the moment the user flips the setting
+//   · enabled      → the button removes itself; login carries no dead weight
+// Location stays on the first-gesture flow (promptBrowserPermissions); the
+// button only ever deals with the notification permission sign-in depends on.
+function AllowAlertsButton({ onToken }) {
+  const [state, setState] = useState('checking');
   const [busy, setBusy] = useState(false);
-  const [helpOpen, setHelpOpen] = useState(false);
+  const [gate, setGate] = useState({ open: false, state: 'needs-permission' });
+  const onTokenRef = useRef(onToken);
+  onTokenRef.current = onToken;
 
-  const inspect = useCallback(async () => {
-    setStatus(await queryLocationPermission());
-  }, []);
-
-  useEffect(() => { inspect(); }, [inspect]);
-
-  const enable = async () => {
-    setBusy(true);
+  const read = useCallback(async () => {
     try {
-      const current = await getBrowserLocation();
-      if (current) {
-        setStatus('granted');
-        onLocated?.(current);
-        return;
-      }
-      setStatus(await queryLocationPermission() === 'denied' ? 'denied' : 'prompt');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (status === 'checking' || status === 'granted') return null;
-
-  const copy = status === 'unsupported'
-    ? { title: 'Location is unavailable', body: 'This browser cannot share your location. Nearby salons are still listed — just without the distance.' }
-    : status === 'denied'
-      ? { title: 'Location is off — that is fine', body: 'Optional. Salons are still listed, only without distances. To sort by nearest, allow location in your browser settings.' }
-      : { title: 'Show nearby salons first?', body: 'Optional. Share your location and My Naai sorts salons by how close they are. You can skip this and still book.' };
-
-  return (
-    <section className={cx('push-setup-card', compact && 'push-setup-compact', 'push-setup-optional')} aria-live="polite">
-      <span className="push-setup-icon"><MapPin size={compact ? 15 : 18} /></span>
-      <div className="push-setup-copy"><strong>{copy.title}</strong><p>{copy.body}</p></div>
-      <div className="push-setup-actions">
-        {status === 'denied'
-          ? <>
-            <Button size="small" variant="secondary" onClick={inspect} loading={busy}><Check size={13} /> Check again</Button>
-            <button type="button" className="permission-help-link" onClick={() => setHelpOpen(true)}>How to allow</button>
-          </>
-          : status !== 'unsupported' && <Button size="small" onClick={enable} loading={busy}>Allow</Button>}
-        {onDismiss && <button type="button" className="permission-help-link" onClick={onDismiss}>Not now</button>}
-      </div>
-      <PermissionHelp open={helpOpen} kind="location" onClose={() => { setHelpOpen(false); inspect(); }} />
-    </section>
-  );
-}
-
-
-function PWAInstallCard({ compact = false, notifyInstall = null }) {
-  const [dismissed, setDismissed] = useState(() => {
-    try { return sessionStorage.getItem('mynaaiPWAInstallDismissed') === 'true'; } catch { return false; }
-  });
-  const [isStandalone, setIsStandalone] = useState(false);
-  const [hasPrompt, setHasPrompt] = useState(() => Boolean(typeof window !== 'undefined' && window.deferredPWAInstallPrompt));
-
-  useEffect(() => {
-    const checkStandalone = () => {
-      const standalone = window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone;
-      setIsStandalone(Boolean(standalone));
-    };
-    checkStandalone();
-    const onAvailable = () => setHasPrompt(true);
-    const onInstalled = () => { setHasPrompt(false); setIsStandalone(true); };
-    window.addEventListener('pwa-install-available', onAvailable);
-    window.addEventListener('pwa-installed', onInstalled);
-    window.addEventListener('appinstalled', onInstalled);
-    // Also check deferred prompt periodically for 5 seconds (in case it fires early)
-    let checks = 0;
-    const interval = setInterval(() => {
-      if (window.deferredPWAInstallPrompt) setHasPrompt(true);
-      checks++;
-      if (checks > 10) clearInterval(interval);
-    }, 500);
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener('pwa-install-available', onAvailable);
-      window.removeEventListener('pwa-installed', onInstalled);
-      window.removeEventListener('appinstalled', onInstalled);
-    };
-  }, []);
-
-  if (isStandalone || dismissed) return null;
-  // Only show if we have install prompt or on iOS where prompt doesn't exist
-  const isIos = isIosDevice();
-  const showForIos = isIos && !isIosPwaInstalled();
-  if (!hasPrompt && !showForIos) return null;
-
-  const dismiss = () => {
-    setDismissed(true);
-    try { sessionStorage.setItem('mynaaiPWAInstallDismissed', 'true'); } catch {}
-  };
-
-  return (
-    <section className={cx('push-setup-card', compact && 'push-setup-compact', 'push-setup-pwa')} aria-live="polite">
-      <span className="push-setup-icon"><Download size={compact ? 15 : 18} /></span>
-      <div className="push-setup-copy">
-        <strong>{isIos ? 'Install My Naai to your Home Screen' : 'Install My Naai app'}</strong>
-        <p>{isIos ? 'Required for notifications with buzzer when app is closed. Tap Share → Add to Home Screen.' : 'Get booking alerts with buzzer even when app is not in recent. Works offline too.'}</p>
-      </div>
-      <div className="push-setup-actions">
-        {notifyInstall ? <Button size="small" onClick={notifyInstall}><Download size={14} /> Install</Button> : <Button size="small" variant="secondary" onClick={() => { if (isIos) { /* iOS has no programmatic install */ } }}><Smartphone size={14} /> {isIos ? 'How to install' : 'Install'}</Button>}
-        <button type="button" className="permission-help-link" onClick={dismiss}>Not now</button>
-      </div>
-    </section>
-  );
-}
-
-
-// The single permission card on the login screen — replaces the old
-// three-card stack. One row per thing, one tap per browser popup:
-//   · notifications → the browser's own Allow popup (required to sign in)
-//   · location      → the browser's own Allow popup (optional)
-//   · buzzer        → plays the real booking buzz so the user can hear it
-// A blocked permission cannot be re-asked by a browser, so instead of another
-// modal the fix is inline: exact steps for the detected browser plus a one-tap
-// "I allowed — Check" that re-reads the real permission. The card also
-// re-checks itself whenever the tab regains focus, so fixing the setting in
-// the browser and coming back updates it without any tap at all. When
-// notifications are on and location is settled, the card removes itself and
-// the login form is all that is left.
-function LoginPermissionsPanel({ onPushToken, onLocated }) {
-  const [notif, setNotif] = useState({ state: 'checking', token: '' });
-  const [loc, setLoc] = useState('checking');
-  const [locDismissed, setLocDismissed] = useState(() => {
-    try { return sessionStorage.getItem('mynaaiLocationPromptDismissed') === 'true'; } catch { return false; }
-  });
-  const [busy, setBusy] = useState({ notif: false, loc: false, check: false });
-  const [soundTested, setSoundTested] = useState(false);
-  const [checkFailed, setCheckFailed] = useState(false);
-  const [showSteps, setShowSteps] = useState(false);
-  const [iosHelpOpen, setIosHelpOpen] = useState(false);
-  const [locHelpOpen, setLocHelpOpen] = useState(false);
-  const onPushTokenRef = useRef(onPushToken);
-  onPushTokenRef.current = onPushToken;
-  const onLocatedRef = useRef(onLocated);
-  onLocatedRef.current = onLocated;
-
-  const applyPushStatus = useCallback(result => {
-    setNotif({ state: result.state, token: result.token || '' });
-    if (result.state === 'enabled' && result.token) onPushTokenRef.current?.(result.token);
-    return result.state === 'enabled' && Boolean(result.token);
-  }, []);
-
-  const refreshNotif = useCallback(async ({ requestPermission = false } = {}) => {
-    if (requestPermission) {
-      try {
-        const token = await getPushToken({ requestPermission: true });
-        if (token) {
-          setNotif({ state: 'enabled', token });
-          onPushTokenRef.current?.(token);
-          return true;
-        }
-      } catch (askError) {
-        console.debug(getErrorMessage(askError, 'Notification permission request failed.'));
-      }
-    }
-    try {
-      return applyPushStatus(await getPushStatus());
+      const status = await getPushStatus();
+      setState(status.state);
+      if (status.state === 'enabled' && status.token) onTokenRef.current?.(status.token);
+      return status.state;
     } catch (statusError) {
-      console.debug(getErrorMessage(statusError, 'Could not check notification status.'));
-      setNotif({ state: 'unavailable', token: '' });
-      return false;
+      console.debug(getErrorMessage(statusError, 'Could not read the notification status.'));
+      setState('unavailable');
+      return 'unavailable';
     }
-  }, [applyPushStatus]);
-
-  const refreshLoc = useCallback(() => {
-    queryLocationPermission().then(setLoc).catch(() => setLoc('unsupported'));
   }, []);
 
-  useEffect(() => {
-    let active = true;
-    getPushStatus()
-      .then(result => { if (active) applyPushStatus(result); })
-      .catch(() => { if (active) setNotif({ state: 'unavailable', token: '' }); });
-    refreshLoc();
-    return () => { active = false; };
-  }, [applyPushStatus, refreshLoc]);
+  useEffect(() => { read(); }, [read]);
 
-  // The user leaves to change a setting in the browser and comes back: pick the
-  // new state up automatically instead of waiting for a tap.
+  // The browser's Permissions API fires the instant the user flips the setting
+  // in its own UI — the pill updates itself with no tap at all.
+  useEffect(() => watchNotificationPermission(() => { read(); }), [read]);
+
+  // Coming back from the browser settings: pick the new state up automatically.
   useEffect(() => {
     const recheck = () => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-      getPushStatus().then(result => { if (applyPushStatus(result)) setCheckFailed(false); }).catch(() => {});
-      refreshLoc();
+      read();
     };
     window.addEventListener('focus', recheck);
     document.addEventListener('visibilitychange', recheck);
@@ -939,240 +897,88 @@ function LoginPermissionsPanel({ onPushToken, onLocated }) {
       window.removeEventListener('focus', recheck);
       document.removeEventListener('visibilitychange', recheck);
     };
-  }, [applyPushStatus, refreshLoc]);
+  }, [read]);
 
-  // The browser's Permissions API fires the instant the user flips the
-  // notification setting in its own UI — refresh the row right away, before the
-  // tab even regains focus. This is what makes "I allowed it" reflect without a
-  // Check tap on browsers that report the change live.
-  useEffect(() => watchNotificationPermission(() => {
-    refreshNotif().then(enabled => { if (enabled) setCheckFailed(false); }).catch(() => {});
-  }), [refreshNotif]);
+  const needsIosInstall = isIosDevice() && !isIosPwaInstalled();
 
-  const enableNotifs = async () => {
-    setBusy(current => ({ ...current, notif: true }));
-    try { setCheckFailed(!(await refreshNotif({ requestPermission: true }))); } finally { setBusy(current => ({ ...current, notif: false })); }
-  };
-  const enableLoc = async () => {
-    setBusy(current => ({ ...current, loc: true }));
+  const tap = async () => {
+    setBusy(true);
     try {
-      const current = await getBrowserLocation();
-      if (current) {
-        setLoc('granted');
-        onLocatedRef.current?.(current);
-        return;
+      // The normal path: the browser has never been asked, so this tap IS the
+      // gesture the browser needs — its own Allow popup appears right here and
+      // sign in can continue immediately after Allow. Regular iPhone Safari
+      // has no such popup until installed, so it goes to the install gate.
+      if (state === 'needs-permission' && !needsIosInstall && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        const token = await getPushToken({ requestPermission: true });
+        if (token) {
+          onTokenRef.current?.(token);
+          setState('enabled');
+          return;
+        }
       }
-      setLoc((await queryLocationPermission()) === 'denied' ? 'denied' : 'prompt');
-    } finally { setBusy(current => ({ ...current, loc: false })); }
-  };
-  const checkNotif = async () => {
-    setBusy(current => ({ ...current, check: true }));
-    try { setCheckFailed(!(await refreshNotif())); } finally { setBusy(current => ({ ...current, check: false })); }
-  };
-  // Only for pages embedded inside another app/preview (never for a normal
-  // mynaai.in visit): browsers hide the permission popup inside embedded
-  // frames, so the one working path is a real browser tab.
-  const openStandalone = () => {
-    try { window.open(window.location.href, '_blank', 'noopener'); } catch (openError) { console.debug(getErrorMessage(openError, 'Could not open My Naai in a new tab.')); }
-  };
-  const checkLoc = () => refreshLoc();
-  const dismissLoc = () => {
-    setLocDismissed(true);
-    try { sessionStorage.setItem('mynaaiLocationPromptDismissed', 'true'); } catch { /* private mode: skip this session only */ }
-  };
-  const testBuzz = () => {
-    unlockBuzzer();
-    playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1 });
-    setSoundTested(true);
+      await read().catch(() => {});
+      // Everything else — blocked, iPhone install, or a retry state — opens
+      // the permission gate, which owns the exact fix for that state.
+      setGate({ open: true, state });
+    } finally { setBusy(false); }
   };
 
-  // First visits sometimes lose the race with the service worker: permission is
-  // granted but the token mint fails once. One quiet automatic retry (capped at
-  // two) closes that gap without the user having to notice or tap anything —
-  // this is the "grant permission → app syncs by itself" path.
-  const autoRetriedRef = useRef(0);
-  useEffect(() => {
-    if (notif.state !== 'unavailable' || autoRetriedRef.current >= 2) return undefined;
-    const timer = setTimeout(() => {
-      autoRetriedRef.current += 1;
-      refreshNotif();
-    }, 1800);
-    return () => clearTimeout(timer);
-  }, [notif.state, refreshNotif]);
-
-  const browser = detectBrowser();
-  const browserLabel = BROWSER_LABELS[browser] || BROWSER_LABELS.other;
-  const needsInstall = isIosDevice() && !isIosPwaInstalled();
-  const notifDone = notif.state === 'enabled';
-  const embeddedBlocked = notif.state === 'denied' && isEmbeddedFrame();
-  const showLoc = !locDismissed && (loc === 'prompt' || loc === 'denied');
-  if (notifDone && !showLoc) return null;
-
-  const notifCopy = {
-    checking: 'Checking this browser…',
-    enabled: 'Booking requests, confirmations and the salon buzzer will reach you here.',
-    'needs-permission': 'One tap opens your browser\u2019s Allow popup — choose Allow.',
-    denied: embeddedBlocked
-      ? 'This page is open inside another app, and browsers will not show the Allow popup here. Open My Naai in a normal browser tab to allow notifications.'
-      : `Blocked in ${browserLabel}. Tap Allow notifications — if nothing pops up, open How to allow.`,
-    unavailable: 'The browser allowed notifications — the last setup step did not finish. Tap Try again.',
-    unsupported: needsInstall
-      ? 'iPhone shows notifications only for apps on the Home Screen. Install My Naai first — it takes 20 seconds.'
-      : 'This browser cannot show web notifications. Use Chrome, Edge or Samsung Internet.',
-    unconfigured: 'Notifications are not set up for this build yet. Call 8380017393 for booking alerts on this device.',
-  }[notif.state] || 'Turn on booking alerts so requests and confirmations reach you.';
-
-  // The unblock steps stay collapsed behind "How to allow" so the card reads
-  // like a clean permission ask. They open on demand, and by themselves after
-  // a failed Allow/Check — the moment they are actually needed. The iPhone
-  // install steps and the embedded-page fix are the only path forward there,
-  // so those stay open.
-  const showNotifFix = !notifDone && (notif.state === 'denied' || needsInstall);
-  const fixOpen = Boolean(showNotifFix && (needsInstall || embeddedBlocked || showSteps || (checkFailed && notif.state === 'denied')));
-
-  let notifAction;
-  if (notif.state === 'checking') notifAction = <Spinner size={15} />;
-  else if (notifDone) notifAction = <span className="perm-chip perm-chip-on"><Check size={12} /> On</span>;
-  else if (needsInstall) notifAction = <span className="perm-chip perm-chip-warn">Install first</span>;
-  else if (embeddedBlocked) notifAction = (
-    <Button size="small" onClick={openStandalone}><ExternalLink size={13} /> Open My Naai in a new tab</Button>
-  );
-  else if (notif.state === 'needs-permission' || notif.state === 'denied') notifAction = (
-    <>
-      <Button size="small" onClick={enableNotifs} loading={busy.notif}><Bell size={13} /> Allow notifications</Button>
-      {notif.state === 'denied' && (
-        <button type="button" className="ghost-link" onClick={() => setShowSteps(value => !value)}>{fixOpen ? 'Hide steps' : 'How to allow'}</button>
-      )}
-    </>
-  );
-  else if (notif.state === 'unavailable') notifAction = <Button size="small" variant="secondary" onClick={enableNotifs} loading={busy.notif}>Try again</Button>;
-  else notifAction = <span className="perm-chip perm-chip-mute">{notif.state === 'unconfigured' ? 'Not set up' : 'Not supported'}</span>;
-
+  // 'unconfigured' (alerts not wired into this build yet) → hide the pill
+  // entirely; nothing actionable here and login never gates on it.
+  if (state === 'enabled' || state === 'unconfigured') return null;
+  if (state === 'checking') {
+    return <span className="install-auth-button login-action-loading" aria-live="polite"><Spinner size={13} /> Checking alerts…</span>;
+  }
+  const label = state === 'denied' ? 'Fix alerts' : 'Allow alerts';
   return (
-    <section className={cx('perm-panel', !notifDone && 'perm-panel-attention')} aria-live="polite">
-      <div className="perm-panel-head">
-        <BellRing size={15} />
-        <strong>{notifDone ? 'Booking alerts are on' : 'One-time setup · about 20 seconds'}</strong>
-        <span className="perm-panel-hint">{notifDone ? 'You are all set' : 'Notifications are required to sign in'}</span>
-      </div>
-
-      {!notifDone && (
-        <div className={cx('perm-row', notif.state === 'denied' && 'perm-row-attention')}>
-          <span className="perm-ico"><Bell size={15} /></span>
-          <div className="perm-copy">
-            <strong>Booking notifications <em className="perm-tag">Required</em></strong>
-            <p>{notifCopy}</p>
-          </div>
-          <div className="perm-actions">{notifAction}</div>
-        </div>
-      )}
-
-      {showNotifFix && fixOpen && (
-        <div className="perm-fix" role="note">
-          {needsInstall ? (
-            <>
-              <span className="perm-fix-label">How to install on iPhone (20 seconds):</span>
-              <ol className="ios-install-steps">
-                <li>Tap the <strong>Share</strong> button (the square with an arrow) at the bottom.</li>
-                <li>Choose <strong>Add to Home Screen</strong>, then <strong>Add</strong>.</li>
-                <li>Open My Naai from the Home Screen and tap <strong>Allow notifications</strong>.</li>
-              </ol>
-              {checkFailed && <p className="permission-gate-warn">Not detected yet. Make sure you opened My Naai from the Home Screen icon — not from Safari — then tap Check again.</p>}
-              <div className="perm-fix-actions">
-                <Button size="small" onClick={() => setIosHelpOpen(true)}><Smartphone size={13} /> Show me how</Button>
-                <Button size="small" variant="secondary" onClick={checkNotif} loading={busy.check}><Check size={13} /> I installed — Check</Button>
-              </div>
-            </>
-          ) : embeddedBlocked ? (
-            <>
-              <span className="perm-fix-label">Browsers hide the Allow popup inside embedded pages:</span>
-              <ol className="ios-install-steps">
-                <li>Tap <strong>Open My Naai in a new tab</strong> below — the app opens in a full browser tab.</li>
-                <li>Tap <strong>Allow notifications</strong> there and choose <strong>Allow</strong> in the browser popup.</li>
-                <li>Sign in from that tab — the popup cannot appear inside this embedded view.</li>
-              </ol>
-              <div className="perm-fix-actions">
-                <Button size="small" onClick={openStandalone}><ExternalLink size={13} /> Open My Naai in a new tab</Button>
-                <Button size="small" variant="secondary" onClick={checkNotif} loading={busy.check}><Check size={13} /> I allowed — Check</Button>
-                <a href="tel:8380017393">Need help? Call us</a>
-              </div>
-            </>
-          ) : (
-            <>
-              <span className="perm-fix-label">How to unblock notifications in {browserLabel} (a browser only asks once):</span>
-              <ol className="ios-install-steps">
-                {permissionSteps(browser, 'notifications').map(step => <li key={step}>{step}</li>)}
-              </ol>
-              {checkFailed && (
-                <div className="permission-gate-warn">
-                  <p>Still blocked. The site must be exactly <strong>{siteHost()}</strong> and the setting must be <strong>Notifications</strong> — not Location.</p>
-                  <p>Then tap <strong>Reload page</strong> — some browsers need one fresh load to see the change.{androidAppNotificationHint(browser)}</p>
-                </div>
-              )}
-              <div className="perm-fix-actions">
-                <Button size="small" onClick={checkNotif} loading={busy.check}><Check size={13} /> I allowed — Check</Button>
-                <button type="button" className="ghost-link" onClick={() => window.location.reload()}>Reload page</button>
-                <a href="tel:8380017393">Need help? Call us</a>
-              </div>
-            </>
-          )}
-        </div>
-      )}
-
-      {showLoc && (
-        <div className="perm-row perm-row-optional">
-          <span className="perm-ico"><MapPin size={15} /></span>
-          <div className="perm-copy">
-            <strong>Nearby salons <em className="perm-tag perm-tag-optional">Optional</em></strong>
-            <p>{loc === 'denied' ? 'Blocked — salons still show, just without distance.' : 'Share your location and salons sort by distance.'}</p>
-          </div>
-          <div className="perm-actions">
-            {loc === 'prompt' && <Button size="small" variant="secondary" onClick={enableLoc} loading={busy.loc}><MapPin size={13} /> Allow</Button>}
-            {loc === 'denied' && (
-              <>
-                <Button size="small" variant="secondary" onClick={() => setLocHelpOpen(true)}>How to allow</Button>
-                <button type="button" className="ghost-link" onClick={checkLoc}>Check again</button>
-              </>
-            )}
-            <button type="button" className="ghost-link" onClick={dismissLoc}>Skip</button>
-          </div>
-        </div>
-      )}
-
-      <div className="perm-row perm-row-sound">
-        <span className="perm-ico"><Volume2 size={15} /></span>
-        <div className="perm-copy">
-          <strong>Buzzer sound + vibration</strong>
-          <p>{soundTested ? 'The booking buzz works on this device.' : 'Hear the booking buzz now — it plays and vibrates once.'}</p>
-        </div>
-        <div className="perm-actions">
-          {soundTested
-            ? <span className="perm-chip perm-chip-on"><Check size={12} /> Works</span>
-            : <Button size="small" variant="secondary" onClick={testBuzz}><Volume2 size={13} /> Test buzz</Button>}
-        </div>
-      </div>
-
-      <IosInstallHelp open={iosHelpOpen} onClose={() => { setIosHelpOpen(false); checkNotif(); }} />
-      <PermissionHelp open={locHelpOpen} kind="location" onClose={() => { setLocHelpOpen(false); refreshLoc(); }} />
-    </section>
+    <>
+      <button type="button" className={cx('install-auth-button', 'allow-alerts-button', state === 'denied' && 'allow-alerts-attention')} onClick={tap} disabled={busy} aria-live="polite">
+        {busy ? <Spinner size={14} /> : state === 'denied' ? <CircleAlert size={14} /> : <BellRing size={14} />} {label}
+      </button>
+      <PermissionGateModal
+        open={gate.open}
+        state={gate.state}
+        onClose={() => { setGate(current => ({ ...current, open: false })); read(); }}
+        onGranted={token => { if (token) { onTokenRef.current?.(token); setState('enabled'); } }}
+      />
+    </>
   );
 }
 
-
-function PermissionsPrompt({ compact = false, prominent = false, notifyInstall = null, onPushToken, onLocated }) {
-  const [locationDismissed, setLocationDismissed] = useState(() => {
-    try { return sessionStorage.getItem('mynaaiLocationPromptDismissed') === 'true'; } catch { return false; }
+// The guest shell and login page always offer a way to install — hiding
+// install UI until the browser fires beforeinstallprompt meant most
+// first-time mobile visitors never saw the easiest way to get background
+// alerts. With a captured prompt the button fires it directly; without one it
+// opens the shortest possible guide for the detected browser (iPhone gets the
+// Share → Add to Home Screen sheet). Already installed (standalone) →
+// nothing renders.
+function InstallAppButton({ onInstall = null }) {
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [standalone, setStandalone] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return Boolean(window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone);
   });
-  const dismissLocation = () => {
-    setLocationDismissed(true);
-    try { sessionStorage.setItem('mynaaiLocationPromptDismissed', 'true'); } catch { /* private mode: dismiss for this render only */ }
-  };
+  useEffect(() => {
+    const check = () => setStandalone(Boolean(window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone));
+    window.addEventListener('pwa-installed', check);
+    window.addEventListener('appinstalled', check);
+    return () => {
+      window.removeEventListener('pwa-installed', check);
+      window.removeEventListener('appinstalled', check);
+    };
+  }, []);
+  if (standalone) return null;
+  const iosNeedsGuide = isIosDevice() && !isIosPwaInstalled();
+  const open = () => { if (onInstall) onInstall(); else setHelpOpen(true); };
   return (
-    <div className={cx('permission-prompt-stack', compact && 'permission-prompt-compact')}>
-      <PWAInstallCard compact={compact} notifyInstall={notifyInstall} />
-      <NotificationSetupCard compact={compact} prominent={prominent} notifyInstall={notifyInstall} onEnabled={onPushToken} />
-      {!locationDismissed && <LocationSetupCard compact={compact} onLocated={onLocated} onDismiss={dismissLocation} />}
-    </div>
+    <>
+      <button type="button" className="install-auth-button install-login-button" onClick={open}>
+        <Download size={14} /> Install app
+      </button>
+      {iosNeedsGuide
+        ? <IosInstallHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+        : <InstallStepsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />}
+    </>
   );
 }
 
@@ -1189,7 +995,21 @@ export default function App() {
 
 function AppRoot() {
   const [session, setSession] = useState(readStoredSession);
-  const [route, setRoute] = useState(() => getRouteFromHash(session?.role));
+  const [route, setRoute] = useState(() => {
+    if (!session) {
+      // A first-visit deep link that needs an account goes through login and
+      // resumes afterwards; guest routes render the public shell directly.
+      // readLocationRoute also upgrades legacy `#/...` share links in place.
+      const raw = readLocationRoute();
+      if (raw.name && !PUBLIC_ROUTE_NAMES.includes(raw.name)) {
+        stashPendingRoute(`${window.location.pathname}${window.location.search}`);
+        return { name: 'login', params: {} };
+      }
+      if (!raw.name) return { name: 'home', params: {} };
+      return raw;
+    }
+    return getRouteFromPath(session.role);
+  });
   const [installPrompt, setInstallPrompt] = useState(() => {
     // Check if prompt was already captured in index.html
     if (typeof window !== 'undefined' && window.deferredPWAInstallPrompt) {
@@ -1270,14 +1090,16 @@ function AppRoot() {
     }
     const stored = saveSession(resolvedSession);
     setSession(stored);
+    // Guests who landed here from a salon page (Book now → login) go straight
+    // back to that exact salon; everyone else lands on their role home.
+    const resume = resolveResumeRoute(stored.role, popPendingRoute());
     const needsSalonProfile = stored.role === 'SALON' && stored.isNewSalon;
-    const nextRoute = needsSalonProfile ? 'editProfile' : stored.role === 'SALON' ? 'queue' : 'home';
-    const nextParams = needsSalonProfile ? { isOnboarding: 'true' } : {};
+    const nextRoute = needsSalonProfile ? 'editProfile' : resume?.name || (stored.role === 'SALON' ? 'queue' : 'home');
+    const nextParams = needsSalonProfile ? { isOnboarding: 'true' } : resume?.params || {};
     setRoute({ name: nextRoute, params: nextParams });
-    const query = new URLSearchParams(nextParams).toString();
-    window.history.replaceState({}, '', `#/${nextRoute}${query ? `?${query}` : ''}`);
+    window.history.replaceState({}, '', routeToPath(nextRoute, nextParams));
   }, []);
-  const logout = useCallback(() => { clearSession(); resetLiveUpdatesSocket(); setSession(null); setRoute({ name: 'home', params: {} }); window.history.replaceState({}, '', '#/'); }, []);
+  const logout = useCallback(() => { clearSession(); resetLiveUpdatesSocket(); setSession(null); setRoute({ name: 'home', params: {} }); window.history.replaceState({}, '', '/'); }, []);
   const updateSessionUser = useCallback((user, sessionPatch = {}) => setSession(current => {
     if (!current) return current;
     const nextUser = { ...current.user, ...user };
@@ -1288,28 +1110,40 @@ function AppRoot() {
     return { ...current, ...sessionPatch, user: nextUser };
   }), []);
   useEffect(() => {
-    const onRouteChange = () => setRoute(getRouteFromHash(session?.role));
+    const onRouteChange = () => {
+      // Guests: path edits outside the public routes (notification deep links,
+      // a pasted /bookings URL) are remembered and sent through login first.
+      if (!readStoredSession()) {
+        const raw = readLocationRoute();
+        if (!raw.name) { setRoute({ name: 'home', params: {} }); return; }
+        if (!PUBLIC_ROUTE_NAMES.includes(raw.name)) {
+          stashPendingRoute(`${window.location.pathname}${window.location.search}`);
+          setRoute({ name: 'login', params: {} });
+          window.history.replaceState({}, '', '/login');
+          return;
+        }
+        setRoute(raw);
+        return;
+      }
+      setRoute(getRouteFromPath(session?.role));
+    };
     window.addEventListener('popstate', onRouteChange);
-    window.addEventListener('hashchange', onRouteChange);
     return () => {
       window.removeEventListener('popstate', onRouteChange);
-      window.removeEventListener('hashchange', onRouteChange);
     };
   }, [session?.role]);
   useEffect(() => {
     if (session?.role !== 'SALON' || !session.isNewSalon || route.name === 'editProfile') return;
     const next = { name: 'editProfile', params: { isOnboarding: 'true' } };
     setRoute(next);
-    window.history.replaceState({}, '', '#/editProfile?isOnboarding=true');
+    window.history.replaceState({}, '', '/editProfile?isOnboarding=true');
   }, [route.name, session?.isNewSalon, session?.role]);
   const navigate = useCallback((screen, params = {}, options = {}) => {
     if (screen === -1) { window.history.back(); return; }
     const next = typeof screen === 'object' ? screen : { name: screen, params };
     setRoute(next);
-    const serializableParams = Object.fromEntries(Object.entries(next.params || {}).filter(([, value]) => value !== null && value !== undefined && typeof value !== 'object'));
-    const query = new URLSearchParams(serializableParams).toString();
-    const hash = `#/${next.name}${query ? `?${query}` : ''}`;
-    if (options.replace) window.history.replaceState({}, '', hash); else window.history.pushState({}, '', hash);
+    const path = routeToPath(next.name, next.params);
+    if (options.replace) window.history.replaceState({}, '', path); else window.history.pushState({}, '', path);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
   useEffect(() => {
@@ -1317,7 +1151,7 @@ function AppRoot() {
       if (['mynaai', 'mynaaiUser', 'userType', 'isLoggedIn', 'isNewSalon'].includes(event.key)) {
         const next = readStoredSession();
         setSession(next);
-        if (next) setRoute(getRouteFromHash(next.role));
+        if (next) setRoute(getRouteFromPath(next.role));
       }
     };
     const onSessionExpired = () => { deletePushToken().catch(error => console.debug(getErrorMessage(error, 'Could not clear the browser notification token.'))); resetLiveUpdatesSocket(); setSession(null); setRoute({ name: 'home', params: {} }); };
@@ -1340,14 +1174,101 @@ function AppRoot() {
       setInstallPrompt(null);
     }
   };
-  if (!session) return <AuthFlow onComplete={completeAuth} notifyInstall={installPrompt ? install : null} />;
+  // Re-arm per-booking reminders (30 minutes before the slot) that survived a
+  // page reload. OS-scheduled reminders (TimestampTrigger browsers) live in
+  // the service worker and need nothing here.
+  useEffect(() => { armStoredReminders(); }, []);
+
+  // The login page's back affordance in guest mode: return to exactly what
+  // the user was browsing (usually a salon page) instead of trapping them at
+  // an OTP form when they only came to look.
+  const backToBrowse = useCallback(() => {
+    // Only ever return to a page a guest may actually see: the stash can hold
+    // a gated deep link (someone pasted /bookings), and resuming that would
+    // bounce straight back to this same login page and lose the stash.
+    const hash = popPendingRoute();
+    const parsed = hash ? parseRoutePath(hash) : null;
+    const next = parsed && GUEST_ROUTE_NAMES.includes(parsed.name) ? parsed : { name: 'home', params: {} };
+    setRoute(next);
+    window.history.replaceState({}, '', routeToPath(next.name, next.params));
+  }, []);
+
+  if (!session) {
+    const showLogin = route.name === 'login' || !PUBLIC_ROUTE_NAMES.includes(route.name);
+    if (showLogin) return <AuthFlow onComplete={completeAuth} notifyInstall={installPrompt ? install : null} onBrowseBack={backToBrowse} initialRole={String(route.params?.role || '').toUpperCase() === 'SALON' ? 'SALON' : 'USER'} />;
+    return <GuestShell route={route} navigate={navigate} notifyInstall={installPrompt ? install : null} />;
+  }
   return <AppShell session={session} route={route} navigate={navigate} onLogout={logout} onSessionUpdate={updateSessionUser} notifyInstall={installPrompt ? install : null} />;
 }
 
-function AuthFlow({ onComplete, notifyInstall }) {
-  const [view, setView] = useState(() => localStorage.getItem('hasSeenOnboarding') === 'true' ? 'login' : 'onboarding');
-  const [slide, setSlide] = useState(0);
-  const [role, setRole] = useState('USER');
+// The pre-login shell: full salon discovery without an account. The header
+// keeps login + install one tap away; every account-gated action (booking
+// steps, bookmarks) funnels to login with the exact route remembered for
+// afterwards. No onboarding slides, no marketing wall — salons first.
+function GuestShell({ route, navigate, notifyInstall }) {
+  const [toast, setToast] = useState(null);
+  const notify = useCallback((type, message) => { setToast({ type, message }); window.clearTimeout(notify.timer); notify.timer = window.setTimeout(() => setToast(null), 4000); }, []);
+  const guestNavigate = useCallback((screen, params = {}, options = {}) => {
+    if (screen === -1) { window.history.back(); return; }
+    const name = typeof screen === 'object' ? screen.name : screen;
+    if (GUEST_ROUTE_NAMES.includes(name)) return navigate(name, params, options);
+    if (name !== 'login') {
+      // Login is required beyond this point — carry the current salon (or the
+      // discovery page) as the resume target unless the caller named one.
+      const current = route.name === 'salon' && route.params?.salonId
+        ? `/salon/${route.params.salonId}`
+        : '/';
+      stashPendingRoute(params.returnTo || current);
+    } else if (params.returnTo) {
+      stashPendingRoute(params.returnTo);
+    }
+    // Partner CTAs carry { role: 'SALON' } so the pair lands pre-selected on
+    // the login page (/login?role=SALON — shareable, bookmarkable).
+    return navigate('login', params, options);
+  }, [navigate, route.name, route.params?.salonId]);
+  // The public page runs as a small website: sticky navbar (logo → home, the
+  // three site routes, Install + Login), the routed page, then the footer
+  // that each screen renders itself. The navbar link labels match the hashes
+  // (#/, #/about, #/contact) so deep links and clicks resolve identically.
+  const currentPage = route.name === 'salon' ? '' : route.name;
+  const siteLinks = [
+    { name: 'home', label: 'Home' },
+    { name: 'about', label: 'About' },
+    // Owners find their route straight from the navbar — no hunting.
+    { name: 'partner', label: 'Salon partner' },
+    { name: 'contact', label: 'Contact' },
+  ];
+  return <div className="guest-shell">
+    <header className="site-navbar">
+      <button type="button" className="site-navbar-brand" onClick={() => guestNavigate('home')} aria-label="My Naai — home"><Brand /></button>
+      <nav className="site-nav-links" aria-label="Site navigation">
+        {siteLinks.map(link => (
+          <button key={link.name} type="button" className={cx(currentPage === link.name && 'active')} aria-current={currentPage === link.name ? 'page' : undefined} onClick={() => guestNavigate(link.name)}>{link.label}</button>
+        ))}
+      </nav>
+      <div className="site-navbar-actions">
+        <InstallAppButton onInstall={notifyInstall} />
+        <button className="guest-login-button" onClick={() => guestNavigate('login')}><CircleUserRound size={15} /> Login</button>
+      </div>
+    </header>
+    <main className="guest-content">
+      {route.name === 'partner'
+        ? <PartnerScreen navigate={guestNavigate} />
+        : route.name === 'salon'
+          ? <SalonDetailScreen session={null} params={route.params} navigate={guestNavigate} notify={notify} />
+          : ['about', 'faq', 'terms', 'privacy', 'contact'].includes(route.name)
+            ? <InfoScreen type={route.name} navigate={guestNavigate} />
+            : <HomeScreen session={null} navigate={guestNavigate} notify={notify} />}
+    </main>
+    {toast && <div className="toast-position"><div className={cx('toast', `toast-${toast.type || 'info'}`)} role="status"><span className="toast-mark">{toast.type === 'error' ? '!' : '✓'}</span><span>{toast.message}</span><button onClick={() => setToast(null)} aria-label="Dismiss"><X size={15} /></button></div></div>}
+  </div>;
+}
+
+function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole = 'USER' }) {
+  // No splash view anymore — discovery is public and login is only shown when
+  // the visitor actually needs an account, so the auth flow always opens here.
+  const [view, setView] = useState('login');
+  const [role, setRole] = useState(initialRole === 'SALON' ? 'SALON' : 'USER');
   const [salonAuthMode, setSalonAuthMode] = useState('login');
   const [salonRegistrationData, setSalonRegistrationData] = useState(null);
   const [step, setStep] = useState('phone');
@@ -1367,15 +1288,14 @@ function AuthFlow({ onComplete, notifyInstall }) {
     if (token) setPushToken(token);
   }, []);
 
-  // The splash AND the login screen both open the browser's own permission
-  // popups on the first tap (any tap counts as the user gesture) —
-  // notifications first (sign-in depends on them), then location while the tap
-  // is still fresh. A returning customer who lands straight on the login page —
-  // from Google, a bookmark or a notification — gets the exact same one-tap
-  // permission flow as the splash, instead of a card that only describes it.
+  // The login screen opens the browser's own permission popups on the first
+  // tap (any tap counts as the user gesture) — notifications first (sign-in
+  // depends on them), then location while the tap is still fresh. A customer
+  // who lands here — from a salon link, Google, a bookmark or a notification —
+  // gets the same one-tap permission flow, not a card that only describes it.
   // `askedBrowserPermissions` keeps it to one ask per visit.
   useEffect(() => {
-    if (view !== 'onboarding' && view !== 'login') return undefined;
+    if (view !== 'login') return undefined;
     const onGesture = () => { askBrowserPermissions(); };
     window.addEventListener('pointerdown', onGesture, { once: true });
     window.addEventListener('keydown', onGesture, { once: true });
@@ -1385,19 +1305,10 @@ function AuthFlow({ onComplete, notifyInstall }) {
     };
   }, [askBrowserPermissions, view]);
 
-  const onboarding = [
-    { image: '/assets/naai/naai3.jpg', kicker: 'THE PROFESSIONAL SPECIALISTS', title: 'Your next good look is closer than you think.', text: 'Find trusted barbers and salons around your location.' },
-    { image: '/assets/naai/naai2.jpeg', kicker: 'A LITTLE MORE YOU', title: 'Book the service. Skip the waiting room.', text: 'Haircut, beard, spa and more — choose a time that works for you.' },
-    { image: '/assets/naai/naai1.jpg', kicker: 'MADE FOR YOUR TIME', title: 'Good style, without the guesswork.', text: 'See availability, pick your specialist and arrive ready.' }
-  ];
-
-  const finishOnboarding = async () => {
-    localStorage.setItem('hasSeenOnboarding', 'true');
-    await askBrowserPermissions();
-    setView('login');
-  };
-
   const requirePushTokenWithGate = useCallback(async () => {
+    // 0) No alerts configured in this build → nothing to ask at all: sign-in
+    //    proceeds without a device token and the confusing gate never opens.
+    if (!isPushConfigured()) return '';
     // 1) A token from the setup card or an earlier step — nothing to ask.
     if (pushToken) return pushToken;
     try {
@@ -1540,11 +1451,10 @@ function AuthFlow({ onComplete, notifyInstall }) {
     } catch (createError) { setError(getErrorMessage(createError, 'Could not create your account.')); } finally { setBusy(false); }
   };
 
-  if (view === 'onboarding') return <div className="auth-page onboarding-page"><div className="onboarding-slide" style={{ backgroundImage: `url(${onboarding[slide].image})` }}><div className="auth-image-shade" /><div className="onboarding-top"><Brand light /><div className="onboarding-top-actions">{notifyInstall && <button className="install-auth-button" onClick={notifyInstall}><Download size={14} /> Install app</button>}<button className="skip-button" onClick={finishOnboarding}>Skip</button></div></div><div className="onboarding-copy"><span className="eyebrow">{onboarding[slide].kicker}</span><h1>{onboarding[slide].title}</h1><p>{onboarding[slide].text}</p><PermissionsPrompt compact notifyInstall={notifyInstall} onPushToken={token => { if (token) setPushToken(token); }} /><div className="onboarding-controls"><div className="onboarding-dots">{onboarding.map((item, index) => <button key={item.kicker} className={index === slide ? 'active' : ''} onClick={() => setSlide(index)} aria-label={`Slide ${index + 1}`} />)}</div>{slide === onboarding.length - 1 ? <Button size="large" className="lets-start-button" onClick={finishOnboarding}><Sparkles size={18} /> Let&apos;s Start</Button> : <button className="next-circle" onClick={() => setSlide(current => current + 1)} aria-label="Next"><ChevronRight size={22} /></button>}</div></div></div></div>;
 
   if (view === 'register') return <SalonRegistration initialData={salonRegistrationData} onBack={() => { setSalonRegistrationData(null); setView('login'); }} onComplete={onComplete} notifyInstall={notifyInstall} />;
 
-  return <div className="auth-page login-page"><div className="auth-visual"><div className="auth-visual-image" /><div className="auth-image-shade" /><div className="auth-visual-content"><Brand light /><div><span className="eyebrow">SALON & GROOMING, REIMAGINED</span><h1>Less waiting.<br /><em>More you.</em></h1><p>Book a great salon nearby and make the time yours.</p></div><div className="visual-quote"><span></span><p>Your time is valuable. We’re here to give it back.</p></div></div></div><div className="auth-form-panel"><div className="mobile-auth-brand"><Brand /></div><div className="auth-form-wrap"><span className="eyebrow">WELCOME TO MY NAAI</span><span className="login-hero-badge"><Sparkles size={12} /> {role === 'USER' ? 'Customer login' : 'Salon partner'}</span><h1>{step === 'phone' ? role === 'USER' ? 'Login to book your favorite salon' : 'Grow your salon with My Naai' : step === 'new-user' ? 'One last thing.' : 'Check your phone.'}</h1><p className="auth-subtitle">{step === 'phone' ? role === 'USER' ? 'Welcome back! Sign in to book appointments, track your visits, and get instant confirmations with buzzer alerts.' : 'Receive booking requests instantly with buzzer + vibration, even when app is in background. Works on Android, iOS, Chrome, Edge, Safari and more.' : step === 'new-user' ? `Let\u2019s create your My Naai profile for +91 ${mobile}.` : `Enter the 6-digit code sent to +91 ${mobile}.`}</p>{step === 'phone' && notifyInstall && <button className="install-auth-button install-login-button" onClick={notifyInstall}><Download size={14} /> Install app</button>}{!isIosDevice() && <PWAInstallCard compact notifyInstall={notifyInstall} />}<LoginPermissionsPanel onPushToken={token => { if (token) setPushToken(token); }} />{step === 'phone' && <div className="role-switch"><button className={role === 'USER' ? 'active' : ''} onClick={() => { setRole('USER'); setError(''); }}><CircleUserRound size={16} /> Customer</button><button className={role === 'SALON' ? 'active' : ''} onClick={() => { setRole('SALON'); setError(''); }}><Store size={16} /> Salon partner</button></div>}{error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}{step === 'phone' && <form onSubmit={requestOtp}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" autoComplete="tel" maxLength="10" value={mobile} onChange={event => setMobile(event.target.value.replace(/\D/g, ''))} placeholder="Enter 10-digit number" autoFocus /></div></Field><Button type="submit" loading={busy}>Continue with OTP <ChevronRight size={17} /></Button></form>}{step === 'otp' && <form onSubmit={verify}><Field label="One-time password"><input className="otp-input" inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="· · · · · ·" autoFocus /></Field><Button type="submit" loading={busy}>Verify code <ChevronRight size={17} /></Button><button className="resend-link" type="button" onClick={requestOtp}>Resend code</button><button className="back-form-link" type="button" onClick={() => { setStep('phone'); setOtp(''); setError(''); }}>Use a different number</button></form>}{step === 'new-user' && <form onSubmit={createAccount}><Field label="Your name"><input value={name} onChange={event => setName(event.target.value)} placeholder="How should we call you?" autoFocus /></Field><Button type="submit" loading={busy}>Create my account <ChevronRight size={17} /></Button></form>}</div><p className="auth-legal">By continuing, you agree to My Naai’s terms and privacy policy.</p></div>
+  return <div className="auth-page login-page"><div className="auth-visual"><div className="auth-visual-image" /><div className="auth-image-shade" /><div className="auth-visual-content"><Brand light /><div><span className="eyebrow">SALON & GROOMING, REIMAGINED</span><h1>Less waiting.<br /><em>More you.</em></h1><p>Book a great salon nearby and make the time yours.</p></div><div className="visual-quote"><span></span><p>Your time is valuable. We’re here to give it back.</p></div></div></div><div className="auth-form-panel"><div className="mobile-auth-brand"><Brand /></div><div className="auth-form-wrap">{onBrowseBack && <button className="login-back" onClick={onBrowseBack}><ChevronRight size={15} className="rotate-180" /> Browse salons</button>}<span className="eyebrow">WELCOME TO MY NAAI</span><span className="login-hero-badge"><Sparkles size={12} /> {role === 'USER' ? 'Customer login' : 'Salon partner'}</span><h1>{step === 'phone' ? role === 'USER' ? 'Login to book your favorite salon' : 'Grow your salon with My Naai' : step === 'new-user' ? 'One last thing.' : 'Check your phone.'}</h1><p className="auth-subtitle">{step === 'phone' ? role === 'USER' ? 'Sign in and book your next visit.' : 'Sign in and never miss a booking.' : step === 'new-user' ? `Let\u2019s create your My Naai profile for +91 ${mobile}.` : `Enter the 6-digit code sent to +91 ${mobile}.`}</p>{step === 'phone' && <div className="login-actions"><AllowAlertsButton onToken={token => { if (token) setPushToken(token); }} /><InstallAppButton onInstall={notifyInstall} /></div>}{step === 'phone' && <div className="role-switch"><button className={role === 'USER' ? 'active' : ''} onClick={() => { setRole('USER'); setError(''); }}><CircleUserRound size={16} /> Customer</button><button className={role === 'SALON' ? 'active' : ''} onClick={() => { setRole('SALON'); setError(''); }}><Store size={16} /> Salon partner</button></div>}{error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}{step === 'phone' && <form onSubmit={requestOtp}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" autoComplete="tel" maxLength="10" value={mobile} onChange={event => setMobile(event.target.value.replace(/\D/g, ''))} placeholder="Enter 10-digit number" autoFocus /></div></Field><Button type="submit" loading={busy}>Continue with OTP <ChevronRight size={17} /></Button></form>}{step === 'otp' && <form onSubmit={verify}><Field label="One-time password"><input className="otp-input" inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="· · · · · ·" autoFocus /></Field><Button type="submit" loading={busy}>Verify code <ChevronRight size={17} /></Button><button className="resend-link" type="button" onClick={requestOtp}>Resend code</button><button className="back-form-link" type="button" onClick={() => { setStep('phone'); setOtp(''); setError(''); }}>Use a different number</button></form>}{step === 'new-user' && <form onSubmit={createAccount}><Field label="Your name"><input value={name} onChange={event => setName(event.target.value)} placeholder="How should we call you?" autoFocus /></Field><Button type="submit" loading={busy}>Create my account <ChevronRight size={17} /></Button></form>}</div><p className="auth-legal">By continuing, you agree to My Naai’s <button type="button" onClick={() => softNavigate('/terms')}>Terms &amp; Conditions</button> and <button type="button" onClick={() => softNavigate('/privacy-policy')}>Privacy Policy</button>.</p></div>
       <PermissionGateModal open={permissionGate.open} onClose={() => setPermissionGate(current => ({ ...current, open: false }))} onGranted={handlePermissionGranted} state={permissionGate.state} />
     </div>;
 }
@@ -1646,7 +1556,7 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
   const confirmSignOut = async () => { if (await confirm(LOGOUT_CONFIRM)) onLogout?.(); };
   const nav = isSalon ? SALON_NAV : USER_NAV;
   const primaryRoutes = nav.map(item => item.name);
-  const utilityRoutes = ['detail', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'salonAbout', 'salonFaq', 'salonTerms', 'subscription', 'editProfile', 'bookingRequest'];
+  const utilityRoutes = ['detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'salonAbout', 'salonFaq', 'salonTerms', 'subscription', 'editProfile', 'bookingRequest'];
   const showBottomNav = primaryRoutes.includes(route.name);
   const [toast, setToast] = useState(null);
   const notify = useCallback((type, message) => { setToast({ type, message }); window.clearTimeout(notify.timer); notify.timer = window.setTimeout(() => setToast(null), 4000); }, []);
@@ -1853,12 +1763,12 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
       if (route.name === 'bookings') return <BookingsScreen {...props} />;
       if (route.name === 'products') return <ProductsScreen {...props} />;
       if (route.name === 'account') return <AccountScreen {...props} onLogout={onLogout} />;
-      if (route.name === 'detail') return <SalonDetailScreen {...props} params={route.params} />;
+      if (route.name === 'detail' || route.name === 'salon') return <SalonDetailScreen {...props} params={route.params} />;
       if (route.name === 'services') return <ServicesScreen {...props} params={route.params} />;
       if (route.name === 'schedule') return <ScheduleScreen {...props} params={route.params} />;
       if (route.name === 'notifications') return <NotificationsScreen {...props} />;
       if (route.name === 'delay') return <DelayRequestScreen {...props} params={route.params} />;
-      if (['about', 'faq', 'terms'].includes(route.name)) return <InfoScreen type={route.name} navigate={navForScreens} />;
+      if (['about', 'faq', 'terms', 'privacy', 'contact'].includes(route.name)) return <InfoScreen type={route.name} navigate={navForScreens} />;
       return <HomeScreen {...props} />;
     }
     if (route.name === 'queue') return <SalonQueueScreen {...props} />;
