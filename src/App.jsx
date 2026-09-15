@@ -982,8 +982,8 @@ export default function App() {
 
 function AppRoot() {
   const [session, setSession] = useState(readStoredSession);
-  // One-time startup permission setup (the old splash flow, see
-  // PermissionSplash) — guests see it exactly once before the public site.
+  // One-time startup splash — asks location only; alerts & install pop on
+  // the login page, never on home loading. Guests see it once per device.
   const [setupDone, setSetupDone] = useState(readSetupDone);
   const [route, setRoute] = useState(() => {
     if (!session) {
@@ -1184,10 +1184,10 @@ function AppRoot() {
   }, []);
 
   if (!session) {
-    // First visit → the startup permission setup (alerts/location/install),
-    // exactly like the old splash flow. It runs once per device and never
-    // again; the booking flow behind it is unchanged.
-    if (!setupDone) return <PermissionSplash notifyInstall={installPrompt ? install : null} onDone={() => { try { localStorage.setItem('hasSeenOnboarding', 'true'); } catch { /* private mode */ } setSetupDone(true); }} />;
+    // First visit → the one-time startup splash. It asks ONLY location (the
+    // home page's own permission); alerts & install pop on the login page,
+    // not on home loading. Once per device; the booking flow is unchanged.
+    if (!setupDone) return <PermissionSplash onDone={() => { try { localStorage.setItem('hasSeenOnboarding', 'true'); } catch { /* private mode */ } setSetupDone(true); }} />;
     const showLogin = route.name === 'login' || !PUBLIC_ROUTE_NAMES.includes(route.name);
     if (showLogin) return <AuthFlow onComplete={completeAuth} notifyInstall={installPrompt ? install : null} onBrowseBack={backToBrowse} />;
     return <GuestShell route={route} navigate={navigate} notifyInstall={installPrompt ? install : null} />;
@@ -1203,11 +1203,13 @@ function readSetupDone() {
   try { return localStorage.getItem('hasSeenOnboarding') === 'true'; } catch { return false; }
 }
 
-// One-time startup setup — the same permissions the old splash/onboarding
-// slides collected (alerts, location, install), kept to compact buttons so a
-// guest taps through in seconds. It shows exactly once (hasSeenOnboarding),
-// before the public site; the booking flow after it is untouched.
-function PermissionSplash({ onDone, notifyInstall }) {
+// One-time startup setup — asks ONLY the home page's own permission:
+// location (it powers distance + nearest-first sorting). Notifications and
+// install deliberately do NOT pop here — those browser asks live on the
+// login page (Allow alerts / Install pills) where they belong to the flow.
+// Shows exactly once (hasSeenOnboarding) before the public site; the booking
+// flow after it is untouched.
+function PermissionSplash({ onDone }) {
   const [locationState, setLocationState] = useState('idle'); // idle | busy | ok | denied
   const askLocation = async () => {
     setLocationState('busy');
@@ -1229,7 +1231,6 @@ function PermissionSplash({ onDone, notifyInstall }) {
           <h1>Book your salon.<br /><em>Skip the wait.</em></h1>
         </div>
         <div className="setup-splash-actions">
-          <div className="setup-splash-row"><AllowAlertsButton /></div>
           <div className="setup-splash-row">
             <button type="button" className={cx('push-setup-card', locationState === 'ok' && 'push-setup-granted', locationState === 'denied' && 'push-setup-retry')} onClick={locationState === 'busy' ? undefined : askLocation} disabled={locationState === 'busy'} aria-live="polite">
               <span className="push-setup-icon">{locationState === 'busy' ? <Spinner size={16} /> : <LocateFixed size={17} />}</span>
@@ -1240,9 +1241,8 @@ function PermissionSplash({ onDone, notifyInstall }) {
               {locationState === 'idle' && <span className="btn setup-row-cta">Allow</span>}
             </button>
           </div>
-          <div className="setup-splash-row"><InstallAppButton onInstall={notifyInstall} /></div>
           <Button className="setup-continue" onClick={onDone}>Start browsing <ArrowRight size={17} /></Button>
-          <p className="setup-splash-note">No login needed to browse — login comes only when you book.</p>
+          <p className="setup-splash-note">Alerts &amp; install are asked on the login page — only when you need them. Browsing needs no login.</p>
         </div>
       </div>
     </div>
