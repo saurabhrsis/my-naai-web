@@ -110,8 +110,10 @@ const USER_ROUTE_NAMES = ['home', 'bookings', 'products', 'account', 'detail', '
 const SALON_ROUTE_NAMES = ['queue', 'history', 'salonProducts', 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
 // Every route a visitor may open WITHOUT an account — salons are browsable
 // first, login only appears when they try to book (the client's headline
-// ask). `login` is handled by AppRoot itself, not by the guest shell.
-const GUEST_ROUTE_NAMES = ['home', 'salon'];
+// ask). The info pages are public too: the site footer links About/FAQ/Terms
+// and a website's legal pages must never sit behind a login. `login` is
+// handled by AppRoot itself, not by the guest shell.
+const GUEST_ROUTE_NAMES = ['home', 'salon', 'about', 'faq', 'terms'];
 const PUBLIC_ROUTE_NAMES = [...GUEST_ROUTE_NAMES, 'login'];
 
 function defaultRouteForRole(role) {
@@ -1233,7 +1235,9 @@ function GuestShell({ route, navigate, notifyInstall }) {
     <main className="guest-content">
       {route.name === 'salon'
         ? <SalonDetailScreen session={null} params={route.params} navigate={guestNavigate} notify={notify} />
-        : <HomeScreen session={null} navigate={guestNavigate} notify={notify} />}
+        : ['about', 'faq', 'terms'].includes(route.name)
+          ? <InfoScreen type={route.name} navigate={guestNavigate} />
+          : <HomeScreen session={null} navigate={guestNavigate} notify={notify} />}
     </main>
     {toast && <div className="toast-position"><div className={cx('toast', `toast-${toast.type || 'info'}`)} role="status"><span className="toast-mark">{toast.type === 'error' ? '!' : '✓'}</span><span>{toast.message}</span><button onClick={() => setToast(null)} aria-label="Dismiss"><X size={15} /></button></div></div>}
   </div>;

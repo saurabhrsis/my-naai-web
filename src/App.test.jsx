@@ -329,6 +329,34 @@ describe('Guest browsing flow', () => {
     expect(buttonByText('Browse salons')).not.toBeNull();
   });
 
+  it('gives the guest home a website footer with app badges and route links', async () => {
+    setHash('#/home');
+    await mount();
+
+    const footer = container.querySelector('.site-footer');
+    expect(footer).not.toBeNull();
+    expect(footer.querySelector('a[href*="play.google.com/store/apps/details?id=com.mynaai"]')).not.toBeNull();
+    expect(footer.textContent).toContain('COMING SOON'); // the iOS chip
+    expect(footer.querySelector('a[href="/about"], a[href="#/about"]')).not.toBeNull();
+    expect(footer.querySelector('a[href="/faq"], a[href="#/faq"]')).not.toBeNull();
+    expect(footer.querySelector('a[href="/terms"], a[href="#/terms"]')).not.toBeNull();
+  });
+
+  it('opens the website info pages to guests without a login gate', async () => {
+    setHash('#/about');
+    await mount();
+
+    expect(container.querySelector('.info-screen')).not.toBeNull();
+    expect(container.textContent).toContain('About My Naai');
+    expect(container.querySelector('.auth-page')).toBeNull();
+    expect(container.querySelector('.site-footer')).not.toBeNull();
+
+    await act(async () => { window.location.hash = '#/faq'; });
+    await flush();
+    expect(container.textContent).toContain('Frequently asked questions');
+    expect(container.querySelector('.auth-page')).toBeNull();
+  });
+
   it('returns to the salon page when the guest backs out of logging in', async () => {
     setHash('#/salon/salon-9');
     await mount();

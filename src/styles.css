@@ -731,6 +731,35 @@ img { display: block; max-width: 100%; }
 .guest-login-button:active { transform: scale(.97); }
 .guest-content { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 14px max(15px, var(--safe-right)) calc(24px + var(--safe-bottom)) max(15px, var(--safe-left)); }
 
+/* Website-style footer on the public pages (home #/, salon page, About/FAQ /
+   Terms). Dark-compact on phones; the top row splits on wide screens. All
+   links are hash routes, so they work identically for guests and signed-in
+   customers. */
+.site-footer { margin: 26px 0 0; padding: 22px 4px calc(20px + var(--safe-bottom)); border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 16px; }
+.info-screen .site-footer { padding-bottom: 8px; }
+.site-footer-top { display: flex; flex-direction: column; gap: 14px; }
+.site-footer-brand strong { display: block; color: var(--white); font-size: 16px; font-weight: 800; letter-spacing: -.02em; }
+.site-footer-brand p { margin: 3px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.site-footer-apps { display: flex; flex-wrap: wrap; gap: 9px; }
+.store-badge { display: inline-flex; align-items: center; gap: 9px; padding: 9px 13px; border: 1px solid var(--line-strong); border-radius: 12px; background: #191d1d; color: var(--white); text-decoration: none; }
+.store-badge:active, .store-badge:hover { border-color: var(--gold); }
+.store-badge span { display: flex; flex-direction: column; line-height: 1.25; }
+.store-badge small { font-size: 8px; font-weight: 800; letter-spacing: .09em; color: var(--muted); }
+.store-badge strong { font-size: 12px; font-weight: 700; }
+.store-badge-soon { border-style: dashed; opacity: .8; }
+.store-badge-soon small { color: var(--gold); }
+.site-footer-webnote { display: flex; align-items: flex-start; gap: 7px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.site-footer-webnote svg { flex: none; margin-top: 1px; }
+.site-footer-links { display: flex; flex-wrap: wrap; column-gap: 16px; row-gap: 6px; }
+.site-footer-links a { color: var(--muted-light); font-size: 11px; font-weight: 600; text-decoration: none; }
+.site-footer-links a:hover { color: var(--gold); }
+.site-footer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #5a6363; font-size: 10px; }
+.site-footer-bottom a { color: #5a6363; text-decoration: none; }
+.site-footer-bottom a:hover { color: var(--gold); }
+@media (min-width: 900px) {
+  .site-footer-top { flex-direction: row; align-items: flex-start; justify-content: space-between; }
+}
+
 /* Salon editor and subscription */
 .subscription-gate-shell { display: block; }
 /* The gate hides .mobile-shell-bar, so this element clears the status bar and the

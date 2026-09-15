@@ -38,6 +38,8 @@ Login is only ever required at **booking intent**: tapping **Book now** on a sal
 
 Every salon has its own shareable link: `#/salon/<salonId>`, produced and consumed by `parseRouteHash()`/`routeToHash()` in `src/App.jsx`. The **Share** affordances (salon card footer, salon page header) use the native share sheet where available and copy to the clipboard otherwise. A guest opening a shared link lands directly on that salon's page — per-salon discovery links are a marketing channel, so they must never hit a login gate.
 
+The site stays route-based like any website: home is `#/` (with `#/home` as an alias), and the informational pages `#/about`, `#/faq`, `#/terms` are public too (no login gate) so the footer can link them for everyone. All public pages end in the website footer (`SiteFooter` in `src/components/UserScreens.jsx`): brand, **Get the app** Google Play badge (`https://play.google.com/store/apps/details?id=com.mynaai`), a dashed **iOS — coming soon** badge with a note that the web app already works everywhere, quick links, the support number and the copyright bar.
+
 The web session uses these keys:
 
 | Key | Purpose |

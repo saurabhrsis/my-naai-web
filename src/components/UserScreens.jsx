@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Apple,
   ArrowRight,
   AlarmClock,
   Bell,
@@ -15,6 +16,7 @@ import {
   Clock3,
   Compass,
   ExternalLink,
+  Globe,
   Heart,
   HelpCircle,
   Info,
@@ -23,6 +25,7 @@ import {
   MapPin,
   Navigation,
   Phone,
+  Play,
   Search,
   Scissors,
   Send,
@@ -419,6 +422,7 @@ export function HomeScreen({ session, navigate, notify }) {
       {!loading && !location && <div className="inline-notice location-fallback-notice"><MapPin size={16} /> <span>Location is unavailable, so we are showing the available salon list without distance sorting.</span><button onClick={loadData}>Enable location</button></div>}
       {loading ? <div className="salon-grid">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} />)}</div> : visibleSalons.length ? <div className="salon-grid">{visibleSalons.map(salon => <SalonCard key={salon.id} salon={salon} saved={savedId === salon.id || salon.isSaved} onSelect={openSalon} onBook={bookSalon} onShare={item => shareSalon(item, notify)} onBookmark={bookmark} userLocation={location} />)}</div> : <EmptyState icon={Scissors} title="No salons found" message="Try another search or switch the salon type." />}
       <div className="home-trust-row"><ShieldCheck size={16} /><span>Verified listings</span><i /><Clock3 size={16} /><span>Book in minutes</span><i /><Heart size={16} /><span>Made for your time</span></div>
+      <SiteFooter />
     </div>
   );
 }
@@ -646,7 +650,7 @@ export function SalonDetailScreen({ session, params, navigate, notify }) {
     }
     navigate('services', { salon: details, salonId: salonRouteId });
   };
-  return <div className="screen detail-screen" aria-busy={loading || undefined}><PageHeader title={details.name} subtitle={`${details.genderType || 'UNISEX'} salon`} onBack={() => navigate(-1)} action={<div className="detail-header-actions"><button className="icon-btn ghost" onClick={() => shareSalon(details, notify)} aria-label="Share salon"><Share2 size={18} /></button><button className="icon-btn ghost" onClick={() => window.open(`tel:${details.phoneNumber || ''}`)} aria-label="Call salon"><Phone size={18} /></button></div>} /><div className="detail-hero"><div className="detail-gallery"><ImageWithFallback src={images[active]} fallback={USER_FALLBACK_IMAGE} alt={details.name} className="detail-main-image" onClick={() => setImageOpen(true)} /><button className="gallery-expand" onClick={() => setImageOpen(true)} aria-label="Open image"><ExternalLink size={16} /></button>{images.length > 1 && <div className="gallery-thumbs">{images.map((image, index) => <button key={`${image}-${index}`} className={index === active ? 'active' : ''} onClick={() => setActive(index)}><ImageWithFallback src={image} fallback={USER_FALLBACK_IMAGE} alt="" /></button>)}</div>}</div><div className="detail-overview"><div className="detail-title-row"><div><span className="salon-type">{details.genderType || 'UNISEX'} SALON</span><h2>{details.name}</h2></div></div><div className="detail-status-line"><StatusPill tone={status.isOpen ? 'open' : 'closed'} dot>{status.text}</StatusPill>{hours && <span><Clock3 size={14} /> {formatTime(hours.openingTime)} – {formatTime(hours.closingTime)}</span>}</div><button className="detail-location" onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${details.latitude},${details.longitude}`, '_blank', 'noopener,noreferrer')}><MapPin size={17} /><span>{details.address || 'Address unavailable'}</span><ExternalLink size={14} /></button><div className="detail-stat-grid"><div><Timer size={17} /><span><small>Current wait</small><strong>{details.waitTime || '10–15 min'}</strong></span></div><div><Scissors size={17} /><span><small>Services</small><strong>{details.services?.length || 0} to choose</strong></span></div></div><div className="arrival-note"><Zap size={16} /><span><strong>Before you arrive</strong> Come 10 minutes before your slot and follow the latest appointment status.</span></div></div></div><section className="detail-section"><div className="section-heading compact"><div><span className="eyebrow">WHAT THEY OFFER</span><h2>Services & specialists</h2></div><span className="muted-line">{details.barbers?.length || 0} specialists</span></div><div className="service-preview-grid">{(details.services || []).slice(0, 4).map(service => <div className="service-preview" key={service.serviceId || service.id}><Scissors size={15} /><span>{service.serviceName || service.name}</span><strong>{formatCurrency(service.price)}</strong></div>)}</div></section><div className="sticky-continue"><div><span>Ready when you are?</span><small>{isGuest ? 'Login once, then pick services & a time slot' : 'Select services and a time slot'}</small></div><Button onClick={continueToBooking}>{isGuest ? 'Login to book' : 'Continue'} <ArrowRight size={17} /></Button></div><Modal open={imageOpen} onClose={() => setImageOpen(false)} title={details.name} size="image"><ImageWithFallback src={images[active]} fallback={USER_FALLBACK_IMAGE} alt={details.name} className="modal-full-image" /></Modal></div>;
+  return <div className="screen detail-screen" aria-busy={loading || undefined}><PageHeader title={details.name} subtitle={`${details.genderType || 'UNISEX'} salon`} onBack={() => navigate(-1)} action={<div className="detail-header-actions"><button className="icon-btn ghost" onClick={() => shareSalon(details, notify)} aria-label="Share salon"><Share2 size={18} /></button><button className="icon-btn ghost" onClick={() => window.open(`tel:${details.phoneNumber || ''}`)} aria-label="Call salon"><Phone size={18} /></button></div>} /><div className="detail-hero"><div className="detail-gallery"><ImageWithFallback src={images[active]} fallback={USER_FALLBACK_IMAGE} alt={details.name} className="detail-main-image" onClick={() => setImageOpen(true)} /><button className="gallery-expand" onClick={() => setImageOpen(true)} aria-label="Open image"><ExternalLink size={16} /></button>{images.length > 1 && <div className="gallery-thumbs">{images.map((image, index) => <button key={`${image}-${index}`} className={index === active ? 'active' : ''} onClick={() => setActive(index)}><ImageWithFallback src={image} fallback={USER_FALLBACK_IMAGE} alt="" /></button>)}</div>}</div><div className="detail-overview"><div className="detail-title-row"><div><span className="salon-type">{details.genderType || 'UNISEX'} SALON</span><h2>{details.name}</h2></div></div><div className="detail-status-line"><StatusPill tone={status.isOpen ? 'open' : 'closed'} dot>{status.text}</StatusPill>{hours && <span><Clock3 size={14} /> {formatTime(hours.openingTime)} – {formatTime(hours.closingTime)}</span>}</div><button className="detail-location" onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${details.latitude},${details.longitude}`, '_blank', 'noopener,noreferrer')}><MapPin size={17} /><span>{details.address || 'Address unavailable'}</span><ExternalLink size={14} /></button><div className="detail-stat-grid"><div><Timer size={17} /><span><small>Current wait</small><strong>{details.waitTime || '10–15 min'}</strong></span></div><div><Scissors size={17} /><span><small>Services</small><strong>{details.services?.length || 0} to choose</strong></span></div></div><div className="arrival-note"><Zap size={16} /><span><strong>Before you arrive</strong> Come 10 minutes before your slot and follow the latest appointment status.</span></div></div></div><section className="detail-section"><div className="section-heading compact"><div><span className="eyebrow">WHAT THEY OFFER</span><h2>Services & specialists</h2></div><span className="muted-line">{details.barbers?.length || 0} specialists</span></div><div className="service-preview-grid">{(details.services || []).slice(0, 4).map(service => <div className="service-preview" key={service.serviceId || service.id}><Scissors size={15} /><span>{service.serviceName || service.name}</span><strong>{formatCurrency(service.price)}</strong></div>)}</div></section><SiteFooter /><div className="sticky-continue"><div><span>Ready when you are?</span><small>{isGuest ? 'Login once, then pick services & a time slot' : 'Select services and a time slot'}</small></div><Button onClick={continueToBooking}>{isGuest ? 'Login to book' : 'Continue'} <ArrowRight size={17} /></Button></div><Modal open={imageOpen} onClose={() => setImageOpen(false)} title={details.name} size="image"><ImageWithFallback src={images[active]} fallback={USER_FALLBACK_IMAGE} alt={details.name} className="modal-full-image" /></Modal></div>;
 }
 
 export function ServicesScreen({ params, navigate, notify }) {
@@ -910,7 +914,46 @@ const INFO_CONTENT = {
   terms: { title: 'Terms & conditions', eyebrow: 'PLEASE READ', intro: 'By using My Naai, you agree to use the service respectfully and provide accurate information when making an appointment.', sections: [{ title: 'Bookings', text: 'Appointments are requests until the salon confirms them. Please arrive at least 10 minutes before your selected time. Service duration and availability may vary.' }, { title: 'Cancellations', text: 'Cancel as early as possible so the salon can offer the slot to another customer. The salon may decline or change a request based on availability.' }, { title: 'Information', text: 'We use your account and location information to help show relevant salons and manage your bookings. Please keep your account details up to date.' }] },
 };
 
+// The Android app on Google Play — the web version tells visitors it exists.
+// iOS is "coming soon"; until then the full booking flow lives on this site.
+export const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.mynaai&hl=en';
+
+// Website-style footer for the public pages (home `#/`, salon, About/FAQ/
+// Terms). Hash-link anchors keep it fully route-based in both the guest shell
+// and the signed-in shell — no special casing, the router resolves them.
+export function SiteFooter() {
+  return (
+    <footer className="site-footer">
+      <div className="site-footer-top">
+        <div className="site-footer-brand">
+          <strong>My Naai</strong>
+          <p>Book your salon.<br />Skip the wait.</p>
+        </div>
+        <div className="site-footer-apps">
+          <a className="store-badge" href={PLAY_STORE_URL} target="_blank" rel="noopener noreferrer" aria-label="Get the My Naai app on Google Play">
+            <Play size={18} fill="currentColor" />
+            <span><small>GET THE APP</small><strong>Google Play</strong></span>
+          </a>
+          <span className="store-badge store-badge-soon" aria-disabled="true" title="The iOS app is coming soon — until then the web app works everywhere">
+            <Apple size={18} />
+            <span><small>COMING SOON</small><strong>iOS App Store</strong></span>
+          </span>
+        </div>
+      </div>
+      <p className="site-footer-webnote"><Globe size={14} /> Using an iPhone or a computer? Everything — browsing, booking, live updates — works right here on the web. Add this page to your Home Screen for the app feel.</p>
+      <nav className="site-footer-links" aria-label="Site links">
+        <a href="#/">Salons near you</a>
+        <a href="#/about">About</a>
+        <a href="#/faq">FAQ</a>
+        <a href="#/terms">Terms &amp; Conditions</a>
+        <a href="tel:8380017393">Support: 8380017393</a>
+      </nav>
+      <div className="site-footer-bottom"><span>© {new Date().getFullYear()} My Naai · All rights reserved</span><a href="#/">mynaai.in</a></div>
+    </footer>
+  );
+}
+
 export function InfoScreen({ type, navigate }) {
   const content = INFO_CONTENT[type] || INFO_CONTENT.about;
-  return <div className="screen info-screen"><PageHeader title={content.title} eyebrow={content.eyebrow} onBack={() => navigate(-1)} /><div className="info-intro"><Sparkles size={18} /><p>{content.intro || 'Everything you need to know about using My Naai.'}</p></div><div className="info-sections">{content.sections.map(section => <section key={section.title}><h2>{section.title}</h2>{section.text && <p>{section.text}</p>}{section.bullets && <ul>{section.bullets.map(item => <li key={item}><CheckCircle2 size={16} />{item}</li>)}</ul>}</section>)}</div><div className="info-contact"><span className="info-contact-icon"><Phone size={18} /></span><div><strong>Need more help?</strong><p>Call our support team on 8380017393</p></div><button onClick={() => window.open('tel:8380017393')}><ArrowRight size={17} /></button></div></div>;
+  return <div className="screen info-screen"><PageHeader title={content.title} eyebrow={content.eyebrow} onBack={() => navigate(-1)} /><div className="info-intro"><Sparkles size={18} /><p>{content.intro || 'Everything you need to know about using My Naai.'}</p></div><div className="info-sections">{content.sections.map(section => <section key={section.title}><h2>{section.title}</h2>{section.text && <p>{section.text}</p>}{section.bullets && <ul>{section.bullets.map(item => <li key={item}><CheckCircle2 size={16} />{item}</li>)}</ul>}</section>)}</div><div className="info-contact"><span className="info-contact-icon"><Phone size={18} /></span><div><strong>Need more help?</strong><p>Call our support team on 8380017393</p></div><button onClick={() => window.open('tel:8380017393')}><ArrowRight size={17} /></button></div><SiteFooter /></div>;
 }
