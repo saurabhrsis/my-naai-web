@@ -37,6 +37,7 @@ vi.mock('./lib/push', () => {
     setupPush: vi.fn(() => Promise.resolve({ token: '', unsubscribe: noop })),
     getPushToken: stub('getPushToken'),
     getPushStatus: stub('getPushStatus'),
+    isPushConfigured: vi.fn(() => true),
     deletePushToken: stub('deletePushToken'),
     displayNotification: noop,
     closeNotification: noop,
@@ -71,9 +72,8 @@ const flush = () => act(async () => { await new Promise(resolve => setTimeout(re
 beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
-  // Suites render as a returning device by default: the one-time startup
-  // permission splash is opt-tested in its own describe below.
-  localStorage.setItem('hasSeenOnboarding', 'true');
+  // No startup splash exists: every suite runs the real first-visit flow —
+  // guests land straight on home, where the page itself asks only location.
   setPath('/');
   // A successful empty discovery list by default — guest-flow tests override it.
   userSalonList.mockReset().mockResolvedValue({ status: 'SUCCESS', data: { salons: [] } });
@@ -334,6 +334,19 @@ describe('Guest browsing flow', () => {
     vi.clearAllMocks();
   });
 
+  it('lands a first-time guest straight on home — no permission splash ever', async () => {
+    setPath('/');
+    await mount();
+
+    // No splash/step screen of any kind before the guest home…
+    expect(container.querySelector('.setup-splash')).toBeNull();
+    expect(container.querySelector('.guest-shell')).not.toBeNull();
+    expect(container.querySelector('.auth-page')).toBeNull();
+    // …and the one home-screen permission — location — is asked by the home
+    // page itself right after load (browser geolocation popup).
+    expect(container.textContent).toContain('Golden Scissors');
+  });
+
   it('shows salons to a guest with no login wall', async () => {
     setPath('/');
     await mount();
@@ -507,6 +520,7 @@ describe('Login permission flow', () => {
     setPath('/login');
     vi.mocked(push.getPushStatus).mockReset().mockResolvedValue({ state: 'needs-permission', reason: '' });
     vi.mocked(push.getPushToken).mockReset().mockResolvedValue('');
+    vi.mocked(push.isPushConfigured).mockReset().mockReturnValue(true);
     vi.mocked(push.isEmbeddedFrame).mockReset().mockReturnValue(false);
   });
 
@@ -517,6 +531,28 @@ describe('Login permission flow', () => {
     container = null;
     delete globalThis.Notification;
     vi.clearAllMocks();
+  });
+
+  it('without alerts config, login skips the permission gate and sends the OTP', async () => {
+    // The alerts setup is not wired into this build (no Firebase env): there
+    // is nothing actionable for a user, so the pill hides, no "not set up"
+    // gate ever opens, and sign-in proceeds without a device token.
+    vi.mocked(push.isPushConfigured).mockReturnValue(false);
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'unconfigured', reason: 'Notifications have not been enabled for this build yet.' });
+    await mount();
+
+    expect(container.querySelector('.setup-splash')).toBeNull();
+    expect(container.textContent).not.toContain('not set up for web alerts');
+    expect(container.textContent).not.toContain('need a second try');
+    expect(buttonByText('Allow alerts')).toBeUndefined();
+
+    await act(async () => { typeMobile('9876543210'); });
+    await act(async () => { submitPhone(); });
+    await flush();
+
+    expect(push.getPushToken).not.toHaveBeenCalled();
+    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+    expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
   });
 
   it('asks the browser directly when Continue is tapped, then sends the OTP', async () => {
@@ -538,13 +574,13 @@ describe('Login permission flow', () => {
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
   });
 
-  it('asks for notification permission on the first tap of the login page, like the splash', async () => {
+  it('asks for notification permission on the first tap of the login page', async () => {
     setNotificationPermission('default');
     vi.mocked(push.getPushToken).mockResolvedValue('');
     await mount();
 
-    // A returning user lands straight on login (no splash) and taps anything —
-    // the browser's own permission popup opens, exactly like the splash did.
+    // Alerts belong to login: any tap on the page is the gesture that opens
+    // the browser's own permission popup here — never on the home screen.
     await act(async () => { window.dispatchEvent(new Event('pointerdown')); });
     await flush();
     expect(push.getPushToken).toHaveBeenCalledWith({ requestPermission: true });

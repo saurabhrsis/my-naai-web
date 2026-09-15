@@ -146,26 +146,8 @@ img { display: block; max-width: 100%; }
 /* One-time startup permission setup — the visual language of the original
    splash screen (full-bleed photo, shaded gradient, bottom-anchored copy),
    trimmed to the three permission buttons and one Continue. */
-.setup-splash { position: relative; min-height: var(--viewport-height); width: 100%; display: flex; align-items: stretch; justify-content: center; padding: max(10px, var(--safe-top)) max(10px, var(--safe-right)) max(10px, var(--safe-bottom)) max(10px, var(--safe-left)); background: var(--black); overflow: hidden; }
-.setup-splash-image { position: absolute; inset: 0; background: url('/assets/new_background.jpeg') center / cover; filter: saturate(.85); }
-.setup-splash-shade { position: absolute; inset: 0; z-index: 0; background: linear-gradient(180deg, rgba(5,7,7,.66) 0%, rgba(5,7,7,.22) 34%, rgba(5,7,7,.95) 78%); }
-.setup-splash-content { position: relative; z-index: 1; width: 100%; max-width: 480px; min-height: calc(var(--viewport-height) - 20px); display: flex; flex-direction: column; padding: max(18px, calc(var(--safe-top) + 8px)) 8px max(20px, calc(var(--safe-bottom) + 6px)); }
-.setup-splash-copy { margin-top: auto; margin-bottom: 18px; }
-.setup-splash-copy h1 { margin: 12px 0 0; color: var(--white); font-size: clamp(30px, 7vw, 44px); line-height: 1.04; letter-spacing: -.04em; }
-.setup-splash-copy h1 em { color: var(--gold); font-style: normal; }
-.setup-splash-actions { display: flex; flex-direction: column; gap: 9px; }
-.setup-splash-row > * { width: 100%; margin: 0; }
-.setup-splash-row .push-setup-card { width: 100%; margin: 0; text-align: left; cursor: pointer; }
-.setup-splash-row .push-setup-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.setup-splash-row .push-setup-copy strong { font-size: 12px; }
-.setup-splash-row .push-setup-copy small { color: var(--muted); font-size: 10px; }
-.setup-splash-row .install-auth-button { width: 100%; justify-content: center; padding: 12px 14px; }
 .setup-row-cta { flex: none; padding: 7px 13px; border-radius: 9px; background: var(--gold); color: #0d0e0e; font-size: 11px; font-weight: 800; }
 .setup-continue { width: 100%; min-height: 50px; border-radius: 14px; font-size: 15px; font-weight: 800; box-shadow: 0 14px 40px rgba(0,0,0,.35); }
-.setup-splash-note { margin: 10px 0 0; text-align: center; color: #aeb6b5; font-size: 11px; }
-@media (max-height: 620px) {
-  .setup-splash-copy h1 { font-size: clamp(24px, 5.6vw, 32px); }
-}
 .auth-image-shade { position: absolute; inset: 0; z-index: 0; background: linear-gradient(180deg, rgba(5, 7, 7, .72) 0%, rgba(5, 7, 7, .18) 38%, rgba(5, 7, 7, .92) 100%); }
 .install-auth-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 11px; border: 1px solid rgba(232, 185, 126, .4); border-radius: 30px; background: rgba(232, 185, 126, .12); color: var(--gold); font-size: 11px; font-weight: 700; white-space: nowrap; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .install-auth-button:hover { background: rgba(232, 185, 126, .2); }

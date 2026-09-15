@@ -32,7 +32,7 @@ A deployed production site should use HTTPS, serve the SPA fallback for hash rou
 
 ## 3. Startup and authentication
 
-There is deliberately no multi-second web splash screen — and no login wall. Browsing is public: a first-time visitor (or someone who simply signed out) lands on the **guest shell** — the same salon discovery list as signed-in customers, plus a `Login / Register` pill and the install pill in the top bar. Signing-in users resume their saved workspace immediately.
+There is deliberately no multi-second web splash screen — and no login wall. Browsing is public: a first-time visitor (or someone who simply signed out) lands **directly** on the **guest shell** — the same salon discovery list as signed-in customers, plus a `Login / Register` pill and the install pill in the top bar. No startup permission screen stands in front of home; the only permission home itself raises, right as the salon list loads, is the browser's **location** popup — it powers distances and nearest-first sorting (§7). Every other ask (notifications, install) belongs to the **login** page. Signing-in users resume their saved workspace immediately.
 
 Login is only ever required at **booking intent**: tapping **Book now** on a salon card, **Continue/Login to book** on the salon page, or the bookmark star stashes the exact page in `sessionStorage` (`mynaaiPendingRoute`, see `src/lib/pendingRoute.js`) and opens the login form. OTP completion pops the stash and resumes that exact page via `resolveResumeRoute()` (validated against the role's routes — a customer salon link means nothing to a partner account). The login page itself carries a thin **Browse salons** back-link that returns to the stashed page (never to a gated route — guests bounce off those), so the auth detour never feels like a trap.
 
@@ -198,7 +198,9 @@ Both paths use `useConfirm()`, never `window.confirm` — the native dialog is s
 
 ## 7. Browser permissions
 
-One notification permission does everything: sign-in pushes (the backend requires a `deviceToken`), booking alerts, and the 30-minute booking reminders (§3). It is asked compactly and always with a working next step:
+One notification permission does everything: sign-in pushes (the backend stores the browser's `deviceToken`), booking alerts, and the 30-minute booking reminders (§3). It is asked compactly and always with a working next step:
+
+- **Alerts depend on being configured.** The push wiring needs the Firebase web config + public VAPID key (see `docs/FIREBASE-WEB-PUSH.md` and `.env.example`). Until those values are set for a deployment, the portal deliberately yields nothing: no alerts pill or card on login, no permission gate, no "not set up" messages — sign-in simply proceeds without a device token, and everything else is unaffected. The moment the values land, the whole funnel below lights up with no code change.
 
 - **Never asked yet** — the login page's **Allow alerts** pill opens the browser's own popup from the tap; the same ask happens from the Account reminders switch.
 - **Blocked** — a browser will not show its prompt a second time, so the pill turns red as **Fix alerts** and opens the permission gate: step-by-step instructions for the actual browser in use (Chrome on Android, Chrome/Edge/Firefox/Opera desktop, Samsung Internet, Safari and Chrome on iOS, Safari desktop), an **I allowed it — Check** re-verification, a reload, plus the support number.

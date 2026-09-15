@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowRight,
   Bell,
   CalendarCheck2,
   Check,
@@ -12,7 +11,6 @@ import {
   HelpCircle,
   History,
   Info,
-  LocateFixed,
   LogOut,
   MapPin,
   Package,
@@ -30,7 +28,7 @@ import {
   RotateCw,
 } from 'lucide-react';
 import { api, clearSession, getToken, isPlanExpiredResponse, isUnknownSalonResponse, setToken } from './lib/api';
-import { closeNotification, deletePushToken, displayNotification, getNotificationRoute, getPushStatus, getPushToken, isActionableNotification, isEmbeddedFrame, normalizePushPayload, recordForegroundMessage, setupPush, watchNotificationPermission } from './lib/push';
+import { closeNotification, deletePushToken, displayNotification, getNotificationRoute, getPushStatus, getPushToken, isActionableNotification, isEmbeddedFrame, isPushConfigured, normalizePushPayload, recordForegroundMessage, setupPush, watchNotificationPermission } from './lib/push';
 import { playBuzzer, unlockBuzzer } from './lib/buzzer';
 import { resetLiveUpdatesSocket } from './lib/socket';
 import { armStoredReminders } from './lib/reminders';
@@ -191,6 +189,9 @@ function androidAppNotificationHint(browser) {
 }
 
 async function requirePushToken() {
+  // Unconfigured build (Firebase env not wired yet): never brick the flow —
+  // proceed without a device token; alerts come alive the moment it is set.
+  if (!isPushConfigured()) return '';
   const token = await getPushToken({ requestPermission: true });
   if (!token) {
     // A token can never be created in regular iOS Safari (web push only exists
@@ -204,7 +205,13 @@ async function requirePushToken() {
 
 function withDeviceToken(payload, token) {
   const value = typeof token === 'string' ? token.trim() : '';
-  if (!value) throw new Error(PUSH_REQUIRED_MESSAGE);
+  if (!value) {
+    // The backend accepts logins without a device token; alerts attach as
+    // soon as the push config is wired. A configured build keeps the strict
+    // requirement, so real permission problems still surface honestly.
+    if (isPushConfigured()) throw new Error(PUSH_REQUIRED_MESSAGE);
+    return { ...payload };
+  }
   return { ...payload, deviceToken: value };
 }
 
@@ -390,14 +397,18 @@ function PermissionHelp({ open, onClose, kind = 'notifications' }) {
 // does this on its own; its setup card and the Continue button own the prompts.
 async function promptBrowserPermissions() {
   let token = '';
-  try {
-    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      token = await getPushToken({ requestPermission: true });
+  if (isPushConfigured()) {
+    try {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        token = await getPushToken({ requestPermission: true });
+      }
+      if (!token) token = await getPushToken({ requestPermission: false });
+    } catch (error) {
+      console.debug(getErrorMessage(error, 'Browser notification permission was not available.'));
     }
-    if (!token) token = await getPushToken({ requestPermission: false });
-  } catch (error) {
-    console.debug(getErrorMessage(error, 'Browser notification permission was not available.'));
   }
+  // Location is separate from the alerts config — the home screen needs it
+  // either way, so it is still nudged from this gesture.
   try {
     // Respect an explicit Skip on the login card — the first tap that fires
     // this handler can be the Skip tap itself.
@@ -595,10 +606,8 @@ function PermissionGateModal({ open, onClose, onGranted, state: initialState = '
       </>
     );
   } else {
-    title = 'Notifications need a second try';
-    lede = state === 'unconfigured'
-      ? 'This build of My Naai is not set up for web alerts yet. You can still browse; call 8380017393 if you need booking alerts on this device.'
-      : 'Setup did not finish on this device — first visits sometimes need one more try.';
+    title = 'Alerts need one more try';
+    lede = 'Setting up notifications did not finish on this device. Tap Try again — if it keeps failing, we will take a call at 8380017393.';
     body = (
       <div className="permission-gate-actions">
         <Button onClick={allow} loading={busy}><RefreshCw size={16} /> Try again</Button>
@@ -630,8 +639,10 @@ function PermissionGateModal({ open, onClose, onGranted, state: initialState = '
 }
 
 // The backend requires deviceToken on login and registration. Ask for
-// notification permission on splash and login, with a clear Enable control,
-// and do not continue until a token exists. Location stays optional.
+// notification permission on the login page, with a clear Enable control,
+// and do not continue until a token exists — unless alerts are not yet
+// configured in this build (then the card/pill stay hidden and flows proceed
+// without a token). Location stays optional.
 function NotificationSetupCard({ compact = false, prominent = false, notifyInstall = null, onEnabled }) {
   const [status, setStatus] = useState('checking');
   const [reason, setReason] = useState('');
@@ -719,10 +730,9 @@ function NotificationSetupCard({ compact = false, prominent = false, notifyInsta
     try { await inspect(false); } finally { setBusy(false); }
   };
 
-  if (['checking', 'enabled'].includes(status)) return null;
+  if (['checking', 'enabled', 'unconfigured'].includes(status)) return null;
   const needsIosInstall = status === 'unsupported' && isIosDevice() && !isIosPwaInstalled();
   const copy = {
-    unconfigured: { title: 'Notifications are unavailable', body: reason || 'This build of My Naai is not set up for web alerts yet. You can still browse; call 8380017393 if you need booking alerts on this device.' },
     unsupported: { title: 'Notifications need a different setup', body: reason || 'This browser cannot deliver web notifications. Install My Naai to your home screen, or use Chrome, Edge or Samsung Internet.' },
     denied: { title: 'Notifications are blocked', body: 'My Naai sends booking requests, confirmations and delay alerts. Your browser has blocked them for this site — tap How to allow, then Check again. If Check keeps saying blocked, tap Reload once.' },
     'needs-permission': { title: 'Turn on booking alerts', body: 'Tap Allow so My Naai can send booking requests, confirmations and delay alerts. Your salon\u2019s buzzer needs this to reach you in background too.' },
@@ -912,7 +922,9 @@ function AllowAlertsButton({ onToken }) {
     } finally { setBusy(false); }
   };
 
-  if (state === 'enabled') return null;
+  // 'unconfigured' (alerts not wired into this build yet) → hide the pill
+  // entirely; nothing actionable here and login never gates on it.
+  if (state === 'enabled' || state === 'unconfigured') return null;
   if (state === 'checking') {
     return <span className="install-auth-button login-action-loading" aria-live="polite"><Spinner size={13} /> Checking alerts…</span>;
   }
@@ -982,9 +994,6 @@ export default function App() {
 
 function AppRoot() {
   const [session, setSession] = useState(readStoredSession);
-  // One-time startup splash — asks location only; alerts & install pop on
-  // the login page, never on home loading. Guests see it once per device.
-  const [setupDone, setSetupDone] = useState(readSetupDone);
   const [route, setRoute] = useState(() => {
     if (!session) {
       // A first-visit deep link that needs an account goes through login and
@@ -1184,10 +1193,6 @@ function AppRoot() {
   }, []);
 
   if (!session) {
-    // First visit → the one-time startup splash. It asks ONLY location (the
-    // home page's own permission); alerts & install pop on the login page,
-    // not on home loading. Once per device; the booking flow is unchanged.
-    if (!setupDone) return <PermissionSplash onDone={() => { try { localStorage.setItem('hasSeenOnboarding', 'true'); } catch { /* private mode */ } setSetupDone(true); }} />;
     const showLogin = route.name === 'login' || !PUBLIC_ROUTE_NAMES.includes(route.name);
     if (showLogin) return <AuthFlow onComplete={completeAuth} notifyInstall={installPrompt ? install : null} onBrowseBack={backToBrowse} />;
     return <GuestShell route={route} navigate={navigate} notifyInstall={installPrompt ? install : null} />;
@@ -1199,56 +1204,6 @@ function AppRoot() {
 // keeps login + install one tap away; every account-gated action (booking
 // steps, bookmarks) funnels to login with the exact route remembered for
 // afterwards. No onboarding slides, no marketing wall — salons first.
-function readSetupDone() {
-  try { return localStorage.getItem('hasSeenOnboarding') === 'true'; } catch { return false; }
-}
-
-// One-time startup setup — asks ONLY the home page's own permission:
-// location (it powers distance + nearest-first sorting). Notifications and
-// install deliberately do NOT pop here — those browser asks live on the
-// login page (Allow alerts / Install pills) where they belong to the flow.
-// Shows exactly once (hasSeenOnboarding) before the public site; the booking
-// flow after it is untouched.
-function PermissionSplash({ onDone }) {
-  const [locationState, setLocationState] = useState('idle'); // idle | busy | ok | denied
-  const askLocation = async () => {
-    setLocationState('busy');
-    try {
-      const current = await getBrowserLocation({ timeout: 15000 });
-      setLocationState(current ? 'ok' : 'denied');
-    } catch {
-      setLocationState('denied');
-    }
-  };
-  return (
-    <div className="setup-splash">
-      <div className="setup-splash-image" />
-      <div className="setup-splash-shade" />
-      <div className="setup-splash-content">
-        <Brand light />
-        <div className="setup-splash-copy">
-          <span className="eyebrow">WELCOME TO MY NAAI</span>
-          <h1>Book your salon.<br /><em>Skip the wait.</em></h1>
-        </div>
-        <div className="setup-splash-actions">
-          <div className="setup-splash-row">
-            <button type="button" className={cx('push-setup-card', locationState === 'ok' && 'push-setup-granted', locationState === 'denied' && 'push-setup-retry')} onClick={locationState === 'busy' ? undefined : askLocation} disabled={locationState === 'busy'} aria-live="polite">
-              <span className="push-setup-icon">{locationState === 'busy' ? <Spinner size={16} /> : <LocateFixed size={17} />}</span>
-              <span className="push-setup-copy">
-                <strong>{locationState === 'ok' ? 'Location found' : 'Show near-you salons first'}</strong>
-                <small>{locationState === 'ok' ? 'Nearest salons will sort by distance.' : locationState === 'denied' ? 'No problem — salons are still listed. Tap to retry.' : 'Optional. One tap for better distance sorting.'}</small>
-              </span>
-              {locationState === 'idle' && <span className="btn setup-row-cta">Allow</span>}
-            </button>
-          </div>
-          <Button className="setup-continue" onClick={onDone}>Start browsing <ArrowRight size={17} /></Button>
-          <p className="setup-splash-note">Alerts &amp; install are asked on the login page — only when you need them. Browsing needs no login.</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function GuestShell({ route, navigate, notifyInstall }) {
   const [toast, setToast] = useState(null);
   const notify = useCallback((type, message) => { setToast({ type, message }); window.clearTimeout(notify.timer); notify.timer = window.setTimeout(() => setToast(null), 4000); }, []);
@@ -1344,6 +1299,9 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null }) {
   }, [askBrowserPermissions, view]);
 
   const requirePushTokenWithGate = useCallback(async () => {
+    // 0) No alerts configured in this build → nothing to ask at all: sign-in
+    //    proceeds without a device token and the confusing gate never opens.
+    if (!isPushConfigured()) return '';
     // 1) A token from the setup card or an earlier step — nothing to ask.
     if (pushToken) return pushToken;
     try {
