@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowRight,
   Bell,
   CalendarCheck2,
   Check,
@@ -11,6 +12,7 @@ import {
   HelpCircle,
   History,
   Info,
+  LocateFixed,
   LogOut,
   MapPin,
   Package,
@@ -980,6 +982,9 @@ export default function App() {
 
 function AppRoot() {
   const [session, setSession] = useState(readStoredSession);
+  // One-time startup permission setup (the old splash flow, see
+  // PermissionSplash) — guests see it exactly once before the public site.
+  const [setupDone, setSetupDone] = useState(readSetupDone);
   const [route, setRoute] = useState(() => {
     if (!session) {
       // A first-visit deep link that needs an account goes through login and
@@ -1179,6 +1184,10 @@ function AppRoot() {
   }, []);
 
   if (!session) {
+    // First visit → the startup permission setup (alerts/location/install),
+    // exactly like the old splash flow. It runs once per device and never
+    // again; the booking flow behind it is unchanged.
+    if (!setupDone) return <PermissionSplash notifyInstall={installPrompt ? install : null} onDone={() => { try { localStorage.setItem('hasSeenOnboarding', 'true'); } catch { /* private mode */ } setSetupDone(true); }} />;
     const showLogin = route.name === 'login' || !PUBLIC_ROUTE_NAMES.includes(route.name);
     if (showLogin) return <AuthFlow onComplete={completeAuth} notifyInstall={installPrompt ? install : null} onBrowseBack={backToBrowse} />;
     return <GuestShell route={route} navigate={navigate} notifyInstall={installPrompt ? install : null} />;
@@ -1190,6 +1199,56 @@ function AppRoot() {
 // keeps login + install one tap away; every account-gated action (booking
 // steps, bookmarks) funnels to login with the exact route remembered for
 // afterwards. No onboarding slides, no marketing wall — salons first.
+function readSetupDone() {
+  try { return localStorage.getItem('hasSeenOnboarding') === 'true'; } catch { return false; }
+}
+
+// One-time startup setup — the same permissions the old splash/onboarding
+// slides collected (alerts, location, install), kept to compact buttons so a
+// guest taps through in seconds. It shows exactly once (hasSeenOnboarding),
+// before the public site; the booking flow after it is untouched.
+function PermissionSplash({ onDone, notifyInstall }) {
+  const [locationState, setLocationState] = useState('idle'); // idle | busy | ok | denied
+  const askLocation = async () => {
+    setLocationState('busy');
+    try {
+      const current = await getBrowserLocation({ timeout: 15000 });
+      setLocationState(current ? 'ok' : 'denied');
+    } catch {
+      setLocationState('denied');
+    }
+  };
+  return (
+    <div className="setup-splash">
+      <div className="setup-splash-image" />
+      <div className="setup-splash-shade" />
+      <div className="setup-splash-content">
+        <Brand light />
+        <div className="setup-splash-copy">
+          <span className="eyebrow">WELCOME TO MY NAAI</span>
+          <h1>Book your salon.<br /><em>Skip the wait.</em></h1>
+        </div>
+        <div className="setup-splash-actions">
+          <div className="setup-splash-row"><AllowAlertsButton /></div>
+          <div className="setup-splash-row">
+            <button type="button" className={cx('push-setup-card', locationState === 'ok' && 'push-setup-granted', locationState === 'denied' && 'push-setup-retry')} onClick={locationState === 'busy' ? undefined : askLocation} disabled={locationState === 'busy'} aria-live="polite">
+              <span className="push-setup-icon">{locationState === 'busy' ? <Spinner size={16} /> : <LocateFixed size={17} />}</span>
+              <span className="push-setup-copy">
+                <strong>{locationState === 'ok' ? 'Location found' : 'Show near-you salons first'}</strong>
+                <small>{locationState === 'ok' ? 'Nearest salons will sort by distance.' : locationState === 'denied' ? 'No problem — salons are still listed. Tap to retry.' : 'Optional. One tap for better distance sorting.'}</small>
+              </span>
+              {locationState === 'idle' && <span className="btn setup-row-cta">Allow</span>}
+            </button>
+          </div>
+          <div className="setup-splash-row"><InstallAppButton onInstall={notifyInstall} /></div>
+          <Button className="setup-continue" onClick={onDone}>Start browsing <ArrowRight size={17} /></Button>
+          <p className="setup-splash-note">No login needed to browse — login comes only when you book.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GuestShell({ route, navigate, notifyInstall }) {
   const [toast, setToast] = useState(null);
   const notify = useCallback((type, message) => { setToast({ type, message }); window.clearTimeout(notify.timer); notify.timer = window.setTimeout(() => setToast(null), 4000); }, []);

@@ -71,6 +71,9 @@ const flush = () => act(async () => { await new Promise(resolve => setTimeout(re
 beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
+  // Suites render as a returning device by default: the one-time startup
+  // permission splash is opt-tested in its own describe below.
+  localStorage.setItem('hasSeenOnboarding', 'true');
   setPath('/');
   // A successful empty discovery list by default — guest-flow tests override it.
   userSalonList.mockReset().mockResolvedValue({ status: 'SUCCESS', data: { salons: [] } });
