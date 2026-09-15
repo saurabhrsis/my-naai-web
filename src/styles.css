@@ -783,6 +783,15 @@ img { display: block; max-width: 100%; }
 .site-footer-grid { display: grid; grid-template-columns: 1fr; gap: 22px; }
 .site-footer-brand strong { display: block; color: var(--white); font-size: 17px; font-weight: 800; letter-spacing: -.02em; }
 .site-footer-brand p { margin: 3px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.store-badges { display: flex; flex-wrap: wrap; gap: 9px; margin: 12px 0; }
+.store-badge { display: inline-flex; align-items: center; gap: 10px; padding: 9px 13px; background: #0b0d0c; border: 1px solid rgba(232, 185, 126, .38); border-radius: 12px; color: var(--white); text-decoration: none; line-height: 1; box-shadow: 0 1px 0 rgba(255,255,255,.05) inset; }
+a.store-badge:hover { border-color: var(--gold); background: #121512; }
+.store-badge-icon { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 9px; background: rgba(232, 185, 126, .14); color: var(--gold); flex: none; }
+.store-badge-text { display: flex; flex-direction: column; gap: 3px; text-align: left; }
+.store-badge-text small { color: var(--muted); font-size: 8.5px; font-weight: 700; letter-spacing: .16em; }
+.store-badge-text strong { color: var(--white); font-size: 13px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; }
+.store-badge > svg:last-child { color: var(--muted); }
+.store-badge-soon { opacity: .6; cursor: not-allowed; border-style: dashed; }
 .site-footer-apps { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 12px; }
 .site-footer-webnote { display: flex; align-items: flex-start; gap: 6px; margin: 12px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
 .site-footer-webnote svg { flex: none; margin-top: 1px; }
@@ -801,21 +810,24 @@ img { display: block; max-width: 100%; }
   .site-footer-grid { grid-template-columns: 1.6fr 1fr 1fr 1fr; }
 }
 
-/* ── Testimonials (above the footer on public pages) ── */
+/* ── Testimonials (above the footer on public pages): a swipeable carousel
+   with arrow controls + gentle auto-advance — any number of reviews works. */
 .testimonial-section { margin: 30px 0 0; }
-.testimonial-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 14px; }
-.testimonial-card { margin: 0; padding: 15px 15px 13px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; display: flex; flex-direction: column; gap: 8px; position: relative; }
+.testimonial-nav { display: flex; gap: 6px; }
+.testimonial-nav button { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; background: var(--card); border: 1px solid var(--line); border-radius: 50%; color: var(--muted-light); }
+.testimonial-nav button:hover { color: var(--gold); border-color: rgba(232, 185, 126, .4); }
+.testimonial-nav .rotate-180 { transform: rotate(180deg); }
+.testimonial-track { display: flex; gap: 12px; margin-top: 14px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; -ms-overflow-style: none; padding-bottom: 4px; }
+.testimonial-track::-webkit-scrollbar { display: none; }
+.testimonial-card { margin: 0; flex: 0 0 min(84vw, 320px); scroll-snap-align: start; padding: 15px 15px 13px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; display: flex; flex-direction: column; gap: 8px; position: relative; }
 .testimonial-quote { position: absolute; top: 12px; right: 13px; color: rgba(232, 185, 126, .35); }
 .testimonial-stars { display: inline-flex; gap: 2px; color: var(--gold); }
 .testimonial-card blockquote { margin: 0; color: #d7dbda; font-size: 12.5px; line-height: 1.55; }
 .testimonial-card figcaption { display: flex; flex-direction: column; gap: 1px; margin-top: 2px; }
 .testimonial-card figcaption strong { color: var(--white); font-size: 12px; }
 .testimonial-card figcaption small { color: var(--muted); font-size: 10.5px; }
-@media (min-width: 560px) {
-  .testimonial-grid { grid-template-columns: repeat(2, 1fr); }
-}
 @media (min-width: 900px) {
-  .testimonial-grid { grid-template-columns: repeat(3, 1fr); }
+  .testimonial-card { flex-basis: calc((100% - 24px) / 3); }
 }
 
 /* ── Salon partner landing page (/salon-partner) ── */

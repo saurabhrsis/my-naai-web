@@ -382,9 +382,16 @@ describe('Guest browsing flow', () => {
     const nav = container.querySelector('.site-nav-links');
     expect(nav).not.toBeNull();
     const labels = Array.from(nav.querySelectorAll('button')).map(node => node.textContent.trim());
-    expect(labels).toEqual(['Home', 'About', 'Contact']);
+    expect(labels).toEqual(['Home', 'About', 'Salon partner', 'Contact']);
 
-    await act(async () => { Array.from(nav.querySelectorAll('button')).find(node => node.textContent === 'About').click(); });
+    // The partner tab is for owners — it opens the public partner page.
+    await act(async () => { Array.from(nav.querySelectorAll('button')).find(node => node.textContent === 'Salon partner').click(); });
+    await flush();
+    expect(currentPath()).toBe('/salon-partner');
+    expect(container.querySelector('.partner-screen')).not.toBeNull();
+    expect(container.querySelector('.site-nav-links button.active')?.textContent).toBe('Salon partner');
+
+    await act(async () => { Array.from(container.querySelector('.site-nav-links').querySelectorAll('button')).find(node => node.textContent === 'About').click(); });
     await flush();
     expect(currentPath()).toBe('/about');
     expect(container.querySelector('.info-screen')).not.toBeNull();
@@ -440,20 +447,26 @@ describe('Guest browsing flow', () => {
     expect(footer.textContent).toContain('Salon partners');
   });
 
-  it('shows a testimonial section right above the home footer', async () => {
+  it('shows a swipeable testimonial carousel right above the home footer', async () => {
     setPath('/');
     await mount();
 
     const section = container.querySelector('.testimonial-section');
     expect(section).not.toBeNull();
+    // Real carousel: a scrollable track plus prev/next buttons, so any number
+    // of reviews fits.
+    expect(section.querySelector('.testimonial-track')).not.toBeNull();
+    expect(section.querySelector('button[aria-label="Previous reviews"]')).not.toBeNull();
+    expect(section.querySelector('button[aria-label="Next reviews"]')).not.toBeNull();
     expect(container.querySelectorAll('.testimonial-card').length).toBeGreaterThanOrEqual(4);
     // It sits directly before the footer, social proof on the way out.
     const children = Array.from(container.querySelector('.home-screen').children).map(node => node.className);
-    expect(children.indexOf('testimonial-section')).toBeLessThan(children.indexOf('site-footer'));
     expect(children.indexOf('testimonial-section')).toBe(children.indexOf('site-footer') - 1);
-    // …and it mixes customer stories with salon-owner stories.
+    // Mixed voices, and NO locations on any review — role only.
     expect(section.textContent).toContain('Salon partner');
     expect(section.textContent).toContain('Customer');
+    expect(section.textContent).not.toContain('Nagpur');
+    expect(section.textContent).not.toContain('Sitabuldi');
   });
 
   it('opens the salon partner page and starts partner registration', async () => {
@@ -484,6 +497,15 @@ describe('Guest browsing flow', () => {
     expect(container.textContent).toContain('About My Naai');
     expect(container.querySelector('.auth-page')).toBeNull();
     expect(container.querySelector('.site-footer')).not.toBeNull();
+
+    // The About page reads like a company about page: story, vision, mission,
+    // values — and a dedicated About-our-app section with the store badges.
+    expect(container.textContent).toContain('Our vision');
+    expect(container.textContent).toContain('Our mission');
+    expect(container.textContent).toContain('What we value');
+    expect(container.textContent).toContain('About our app');
+    expect(container.querySelector('.info-screen .store-badges')).not.toBeNull();
+    expect(container.querySelector('.info-screen a[href*="play.google.com/store/apps/details?id=com.mynaai"]')).not.toBeNull();
 
     await act(async () => { goto('/faq'); });
     await flush();

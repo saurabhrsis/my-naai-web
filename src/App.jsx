@@ -1234,6 +1234,8 @@ function GuestShell({ route, navigate, notifyInstall }) {
   const siteLinks = [
     { name: 'home', label: 'Home' },
     { name: 'about', label: 'About' },
+    // Owners find their route straight from the navbar — no hunting.
+    { name: 'partner', label: 'Salon partner' },
     { name: 'contact', label: 'Contact' },
   ];
   return <div className="guest-shell">
