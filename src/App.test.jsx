@@ -141,6 +141,12 @@ describe('getRouteFromPath', () => {
     expect(getRouteFromPath('SALON')).toEqual({ name: 'queue', params: {} });
   });
 
+  it('maps the salon-partner URL segment onto the partner route', () => {
+    setPath('/salon-partner');
+    expect(getRouteFromPath(undefined)).toEqual({ name: 'partner', params: {} });
+    expect(routeToPath('partner')).toBe('/salon-partner');
+  });
+
   it('maps the privacy-policy URL segment onto the privacy route', () => {
     setPath('/privacy-policy');
     expect(getRouteFromPath(undefined)).toEqual({ name: 'privacy', params: {} });
@@ -413,17 +419,61 @@ describe('Guest browsing flow', () => {
     expect(buttonByText('Browse salons')).not.toBeNull();
   });
 
-  it('gives the guest home a website footer with app badges and route links', async () => {
+  it('gives the guest home a business-site footer: columns, badges, partner links', async () => {
     setPath('/');
     await mount();
 
     const footer = container.querySelector('.site-footer');
     expect(footer).not.toBeNull();
+    // App badges stay (Play Store live, iOS chip marked coming soon).
     expect(footer.querySelector('a[href*="play.google.com/store/apps/details?id=com.mynaai"]')).not.toBeNull();
-    expect(footer.textContent).toContain('COMING SOON'); // the iOS chip
+    expect(footer.textContent).toContain('COMING SOON');
+    // Three link columns — Explore, Salon partners, Support & legal.
     expect(footer.querySelector('a[href="/about"]')).not.toBeNull();
     expect(footer.querySelector('a[href="/faq"]')).not.toBeNull();
     expect(footer.querySelector('a[href="/terms"]')).not.toBeNull();
+    expect(footer.querySelector('a[href="/privacy-policy"]')).not.toBeNull();
+    expect(footer.querySelector('a[href="/salon-partner"]')).not.toBeNull();
+    expect(footer.querySelectorAll('a[href="/login?role=SALON"]').length).toBeGreaterThan(0);
+    expect(footer.querySelector('a[href="tel:8380017393"]')).not.toBeNull();
+    expect(footer.querySelector('a[href="mailto:support@mynaai.com"]')).not.toBeNull();
+    expect(footer.textContent).toContain('Salon partners');
+  });
+
+  it('shows a testimonial section right above the home footer', async () => {
+    setPath('/');
+    await mount();
+
+    const section = container.querySelector('.testimonial-section');
+    expect(section).not.toBeNull();
+    expect(container.querySelectorAll('.testimonial-card').length).toBeGreaterThanOrEqual(4);
+    // It sits directly before the footer, social proof on the way out.
+    const children = Array.from(container.querySelector('.home-screen').children).map(node => node.className);
+    expect(children.indexOf('testimonial-section')).toBeLessThan(children.indexOf('site-footer'));
+    expect(children.indexOf('testimonial-section')).toBe(children.indexOf('site-footer') - 1);
+    // …and it mixes customer stories with salon-owner stories.
+    expect(section.textContent).toContain('Salon partner');
+    expect(section.textContent).toContain('Customer');
+  });
+
+  it('opens the salon partner page and starts partner registration', async () => {
+    goto('/salon-partner');
+    await mount();
+
+    // The public landing page sells the opportunity — no login gate.
+    expect(container.querySelector('.partner-screen')).not.toBeNull();
+    expect(container.querySelector('.auth-page')).toBeNull();
+    expect(container.textContent).toContain('Your salon, fully booked.');
+    expect(container.textContent).toContain('Live in three steps');
+    expect(container.textContent).toContain('Register your salon');
+
+    // Tapping register lands on login with the Salon partner role preselected.
+    await act(async () => { buttonByText('Register your salon').click(); });
+    await flush();
+    expect(currentPath()).toBe('/login?role=SALON');
+    expect(container.querySelector('.auth-page')).not.toBeNull();
+    const roleButtons = Array.from(container.querySelectorAll('.role-switch button'));
+    expect(roleButtons.some(b => b.classList.contains('active') && b.textContent.includes('Salon partner'))).toBe(true);
   });
 
   it('opens the website info pages to guests without a login gate', async () => {

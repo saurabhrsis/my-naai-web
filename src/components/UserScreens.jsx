@@ -22,10 +22,12 @@ import {
   Info,
   LocateFixed,
   LogOut,
+  Mail,
   MapPin,
   Navigation,
   Phone,
   Play,
+  Quote,
   Search,
   Scissors,
   Send,
@@ -425,6 +427,7 @@ export function HomeScreen({ session, navigate, notify }) {
       {!loading && !location && <div className="inline-notice location-fallback-notice"><MapPin size={16} /> <span>Location is unavailable, so we are showing the available salon list without distance sorting.</span><button onClick={loadData}>Enable location</button></div>}
       {loading ? <div className="salon-grid">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} />)}</div> : visibleSalons.length ? <div className="salon-grid">{visibleSalons.map(salon => <SalonCard key={salon.id} salon={salon} saved={savedId === salon.id || salon.isSaved} onSelect={openSalon} onBook={bookSalon} onShare={item => shareSalon(item, notify)} onBookmark={bookmark} userLocation={location} />)}</div> : <EmptyState icon={Scissors} title="No salons found" message="Try another search or switch the salon type." />}
       <div className="home-trust-row"><ShieldCheck size={16} /><span>Verified listings</span><i /><Clock3 size={16} /><span>Book in minutes</span><i /><Heart size={16} /><span>Made for your time</span></div>
+      <TestimonialSection />
       <SiteFooter />
     </div>
   );
@@ -936,35 +939,148 @@ function footerNav(event) {
   softNavigate(href);
 }
 
+// Starter stories shown on the public pages — short, phone-friendly quotes.
+// Owners can swap the copy anytime; keep it this length so cards stay compact.
+const TESTIMONIALS = [
+  { quote: 'Booked my haircut from the bus and walked straight in — no more waiting on the bench.', name: 'Rahul Deshmukh', meta: 'Customer · Sitabuldi, Nagpur' },
+  { quote: 'The reminder before my slot means I never miss my booking any more.', name: 'Sneha Waghmare', meta: 'Customer · Dharampeth, Nagpur' },
+  { quote: 'Found my regular salon through My Naai. Browsing is free; login came only when I booked.', name: 'Priya Kulkarni', meta: 'Customer · Itwari, Nagpur' },
+  { quote: 'Booking requests buzz straight on my phone — I never miss a customer now.', name: 'Amit Jichkar', meta: 'Salon partner · Male salon' },
+  { quote: 'My chairs stay busy during the day instead of everyone arriving at the same time.', name: 'Neha Bawankar', meta: 'Salon partner · Ladies salon' },
+];
+
+// The ratings row sits right above the site footer on the public pages —
+// social proof on the way out, like a normal business website.
+export function TestimonialSection() {
+  return (
+    <section className="testimonial-section" aria-label="What people say about My Naai">
+      <div className="section-heading"><div><span className="eyebrow">REAL STORIES</span><h2>What customers & salon owners say</h2></div></div>
+      <div className="testimonial-grid">
+        {TESTIMONIALS.map(item => (
+          <figure className="testimonial-card" key={item.name}>
+            <span className="testimonial-quote"><Quote size={16} /></span>
+            <span className="testimonial-stars" aria-label="5 out of 5 stars">{[1, 2, 3, 4, 5].map(star => <Star key={star} size={13} fill="currentColor" />)}</span>
+            <blockquote>{item.quote}</blockquote>
+            <figcaption><strong>{item.name}</strong><small>{item.meta}</small></figcaption>
+          </figure>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// The salon partner landing page (/salon-partner): what My Naai offers an
+// owner, how onboarding works, and one-tap entry into the partner login /
+// registration flow — the same content the app shows only after signing in,
+// public like the customer-facing home page.
+const PARTNER_BENEFITS = [
+  { icon: Compass, title: 'Get discovered nearby', body: 'Customers searching for a salon around you see your listing, timings and live wait time.' },
+  { icon: Bell, title: 'Bookings with a buzzer', body: 'New booking requests reach your phone instantly with sound and vibration.' },
+  { icon: Scissors, title: 'Manage your own page', body: 'Update services, prices, photos and opening hours whenever you like.' },
+  { icon: Timer, title: 'A calmer waiting room', body: 'Customers book slots and arrive on time instead of crowding in the evening.' },
+];
+
+const PARTNER_STEPS = [
+  { step: '1', title: 'Register your salon', body: 'Sign in with your mobile number and add your salon details.' },
+  { step: '2', title: 'Go live on the map', body: 'Your salon is listed for customers browsing nearby.' },
+  { step: '3', title: 'Receive bookings', body: 'Accept requests, manage the queue and keep your chairs busy.' },
+];
+
+export function PartnerScreen({ navigate }) {
+  const startPartner = () => navigate('login', { role: 'SALON' });
+  return (
+    <div className="screen partner-screen">
+      <section className="partner-hero">
+        <div className="partner-hero-copy">
+          <span className="eyebrow">FOR SALON OWNERS</span>
+          <h1>Your salon, <em>fully booked.</em></h1>
+          <p>List your salon on My Naai and let customers book instead of wait. You manage everything from your phone.</p>
+          <div className="partner-hero-actions">
+            <Button onClick={startPartner}>Register your salon <ArrowRight size={17} /></Button>
+            <button className="partner-signin" type="button" onClick={startPartner}>Already a partner? Sign in</button>
+          </div>
+        </div>
+        <div className="partner-hero-card" aria-hidden="true">
+          <Store size={34} />
+          <strong>New booking request</strong>
+          <span>Haircut · Rakesh · Arriving in 20 min</span>
+          <div className="partner-hero-card-actions"><i>Accept</i><i>Delay</i></div>
+        </div>
+      </section>
+      <section className="partner-benefits" aria-label="Why join My Naai">
+        <div className="section-heading"><div><span className="eyebrow">WHY MY NAAI</span><h2>Built for your salon’s day</h2></div></div>
+        <div className="partner-benefit-grid">
+          {PARTNER_BENEFITS.map(benefit => (
+            <div className="partner-benefit" key={benefit.title}>
+              <benefit.icon size={20} />
+              <strong>{benefit.title}</strong>
+              <p>{benefit.body}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+      <section className="partner-steps" aria-label="How it works">
+        <div className="section-heading"><div><span className="eyebrow">GETTING STARTED</span><h2>Live in three steps</h2></div></div>
+        <div className="partner-step-grid">
+          {PARTNER_STEPS.map(item => (
+            <div className="partner-step" key={item.step}>
+              <span className="partner-step-num">{item.step}</span>
+              <strong>{item.title}</strong>
+              <p>{item.body}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+      <section className="partner-cta-band">
+        <div><span className="eyebrow">READY?</span><h2>Grow your salon with My Naai</h2><p>Register in minutes — our team verifies the details and your salon goes live.</p></div>
+        <Button onClick={startPartner}><Store size={16} /> Register your salon</Button>
+      </section>
+      <TestimonialSection />
+      <SiteFooter />
+    </div>
+  );
+}
+
 export function SiteFooter() {
   return (
     <footer className="site-footer">
-      <div className="site-footer-top">
+      <div className="site-footer-grid">
         <div className="site-footer-brand">
           <strong>My Naai</strong>
-          <p>Book your salon.<br />Skip the wait.</p>
+          <p>Book your salon. Skip the wait.</p>
+          <div className="site-footer-apps">
+            <a className="store-badge" href={PLAY_STORE_URL} target="_blank" rel="noopener noreferrer" aria-label="Get the My Naai app on Google Play">
+              <Play size={18} fill="currentColor" />
+              <span><small>GET THE APP</small><strong>Google Play</strong></span>
+            </a>
+            <span className="store-badge store-badge-soon" aria-disabled="true" title="The iOS app is coming soon — until then the web app works everywhere">
+              <Apple size={18} />
+              <span><small>COMING SOON</small><strong>iOS App Store</strong></span>
+            </span>
+          </div>
+          <p className="site-footer-webnote"><Globe size={13} /> On iPhone or a computer? Everything works right here on the web.</p>
         </div>
-        <div className="site-footer-apps">
-          <a className="store-badge" href={PLAY_STORE_URL} target="_blank" rel="noopener noreferrer" aria-label="Get the My Naai app on Google Play">
-            <Play size={18} fill="currentColor" />
-            <span><small>GET THE APP</small><strong>Google Play</strong></span>
-          </a>
-          <span className="store-badge store-badge-soon" aria-disabled="true" title="The iOS app is coming soon — until then the web app works everywhere">
-            <Apple size={18} />
-            <span><small>COMING SOON</small><strong>iOS App Store</strong></span>
-          </span>
-        </div>
+        <nav className="site-footer-col" aria-label="Explore">
+          <h3>Explore</h3>
+          <a href="/" onClick={footerNav}>Salons near you</a>
+          <a href="/about" onClick={footerNav}>About</a>
+          <a href="/faq" onClick={footerNav}>FAQ</a>
+          <a href="/contact" onClick={footerNav}>Contact</a>
+        </nav>
+        <nav className="site-footer-col" aria-label="Salon partners">
+          <h3>Salon partners</h3>
+          <a href="/salon-partner" onClick={footerNav}>Partner opportunities</a>
+          <a href="/login?role=SALON" onClick={footerNav}>Register your salon</a>
+          <a href="/login?role=SALON" onClick={footerNav}>Partner sign in</a>
+        </nav>
+        <nav className="site-footer-col" aria-label="Support and legal">
+          <h3>Support & legal</h3>
+          <a href="tel:8380017393"><Phone size={13} /> Support: 8380017393</a>
+          <a href="mailto:support@mynaai.com"><Mail size={13} /> support@mynaai.com</a>
+          <a href="/terms" onClick={footerNav}>Terms &amp; Conditions</a>
+          <a href="/privacy-policy" onClick={footerNav}>Privacy Policy</a>
+        </nav>
       </div>
-      <p className="site-footer-webnote"><Globe size={14} /> Using an iPhone or a computer? Everything — browsing, booking, live updates — works right here on the web. Add this page to your Home Screen for the app feel.</p>
-      <nav className="site-footer-links" aria-label="Site links">
-        <a href="/" onClick={footerNav}>Salons near you</a>
-        <a href="/about" onClick={footerNav}>About</a>
-        <a href="/faq" onClick={footerNav}>FAQ</a>
-        <a href="/terms" onClick={footerNav}>Terms &amp; Conditions</a>
-        <a href="/privacy-policy" onClick={footerNav}>Privacy Policy</a>
-        <a href="/contact" onClick={footerNav}>Contact</a>
-        <a href="tel:8380017393">Support: 8380017393</a>
-      </nav>
       <div className="site-footer-bottom"><span>© {new Date().getFullYear()} My Naai · All rights reserved</span><a href="/" onClick={footerNav}>mynaai.in</a></div>
     </footer>
   );

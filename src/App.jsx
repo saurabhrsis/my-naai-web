@@ -50,6 +50,7 @@ import {
   SalonDetailScreen,
   ScheduleScreen,
   ServicesScreen,
+  PartnerScreen,
 } from './components/UserScreens';
 import {
   BookingRequestScreen,
@@ -117,7 +118,7 @@ const SALON_ROUTE_NAMES = ['queue', 'history', 'salonProducts', 'account', 'noti
 // ask). The info pages are public too: the site footer links About/FAQ/Terms/
 // Privacy and a website's legal pages must never sit behind a login. `login`
 // is handled by AppRoot itself, not by the guest shell.
-const GUEST_ROUTE_NAMES = ['home', 'salon', 'about', 'faq', 'terms', 'privacy', 'contact'];
+const GUEST_ROUTE_NAMES = ['home', 'salon', 'about', 'faq', 'terms', 'privacy', 'contact', 'partner'];
 const PUBLIC_ROUTE_NAMES = [...GUEST_ROUTE_NAMES, 'login'];
 
 function defaultRouteForRole(role) {
@@ -1194,7 +1195,7 @@ function AppRoot() {
 
   if (!session) {
     const showLogin = route.name === 'login' || !PUBLIC_ROUTE_NAMES.includes(route.name);
-    if (showLogin) return <AuthFlow onComplete={completeAuth} notifyInstall={installPrompt ? install : null} onBrowseBack={backToBrowse} />;
+    if (showLogin) return <AuthFlow onComplete={completeAuth} notifyInstall={installPrompt ? install : null} onBrowseBack={backToBrowse} initialRole={String(route.params?.role || '').toUpperCase() === 'SALON' ? 'SALON' : 'USER'} />;
     return <GuestShell route={route} navigate={navigate} notifyInstall={installPrompt ? install : null} />;
   }
   return <AppShell session={session} route={route} navigate={navigate} onLogout={logout} onSessionUpdate={updateSessionUser} notifyInstall={installPrompt ? install : null} />;
@@ -1221,7 +1222,9 @@ function GuestShell({ route, navigate, notifyInstall }) {
     } else if (params.returnTo) {
       stashPendingRoute(params.returnTo);
     }
-    return navigate('login', {}, options);
+    // Partner CTAs carry { role: 'SALON' } so the pair lands pre-selected on
+    // the login page (/login?role=SALON — shareable, bookmarkable).
+    return navigate('login', params, options);
   }, [navigate, route.name, route.params?.salonId]);
   // The public page runs as a small website: sticky navbar (logo → home, the
   // three site routes, Install + Login), the routed page, then the footer
@@ -1247,21 +1250,23 @@ function GuestShell({ route, navigate, notifyInstall }) {
       </div>
     </header>
     <main className="guest-content">
-      {route.name === 'salon'
-        ? <SalonDetailScreen session={null} params={route.params} navigate={guestNavigate} notify={notify} />
-        : ['about', 'faq', 'terms', 'privacy', 'contact'].includes(route.name)
-          ? <InfoScreen type={route.name} navigate={guestNavigate} />
-          : <HomeScreen session={null} navigate={guestNavigate} notify={notify} />}
+      {route.name === 'partner'
+        ? <PartnerScreen navigate={guestNavigate} />
+        : route.name === 'salon'
+          ? <SalonDetailScreen session={null} params={route.params} navigate={guestNavigate} notify={notify} />
+          : ['about', 'faq', 'terms', 'privacy', 'contact'].includes(route.name)
+            ? <InfoScreen type={route.name} navigate={guestNavigate} />
+            : <HomeScreen session={null} navigate={guestNavigate} notify={notify} />}
     </main>
     {toast && <div className="toast-position"><div className={cx('toast', `toast-${toast.type || 'info'}`)} role="status"><span className="toast-mark">{toast.type === 'error' ? '!' : '✓'}</span><span>{toast.message}</span><button onClick={() => setToast(null)} aria-label="Dismiss"><X size={15} /></button></div></div>}
   </div>;
 }
 
-function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null }) {
+function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole = 'USER' }) {
   // No splash view anymore — discovery is public and login is only shown when
   // the visitor actually needs an account, so the auth flow always opens here.
   const [view, setView] = useState('login');
-  const [role, setRole] = useState('USER');
+  const [role, setRole] = useState(initialRole === 'SALON' ? 'SALON' : 'USER');
   const [salonAuthMode, setSalonAuthMode] = useState('login');
   const [salonRegistrationData, setSalonRegistrationData] = useState(null);
   const [step, setStep] = useState('phone');

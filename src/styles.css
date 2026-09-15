@@ -775,29 +775,85 @@ img { display: block; max-width: 100%; }
    Terms). Dark-compact on phones; the top row splits on wide screens. All
    links are hash routes, so they work identically for guests and signed-in
    customers. */
-.site-footer { margin: 26px 0 0; padding: 22px 4px calc(20px + var(--safe-bottom)); border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 16px; }
+/* ── Website footer (reference: multi-column business-site footer) ──
+   Brand + store badges, then three link columns — Explore / Salon partners /
+   Support & legal — and a bottom bar. Columns stack on phones. */
+.site-footer { margin: 26px 0 0; padding: 26px 4px calc(20px + var(--safe-bottom)); border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 20px; }
 .info-screen .site-footer { padding-bottom: 8px; }
-.site-footer-top { display: flex; flex-direction: column; gap: 14px; }
-.site-footer-brand strong { display: block; color: var(--white); font-size: 16px; font-weight: 800; letter-spacing: -.02em; }
+.site-footer-grid { display: grid; grid-template-columns: 1fr; gap: 22px; }
+.site-footer-brand strong { display: block; color: var(--white); font-size: 17px; font-weight: 800; letter-spacing: -.02em; }
 .site-footer-brand p { margin: 3px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
-.site-footer-apps { display: flex; flex-wrap: wrap; gap: 9px; }
-.store-badge { display: inline-flex; align-items: center; gap: 9px; padding: 9px 13px; border: 1px solid var(--line-strong); border-radius: 12px; background: #191d1d; color: var(--white); text-decoration: none; }
-.store-badge:active, .store-badge:hover { border-color: var(--gold); }
-.store-badge span { display: flex; flex-direction: column; line-height: 1.25; }
-.store-badge small { font-size: 8px; font-weight: 800; letter-spacing: .09em; color: var(--muted); }
-.store-badge strong { font-size: 12px; font-weight: 700; }
-.store-badge-soon { border-style: dashed; opacity: .8; }
-.store-badge-soon small { color: var(--gold); }
-.site-footer-webnote { display: flex; align-items: flex-start; gap: 7px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.site-footer-apps { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 12px; }
+.site-footer-webnote { display: flex; align-items: flex-start; gap: 6px; margin: 12px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
 .site-footer-webnote svg { flex: none; margin-top: 1px; }
-.site-footer-links { display: flex; flex-wrap: wrap; column-gap: 16px; row-gap: 6px; }
-.site-footer-links a { color: var(--muted-light); font-size: 11px; font-weight: 600; text-decoration: none; }
-.site-footer-links a:hover { color: var(--gold); }
-.site-footer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #5a6363; font-size: 10px; }
+.site-footer-col { display: flex; flex-direction: column; gap: 8px; }
+.site-footer-col h3 { margin: 0 0 4px; color: #8b9194; font-size: 10.5px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+.site-footer-col a { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-light); font-size: 11.5px; font-weight: 600; text-decoration: none; }
+.site-footer-col a:hover { color: var(--gold); }
+.site-footer-col a svg { color: var(--gold); flex: none; }
+.site-footer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); color: #5a6363; font-size: 10px; }
 .site-footer-bottom a { color: #5a6363; text-decoration: none; }
 .site-footer-bottom a:hover { color: var(--gold); }
+@media (min-width: 560px) {
+  .site-footer-grid { grid-template-columns: 1fr 1fr; }
+}
 @media (min-width: 900px) {
-  .site-footer-top { flex-direction: row; align-items: flex-start; justify-content: space-between; }
+  .site-footer-grid { grid-template-columns: 1.6fr 1fr 1fr 1fr; }
+}
+
+/* ── Testimonials (above the footer on public pages) ── */
+.testimonial-section { margin: 30px 0 0; }
+.testimonial-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 14px; }
+.testimonial-card { margin: 0; padding: 15px 15px 13px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; display: flex; flex-direction: column; gap: 8px; position: relative; }
+.testimonial-quote { position: absolute; top: 12px; right: 13px; color: rgba(232, 185, 126, .35); }
+.testimonial-stars { display: inline-flex; gap: 2px; color: var(--gold); }
+.testimonial-card blockquote { margin: 0; color: #d7dbda; font-size: 12.5px; line-height: 1.55; }
+.testimonial-card figcaption { display: flex; flex-direction: column; gap: 1px; margin-top: 2px; }
+.testimonial-card figcaption strong { color: var(--white); font-size: 12px; }
+.testimonial-card figcaption small { color: var(--muted); font-size: 10.5px; }
+@media (min-width: 560px) {
+  .testimonial-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (min-width: 900px) {
+  .testimonial-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* ── Salon partner landing page (/salon-partner) ── */
+.partner-screen { padding-top: 4px; }
+.partner-hero { display: grid; grid-template-columns: 1fr; gap: 18px; align-items: center; margin: 6px 0 4px; padding: 22px 18px; background: linear-gradient(155deg, #17211d 0%, #0b0f0d 70%); border: 1px solid var(--line); border-radius: 22px; overflow: hidden; }
+.partner-hero-copy h1 { margin: 8px 0 10px; color: var(--white); font-size: clamp(30px, 7vw, 46px); line-height: 1.02; letter-spacing: -.045em; }
+.partner-hero-copy h1 em { color: var(--gold); font-style: normal; }
+.partner-hero-copy p { margin: 0 0 16px; color: var(--muted-light); font-size: 13px; line-height: 1.6; max-width: 400px; }
+.partner-hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.partner-signin { background: none; border: 0; padding: 0; color: var(--gold); font-size: 12px; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.partner-hero-card { justify-self: center; width: min(260px, 100%); padding: 18px; background: #0e1211; border: 1px solid var(--line); border-radius: 18px; display: flex; flex-direction: column; gap: 6px; color: var(--muted-light); }
+.partner-hero-card svg { color: var(--gold); }
+.partner-hero-card strong { color: var(--white); font-size: 13px; }
+.partner-hero-card > span { font-size: 11.5px; }
+.partner-hero-card-actions { display: flex; gap: 8px; margin-top: 6px; }
+.partner-hero-card-actions i { font-style: normal; flex: 1; padding: 8px 0; border-radius: 10px; font-size: 11px; font-weight: 800; text-align: center; background: rgba(232, 185, 126, .16); color: var(--gold); }
+.partner-hero-card-actions i:last-child { background: rgba(255, 255, 255, .06); color: var(--muted-light); }
+.partner-benefits, .partner-steps { margin-top: 30px; }
+.partner-benefit-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 14px; }
+.partner-benefit { padding: 15px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; display: flex; flex-direction: column; gap: 6px; }
+.partner-benefit svg { color: var(--gold); }
+.partner-benefit strong { color: var(--white); font-size: 13px; }
+.partner-benefit p { margin: 0; color: var(--muted-light); font-size: 12px; line-height: 1.55; }
+.partner-step-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 14px; }
+.partner-step { position: relative; padding: 15px 15px 15px 60px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; display: flex; flex-direction: column; gap: 4px; }
+.partner-step-num { position: absolute; left: 15px; top: 15px; width: 32px; height: 32px; border-radius: 50%; background: rgba(232, 185, 126, .14); color: var(--gold); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; }
+.partner-step strong { color: var(--white); font-size: 13px; }
+.partner-step p { margin: 0; color: var(--muted-light); font-size: 12px; line-height: 1.55; }
+.partner-cta-band { margin-top: 30px; padding: 20px 18px; background: linear-gradient(135deg, rgba(232, 185, 126, .14), rgba(232, 185, 126, .05)); border: 1px solid rgba(232, 185, 126, .35); border-radius: 20px; display: flex; flex-direction: column; gap: 14px; }
+.partner-cta-band h2 { margin: 6px 0 4px; color: var(--white); font-size: 21px; letter-spacing: -.03em; }
+.partner-cta-band p { margin: 0; color: var(--muted-light); font-size: 12px; line-height: 1.55; }
+@media (min-width: 560px) {
+  .partner-benefit-grid { grid-template-columns: repeat(2, 1fr); }
+  .partner-step-grid { grid-template-columns: repeat(3, 1fr); }
+  .partner-cta-band { flex-direction: row; align-items: center; justify-content: space-between; }
+}
+@media (min-width: 900px) {
+  .partner-hero { grid-template-columns: 1.5fr 1fr; padding: 34px 30px; }
 }
 
 /* Salon editor and subscription */

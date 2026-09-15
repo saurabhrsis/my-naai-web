@@ -11,9 +11,10 @@
 // platform's equivalent (documented in docs/MY-NAAI-WEB-PORTAL.md).
 //
 // Segment aliases keep short stable route names inside the app while the
-// public URL reads properly: `privacy` lives at /privacy-policy.
-const ROUTE_TO_SEGMENT = { privacy: 'privacy-policy', home: '' };
-const SEGMENT_TO_ROUTE = { 'privacy-policy': 'privacy' };
+// public URL reads properly: `privacy` lives at /privacy-policy, the salon
+// partner landing page at /salon-partner.
+const ROUTE_TO_SEGMENT = { privacy: 'privacy-policy', partner: 'salon-partner', home: '' };
+const SEGMENT_TO_ROUTE = { 'privacy-policy': 'privacy', 'salon-partner': 'partner' };
 
 // Parse `window.location`-style input (a path, optionally with a query) into
 // the router's { name, params }. The salon screen consumes its id from the
