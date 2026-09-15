@@ -296,7 +296,9 @@ export function HomeScreen({ session, navigate, notify }) {
     };
 
     try {
-      const salonResult = await api.userSalonList(salonPayload);
+      // Guests get the token-free public list (same payload contract);
+      // signed-in customers keep the personalized one (saved-flag etc.).
+      const salonResult = await (session?.userId ? api.userSalonList(salonPayload) : api.userSalonListPublic(salonPayload));
       if (id !== requestId.current) return;
 
       const raw = getList(salonResult, ['salons', 'plans']);
@@ -414,7 +416,7 @@ export function HomeScreen({ session, navigate, notify }) {
 
   return (
     <div className="screen home-screen">
-      <div className="home-topline"><div><span className="eyebrow">NEARBY GROOMING</span><h1>{isGuest ? 'Find your salon' : `Hi ${firstName(userName)}`}</h1><p className="muted-line"><LocateFixed size={14} /> {location ? 'Using your current location' : 'Discover trusted specialists around you'}</p></div><div className="home-actions"><GenderToggle value={gender} onChange={setGender} /></div></div>
+      <div className="home-topline"><div><span className="eyebrow">{isGuest ? 'SALON BOOKINGS, SIMPLIFIED' : 'NEARBY GROOMING'}</span><h1>{isGuest ? 'Find your salon' : `Hi ${firstName(userName)}`}</h1><p className="muted-line"><LocateFixed size={14} /> {location ? 'Using your current location' : isGuest ? 'Browse trusted salons around you — login only when you book' : 'Discover trusted specialists around you'}</p></div><div className="home-actions"><GenderToggle value={gender} onChange={setGender} /></div></div>
       <div className="home-search-row"><label className="search-field"><Search size={18} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Find salon, specialist..." aria-label="Search salons" />{search && <button onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label><button className="filter-button" onClick={() => notify?.('info', 'Use Male or Female to change salon recommendations.')}><Sparkles size={17} /><span>For you</span></button></div>
       <AdCarousel ads={ads} />
       <div className="section-heading"><div><span className="eyebrow">CURATED FOR YOU</span><h2>Salons near you</h2></div><span className="result-count">{loading ? 'Updating…' : `${visibleSalons.length} places`}</span></div>
@@ -912,6 +914,7 @@ const INFO_CONTENT = {
   about: { title: 'About My Naai', eyebrow: 'THE IDEA', intro: 'Your time is valuable. My Naai connects you with trusted local salons so you can find a great specialist, book a slot and skip the wait.', sections: [{ title: 'A calmer way to get ready', text: 'We built My Naai for people who want the confidence of a good salon visit without spending their day in a queue.' }, { title: 'For every kind of look', text: 'Discover male, female and unisex salons, from a quick trim to a full refresh, with clear services and convenient time slots.' }, { title: 'Our promise', bullets: ['Simple, thoughtful booking', 'Verified salon partners near you', 'Clear availability and appointment updates'] }] },
   faq: { title: 'Frequently asked questions', eyebrow: 'NEED TO KNOW', sections: [{ title: 'How do I book a salon?', text: 'Choose your salon, select one or more services, pick an available specialist and time, then confirm your booking request.' }, { title: 'Can I cancel a booking?', text: 'Yes. Open My bookings and choose Cancel booking on a pending or confirmed appointment.' }, { title: 'What happens after I send a request?', text: 'The salon receives your request and confirms it. You will see the latest status in My bookings and receive an update.' }, { title: 'Can I use My Naai as a salon owner?', text: 'Absolutely. Use Continue as Salon Partner on the login screen to sign in or register your salon.' }] },
   terms: { title: 'Terms & conditions', eyebrow: 'PLEASE READ', intro: 'By using My Naai, you agree to use the service respectfully and provide accurate information when making an appointment.', sections: [{ title: 'Bookings', text: 'Appointments are requests until the salon confirms them. Please arrive at least 10 minutes before your selected time. Service duration and availability may vary.' }, { title: 'Cancellations', text: 'Cancel as early as possible so the salon can offer the slot to another customer. The salon may decline or change a request based on availability.' }, { title: 'Information', text: 'We use your account and location information to help show relevant salons and manage your bookings. Please keep your account details up to date.' }] },
+  contact: { title: 'Contact us', eyebrow: 'TALK TO US', intro: 'Booking help, account questions or partnership — one call reaches the My Naai team.', sections: [{ title: 'Customer support', text: 'Call 8380017393 for anything about your bookings, reminders or account. You can also tap the call button below.' }, { title: 'Own a salon? Partner with us', text: 'Open Login, switch to Salon partner, and register — our team helps your salon go live with bookings, queue updates and its own shareable page.' }, { title: 'My Naai, everywhere', bullets: ['Android app on Google Play', 'iOS app coming soon', 'Full booking right here on the web — add to Home Screen for the app feel'] }] },
 };
 
 // The Android app on Google Play — the web version tells visitors it exists.

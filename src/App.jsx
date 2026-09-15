@@ -106,14 +106,14 @@ function saveSession(session) {
 // `/#/bookingRequest?bookingRequestId=…` for a partner, `/#/delay?…` for a
 // customer — which is why an unknown or role-mismatched screen falls back to the
 // role's home instead of rendering a screen the shell has no branch for.
-const USER_ROUTE_NAMES = ['home', 'bookings', 'products', 'account', 'detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms'];
+const USER_ROUTE_NAMES = ['home', 'bookings', 'products', 'account', 'detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'contact'];
 const SALON_ROUTE_NAMES = ['queue', 'history', 'salonProducts', 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
 // Every route a visitor may open WITHOUT an account — salons are browsable
 // first, login only appears when they try to book (the client's headline
 // ask). The info pages are public too: the site footer links About/FAQ/Terms
 // and a website's legal pages must never sit behind a login. `login` is
 // handled by AppRoot itself, not by the guest shell.
-const GUEST_ROUTE_NAMES = ['home', 'salon', 'about', 'faq', 'terms'];
+const GUEST_ROUTE_NAMES = ['home', 'salon', 'about', 'faq', 'terms', 'contact'];
 const PUBLIC_ROUTE_NAMES = [...GUEST_ROUTE_NAMES, 'login'];
 
 function defaultRouteForRole(role) {
@@ -1224,18 +1224,33 @@ function GuestShell({ route, navigate, notifyInstall }) {
     }
     return navigate('login', {}, options);
   }, [navigate, route.name, route.params?.salonId]);
+  // The public page runs as a small website: sticky navbar (logo → home, the
+  // three site routes, Install + Login), the routed page, then the footer
+  // that each screen renders itself. The navbar link labels match the hashes
+  // (#/, #/about, #/contact) so deep links and clicks resolve identically.
+  const currentPage = route.name === 'salon' ? '' : route.name;
+  const siteLinks = [
+    { name: 'home', label: 'Home' },
+    { name: 'about', label: 'About' },
+    { name: 'contact', label: 'Contact' },
+  ];
   return <div className="guest-shell">
-    <div className="mobile-shell-bar guest-shell-bar">
-      <Brand />
-      <div className="guest-bar-actions">
+    <header className="site-navbar">
+      <button type="button" className="site-navbar-brand" onClick={() => guestNavigate('home')} aria-label="My Naai — home"><Brand /></button>
+      <nav className="site-nav-links" aria-label="Site navigation">
+        {siteLinks.map(link => (
+          <button key={link.name} type="button" className={cx(currentPage === link.name && 'active')} aria-current={currentPage === link.name ? 'page' : undefined} onClick={() => guestNavigate(link.name)}>{link.label}</button>
+        ))}
+      </nav>
+      <div className="site-navbar-actions">
         <InstallAppButton onInstall={notifyInstall} />
-        <button className="guest-login-button" onClick={() => guestNavigate('login')}><CircleUserRound size={15} /> Login / Register</button>
+        <button className="guest-login-button" onClick={() => guestNavigate('login')}><CircleUserRound size={15} /> Login</button>
       </div>
-    </div>
+    </header>
     <main className="guest-content">
       {route.name === 'salon'
         ? <SalonDetailScreen session={null} params={route.params} navigate={guestNavigate} notify={notify} />
-        : ['about', 'faq', 'terms'].includes(route.name)
+        : ['about', 'faq', 'terms', 'contact'].includes(route.name)
           ? <InfoScreen type={route.name} navigate={guestNavigate} />
           : <HomeScreen session={null} navigate={guestNavigate} notify={notify} />}
     </main>
@@ -1744,7 +1759,7 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
       if (route.name === 'schedule') return <ScheduleScreen {...props} params={route.params} />;
       if (route.name === 'notifications') return <NotificationsScreen {...props} />;
       if (route.name === 'delay') return <DelayRequestScreen {...props} params={route.params} />;
-      if (['about', 'faq', 'terms'].includes(route.name)) return <InfoScreen type={route.name} navigate={navForScreens} />;
+      if (['about', 'faq', 'terms', 'contact'].includes(route.name)) return <InfoScreen type={route.name} navigate={navForScreens} />;
       return <HomeScreen {...props} />;
     }
     if (route.name === 'queue') return <SalonQueueScreen {...props} />;

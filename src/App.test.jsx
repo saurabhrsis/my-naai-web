@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const { salonProfile, userSalonList } = vi.hoisted(() => ({ salonProfile: vi.fn(), userSalonList: vi.fn() }));
+const { salonProfile, userSalonList, userSalonListPublic } = vi.hoisted(() => ({ salonProfile: vi.fn(), userSalonList: vi.fn(), userSalonListPublic: vi.fn() }));
 
 // App.jsx pulls in lib/push.js, which loads the Firebase browser SDK at import
 // time. That SDK needs browser APIs jsdom does not provide, so stub the same
@@ -20,7 +20,7 @@ vi.mock('firebase/messaging', () => ({
 // something specific. The router is what is under test, not the screens' data.
 vi.mock('./lib/api', async () => {
   const actual = await vi.importActual('./lib/api');
-  const api = new Proxy({ salonProfile, userSalonList }, {
+  const api = new Proxy({ salonProfile, userSalonList, userSalonListPublic }, {
     get: (target, key) => (key in target
       ? target[key]
       : vi.fn(() => Promise.resolve({ status: 'SUCCESS', data: {} }))),
@@ -71,6 +71,7 @@ beforeEach(() => {
   setHash('#/');
   // A successful empty discovery list by default — guest-flow tests override it.
   userSalonList.mockReset().mockResolvedValue({ status: 'SUCCESS', data: { salons: [] } });
+  userSalonListPublic.mockReset().mockResolvedValue({ status: 'SUCCESS', data: { salons: [] } });
 });
 
 describe('getRouteFromHash', () => {
@@ -245,6 +246,22 @@ describe('App routing on mount', () => {
     expect(headings().length).toBeGreaterThan(0);
   });
 
+  it('keeps a signed-in session inside the app: #/login resolves to the dashboard home', async () => {
+    signIn('USER', '#/login');
+    await mount();
+    // The public navbar must never render for a session — only logout returns them.
+    expect(container.querySelector('.guest-shell')).toBeNull();
+    expect(container.querySelector('.home-screen')).not.toBeNull();
+  });
+
+  it('uses the personalized salon list endpoint for a signed-in customer', async () => {
+    signIn('USER', '#/home');
+    await mount();
+    await flush();
+    expect(userSalonList).toHaveBeenCalled();
+    expect(userSalonListPublic).not.toHaveBeenCalled();
+  });
+
   it('follows the hash when the user navigates back and forward', async () => {
     signIn('USER', '#/bookings');
     await mount();
@@ -284,7 +301,7 @@ describe('Guest browsing flow', () => {
   const buttonByText = text => Array.from(container.querySelectorAll('button')).find(node => node.textContent.trim().includes(text));
 
   beforeEach(() => {
-    userSalonList.mockResolvedValue(salonPayload());
+    userSalonListPublic.mockResolvedValue(salonPayload());
     vi.mocked(push.getPushStatus).mockReset().mockResolvedValue({ state: 'needs-permission', reason: '' });
     vi.mocked(push.getPushToken).mockReset().mockResolvedValue('');
   });
@@ -304,7 +321,41 @@ describe('Guest browsing flow', () => {
     expect(container.querySelector('.guest-shell')).not.toBeNull();
     expect(container.querySelector('.auth-page')).toBeNull();
     expect(container.textContent).toContain('Golden Scissors');
-    expect(buttonByText('Login / Register')).not.toBeNull();
+    // One Login action in the navbar (registration lives inside the flow).
+    const login = container.querySelector('.guest-login-button');
+    expect(login).not.toBeNull();
+    expect(login.textContent.trim()).toBe('Login');
+  });
+
+  it('loads the discovery list from the token-free public endpoint', async () => {
+    setHash('#/home');
+    await mount();
+
+    expect(userSalonListPublic).toHaveBeenCalled();
+    expect(userSalonList).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Golden Scissors');
+  });
+
+  it('navigates the site routes from the navbar', async () => {
+    setHash('#/home');
+    await mount();
+
+    const nav = container.querySelector('.site-nav-links');
+    expect(nav).not.toBeNull();
+    const labels = Array.from(nav.querySelectorAll('button')).map(node => node.textContent.trim());
+    expect(labels).toEqual(['Home', 'About', 'Contact']);
+
+    await act(async () => { Array.from(nav.querySelectorAll('button')).find(node => node.textContent === 'About').click(); });
+    await flush();
+    expect(window.location.hash).toBe('#/about');
+    expect(container.querySelector('.info-screen')).not.toBeNull();
+    expect(container.querySelector('.site-nav-links button.active')?.textContent).toBe('About');
+
+    await act(async () => { Array.from(container.querySelector('.site-nav-links').querySelectorAll('button')).find(node => node.textContent === 'Contact').click(); });
+    await flush();
+    expect(window.location.hash).toBe('#/contact');
+    expect(container.textContent).toContain('Contact us');
+    expect(container.textContent).toContain('8380017393');
   });
 
   it('opens a shared salon link (#/salon/<id>) straight on the salon page', async () => {
