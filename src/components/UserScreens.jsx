@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
+  AlarmClock,
   Bell,
   Bookmark,
   BookmarkCheck,
@@ -25,6 +26,7 @@ import {
   Search,
   Scissors,
   Send,
+  Share2,
   ShieldCheck,
   ShoppingBag,
   Sparkles,
@@ -41,6 +43,8 @@ import { getErrorMessage as getApiError } from './Shared';
 import { normalizeAdImages } from '../lib/ads';
 import { describeOffset } from '../lib/bookingTime';
 import { getNotificationRoute, isActionableNotification } from '../lib/push';
+import { armStoredReminders, cancelBookingReminder, remindersEnabled, scheduleBookingReminder, setRemindersEnabled } from '../lib/reminders';
+import { stashPendingRoute } from '../lib/pendingRoute';
 
 import { subscribeToLiveUpdates } from '../lib/socket';
 import { LOGOUT_CONFIRM, useConfirm } from './ConfirmDialog';
@@ -173,7 +177,50 @@ function GenderToggle({ value, onChange }) {
   return <div className="gender-toggle" role="group" aria-label="Salon type"><button className={value === 'male' ? 'active' : ''} onClick={() => onChange('male')}>Male</button><button className={value === 'female' ? 'active' : ''} onClick={() => onChange('female')}>Female</button></div>;
 }
 
-function SalonCard({ salon, saved, onSelect, onBookmark, userLocation }) {
+// Every salon has its own route (`#/salon/<id>`) which is what the share
+// button copies/sends — a guest opening that link lands straight on that
+// salon's page (see parseRouteHash in App.jsx). Native share sheet when
+// available, clipboard copy otherwise.
+export function salonShareUrl(salon) {
+  const id = salon.salonId || salon.id;
+  return `${window.location.origin}${window.location.pathname}#/salon/${id}`;
+}
+
+async function shareSalon(salon, notify) {
+  const url = salonShareUrl(salon);
+  const name = salon.name || 'this salon';
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: `${name} on My Naai`, text: `Book ${name} on My Naai — join the queue without waiting at the shop.`, url });
+      return;
+    }
+  } catch (shareError) {
+    if (shareError?.name === 'AbortError') return; // user closed the share sheet
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    notify?.('success', 'Salon link copied — share it anywhere.');
+  } catch {
+    // Legacy copy for browsers without the async clipboard API (no native
+    // dialogs — those are banned app-wide); last resort, show the link in a
+    // toast so the guest can copy it by hand.
+    try {
+      const field = document.createElement('textarea');
+      field.value = url;
+      field.style.position = 'fixed';
+      field.style.opacity = '0';
+      document.body.appendChild(field);
+      field.select();
+      document.execCommand('copy');
+      field.remove();
+      notify?.('success', 'Salon link copied — share it anywhere.');
+    } catch {
+      notify?.('info', url);
+    }
+  }
+}
+
+function SalonCard({ salon, saved, onSelect, onBook, onShare, onBookmark, userLocation }) {
   const calculatedDistance = userLocation ? getDistanceInKm(userLocation.latitude, userLocation.longitude, salon.latitude, salon.longitude) : null;
   const distance = calculatedDistance !== null ? calculatedDistance : normalizeDistanceInKm(salon.distance);
   const distanceLabel = distance === null ? '' : formatDistanceInKm(distance);
@@ -192,7 +239,13 @@ function SalonCard({ salon, saved, onSelect, onBookmark, userLocation }) {
       <div className="salon-card-body">
         <div className="salon-card-heading"><div><span className="salon-type">{salon.genderType || 'UNISEX'} SALON</span><h3>{salon.name}</h3></div></div>
         <button className="salon-address" onClick={openMap}><MapPin size={14} /> <span>{salon.address}</span></button>
-        <div className="salon-card-footer"><span className="wait-copy"><Clock3 size={14} /> {salon.isOpen ? salon.waitTime : 'Come back later'}</span><button className={cx('card-book-button', !salon.isOpen && 'disabled')} disabled={!salon.isOpen} onClick={event => { event.stopPropagation(); onSelect(salon); }}>{salon.isOpen ? 'Book now' : 'Closed'}</button></div>
+        <div className="salon-card-footer">
+          <span className="wait-copy"><Clock3 size={14} /> {salon.isOpen ? salon.waitTime : 'Come back later'}</span>
+          <div className="salon-card-cta">
+            <button className="card-share-button" aria-label={`Share ${salon.name}`} onClick={event => { event.stopPropagation(); onShare(salon); }}><Share2 size={15} /></button>
+            <button className={cx('card-book-button', !salon.isOpen && 'disabled')} disabled={!salon.isOpen} onClick={event => { event.stopPropagation(); onBook(salon); }}>{salon.isOpen ? 'Book now' : 'Closed'}</button>
+          </div>
+        </div>
       </div>
     </article>
   );
@@ -207,8 +260,9 @@ export function HomeScreen({ session, navigate, notify }) {
   const [location, setLocation] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
-  const [userName, setUserName] = useState(session.user?.fullName || '');
+  const [userName, setUserName] = useState(session?.user?.fullName || '');
   const requestId = useRef(0);
+  const isGuest = !session?.userId;
 
   // Ads are loaded once, independently of search/gender, matching NaaiDashboard.
   useEffect(() => {
@@ -278,15 +332,18 @@ export function HomeScreen({ session, navigate, notify }) {
       }
 
       // Profile loading should not turn a successful salon-list response into
-      // an empty screen.
-      try {
-        const profile = await api.userProfile({ userId: session.userId });
-        if (id === requestId.current && profile?.status === 'SUCCESS') {
-          setUserName(currentName => profile.data?.fullName || currentName);
+      // an empty screen. Guests browse without a session — there is no profile
+      // to greet, so the greeting stays generic below.
+      if (session?.userId) {
+        try {
+          const profile = await api.userProfile({ userId: session.userId });
+          if (id === requestId.current && profile?.status === 'SUCCESS') {
+            setUserName(currentName => profile.data?.fullName || currentName);
+          }
+        } catch (profileError) {
+          console.debug(getErrorMessage(profileError, 'Unable to refresh the customer greeting.'));
+          // The discovery list remains useful if the optional greeting request fails.
         }
-      } catch (profileError) {
-        console.debug(getErrorMessage(profileError, 'Unable to refresh the customer greeting.'));
-        // The discovery list remains useful if the optional greeting request fails.
       }
     } catch (error) {
       if (id !== requestId.current) return;
@@ -295,7 +352,7 @@ export function HomeScreen({ session, navigate, notify }) {
     } finally {
       if (id === requestId.current) setLoading(false);
     }
-  }, [gender, notify, search, session.userId]);
+  }, [gender, notify, search, session?.userId]);
 
   useEffect(() => {
     const timer = window.setTimeout(loadData, search ? 350 : 0);
@@ -307,7 +364,28 @@ export function HomeScreen({ session, navigate, notify }) {
     return salons.filter(salon => !query || `${salon.name} ${salon.address} ${salon.location}`.toLowerCase().includes(query));
   }, [salons, search]);
 
+  // Browsing is open to everyone; only booking intent and personal actions
+  // (bookmark) require a login. The guest's exact page is stashed so auth
+  // returns them straight back here after login/register.
+  const openSalon = item => navigate('salon', { salonId: item.id, salon: item });
+
+  const bookSalon = item => {
+    if (isGuest) {
+      stashPendingRoute(`#/salon/${item.id}`);
+      notify?.('info', 'Login to book this salon.');
+      navigate('login');
+      return;
+    }
+    openSalon(item);
+  };
+
   const bookmark = async salonId => {
+    if (isGuest) {
+      stashPendingRoute('#/home');
+      notify?.('info', 'Login to save a salon.');
+      navigate('login');
+      return;
+    }
     // Mirror the mobile dashboard: only one salon can be bookmarked at a time.
     if (savedId && savedId !== salonId) {
       notify?.('info', 'Bookmark exists. Please remove the previously saved salon first.');
@@ -333,13 +411,13 @@ export function HomeScreen({ session, navigate, notify }) {
 
   return (
     <div className="screen home-screen">
-      <div className="home-topline"><div><span className="eyebrow">NEARBY GROOMING</span><h1>Hi {firstName(userName)}</h1><p className="muted-line"><LocateFixed size={14} /> {location ? 'Using your current location' : 'Discover trusted specialists around you'}</p></div><div className="home-actions"><GenderToggle value={gender} onChange={setGender} /></div></div>
+      <div className="home-topline"><div><span className="eyebrow">NEARBY GROOMING</span><h1>{isGuest ? 'Find your salon' : `Hi ${firstName(userName)}`}</h1><p className="muted-line"><LocateFixed size={14} /> {location ? 'Using your current location' : 'Discover trusted specialists around you'}</p></div><div className="home-actions"><GenderToggle value={gender} onChange={setGender} /></div></div>
       <div className="home-search-row"><label className="search-field"><Search size={18} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Find salon, specialist..." aria-label="Search salons" />{search && <button onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label><button className="filter-button" onClick={() => notify?.('info', 'Use Male or Female to change salon recommendations.')}><Sparkles size={17} /><span>For you</span></button></div>
       <AdCarousel ads={ads} />
       <div className="section-heading"><div><span className="eyebrow">CURATED FOR YOU</span><h2>Salons near you</h2></div><span className="result-count">{loading ? 'Updating…' : `${visibleSalons.length} places`}</span></div>
       {loadError && <div className="inline-notice"><CircleAlert size={16} /> {loadError} <button onClick={loadData}>Try again</button></div>}
       {!loading && !location && <div className="inline-notice location-fallback-notice"><MapPin size={16} /> <span>Location is unavailable, so we are showing the available salon list without distance sorting.</span><button onClick={loadData}>Enable location</button></div>}
-      {loading ? <div className="salon-grid">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} />)}</div> : visibleSalons.length ? <div className="salon-grid">{visibleSalons.map(salon => <SalonCard key={salon.id} salon={salon} saved={savedId === salon.id || salon.isSaved} onSelect={item => navigate('detail', { salonId: item.id, salon: item })} onBookmark={bookmark} userLocation={location} />)}</div> : <EmptyState icon={Scissors} title="No salons found" message="Try another search or switch the salon type." />}
+      {loading ? <div className="salon-grid">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} />)}</div> : visibleSalons.length ? <div className="salon-grid">{visibleSalons.map(salon => <SalonCard key={salon.id} salon={salon} saved={savedId === salon.id || salon.isSaved} onSelect={openSalon} onBook={bookSalon} onShare={item => shareSalon(item, notify)} onBookmark={bookmark} userLocation={location} />)}</div> : <EmptyState icon={Scissors} title="No salons found" message="Try another search or switch the salon type." />}
       <div className="home-trust-row"><ShieldCheck size={16} /><span>Verified listings</span><i /><Clock3 size={16} /><span>Book in minutes</span><i /><Heart size={16} /><span>Made for your time</span></div>
     </div>
   );
@@ -384,6 +462,7 @@ export function BookingsScreen({ session, notify }) {
     try {
       const response = await api.bookingRequestCancel(bookingId);
       if (response?.status && response.status !== 'SUCCESS') throw new Error(response.message || 'Cancellation failed');
+      cancelBookingReminder(bookingId);
       notify?.('success', 'Booking cancelled.');
     } catch (error) { setBookings(previous); notify?.('error', getErrorMessage(error, 'Could not cancel this booking.')); } finally { setCancelling(''); }
   };
@@ -459,6 +538,25 @@ export function AccountScreen({ session, navigate, onLogout, notify, onSessionUp
     { label: 'Want Help ? Call on : 8380017393', caption: 'Talk to My Naai support', icon: Phone, action: () => window.open('tel:8380017393') },
   ];
 
+  // Booking reminders ride the same single notification permission as push
+  // (one funnel, nothing extra to grant). Turning the toggle on while the
+  // browser is still neutral is the permission-plea moment.
+  const [remindersOn, setRemindersOn] = useState(() => remindersEnabled());
+  const toggleReminders = async () => {
+    const next = !remindersOn;
+    if (next && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      try { await Notification.requestPermission(); } catch { /* prompt may be blocked */ }
+      if (Notification.permission !== 'granted') {
+        notify?.('info', 'Reminders need notification permission — allow it in the browser prompt.');
+        return;
+      }
+    }
+    setRemindersEnabled(next);
+    setRemindersOn(next);
+    if (next) armStoredReminders();
+    notify?.('success', next ? 'Booking reminders on — 30 min before every visit.' : 'Booking reminders off.');
+  };
+
   return (
     <div className="screen account-screen">
       <PageHeader title="Account" />
@@ -472,6 +570,18 @@ export function AccountScreen({ session, navigate, onLogout, notify, onSessionUp
         </button>
       </section>
       <div className="account-card">
+        <div className="account-menu-row reminder-toggle-row">
+          <span className="account-menu-icon"><AlarmClock size={18} /></span>
+          <span><strong>Booking reminders</strong><small>Get reminded 30 minutes before your slot</small></span>
+          <button
+            type="button"
+            className={cx('switch-toggle', remindersOn && 'on')}
+            role="switch"
+            aria-checked={remindersOn}
+            aria-label="Toggle booking reminders"
+            onClick={toggleReminders}
+          ><span /></button>
+        </div>
         {menus.map(item => (
           <button className="account-menu-row" key={item.label} type="button" onClick={item.action || (() => navigate(item.route))}>
             <span className="account-menu-icon"><item.icon size={18} /></span>
@@ -502,7 +612,7 @@ export function AccountScreen({ session, navigate, onLogout, notify, onSessionUp
   );
 }
 
-export function SalonDetailScreen({ params, navigate, notify }) {
+export function SalonDetailScreen({ session, params, navigate, notify }) {
   const [salon, setSalon] = useState(params?.salon || null);
   const [loading, setLoading] = useState(true);
   const [active, setActive] = useState(0);
@@ -521,7 +631,22 @@ export function SalonDetailScreen({ params, navigate, notify }) {
   const images = details.images?.length ? details.images : [details.image];
   const status = getSalonStatus(details.businessHours, details.isOpen);
   const hours = details.businessHours?.[0];
-  return <div className="screen detail-screen" aria-busy={loading || undefined}><PageHeader title={details.name} subtitle={`${details.genderType || 'UNISEX'} salon`} onBack={() => navigate(-1)} action={<button className="icon-btn ghost" onClick={() => window.open(`tel:${details.phoneNumber || ''}`)} aria-label="Call salon"><Phone size={18} /></button>} /><div className="detail-hero"><div className="detail-gallery"><ImageWithFallback src={images[active]} fallback={USER_FALLBACK_IMAGE} alt={details.name} className="detail-main-image" onClick={() => setImageOpen(true)} /><button className="gallery-expand" onClick={() => setImageOpen(true)} aria-label="Open image"><ExternalLink size={16} /></button>{images.length > 1 && <div className="gallery-thumbs">{images.map((image, index) => <button key={`${image}-${index}`} className={index === active ? 'active' : ''} onClick={() => setActive(index)}><ImageWithFallback src={image} fallback={USER_FALLBACK_IMAGE} alt="" /></button>)}</div>}</div><div className="detail-overview"><div className="detail-title-row"><div><span className="salon-type">{details.genderType || 'UNISEX'} SALON</span><h2>{details.name}</h2></div></div><div className="detail-status-line"><StatusPill tone={status.isOpen ? 'open' : 'closed'} dot>{status.text}</StatusPill>{hours && <span><Clock3 size={14} /> {formatTime(hours.openingTime)} – {formatTime(hours.closingTime)}</span>}</div><button className="detail-location" onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${details.latitude},${details.longitude}`, '_blank', 'noopener,noreferrer')}><MapPin size={17} /><span>{details.address || 'Address unavailable'}</span><ExternalLink size={14} /></button><div className="detail-stat-grid"><div><Timer size={17} /><span><small>Current wait</small><strong>{details.waitTime || '10–15 min'}</strong></span></div><div><Scissors size={17} /><span><small>Services</small><strong>{details.services?.length || 0} to choose</strong></span></div></div><div className="arrival-note"><Zap size={16} /><span><strong>Before you arrive</strong> Come 10 minutes before your slot and follow the latest appointment status.</span></div></div></div><section className="detail-section"><div className="section-heading compact"><div><span className="eyebrow">WHAT THEY OFFER</span><h2>Services & specialists</h2></div><span className="muted-line">{details.barbers?.length || 0} specialists</span></div><div className="service-preview-grid">{(details.services || []).slice(0, 4).map(service => <div className="service-preview" key={service.serviceId || service.id}><Scissors size={15} /><span>{service.serviceName || service.name}</span><strong>{formatCurrency(service.price)}</strong></div>)}</div></section><div className="sticky-continue"><div><span>Ready when you are?</span><small>Select services and a time slot</small></div><Button onClick={() => navigate('services', { salon: details, salonId: details.id })}>Continue <ArrowRight size={17} /></Button></div><Modal open={imageOpen} onClose={() => setImageOpen(false)} title={details.name} size="image"><ImageWithFallback src={images[active]} fallback={USER_FALLBACK_IMAGE} alt={details.name} className="modal-full-image" /></Modal></div>;
+  const isGuest = !session?.userId;
+  // A deep-linked guest's route id is the one id that is always known — the
+  // fetched salon payload may arrive later (or lack the field entirely).
+  const salonRouteId = details.id || params?.salonId;
+  // Booking intent is where the login requirement kicks in — the guest keeps
+  // their exact salon page via the pending-route stash, and auth resumes it.
+  const continueToBooking = () => {
+    if (isGuest) {
+      stashPendingRoute(`#/salon/${salonRouteId}`);
+      notify?.('info', 'Login to book this salon.');
+      navigate('login');
+      return;
+    }
+    navigate('services', { salon: details, salonId: salonRouteId });
+  };
+  return <div className="screen detail-screen" aria-busy={loading || undefined}><PageHeader title={details.name} subtitle={`${details.genderType || 'UNISEX'} salon`} onBack={() => navigate(-1)} action={<div className="detail-header-actions"><button className="icon-btn ghost" onClick={() => shareSalon(details, notify)} aria-label="Share salon"><Share2 size={18} /></button><button className="icon-btn ghost" onClick={() => window.open(`tel:${details.phoneNumber || ''}`)} aria-label="Call salon"><Phone size={18} /></button></div>} /><div className="detail-hero"><div className="detail-gallery"><ImageWithFallback src={images[active]} fallback={USER_FALLBACK_IMAGE} alt={details.name} className="detail-main-image" onClick={() => setImageOpen(true)} /><button className="gallery-expand" onClick={() => setImageOpen(true)} aria-label="Open image"><ExternalLink size={16} /></button>{images.length > 1 && <div className="gallery-thumbs">{images.map((image, index) => <button key={`${image}-${index}`} className={index === active ? 'active' : ''} onClick={() => setActive(index)}><ImageWithFallback src={image} fallback={USER_FALLBACK_IMAGE} alt="" /></button>)}</div>}</div><div className="detail-overview"><div className="detail-title-row"><div><span className="salon-type">{details.genderType || 'UNISEX'} SALON</span><h2>{details.name}</h2></div></div><div className="detail-status-line"><StatusPill tone={status.isOpen ? 'open' : 'closed'} dot>{status.text}</StatusPill>{hours && <span><Clock3 size={14} /> {formatTime(hours.openingTime)} – {formatTime(hours.closingTime)}</span>}</div><button className="detail-location" onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${details.latitude},${details.longitude}`, '_blank', 'noopener,noreferrer')}><MapPin size={17} /><span>{details.address || 'Address unavailable'}</span><ExternalLink size={14} /></button><div className="detail-stat-grid"><div><Timer size={17} /><span><small>Current wait</small><strong>{details.waitTime || '10–15 min'}</strong></span></div><div><Scissors size={17} /><span><small>Services</small><strong>{details.services?.length || 0} to choose</strong></span></div></div><div className="arrival-note"><Zap size={16} /><span><strong>Before you arrive</strong> Come 10 minutes before your slot and follow the latest appointment status.</span></div></div></div><section className="detail-section"><div className="section-heading compact"><div><span className="eyebrow">WHAT THEY OFFER</span><h2>Services & specialists</h2></div><span className="muted-line">{details.barbers?.length || 0} specialists</span></div><div className="service-preview-grid">{(details.services || []).slice(0, 4).map(service => <div className="service-preview" key={service.serviceId || service.id}><Scissors size={15} /><span>{service.serviceName || service.name}</span><strong>{formatCurrency(service.price)}</strong></div>)}</div></section><div className="sticky-continue"><div><span>Ready when you are?</span><small>{isGuest ? 'Login once, then pick services & a time slot' : 'Select services and a time slot'}</small></div><Button onClick={continueToBooking}>{isGuest ? 'Login to book' : 'Continue'} <ArrowRight size={17} /></Button></div><Modal open={imageOpen} onClose={() => setImageOpen(false)} title={details.name} size="image"><ImageWithFallback src={images[active]} fallback={USER_FALLBACK_IMAGE} alt={details.name} className="modal-full-image" /></Modal></div>;
 }
 
 export function ServicesScreen({ params, navigate, notify }) {
@@ -612,6 +737,14 @@ export function ScheduleScreen({ params, navigate, notify }) {
       const response = await api.createBookingRequest({ salonId: salon.salonId || salon.id, barberId: barber?.barberId || barber?.id || '', bookingDate, bookingTime: time, services: services.map(item => item.serviceId || item.id) });
       if (response?.status && response.status !== 'SUCCESS') throw new Error(response.message || 'Booking failed');
       notify?.('success', 'Request sent — wait for the salon response.');
+      // Alarm/reminder through the same (single) notification permission as
+      // push: 30 minutes before the slot the visitor gets a heads-up. Rejects
+      // silently when the funnel is unavailable — the booking already went
+      // through, so nothing here may block navigation.
+      const bookingId = response?.data?.bookingRequestId || response?.data?.bookingId || '';
+      scheduleBookingReminder({ bookingId, bookingDate, bookingTime: time, salonName: salon.salonName || salon.name })
+        .then(outcome => { if (outcome) notify?.('info', 'Reminder set — 30 min before your visit.'); })
+        .catch(() => {});
       navigate('bookings');
     } catch (error) { notify?.('error', getErrorMessage(error, 'Could not send booking request.')); } finally { setLoading(false); }
   };

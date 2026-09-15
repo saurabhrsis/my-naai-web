@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const { salonProfile } = vi.hoisted(() => ({ salonProfile: vi.fn() }));
+const { salonProfile, userSalonList } = vi.hoisted(() => ({ salonProfile: vi.fn(), userSalonList: vi.fn() }));
 
 // App.jsx pulls in lib/push.js, which loads the Firebase browser SDK at import
 // time. That SDK needs browser APIs jsdom does not provide, so stub the same
@@ -20,7 +20,7 @@ vi.mock('firebase/messaging', () => ({
 // something specific. The router is what is under test, not the screens' data.
 vi.mock('./lib/api', async () => {
   const actual = await vi.importActual('./lib/api');
-  const api = new Proxy({ salonProfile }, {
+  const api = new Proxy({ salonProfile, userSalonList }, {
     get: (target, key) => (key in target
       ? target[key]
       : vi.fn(() => Promise.resolve({ status: 'SUCCESS', data: {} }))),
@@ -54,8 +54,9 @@ vi.mock('./lib/socket', () => ({
 }));
 vi.mock('./lib/buzzer', () => ({ playBuzzer: vi.fn(), unlockBuzzer: vi.fn() }));
 
-import App, { getRouteFromHash } from './App';
+import App, { getRouteFromHash, parseRouteHash, resolveResumeRoute, routeToHash } from './App';
 import * as push from './lib/push';
+import { stashPendingRoute, popPendingRoute } from './lib/pendingRoute';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -68,6 +69,8 @@ beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
   setHash('#/');
+  // A successful empty discovery list by default — guest-flow tests override it.
+  userSalonList.mockReset().mockResolvedValue({ status: 'SUCCESS', data: { salons: [] } });
 });
 
 describe('getRouteFromHash', () => {
@@ -144,6 +147,42 @@ describe('getRouteFromHash', () => {
     expect(getRouteFromHash('USER').name).toBe('bookings');
     expect(getRouteFromHash('USER').params.bookingRequestId).toBe('req-1');
   });
+
+  it('parses the shareable per-salon link #/salon/<id>', () => {
+    expect(parseRouteHash('#/salon/salon-42')).toEqual({ name: 'salon', params: { salonId: 'salon-42' } });
+    expect(parseRouteHash('#/salon/salon-42?from=share')).toEqual({ name: 'salon', params: { salonId: 'salon-42', from: 'share' } });
+    // And back. In-session object params (a prefetched salon record) never leak
+    // into the URL — only the scalar slots do.
+    expect(routeToHash('salon', { salonId: 'salon-42', salon: { name: 'X' } })).toBe('#/salon/salon-42');
+    expect(routeToHash('bookings', {})).toBe('#/bookings');
+  });
+
+  it('opens salon links for guests but keeps account screens gated', () => {
+    // No role = browsing before login: home and the salon page are public.
+    setHash('#/salon/salon-42');
+    expect(getRouteFromHash(undefined)).toEqual({ name: 'salon', params: { salonId: 'salon-42' } });
+
+    setHash('#/bookings');
+    expect(getRouteFromHash(undefined)).toEqual({ name: 'home', params: {} });
+
+    setHash('#/home');
+    expect(getRouteFromHash(null)).toEqual({ name: 'home', params: {} });
+  });
+
+  it('resumes the exact page a guest stashed, once it is valid for their role', () => {
+    stashPendingRoute('#/salon/salon-42');
+    expect(popPendingRoute()).toBe('#/salon/salon-42');
+    // One-shot: the stash is consumed by the pop.
+    expect(popPendingRoute()).toBe('');
+
+    expect(resolveResumeRoute('USER', '#/salon/salon-42')).toEqual({ name: 'salon', params: { salonId: 'salon-42' } });
+    // The customer salon link a partner was sent means nothing to their account.
+    expect(resolveResumeRoute('SALON', '#/salon/salon-42')).toBeNull();
+    expect(resolveResumeRoute('USER', '#/queue')).toBeNull();
+    // Login itself is never a resume target — it is stored *from*, not *to*.
+    stashPendingRoute('#/login');
+    expect(popPendingRoute()).toBe('');
+  });
 });
 
 // Regression cover for the crash these helpers caused: `getRouteFromHash` was
@@ -217,6 +256,96 @@ describe('App routing on mount', () => {
   });
 });
 
+// Browse-first guest flow (client ask, Hindi brief): salons are visible with
+// no login wall, Book now is the moment login is required, and every salon
+// carries its own shareable #/salon/<id> link that a fresh visitor can open.
+describe('Guest browsing flow', () => {
+  let container;
+  let root;
+
+  const salonPayload = () => ({
+    status: 'SUCCESS',
+    data: {
+      salons: [{
+        salonId: 'salon-9', salonName: 'Golden Scissors', genderType: 'UNISEX',
+        address: 'Dharampeth, Nagpur', isOpen: true, waitTime: '5–10 min',
+      }],
+    },
+  });
+
+  const mount = async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => { root.render(<App />); });
+    await flush();
+  };
+
+  const buttonByText = text => Array.from(container.querySelectorAll('button')).find(node => node.textContent.trim().includes(text));
+
+  beforeEach(() => {
+    userSalonList.mockResolvedValue(salonPayload());
+    vi.mocked(push.getPushStatus).mockReset().mockResolvedValue({ state: 'needs-permission', reason: '' });
+    vi.mocked(push.getPushToken).mockReset().mockResolvedValue('');
+  });
+
+  afterEach(() => {
+    if (root) act(() => root.unmount());
+    container?.remove();
+    root = null;
+    container = null;
+    vi.clearAllMocks();
+  });
+
+  it('shows salons to a guest with no login wall', async () => {
+    setHash('#/home');
+    await mount();
+
+    expect(container.querySelector('.guest-shell')).not.toBeNull();
+    expect(container.querySelector('.auth-page')).toBeNull();
+    expect(container.textContent).toContain('Golden Scissors');
+    expect(buttonByText('Login / Register')).not.toBeNull();
+  });
+
+  it('opens a shared salon link (#/salon/<id>) straight on the salon page', async () => {
+    setHash('#/salon/salon-9');
+    await mount();
+
+    expect(container.querySelector('.detail-screen')).not.toBeNull();
+    expect(container.querySelector('.auth-page')).toBeNull();
+  });
+
+  it('asks for login only at booking intent and remembers the exact salon', async () => {
+    setHash('#/home');
+    await mount();
+
+    await act(async () => { buttonByText('Book now').click(); });
+    await flush();
+
+    expect(window.location.hash).toBe('#/login');
+    expect(sessionStorage.getItem('mynaaiPendingRoute')).toBe('#/salon/salon-9');
+    expect(container.querySelector('.auth-page')).not.toBeNull();
+    // The login page volunteers a way back to browsing — it must not feel trapped.
+    expect(buttonByText('Browse salons')).not.toBeNull();
+  });
+
+  it('returns to the salon page when the guest backs out of logging in', async () => {
+    setHash('#/salon/salon-9');
+    await mount();
+
+    await act(async () => { buttonByText('Login to book').click(); });
+    await flush();
+    expect(window.location.hash).toBe('#/login');
+    expect(sessionStorage.getItem('mynaaiPendingRoute')).toBe('#/salon/salon-9');
+
+    await act(async () => { buttonByText('Browse salons').click(); });
+    await flush();
+    expect(window.location.hash).toBe('#/salon/salon-9');
+    expect(sessionStorage.getItem('mynaaiPendingRoute')).toBeNull();
+    expect(container.querySelector('.detail-screen')).not.toBeNull();
+  });
+});
+
 // Login permission flow: one setup card on the login screen, direct browser
 // popups from the Continue tap, and a real way out when the browser has
 // blocked notifications (the "followed the steps but it still shows blocked"
@@ -255,8 +384,9 @@ describe('Login permission flow', () => {
   };
 
   beforeEach(() => {
-    // A returning user goes straight to the login screen, past the splash.
-    localStorage.setItem('hasSeenOnboarding', 'true');
+    // Browsing is public now, so a bare hash opens the guest home — these
+    // tests target the login flow, which lives at its own route.
+    setHash('#/login');
     vi.mocked(push.getPushStatus).mockReset().mockResolvedValue({ state: 'needs-permission', reason: '' });
     vi.mocked(push.getPushToken).mockReset().mockResolvedValue('');
     vi.mocked(push.isEmbeddedFrame).mockReset().mockReturnValue(false);

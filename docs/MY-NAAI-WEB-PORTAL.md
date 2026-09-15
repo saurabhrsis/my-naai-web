@@ -32,7 +32,11 @@ A deployed production site should use HTTPS, serve the SPA fallback for hash rou
 
 ## 3. Startup and authentication
 
-There is deliberately no multi-second web splash screen. The app reads its session synchronously from `localStorage` and renders the authenticated shell immediately. First-time visitors see the onboarding slides; returning visitors go directly to the login form or their saved workspace.
+There is deliberately no multi-second web splash screen — and no login wall. Browsing is public: a first-time visitor (or someone who simply signed out) lands on the **guest shell** — the same salon discovery list as signed-in customers, plus a `Login / Register` pill and the install pill in the top bar. Signing-in users resume their saved workspace immediately.
+
+Login is only ever required at **booking intent**: tapping **Book now** on a salon card, **Continue/Login to book** on the salon page, or the bookmark star stashes the exact page in `sessionStorage` (`mynaaiPendingRoute`, see `src/lib/pendingRoute.js`) and opens the login form. OTP completion pops the stash and resumes that exact page via `resolveResumeRoute()` (validated against the role's routes — a customer salon link means nothing to a partner account). The login page itself carries a thin **Browse salons** back-link that returns to the stashed page (never to a gated route — guests bounce off those), so the auth detour never feels like a trap.
+
+Every salon has its own shareable link: `#/salon/<salonId>`, produced and consumed by `parseRouteHash()`/`routeToHash()` in `src/App.jsx`. The **Share** affordances (salon card footer, salon page header) use the native share sheet where available and copy to the clipboard otherwise. A guest opening a shared link lands directly on that salon's page — per-salon discovery links are a marketing channel, so they must never hit a login gate.
 
 The web session uses these keys:
 
@@ -44,7 +48,8 @@ The web session uses these keys:
 | `isLoggedIn` | Boolean-like string used to restore the session |
 | `isNewSalon` | Salon registration state |
 | `FCM_TOKEN` | Browser-only Firebase registration token, when push is configured |
-| `hasSeenOnboarding` | Local onboarding preference |
+| `mynaaiPendingRoute` | Session-scoped stash of the page a guest must resume after login (§3) |
+| `mynaaiReminderList`, `mynaaiBookingRemindersEnabled` | Stored 30-minute reminder schedule + the Account-screen switch state (§3) |
 
 A successful OTP verification/onboarding stores the token and role. A browser restart therefore preserves the login until the API token expires or the user signs out. If the API returns `JWT_FAILED` or another JWT failure response, `src/lib/api.js` clears the stored session and dispatches `mynaai:session-expired`, which immediately returns the React app to authentication. A manual logout also deletes the browser FCM token.
 
@@ -52,11 +57,15 @@ The app listens for relevant `localStorage` changes, so signing out or changing 
 
 ### Required browser notifications
 
-The first-load onboarding/login experience offers a visible **Enable alerts** action only when notification permission or token setup needs attention. Authenticated pages stay focused on their work; a retry action is available from the Account screen when permission is missing or blocked. Technical Firebase configuration details are never shown to users. The action can be retried after the user changes the site permission in browser settings.
+There is exactly **one** notification permission funnel, and both push and booking reminders ride it. The login experience offers a visible **Allow alerts** action when notification permission or token setup needs attention; authenticated pages stay focused on their work, and account-screen controls (the reminder toggle) re-ask when permission is still neutral. Technical Firebase configuration details are never shown to users. The action can be retried after the user changes the site permission in browser settings.
 
-The login screen keeps reading to a minimum — phone users tap buttons, not paragraphs: a one-line subtitle, then two compact pills. `AllowAlertsButton` owns the notification permission sign-in depends on: one tap opens the browser's own Allow popup when it has never been asked, or the permission gate with the exact fix for that device (per-browser unblock steps, Add-to-Home-Screen on iPhone, open-in-new-tab when the page is embedded); the pill follows the live Permissions API and disappears once alerts are on, turning red as **Fix alerts** while blocked. `InstallAppButton` keeps install one tap away — while the richer PWA install card is on screen it owns the CTA (native prompt where the browser offers one, the iPhone guide otherwise); everywhere else the pill fires the captured prompt or opens a 2–3 step guide for the detected browser (`INSTALL_STEPS`). Once the app runs standalone, install UI disappears by itself.
+The login screen keeps reading to a minimum — phone users tap buttons, not paragraphs: a one-line subtitle, then two compact pills. `AllowAlertsButton` owns the notification permission sign-in depends on: one tap opens the browser's own Allow popup when it has never been asked, or the permission gate with the exact fix for that device (per-browser unblock steps, Add-to-Home-Screen on iPhone, open-in-new-tab when the page is embedded); the pill follows the live Permissions API and disappears once alerts are on, turning red as **Fix alerts** while blocked. `InstallAppButton` keeps install one tap away — the pill fires the captured native prompt or opens a 2–3 step guide for the detected browser (`INSTALL_STEPS`, iPhone gets the Share → Add to Home Screen sheet). Once the app runs standalone, install UI disappears by itself. The guest shell's top bar carries the same install pill.
 
 Real customer and salon authentication is blocked until Firebase Web Push returns a non-empty registration token. That token is sent as `deviceToken` in the OTP verification/onboarding contract and is cached as `FCM_TOKEN`.
+
+### Booking reminders (the 30-minute alarm)
+
+`src/lib/reminders.js` schedules a per-booking reminder **30 minutes before the slot** (`REMINDER_MINUTES_BEFORE`) using the same notification permission as push — no second funnel. Confirming a booking schedules it (`scheduleBookingReminder`, fire-and-forget so booking never blocks on it); cancelling a booking clears it (`cancelBookingReminder`); page reloads re-arm survivors from `localStorage` (`armStoredReminders`, mounted once in `AppRoot`). On browsers with `TimestampTrigger` the OS itself fires it even when the tab is closed; elsewhere an in-page timer falls back. The Account screen's **Booking reminders** switch (`remindersEnabled`/`setRemindersEnabled`) is the user control — turning it on while the browser permission is neutral is the moment the OS prompt is requested.
 
 ### Incomplete salon profile guard
 
@@ -179,12 +188,12 @@ Both paths use `useConfirm()`, never `window.confirm` — the native dialog is s
 
 ## 7. Browser permissions
 
-Notification permission is still required to sign in (the backend requires a `deviceToken`), but the portal explains it rather than demanding it, and always offers a next step:
+One notification permission does everything: sign-in pushes (the backend requires a `deviceToken`), booking alerts, and the 30-minute booking reminders (§3). It is asked compactly and always with a working next step:
 
-- **Never asked yet** — *"Turn on booking alerts"* with an **Allow** button and a **Need help?** link.
-- **Blocked** — a browser will not show its prompt a second time, so an Enable button there is a button that cannot work. That state shows **Show me how** instead, opening step-by-step instructions for the actual browser in use (Chrome on Android, Chrome/Edge/Firefox/Opera desktop, Samsung Internet, Safari and Chrome on iOS, Safari desktop) plus the support number.
-- **iPhone** — web push only exists for Home Screen apps, so the card gives the Add-to-Home-Screen steps rather than pointing at a Settings toggle iOS does not have.
-- **Location is optional and says so.** The card reads *"Show nearby salons first?"*, carries a **Not now** action that hides it for the session, and when blocked explains that salons are still listed, just without distances. It never blocks login.
+- **Never asked yet** — the login page's **Allow alerts** pill opens the browser's own popup from the tap; the same ask happens from the Account reminders switch.
+- **Blocked** — a browser will not show its prompt a second time, so the pill turns red as **Fix alerts** and opens the permission gate: step-by-step instructions for the actual browser in use (Chrome on Android, Chrome/Edge/Firefox/Opera desktop, Samsung Internet, Safari and Chrome on iOS, Safari desktop), an **I allowed it — Check** re-verification, a reload, plus the support number.
+- **iPhone** — web push only exists for Home Screen apps, so the gate gives the Add-to-Home-Screen steps rather than pointing at a Settings toggle iOS does not have.
+- **Location is optional.** It only powers distances and nearest-first sorting on discovery; the app works and logins happily without it, so there is no permission plea for it — discovery shows the unsorted salon list with an unobtrusive notice instead.
 
 ## 8. Salon time update and customer notification
 
@@ -296,7 +305,7 @@ Two workers have separate responsibilities and scopes:
 - `public/sw.js` owns the root app scope and caches the offline shell.
 - `public/firebase-messaging-sw.js` is registered only when Firebase push is configured, with scope `/firebase-cloud-messaging-push-scope`. It receives background FCM messages, shows a browser notification and handles click-through routing.
 
-They must not be merged into one worker or registered with the same scope. The PWA install prompt is captured by the app and offered during onboarding/authentication and from the workspace sidebar when the browser supports it.
+They must not be merged into one worker or registered with the same scope. The PWA install prompt is captured by the app and offered from the guest shell's top bar, the login page and the workspace sidebar when the browser supports it.
 
 ## 11. Device safe areas and in-app confirmations
 
