@@ -7,7 +7,7 @@
  * - Works on Android, iOS (PWA), Chrome, Edge, Firefox, Samsung Internet, Safari
  */
 
-const CACHE_NAME = 'mynaai-shell-v6';
+const CACHE_NAME = 'mynaai-shell-v7';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -173,19 +173,19 @@ function isPlanExpiredResponse(data) {
 
 function salonActionDestination(result) {
   return isPlanExpiredResponse(result?.data)
-    ? new URL('/#/subscription?mode=RENEW&forceRenewal=true', self.location.origin).href
-    : new URL('/#/queue', self.location.origin).href;
+    ? new URL('/subscription?mode=RENEW&forceRenewal=true', self.location.origin).href
+    : new URL('/queue', self.location.origin).href;
 }
 
 function notificationRoute(data) {
   const type = String(data.type || data.notificationType || '').toUpperCase();
   const id = encodeURIComponent(data.bookingRequestId || data.bookingId || '');
   if (type === 'DELAY_TIME_PROPOSAL') {
-    return `/#/delay?bookingRequestId=${id}&delayMinutes=${encodeURIComponent(data.delayMinutes || '')}&proposedTime=${encodeURIComponent(data.proposedTime || '')}${data.reason ? `&reason=${encodeURIComponent(data.reason)}` : ''}`;
+    return `/delay?bookingRequestId=${id}&delayMinutes=${encodeURIComponent(data.delayMinutes || '')}&proposedTime=${encodeURIComponent(data.proposedTime || '')}${data.reason ? `&reason=${encodeURIComponent(data.reason)}` : ''}`;
   }
-  if (type === 'BOOKING_CONFIRMED' || type === 'BOOKING_REJECTED' || type === 'DELAY_RESPONSE') return '/#/bookings';
-  if (type === 'BOOKING_REQUEST' || type === 'DELAY_BOOKING') return `/#/bookingRequest?bookingRequestId=${id}${type === 'DELAY_BOOKING' ? '&openDelayModal=true' : ''}`;
-  return '/#/';
+  if (type === 'BOOKING_CONFIRMED' || type === 'BOOKING_REJECTED' || type === 'DELAY_RESPONSE') return '/bookings';
+  if (type === 'BOOKING_REQUEST' || type === 'DELAY_BOOKING') return `/bookingRequest?bookingRequestId=${id}${type === 'DELAY_BOOKING' ? '&openDelayModal=true' : ''}`;
+  return '/';
 }
 
 // App Shell - Install
@@ -293,7 +293,7 @@ self.addEventListener('notificationclick', event => {
     const bookingRequestId = data.bookingRequestId || data.bookingId || '';
 
     if (action === ACTION_DELAY) {
-      const destination = new URL(`/#/bookingRequest?bookingRequestId=${encodeURIComponent(bookingRequestId)}&openDelayModal=true`, self.location.origin).href;
+      const destination = new URL(`/bookingRequest?bookingRequestId=${encodeURIComponent(bookingRequestId)}&openDelayModal=true`, self.location.origin).href;
       event.waitUntil(openOrFocus(destination));
       return;
     }

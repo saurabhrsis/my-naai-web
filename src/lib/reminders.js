@@ -75,7 +75,7 @@ async function showViaServiceWorker(entry, scheduledTs) {
       body: entry.body,
       tag: reminderTag(entry.bookingId),
       showTrigger: new TimestampTrigger(scheduledTs),
-      data: { url: `/#/bookings`, bookingId: entry.bookingId },
+      data: { url: '/bookings', bookingId: entry.bookingId },
     });
     return true;
   } catch (error) {

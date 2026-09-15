@@ -54,74 +54,75 @@ vi.mock('./lib/socket', () => ({
 }));
 vi.mock('./lib/buzzer', () => ({ playBuzzer: vi.fn(), unlockBuzzer: vi.fn() }));
 
-import App, { getRouteFromHash, parseRouteHash, resolveResumeRoute, routeToHash } from './App';
+import App, { getRouteFromPath, parseRoutePath, resolveResumeRoute, routeToPath } from './App';
 import * as push from './lib/push';
 import { stashPendingRoute, popPendingRoute } from './lib/pendingRoute';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-// jsdom normalises a history URL into a real location.hash, which is what makes
-// this a faithful test of what the browser hands the router.
-const setHash = value => { window.history.replaceState({}, '', `${window.location.pathname}${value}`); };
+// Tests drive the real browser history API (paths, not hashes) — exactly
+// what the address bar hands the router. `goto` performs an SPA navigation
+// (pushState + popstate, the same soft-nav the app uses internally).
+const setPath = value => { window.history.replaceState({}, '', value); };
+const goto = value => { window.history.pushState({}, '', value); window.dispatchEvent(new Event('popstate')); };
+const currentPath = () => `${window.location.pathname}${window.location.search}`;
 const flush = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
 
 beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
-  setHash('#/');
+  setPath('/');
   // A successful empty discovery list by default — guest-flow tests override it.
   userSalonList.mockReset().mockResolvedValue({ status: 'SUCCESS', data: { salons: [] } });
   userSalonListPublic.mockReset().mockResolvedValue({ status: 'SUCCESS', data: { salons: [] } });
 });
 
-describe('getRouteFromHash', () => {
-  it('falls back to the customer home screen when there is no usable hash', () => {
-    expect(getRouteFromHash('USER')).toEqual({ name: 'home', params: {} });
-    setHash('#/');
-    expect(getRouteFromHash('USER')).toEqual({ name: 'home', params: {} });
-    setHash('');
-    expect(getRouteFromHash(undefined)).toEqual({ name: 'home', params: {} });
+describe('getRouteFromPath', () => {
+  it('falls back to the customer home screen when there is no usable path', () => {
+    setPath('/');
+    expect(getRouteFromPath('USER')).toEqual({ name: 'home', params: {} });
+    setPath('');
+    expect(getRouteFromPath(undefined)).toEqual({ name: 'home', params: {} });
   });
 
   it('falls back to the salon queue for a partner session', () => {
-    expect(getRouteFromHash('SALON')).toEqual({ name: 'queue', params: {} });
+    setPath('/nonsense');
+    expect(getRouteFromPath('SALON')).toEqual({ name: 'queue', params: {} });
     // The role comes from localStorage and is not guaranteed to be upper case.
-    expect(getRouteFromHash('salon')).toEqual({ name: 'queue', params: {} });
-    setHash('#/nonsense');
-    expect(getRouteFromHash('SALON')).toEqual({ name: 'queue', params: {} });
+    expect(getRouteFromPath('salon')).toEqual({ name: 'queue', params: {} });
   });
 
-  it('reads the screen and its query params back out of the hash', () => {
-    setHash('#/bookings');
-    expect(getRouteFromHash('USER')).toEqual({ name: 'bookings', params: {} });
+  it('reads the screen and its query params back out of the path', () => {
+    setPath('/bookings');
+    expect(getRouteFromPath('USER')).toEqual({ name: 'bookings', params: {} });
 
-    setHash('#/detail?salonId=abc123');
-    expect(getRouteFromHash('USER')).toEqual({ name: 'detail', params: { salonId: 'abc123' } });
+    setPath('/detail?salonId=abc123');
+    expect(getRouteFromPath('USER')).toEqual({ name: 'detail', params: { salonId: 'abc123' } });
 
-    setHash('#/subscription?mode=RENEW&forceRenewal=true');
-    expect(getRouteFromHash('SALON')).toEqual({
+    setPath('/subscription?mode=RENEW&forceRenewal=true');
+    expect(getRouteFromPath('SALON')).toEqual({
       name: 'subscription',
       params: { mode: 'RENEW', forceRenewal: 'true' },
     });
   });
 
   it('restores the deep links a notification opens', () => {
-    setHash('#/bookingRequest?bookingRequestId=req-1&openDelayModal=true');
-    expect(getRouteFromHash('SALON')).toEqual({
+    setPath('/bookingRequest?bookingRequestId=req-1&openDelayModal=true');
+    expect(getRouteFromPath('SALON')).toEqual({
       name: 'bookingRequest',
       params: { bookingRequestId: 'req-1', openDelayModal: 'true' },
     });
 
-    setHash('#/delay?bookingRequestId=req-1&delayMinutes=15&reason=Traffic');
-    expect(getRouteFromHash('USER')).toEqual({
+    setPath('/delay?bookingRequestId=req-1&delayMinutes=15&reason=Traffic');
+    expect(getRouteFromPath('USER')).toEqual({
       name: 'delay',
       params: { bookingRequestId: 'req-1', delayMinutes: '15', reason: 'Traffic' },
     });
   });
 
   it('decodes percent-encoded params written by navigate()', () => {
-    setHash('#/schedule?salonId=s-1&service=Hair%20Cut%20%26%20Beard');
-    expect(getRouteFromHash('USER')).toEqual({
+    setPath('/schedule?salonId=s-1&service=Hair%20Cut%20%26%20Beard');
+    expect(getRouteFromPath('USER')).toEqual({
       name: 'schedule',
       params: { salonId: 's-1', service: 'Hair Cut & Beard' },
     });
@@ -130,58 +131,74 @@ describe('getRouteFromHash', () => {
   it('ignores a screen that belongs to the other role', () => {
     // A customer must not land on a partner-only screen: AppShell has no branch
     // for it on the customer side, so the shell would render nothing at all.
-    setHash('#/queue');
-    expect(getRouteFromHash('USER')).toEqual({ name: 'home', params: {} });
+    setPath('/queue');
+    expect(getRouteFromPath('USER')).toEqual({ name: 'home', params: {} });
 
-    setHash('#/products');
-    expect(getRouteFromHash('SALON')).toEqual({ name: 'queue', params: {} });
+    setPath('/products');
+    expect(getRouteFromPath('SALON')).toEqual({ name: 'queue', params: {} });
   });
 
-  it('tolerates a hash without the leading slash and a malformed query', () => {
-    setHash('#home');
-    expect(getRouteFromHash('USER')).toEqual({ name: 'home', params: {} });
-
-    // URLSearchParams is deliberately lenient, so junk in the query cannot break
-    // screen resolution: the route still lands on bookings and the params a
-    // screen actually reads survive.
-    setHash('#/bookings?%&bookingRequestId=req-1');
-    expect(getRouteFromHash('USER').name).toBe('bookings');
-    expect(getRouteFromHash('USER').params.bookingRequestId).toBe('req-1');
+  it('maps the privacy-policy URL segment onto the privacy route', () => {
+    setPath('/privacy-policy');
+    expect(getRouteFromPath(undefined)).toEqual({ name: 'privacy', params: {} });
+    expect(getRouteFromPath('USER')).toEqual({ name: 'privacy', params: {} });
+    // And routeToPath writes public segment names back out.
+    expect(routeToPath('privacy', {})).toBe('/privacy-policy');
+    expect(routeToPath('home', {})).toBe('/');
+    expect(routeToPath('about', {})).toBe('/about');
   });
 
-  it('parses the shareable per-salon link #/salon/<id>', () => {
-    expect(parseRouteHash('#/salon/salon-42')).toEqual({ name: 'salon', params: { salonId: 'salon-42' } });
-    expect(parseRouteHash('#/salon/salon-42?from=share')).toEqual({ name: 'salon', params: { salonId: 'salon-42', from: 'share' } });
+  it('tolerates a bare segment and a malformed query', () => {
+    setPath('/bookings?%&bookingRequestId=req-1');
+    expect(getRouteFromPath('USER').name).toBe('bookings');
+    expect(getRouteFromPath('USER').params.bookingRequestId).toBe('req-1');
+  });
+
+  it('parses the shareable per-salon link /salon/<id>', () => {
+    expect(parseRoutePath('/salon/salon-42')).toEqual({ name: 'salon', params: { salonId: 'salon-42' } });
+    expect(parseRoutePath('/salon/salon-42?from=share')).toEqual({ name: 'salon', params: { salonId: 'salon-42', from: 'share' } });
     // And back. In-session object params (a prefetched salon record) never leak
     // into the URL — only the scalar slots do.
-    expect(routeToHash('salon', { salonId: 'salon-42', salon: { name: 'X' } })).toBe('#/salon/salon-42');
-    expect(routeToHash('bookings', {})).toBe('#/bookings');
+    expect(routeToPath('salon', { salonId: 'salon-42', salon: { name: 'X' } })).toBe('/salon/salon-42');
+    expect(routeToPath('bookings', {})).toBe('/bookings');
   });
 
   it('opens salon links for guests but keeps account screens gated', () => {
     // No role = browsing before login: home and the salon page are public.
-    setHash('#/salon/salon-42');
-    expect(getRouteFromHash(undefined)).toEqual({ name: 'salon', params: { salonId: 'salon-42' } });
+    setPath('/salon/salon-42');
+    expect(getRouteFromPath(undefined)).toEqual({ name: 'salon', params: { salonId: 'salon-42' } });
 
-    setHash('#/bookings');
-    expect(getRouteFromHash(undefined)).toEqual({ name: 'home', params: {} });
+    setPath('/bookings');
+    expect(getRouteFromPath(undefined)).toEqual({ name: 'home', params: {} });
 
-    setHash('#/home');
-    expect(getRouteFromHash(null)).toEqual({ name: 'home', params: {} });
+    setPath('/home');
+    expect(getRouteFromPath(null)).toEqual({ name: 'home', params: {} });
+  });
+
+  it('still resolves legacy #/ hash links shared before the routing switch', () => {
+    window.history.replaceState({}, '', '/#/salon/legacy-8');
+    expect(getRouteFromPath(undefined)).toEqual({ name: 'salon', params: { salonId: 'legacy-8' } });
+    // The address bar is upgraded in place so refresh/back stay on the path URL.
+    expect(currentPath()).toBe('/salon/legacy-8');
+
+    window.history.replaceState({}, '', '/#/bookings');
+    expect(getRouteFromPath('USER')).toEqual({ name: 'bookings', params: {} });
   });
 
   it('resumes the exact page a guest stashed, once it is valid for their role', () => {
-    stashPendingRoute('#/salon/salon-42');
-    expect(popPendingRoute()).toBe('#/salon/salon-42');
+    stashPendingRoute('/salon/salon-42');
+    expect(popPendingRoute()).toBe('/salon/salon-42');
     // One-shot: the stash is consumed by the pop.
     expect(popPendingRoute()).toBe('');
 
+    expect(resolveResumeRoute('USER', '/salon/salon-42')).toEqual({ name: 'salon', params: { salonId: 'salon-42' } });
+    // Legacy stashes from the hash era are normalised too.
     expect(resolveResumeRoute('USER', '#/salon/salon-42')).toEqual({ name: 'salon', params: { salonId: 'salon-42' } });
     // The customer salon link a partner was sent means nothing to their account.
-    expect(resolveResumeRoute('SALON', '#/salon/salon-42')).toBeNull();
-    expect(resolveResumeRoute('USER', '#/queue')).toBeNull();
+    expect(resolveResumeRoute('SALON', '/salon/salon-42')).toBeNull();
+    expect(resolveResumeRoute('USER', '/queue')).toBeNull();
     // Login itself is never a resume target — it is stored *from*, not *to*.
-    stashPendingRoute('#/login');
+    stashPendingRoute('/login');
     expect(popPendingRoute()).toBe('');
   });
 });
@@ -205,7 +222,7 @@ describe('App routing on mount', () => {
         ? { salon: { salonId: 'salon-1', profileCompleted: true } }
         : { userId: 'user-1' },
     ));
-    setHash(hash);
+    setPath(hash);
   };
 
   const mount = async () => {
@@ -227,27 +244,27 @@ describe('App routing on mount', () => {
   });
 
   it('renders the screen named in the hash for a customer', async () => {
-    signIn('USER', '#/bookings');
+    signIn('USER', '/bookings');
     await mount();
     expect(headings()).toContain('My bookings');
   });
 
   it('renders the deep link a booking-request notification opens for a salon', async () => {
     salonProfile.mockResolvedValue({ status: 'SUCCESS', data: { salon: { profileCompleted: true } } });
-    signIn('SALON', '#/bookingRequest?bookingRequestId=req-1');
+    signIn('SALON', '/bookingRequest?bookingRequestId=req-1');
     await mount();
     expect(headings().some(text => /booking request/i.test(text))).toBe(true);
   });
 
   it('falls back to the role home screen for an unknown hash', async () => {
-    signIn('USER', '#/not-a-screen');
+    signIn('USER', '/not-a-screen');
     await mount();
     expect(container.querySelector('.home-screen, .screen')).not.toBeNull();
     expect(headings().length).toBeGreaterThan(0);
   });
 
   it('keeps a signed-in session inside the app: #/login resolves to the dashboard home', async () => {
-    signIn('USER', '#/login');
+    signIn('USER', '/login');
     await mount();
     // The public navbar must never render for a session — only logout returns them.
     expect(container.querySelector('.guest-shell')).toBeNull();
@@ -255,7 +272,7 @@ describe('App routing on mount', () => {
   });
 
   it('uses the personalized salon list endpoint for a signed-in customer', async () => {
-    signIn('USER', '#/home');
+    signIn('USER', '/home');
     await mount();
     await flush();
     expect(userSalonList).toHaveBeenCalled();
@@ -263,11 +280,11 @@ describe('App routing on mount', () => {
   });
 
   it('follows the hash when the user navigates back and forward', async () => {
-    signIn('USER', '#/bookings');
+    signIn('USER', '/bookings');
     await mount();
     expect(headings()).toContain('My bookings');
 
-    await act(async () => { window.location.hash = '#/notifications'; });
+    await act(async () => { goto('/notifications'); });
     await flush();
     expect(headings()).toContain('Notifications');
   });
@@ -315,7 +332,7 @@ describe('Guest browsing flow', () => {
   });
 
   it('shows salons to a guest with no login wall', async () => {
-    setHash('#/home');
+    setPath('/');
     await mount();
 
     expect(container.querySelector('.guest-shell')).not.toBeNull();
@@ -328,7 +345,7 @@ describe('Guest browsing flow', () => {
   });
 
   it('loads the discovery list from the token-free public endpoint', async () => {
-    setHash('#/home');
+    setPath('/');
     await mount();
 
     expect(userSalonListPublic).toHaveBeenCalled();
@@ -337,7 +354,7 @@ describe('Guest browsing flow', () => {
   });
 
   it('navigates the site routes from the navbar', async () => {
-    setHash('#/home');
+    setPath('/');
     await mount();
 
     const nav = container.querySelector('.site-nav-links');
@@ -347,19 +364,19 @@ describe('Guest browsing flow', () => {
 
     await act(async () => { Array.from(nav.querySelectorAll('button')).find(node => node.textContent === 'About').click(); });
     await flush();
-    expect(window.location.hash).toBe('#/about');
+    expect(currentPath()).toBe('/about');
     expect(container.querySelector('.info-screen')).not.toBeNull();
     expect(container.querySelector('.site-nav-links button.active')?.textContent).toBe('About');
 
     await act(async () => { Array.from(container.querySelector('.site-nav-links').querySelectorAll('button')).find(node => node.textContent === 'Contact').click(); });
     await flush();
-    expect(window.location.hash).toBe('#/contact');
+    expect(currentPath()).toBe('/contact');
     expect(container.textContent).toContain('Contact us');
     expect(container.textContent).toContain('8380017393');
   });
 
   it('opens a shared salon link (#/salon/<id>) straight on the salon page', async () => {
-    setHash('#/salon/salon-9');
+    setPath('/salon/salon-9');
     await mount();
 
     expect(container.querySelector('.detail-screen')).not.toBeNull();
@@ -367,34 +384,34 @@ describe('Guest browsing flow', () => {
   });
 
   it('asks for login only at booking intent and remembers the exact salon', async () => {
-    setHash('#/home');
+    setPath('/');
     await mount();
 
     await act(async () => { buttonByText('Book now').click(); });
     await flush();
 
-    expect(window.location.hash).toBe('#/login');
-    expect(sessionStorage.getItem('mynaaiPendingRoute')).toBe('#/salon/salon-9');
+    expect(currentPath()).toBe('/login');
+    expect(sessionStorage.getItem('mynaaiPendingRoute')).toBe('/salon/salon-9');
     expect(container.querySelector('.auth-page')).not.toBeNull();
     // The login page volunteers a way back to browsing — it must not feel trapped.
     expect(buttonByText('Browse salons')).not.toBeNull();
   });
 
   it('gives the guest home a website footer with app badges and route links', async () => {
-    setHash('#/home');
+    setPath('/');
     await mount();
 
     const footer = container.querySelector('.site-footer');
     expect(footer).not.toBeNull();
     expect(footer.querySelector('a[href*="play.google.com/store/apps/details?id=com.mynaai"]')).not.toBeNull();
     expect(footer.textContent).toContain('COMING SOON'); // the iOS chip
-    expect(footer.querySelector('a[href="/about"], a[href="#/about"]')).not.toBeNull();
-    expect(footer.querySelector('a[href="/faq"], a[href="#/faq"]')).not.toBeNull();
-    expect(footer.querySelector('a[href="/terms"], a[href="#/terms"]')).not.toBeNull();
+    expect(footer.querySelector('a[href="/about"]')).not.toBeNull();
+    expect(footer.querySelector('a[href="/faq"]')).not.toBeNull();
+    expect(footer.querySelector('a[href="/terms"]')).not.toBeNull();
   });
 
   it('opens the website info pages to guests without a login gate', async () => {
-    setHash('#/about');
+    setPath('/about');
     await mount();
 
     expect(container.querySelector('.info-screen')).not.toBeNull();
@@ -402,24 +419,43 @@ describe('Guest browsing flow', () => {
     expect(container.querySelector('.auth-page')).toBeNull();
     expect(container.querySelector('.site-footer')).not.toBeNull();
 
-    await act(async () => { window.location.hash = '#/faq'; });
+    await act(async () => { goto('/faq'); });
     await flush();
     expect(container.textContent).toContain('Frequently asked questions');
     expect(container.querySelector('.auth-page')).toBeNull();
   });
 
+  it('renders full Terms and Privacy Policy pages for guests, linked from the footer', async () => {
+    setPath('/terms');
+    await mount();
+    expect(container.querySelector('.legal-screen')).not.toBeNull();
+    expect(container.textContent).toContain('Terms & Conditions');
+    expect(container.textContent).toContain('Effective Date: 09 January 2026');
+    expect(container.textContent).toContain('4. Payments');
+
+    const privacyLink = container.querySelector('.site-footer a[href="/privacy-policy"]');
+    expect(privacyLink).not.toBeNull();
+    await act(async () => { privacyLink.click(); });
+    await flush();
+    expect(currentPath()).toBe('/privacy-policy');
+    expect(container.textContent).toContain('Privacy Policy');
+    expect(container.textContent).toContain('support@mynaai.com');
+    expect(container.textContent).toContain('made directly at the salon');
+    expect(container.querySelector('.auth-page')).toBeNull();
+  });
+
   it('returns to the salon page when the guest backs out of logging in', async () => {
-    setHash('#/salon/salon-9');
+    setPath('/salon/salon-9');
     await mount();
 
     await act(async () => { buttonByText('Login to book').click(); });
     await flush();
-    expect(window.location.hash).toBe('#/login');
-    expect(sessionStorage.getItem('mynaaiPendingRoute')).toBe('#/salon/salon-9');
+    expect(currentPath()).toBe('/login');
+    expect(sessionStorage.getItem('mynaaiPendingRoute')).toBe('/salon/salon-9');
 
     await act(async () => { buttonByText('Browse salons').click(); });
     await flush();
-    expect(window.location.hash).toBe('#/salon/salon-9');
+    expect(currentPath()).toBe('/salon/salon-9');
     expect(sessionStorage.getItem('mynaaiPendingRoute')).toBeNull();
     expect(container.querySelector('.detail-screen')).not.toBeNull();
   });
@@ -465,7 +501,7 @@ describe('Login permission flow', () => {
   beforeEach(() => {
     // Browsing is public now, so a bare hash opens the guest home — these
     // tests target the login flow, which lives at its own route.
-    setHash('#/login');
+    setPath('/login');
     vi.mocked(push.getPushStatus).mockReset().mockResolvedValue({ state: 'needs-permission', reason: '' });
     vi.mocked(push.getPushToken).mockReset().mockResolvedValue('');
     vi.mocked(push.isEmbeddedFrame).mockReset().mockReturnValue(false);

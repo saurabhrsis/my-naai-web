@@ -79,7 +79,8 @@ if ('serviceWorker' in navigator) {
     }
     if (data.type === 'MYNAAI_NAVIGATE' && data.target) {
       try {
-        window.location.hash = data.target.replace(/^\/#/, '#');
+        window.history.pushState({}, '', data.target.startsWith('#') ? data.target.replace(/^#+/, '') : data.target);
+        window.dispatchEvent(new Event('popstate'));
       } catch {}
     }
   });

@@ -48,6 +48,7 @@ import { describeOffset } from '../lib/bookingTime';
 import { getNotificationRoute, isActionableNotification } from '../lib/push';
 import { armStoredReminders, cancelBookingReminder, remindersEnabled, scheduleBookingReminder, setRemindersEnabled } from '../lib/reminders';
 import { stashPendingRoute } from '../lib/pendingRoute';
+import { softNavigate } from '../lib/routes';
 
 import { subscribeToLiveUpdates } from '../lib/socket';
 import { LOGOUT_CONFIRM, useConfirm } from './ConfirmDialog';
@@ -186,7 +187,7 @@ function GenderToggle({ value, onChange }) {
 // available, clipboard copy otherwise.
 export function salonShareUrl(salon) {
   const id = salon.salonId || salon.id;
-  return `${window.location.origin}${window.location.pathname}#/salon/${id}`;
+  return `${window.location.origin}/salon/${id}`;
 }
 
 async function shareSalon(salon, notify) {
@@ -376,7 +377,7 @@ export function HomeScreen({ session, navigate, notify }) {
 
   const bookSalon = item => {
     if (isGuest) {
-      stashPendingRoute(`#/salon/${item.id}`);
+      stashPendingRoute(`/salon/${item.id}`);
       notify?.('info', 'Login to book this salon.');
       navigate('login');
       return;
@@ -386,7 +387,7 @@ export function HomeScreen({ session, navigate, notify }) {
 
   const bookmark = async salonId => {
     if (isGuest) {
-      stashPendingRoute('#/home');
+      stashPendingRoute('/');
       notify?.('info', 'Login to save a salon.');
       navigate('login');
       return;
@@ -645,7 +646,7 @@ export function SalonDetailScreen({ session, params, navigate, notify }) {
   // their exact salon page via the pending-route stash, and auth resumes it.
   const continueToBooking = () => {
     if (isGuest) {
-      stashPendingRoute(`#/salon/${salonRouteId}`);
+      stashPendingRoute(`/salon/${salonRouteId}`);
       notify?.('info', 'Login to book this salon.');
       navigate('login');
       return;
@@ -913,7 +914,8 @@ export function DelayRequestScreen({ params, navigate, notify }) {
 const INFO_CONTENT = {
   about: { title: 'About My Naai', eyebrow: 'THE IDEA', intro: 'Your time is valuable. My Naai connects you with trusted local salons so you can find a great specialist, book a slot and skip the wait.', sections: [{ title: 'A calmer way to get ready', text: 'We built My Naai for people who want the confidence of a good salon visit without spending their day in a queue.' }, { title: 'For every kind of look', text: 'Discover male, female and unisex salons, from a quick trim to a full refresh, with clear services and convenient time slots.' }, { title: 'Our promise', bullets: ['Simple, thoughtful booking', 'Verified salon partners near you', 'Clear availability and appointment updates'] }] },
   faq: { title: 'Frequently asked questions', eyebrow: 'NEED TO KNOW', sections: [{ title: 'How do I book a salon?', text: 'Choose your salon, select one or more services, pick an available specialist and time, then confirm your booking request.' }, { title: 'Can I cancel a booking?', text: 'Yes. Open My bookings and choose Cancel booking on a pending or confirmed appointment.' }, { title: 'What happens after I send a request?', text: 'The salon receives your request and confirms it. You will see the latest status in My bookings and receive an update.' }, { title: 'Can I use My Naai as a salon owner?', text: 'Absolutely. Use Continue as Salon Partner on the login screen to sign in or register your salon.' }] },
-  terms: { title: 'Terms & conditions', eyebrow: 'PLEASE READ', intro: 'By using My Naai, you agree to use the service respectfully and provide accurate information when making an appointment.', sections: [{ title: 'Bookings', text: 'Appointments are requests until the salon confirms them. Please arrive at least 10 minutes before your selected time. Service duration and availability may vary.' }, { title: 'Cancellations', text: 'Cancel as early as possible so the salon can offer the slot to another customer. The salon may decline or change a request based on availability.' }, { title: 'Information', text: 'We use your account and location information to help show relevant salons and manage your bookings. Please keep your account details up to date.' }] },
+  terms: { title: 'Terms & Conditions', eyebrow: 'PLEASE READ', date: 'Effective Date: 09 January 2026', intro: 'Welcome to MyNaai. By accessing or using the MyNaai website or app, you accept these Terms and Conditions. If you do not agree with any part of them, please do not continue to use the service.', sections: [{ title: '1. The service', text: 'MyNaai connects you with nearby salons so you can request an appointment, follow its status and keep track of your bookings. Appointments remain requests until the salon confirms them.', bullets: ['Choose a salon, services, specialist and time', 'The salon confirms, declines or proposes a new time', 'Arrive at least 10 minutes before your slot'] }, { title: '2. Your account', text: 'You are responsible for keeping your login OTP and account secure and for everything that happens under it. Please keep your name and mobile number accurate and up to date — booking alerts reach you through them.' }, { title: '3. Bookings, delays and cancellations', text: 'Cancel as early as possible so the salon can offer the slot to another customer. The salon may decline or change a request based on availability, and may propose a small time delay you can accept or decline.', bullets: ['You can cancel from My bookings while the visit is upcoming', 'A salon delay offer needs your acceptance to take effect', 'Repeated last-minute cancellations may limit booking'] }, { title: '4. Payments', text: 'All payments are made directly at the salon — not through MyNaai. Price ranges shown on salon pages are indicative; the salon determines the final amount.' }, { title: '5. Fair use', text: 'Please use MyNaai respectfully: accurate details at booking, no misuse of salons\u2019 or other users\u2019 information, and no attempts to disrupt the service. We may suspend accounts that abuse the platform.' }, { title: '6. Privacy', text: 'Your privacy matters to us. The Privacy Policy on this site explains what we collect, how we use it and the choices you have — it is part of these terms.' }, { title: '7. Service changes', text: 'We may improve, modify or pause parts of the service at any time. We are not liable for any modification, suspension or discontinuance, though we always aim to communicate material changes on this page.' }, { title: '8. Questions', text: 'MyNaai is built in India. For anything about these terms, call 8380017393 or write to support@mynaai.com.' }] },
+  privacy: { title: 'Privacy Policy', eyebrow: 'YOUR DATA', date: 'Effective Date: 09 January 2026', intro: 'MyNaai (“we”, “our”, “us”) operates the MyNaai mobile application and website. This Privacy Policy explains how we collect, use and protect your information when you use our services.', sections: [{ title: '1. Information we collect', text: 'Personal information:', bullets: ['Name', 'Mobile number', 'Email address (optional)', 'Location (city/area only)', 'Profile details (optional)'] }, { title: 'Booking information', bullets: ['Selected salon', 'Appointment date & time', 'Service details'] }, { title: 'Device information', bullets: ['Device type', 'Operating system', 'App version', 'IP address (for security & analytics)'] }, { title: '2. What we do NOT collect', text: 'We do not collect or store: credit or debit card details, UPI or wallet information, bank account details or any online payment information. All payments are made directly at the salon and not through the app.' }, { title: '3. How we use your information', bullets: ['To show nearby salons', 'To enable appointment booking', 'To notify you about booking updates and reminders', 'To improve app performance and user experience', 'To prevent fraud and misuse'] }, { title: '4. Location information', text: 'MyNaai may use approximate location (city or area) to show nearby salons. We do not track real-time or background location.' }, { title: '5. Data sharing', text: 'We do not sell or rent your personal data. Information may be shared only:', bullets: ['With the selected salon for booking confirmation', 'When required by law', 'To protect users and platform security'] }, { title: '6. Data security', text: 'We use reasonable security measures such as secure servers and encrypted communication to protect user data. However, no method of transmission over the internet is 100% secure.' }, { title: '7. Children\u2019s privacy', text: 'MyNaai is not intended for children under the age of 13. We do not knowingly collect personal information from children.' }, { title: '8. Your rights', bullets: ['Update or correct your profile', 'Request account deletion', 'Contact us for data-related concerns'] }, { title: '9. Third-party services', text: 'We may use third-party services for analytics, notifications, and app performance monitoring. These services have their own privacy policies.' }, { title: '10. Changes to this policy', text: 'We may update this Privacy Policy from time to time. Changes will be posted on this page with an updated effective date.' }, { title: '11. Contact us', text: 'MyNaai — Email: support@mynaai.com · Location: India. You can also call our support team on 8380017393.' }] },
   contact: { title: 'Contact us', eyebrow: 'TALK TO US', intro: 'Booking help, account questions or partnership — one call reaches the My Naai team.', sections: [{ title: 'Customer support', text: 'Call 8380017393 for anything about your bookings, reminders or account. You can also tap the call button below.' }, { title: 'Own a salon? Partner with us', text: 'Open Login, switch to Salon partner, and register — our team helps your salon go live with bookings, queue updates and its own shareable page.' }, { title: 'My Naai, everywhere', bullets: ['Android app on Google Play', 'iOS app coming soon', 'Full booking right here on the web — add to Home Screen for the app feel'] }] },
 };
 
@@ -924,6 +926,16 @@ export const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com
 // Website-style footer for the public pages (home `#/`, salon, About/FAQ/
 // Terms). Hash-link anchors keep it fully route-based in both the guest shell
 // and the signed-in shell — no special casing, the router resolves them.
+// Real path hrefs keep the links valid for search engines and "open in new
+// tab"; the click handler turns them into router pushes (no reload) inside
+// the app, guest or signed-in, because the route listener owns popstate.
+function footerNav(event) {
+  const href = event.currentTarget.getAttribute('href');
+  if (!href || href.startsWith('tel:')) return;
+  event.preventDefault();
+  softNavigate(href);
+}
+
 export function SiteFooter() {
   return (
     <footer className="site-footer">
@@ -945,18 +957,20 @@ export function SiteFooter() {
       </div>
       <p className="site-footer-webnote"><Globe size={14} /> Using an iPhone or a computer? Everything — browsing, booking, live updates — works right here on the web. Add this page to your Home Screen for the app feel.</p>
       <nav className="site-footer-links" aria-label="Site links">
-        <a href="#/">Salons near you</a>
-        <a href="#/about">About</a>
-        <a href="#/faq">FAQ</a>
-        <a href="#/terms">Terms &amp; Conditions</a>
+        <a href="/" onClick={footerNav}>Salons near you</a>
+        <a href="/about" onClick={footerNav}>About</a>
+        <a href="/faq" onClick={footerNav}>FAQ</a>
+        <a href="/terms" onClick={footerNav}>Terms &amp; Conditions</a>
+        <a href="/privacy-policy" onClick={footerNav}>Privacy Policy</a>
+        <a href="/contact" onClick={footerNav}>Contact</a>
         <a href="tel:8380017393">Support: 8380017393</a>
       </nav>
-      <div className="site-footer-bottom"><span>© {new Date().getFullYear()} My Naai · All rights reserved</span><a href="#/">mynaai.in</a></div>
+      <div className="site-footer-bottom"><span>© {new Date().getFullYear()} My Naai · All rights reserved</span><a href="/" onClick={footerNav}>mynaai.in</a></div>
     </footer>
   );
 }
 
 export function InfoScreen({ type, navigate }) {
   const content = INFO_CONTENT[type] || INFO_CONTENT.about;
-  return <div className="screen info-screen"><PageHeader title={content.title} eyebrow={content.eyebrow} onBack={() => navigate(-1)} /><div className="info-intro"><Sparkles size={18} /><p>{content.intro || 'Everything you need to know about using My Naai.'}</p></div><div className="info-sections">{content.sections.map(section => <section key={section.title}><h2>{section.title}</h2>{section.text && <p>{section.text}</p>}{section.bullets && <ul>{section.bullets.map(item => <li key={item}><CheckCircle2 size={16} />{item}</li>)}</ul>}</section>)}</div><div className="info-contact"><span className="info-contact-icon"><Phone size={18} /></span><div><strong>Need more help?</strong><p>Call our support team on 8380017393</p></div><button onClick={() => window.open('tel:8380017393')}><ArrowRight size={17} /></button></div><SiteFooter /></div>;
+  return <div className={cx('screen info-screen', ['terms', 'privacy'].includes(type) && 'legal-screen')}><PageHeader title={content.title} eyebrow={content.eyebrow} subtitle={content.date || undefined} onBack={() => navigate(-1)} /><div className="info-intro"><Sparkles size={18} /><p>{content.intro || 'Everything you need to know about using My Naai.'}</p></div><div className="info-sections">{content.sections.map(section => <section key={section.title}><h2>{section.title}</h2>{section.text && <p>{section.text}</p>}{section.bullets && <ul>{section.bullets.map(item => <li key={item}><CheckCircle2 size={16} />{item}</li>)}</ul>}</section>)}</div><div className="info-contact"><span className="info-contact-icon"><Phone size={18} /></span><div><strong>Need more help?</strong><p>Call our support team on 8380017393</p></div><button onClick={() => window.open('tel:8380017393')}><ArrowRight size={17} /></button></div><SiteFooter /></div>;
 }

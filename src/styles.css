@@ -748,6 +748,16 @@ img { display: block; max-width: 100%; }
   .site-navbar .install-auth-button svg { flex: none; }
 }
 .site-navbar .install-login-button { margin: 0; } /* pill margin is only for the login page context */
+
+/* Login page legal line: the terms/privacy agreements are links that look
+   like the sentence they sit in. */
+.auth-legal button { display: inline; padding: 0; border: 0; background: none; color: var(--gold); font: inherit; text-decoration: underline; cursor: pointer; }
+.auth-legal button:hover { color: var(--white); }
+
+/* Legal pages (Terms, Privacy Policy): a document read, a touch narrower and
+   calmer than the marketing info pages. */
+.legal-screen { max-width: 860px; }
+.legal-screen .info-sections section h2 { font-size: 14px; }
 @media (min-width: 1490px) {
   .site-navbar { padding-left: calc((100% - 1460px) / 2 + 15px); padding-right: calc((100% - 1460px) / 2 + 15px); }
 }

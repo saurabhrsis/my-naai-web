@@ -33,6 +33,7 @@ import { playBuzzer, unlockBuzzer } from './lib/buzzer';
 import { resetLiveUpdatesSocket } from './lib/socket';
 import { armStoredReminders } from './lib/reminders';
 import { popPendingRoute, stashPendingRoute } from './lib/pendingRoute';
+import { legacyHashToRoute, parseRoutePath, routeToPath, softNavigate } from './lib/routes';
 import { DEFAULT_SERVICES } from './lib/defaultServices';
 import { getSubscriptionState } from './lib/planDetails';
 import { getSalonSubscriptionProfile, getSalonSubscriptionState, salonProfileNeedsCompletion as salonNeedsProfileCompletion } from './lib/salonProfile';
@@ -98,84 +99,69 @@ function saveSession(session) {
   return { ...session, role, userId: session.userId || user?.userId || user?.salon?.salonId || user?.salonId || user?.id || '' };
 }
 
-// Hash routing. `navigate` writes `#/<screen>?<query>`, and `getRouteFromHash`
-// is its inverse: it turns the current hash back into `{ name, params }`. It runs
-// on first paint (so a refresh keeps you on the screen you were on), on
-// popstate/hashchange (browser back/forward), and when another tab rewrites the
-// stored session. It also has to accept the deep links notifications open —
-// `/#/bookingRequest?bookingRequestId=…` for a partner, `/#/delay?…` for a
-// customer — which is why an unknown or role-mismatched screen falls back to the
-// role's home instead of rendering a screen the shell has no branch for.
-const USER_ROUTE_NAMES = ['home', 'bookings', 'products', 'account', 'detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'contact'];
+// History routing (real paths, no hashes, in src/lib/routes.js): `/` is the
+// home page, `/salon/<id>` a salon's public page, `/<screen>?<query>` the rest
+// — `/privacy-policy` maps to the `privacy` route via segment aliases.
+// `navigate` writes paths, `getRouteFromPath` reads them back into
+// `{ name, params }`. It runs on first paint (refresh keeps your screen), on
+// popstate (browser back/forward) and when another tab rewrites the stored
+// session. It also accepts notification deep links — `/bookingRequest?…` for a
+// partner, `/delay?…` for a customer — and upgrades legacy `#/...` links in
+// place (readLocationRoute), which is why an unknown or role-mismatched screen
+// falls back to the role's home instead of rendering a screen the shell has
+// no branch for.
+const USER_ROUTE_NAMES = ['home', 'bookings', 'products', 'account', 'detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'privacy', 'contact'];
 const SALON_ROUTE_NAMES = ['queue', 'history', 'salonProducts', 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
 // Every route a visitor may open WITHOUT an account — salons are browsable
 // first, login only appears when they try to book (the client's headline
-// ask). The info pages are public too: the site footer links About/FAQ/Terms
-// and a website's legal pages must never sit behind a login. `login` is
-// handled by AppRoot itself, not by the guest shell.
-const GUEST_ROUTE_NAMES = ['home', 'salon', 'about', 'faq', 'terms', 'contact'];
+// ask). The info pages are public too: the site footer links About/FAQ/Terms/
+// Privacy and a website's legal pages must never sit behind a login. `login`
+// is handled by AppRoot itself, not by the guest shell.
+const GUEST_ROUTE_NAMES = ['home', 'salon', 'about', 'faq', 'terms', 'privacy', 'contact'];
 const PUBLIC_ROUTE_NAMES = [...GUEST_ROUTE_NAMES, 'login'];
 
 function defaultRouteForRole(role) {
   return { name: String(role || '').toUpperCase() === 'SALON' ? 'queue' : 'home', params: {} };
 }
 
-// Pure hash parsing, shared by getRouteFromHash and the post-login resume.
 // Accepts both the classic `#/<screen>?<query>` shape and the shareable
 // per-salon link `#/salon/<id>?<query>` — the id nests in the path so the URL
 // reads like a real link someone can paste into WhatsApp.
-export function parseRouteHash(hash) {
-  const clean = String(hash || '').replace(/^#/, '');
-  const [rawName, rawQuery = ''] = clean.split('?');
-  let name = '';
-  try { name = decodeURIComponent(rawName); } catch { name = rawName; }
-  name = name.replace(/^\/+|\/+$/g, '');
-  const params = {};
-  const segments = name.split('/');
-  if (segments.length > 1) {
-    const rest = segments.slice(1).join('/');
-    name = segments[0];
-    if (rest) {
-      try { params.salonId = decodeURIComponent(rest); } catch { params.salonId = rest; }
+// parseRoutePath / routeToPath live in src/lib/routes.js (shared, no React
+// cycle) and are re-exported here so existing imports keep working.
+export { parseRoutePath, routeToPath };
+
+// Read the browser location as a route, with legacy-hash upgrade: an old
+// shared `#/salon/<id>` link (or a notification tap written in the hash era)
+// still resolves, and the address bar is rewritten to the clean path so
+// refreshes and the back button stay consistent.
+function readLocationRoute() {
+  const path = parseRoutePath(`${window.location.pathname}${window.location.search}`);
+  if (!path.name) {
+    const legacy = legacyHashToRoute(window.location.hash);
+    if (legacy?.name) {
+      window.history.replaceState({}, '', routeToPath(legacy.name, legacy.params));
+      return legacy;
     }
   }
-  try {
-    for (const [key, value] of new URLSearchParams(rawQuery).entries()) params[key] = value;
-  } catch (parseError) {
-    console.debug(getErrorMessage(parseError, 'Ignored an unreadable route query string.'));
-  }
-  return { name, params };
+  return path;
 }
 
-// Inverse of parseRouteHash: the salon screen gets the pretty nested link,
-// everything else keeps `#/<screen>?<query>`. Object-typed params (e.g. a
-// prefetched salon object handed over in-session) never go into the URL.
-export function routeToHash(name, params = {}) {
-  const serializable = Object.fromEntries(Object.entries(params || {}).filter(([, value]) => value !== null && value !== undefined && typeof value !== 'object'));
-  if (name === 'salon' && serializable.salonId) {
-    const { salonId, ...rest } = serializable;
-    const query = new URLSearchParams(rest).toString();
-    return `#/salon/${encodeURIComponent(salonId)}${query ? `?${query}` : ''}`;
-  }
-  const query = new URLSearchParams(serializable).toString();
-  return `#/${name}${query ? `?${query}` : ''}`;
-}
-
-export function getRouteFromHash(role) {
+export function getRouteFromPath(role) {
   const fallback = defaultRouteForRole(role);
   if (typeof window === 'undefined') return fallback;
-  const route = parseRouteHash(window.location.hash);
+  const route = readLocationRoute();
   const roleKey = String(role || '').toUpperCase();
   const knownRoutes = !roleKey ? PUBLIC_ROUTE_NAMES : roleKey === 'SALON' ? SALON_ROUTE_NAMES : USER_ROUTE_NAMES;
   if (!knownRoutes.includes(route.name)) return fallback;
   return route;
 }
 
-// Validate a stashed resume hash for the role that just logged in (the salon
+// Validate a stashed resume path for the role that just logged in (the salon
 // deep link a customer was browsing means nothing to a partner account).
 export function resolveResumeRoute(role, hash) {
   if (!hash) return null;
-  const parsed = parseRouteHash(hash);
+  const parsed = parseRoutePath(hash.startsWith('#') ? hash.replace(/^#+/, '') : hash);
   const knownRoutes = String(role || '').toUpperCase() === 'SALON' ? SALON_ROUTE_NAMES : USER_ROUTE_NAMES;
   return knownRoutes.includes(parsed.name) ? parsed : null;
 }
@@ -998,15 +984,16 @@ function AppRoot() {
     if (!session) {
       // A first-visit deep link that needs an account goes through login and
       // resumes afterwards; guest routes render the public shell directly.
-      const raw = parseRouteHash(window.location.hash);
+      // readLocationRoute also upgrades legacy `#/...` share links in place.
+      const raw = readLocationRoute();
       if (raw.name && !PUBLIC_ROUTE_NAMES.includes(raw.name)) {
-        stashPendingRoute(window.location.hash);
+        stashPendingRoute(`${window.location.pathname}${window.location.search}`);
         return { name: 'login', params: {} };
       }
       if (!raw.name) return { name: 'home', params: {} };
       return raw;
     }
-    return getRouteFromHash(session.role);
+    return getRouteFromPath(session.role);
   });
   const [installPrompt, setInstallPrompt] = useState(() => {
     // Check if prompt was already captured in index.html
@@ -1095,9 +1082,9 @@ function AppRoot() {
     const nextRoute = needsSalonProfile ? 'editProfile' : resume?.name || (stored.role === 'SALON' ? 'queue' : 'home');
     const nextParams = needsSalonProfile ? { isOnboarding: 'true' } : resume?.params || {};
     setRoute({ name: nextRoute, params: nextParams });
-    window.history.replaceState({}, '', routeToHash(nextRoute, nextParams));
+    window.history.replaceState({}, '', routeToPath(nextRoute, nextParams));
   }, []);
-  const logout = useCallback(() => { clearSession(); resetLiveUpdatesSocket(); setSession(null); setRoute({ name: 'home', params: {} }); window.history.replaceState({}, '', '#/'); }, []);
+  const logout = useCallback(() => { clearSession(); resetLiveUpdatesSocket(); setSession(null); setRoute({ name: 'home', params: {} }); window.history.replaceState({}, '', '/'); }, []);
   const updateSessionUser = useCallback((user, sessionPatch = {}) => setSession(current => {
     if (!current) return current;
     const nextUser = { ...current.user, ...user };
@@ -1109,41 +1096,39 @@ function AppRoot() {
   }), []);
   useEffect(() => {
     const onRouteChange = () => {
-      // Guests: hash edits outside the public routes (notification deep links,
+      // Guests: path edits outside the public routes (notification deep links,
       // a pasted /bookings URL) are remembered and sent through login first.
       if (!readStoredSession()) {
-        const raw = parseRouteHash(window.location.hash);
+        const raw = readLocationRoute();
         if (!raw.name) { setRoute({ name: 'home', params: {} }); return; }
         if (!PUBLIC_ROUTE_NAMES.includes(raw.name)) {
-          stashPendingRoute(window.location.hash);
+          stashPendingRoute(`${window.location.pathname}${window.location.search}`);
           setRoute({ name: 'login', params: {} });
-          window.history.replaceState({}, '', '#/login');
+          window.history.replaceState({}, '', '/login');
           return;
         }
         setRoute(raw);
         return;
       }
-      setRoute(getRouteFromHash(session?.role));
+      setRoute(getRouteFromPath(session?.role));
     };
     window.addEventListener('popstate', onRouteChange);
-    window.addEventListener('hashchange', onRouteChange);
     return () => {
       window.removeEventListener('popstate', onRouteChange);
-      window.removeEventListener('hashchange', onRouteChange);
     };
   }, [session?.role]);
   useEffect(() => {
     if (session?.role !== 'SALON' || !session.isNewSalon || route.name === 'editProfile') return;
     const next = { name: 'editProfile', params: { isOnboarding: 'true' } };
     setRoute(next);
-    window.history.replaceState({}, '', '#/editProfile?isOnboarding=true');
+    window.history.replaceState({}, '', '/editProfile?isOnboarding=true');
   }, [route.name, session?.isNewSalon, session?.role]);
   const navigate = useCallback((screen, params = {}, options = {}) => {
     if (screen === -1) { window.history.back(); return; }
     const next = typeof screen === 'object' ? screen : { name: screen, params };
     setRoute(next);
-    const hash = routeToHash(next.name, next.params);
-    if (options.replace) window.history.replaceState({}, '', hash); else window.history.pushState({}, '', hash);
+    const path = routeToPath(next.name, next.params);
+    if (options.replace) window.history.replaceState({}, '', path); else window.history.pushState({}, '', path);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
   useEffect(() => {
@@ -1151,7 +1136,7 @@ function AppRoot() {
       if (['mynaai', 'mynaaiUser', 'userType', 'isLoggedIn', 'isNewSalon'].includes(event.key)) {
         const next = readStoredSession();
         setSession(next);
-        if (next) setRoute(getRouteFromHash(next.role));
+        if (next) setRoute(getRouteFromPath(next.role));
       }
     };
     const onSessionExpired = () => { deletePushToken().catch(error => console.debug(getErrorMessage(error, 'Could not clear the browser notification token.'))); resetLiveUpdatesSocket(); setSession(null); setRoute({ name: 'home', params: {} }); };
@@ -1184,13 +1169,13 @@ function AppRoot() {
   // an OTP form when they only came to look.
   const backToBrowse = useCallback(() => {
     // Only ever return to a page a guest may actually see: the stash can hold
-    // a gated deep link (someone pasted #/bookings), and resuming that would
+    // a gated deep link (someone pasted /bookings), and resuming that would
     // bounce straight back to this same login page and lose the stash.
     const hash = popPendingRoute();
-    const parsed = hash ? parseRouteHash(hash) : null;
+    const parsed = hash ? parseRoutePath(hash) : null;
     const next = parsed && GUEST_ROUTE_NAMES.includes(parsed.name) ? parsed : { name: 'home', params: {} };
     setRoute(next);
-    window.history.replaceState({}, '', routeToHash(next.name, next.params));
+    window.history.replaceState({}, '', routeToPath(next.name, next.params));
   }, []);
 
   if (!session) {
@@ -1216,8 +1201,8 @@ function GuestShell({ route, navigate, notifyInstall }) {
       // Login is required beyond this point — carry the current salon (or the
       // discovery page) as the resume target unless the caller named one.
       const current = route.name === 'salon' && route.params?.salonId
-        ? `#/salon/${route.params.salonId}`
-        : '#/home';
+        ? `/salon/${route.params.salonId}`
+        : '/';
       stashPendingRoute(params.returnTo || current);
     } else if (params.returnTo) {
       stashPendingRoute(params.returnTo);
@@ -1250,7 +1235,7 @@ function GuestShell({ route, navigate, notifyInstall }) {
     <main className="guest-content">
       {route.name === 'salon'
         ? <SalonDetailScreen session={null} params={route.params} navigate={guestNavigate} notify={notify} />
-        : ['about', 'faq', 'terms', 'contact'].includes(route.name)
+        : ['about', 'faq', 'terms', 'privacy', 'contact'].includes(route.name)
           ? <InfoScreen type={route.name} navigate={guestNavigate} />
           : <HomeScreen session={null} navigate={guestNavigate} notify={notify} />}
     </main>
@@ -1445,7 +1430,7 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null }) {
 
   if (view === 'register') return <SalonRegistration initialData={salonRegistrationData} onBack={() => { setSalonRegistrationData(null); setView('login'); }} onComplete={onComplete} notifyInstall={notifyInstall} />;
 
-  return <div className="auth-page login-page"><div className="auth-visual"><div className="auth-visual-image" /><div className="auth-image-shade" /><div className="auth-visual-content"><Brand light /><div><span className="eyebrow">SALON & GROOMING, REIMAGINED</span><h1>Less waiting.<br /><em>More you.</em></h1><p>Book a great salon nearby and make the time yours.</p></div><div className="visual-quote"><span></span><p>Your time is valuable. We’re here to give it back.</p></div></div></div><div className="auth-form-panel"><div className="mobile-auth-brand"><Brand /></div><div className="auth-form-wrap">{onBrowseBack && <button className="login-back" onClick={onBrowseBack}><ChevronRight size={15} className="rotate-180" /> Browse salons</button>}<span className="eyebrow">WELCOME TO MY NAAI</span><span className="login-hero-badge"><Sparkles size={12} /> {role === 'USER' ? 'Customer login' : 'Salon partner'}</span><h1>{step === 'phone' ? role === 'USER' ? 'Login to book your favorite salon' : 'Grow your salon with My Naai' : step === 'new-user' ? 'One last thing.' : 'Check your phone.'}</h1><p className="auth-subtitle">{step === 'phone' ? role === 'USER' ? 'Sign in and book your next visit.' : 'Sign in and never miss a booking.' : step === 'new-user' ? `Let\u2019s create your My Naai profile for +91 ${mobile}.` : `Enter the 6-digit code sent to +91 ${mobile}.`}</p>{step === 'phone' && <div className="login-actions"><AllowAlertsButton onToken={token => { if (token) setPushToken(token); }} /><InstallAppButton onInstall={notifyInstall} /></div>}{step === 'phone' && <div className="role-switch"><button className={role === 'USER' ? 'active' : ''} onClick={() => { setRole('USER'); setError(''); }}><CircleUserRound size={16} /> Customer</button><button className={role === 'SALON' ? 'active' : ''} onClick={() => { setRole('SALON'); setError(''); }}><Store size={16} /> Salon partner</button></div>}{error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}{step === 'phone' && <form onSubmit={requestOtp}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" autoComplete="tel" maxLength="10" value={mobile} onChange={event => setMobile(event.target.value.replace(/\D/g, ''))} placeholder="Enter 10-digit number" autoFocus /></div></Field><Button type="submit" loading={busy}>Continue with OTP <ChevronRight size={17} /></Button></form>}{step === 'otp' && <form onSubmit={verify}><Field label="One-time password"><input className="otp-input" inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="· · · · · ·" autoFocus /></Field><Button type="submit" loading={busy}>Verify code <ChevronRight size={17} /></Button><button className="resend-link" type="button" onClick={requestOtp}>Resend code</button><button className="back-form-link" type="button" onClick={() => { setStep('phone'); setOtp(''); setError(''); }}>Use a different number</button></form>}{step === 'new-user' && <form onSubmit={createAccount}><Field label="Your name"><input value={name} onChange={event => setName(event.target.value)} placeholder="How should we call you?" autoFocus /></Field><Button type="submit" loading={busy}>Create my account <ChevronRight size={17} /></Button></form>}</div><p className="auth-legal">By continuing, you agree to My Naai’s terms and privacy policy.</p></div>
+  return <div className="auth-page login-page"><div className="auth-visual"><div className="auth-visual-image" /><div className="auth-image-shade" /><div className="auth-visual-content"><Brand light /><div><span className="eyebrow">SALON & GROOMING, REIMAGINED</span><h1>Less waiting.<br /><em>More you.</em></h1><p>Book a great salon nearby and make the time yours.</p></div><div className="visual-quote"><span></span><p>Your time is valuable. We’re here to give it back.</p></div></div></div><div className="auth-form-panel"><div className="mobile-auth-brand"><Brand /></div><div className="auth-form-wrap">{onBrowseBack && <button className="login-back" onClick={onBrowseBack}><ChevronRight size={15} className="rotate-180" /> Browse salons</button>}<span className="eyebrow">WELCOME TO MY NAAI</span><span className="login-hero-badge"><Sparkles size={12} /> {role === 'USER' ? 'Customer login' : 'Salon partner'}</span><h1>{step === 'phone' ? role === 'USER' ? 'Login to book your favorite salon' : 'Grow your salon with My Naai' : step === 'new-user' ? 'One last thing.' : 'Check your phone.'}</h1><p className="auth-subtitle">{step === 'phone' ? role === 'USER' ? 'Sign in and book your next visit.' : 'Sign in and never miss a booking.' : step === 'new-user' ? `Let\u2019s create your My Naai profile for +91 ${mobile}.` : `Enter the 6-digit code sent to +91 ${mobile}.`}</p>{step === 'phone' && <div className="login-actions"><AllowAlertsButton onToken={token => { if (token) setPushToken(token); }} /><InstallAppButton onInstall={notifyInstall} /></div>}{step === 'phone' && <div className="role-switch"><button className={role === 'USER' ? 'active' : ''} onClick={() => { setRole('USER'); setError(''); }}><CircleUserRound size={16} /> Customer</button><button className={role === 'SALON' ? 'active' : ''} onClick={() => { setRole('SALON'); setError(''); }}><Store size={16} /> Salon partner</button></div>}{error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}{step === 'phone' && <form onSubmit={requestOtp}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" autoComplete="tel" maxLength="10" value={mobile} onChange={event => setMobile(event.target.value.replace(/\D/g, ''))} placeholder="Enter 10-digit number" autoFocus /></div></Field><Button type="submit" loading={busy}>Continue with OTP <ChevronRight size={17} /></Button></form>}{step === 'otp' && <form onSubmit={verify}><Field label="One-time password"><input className="otp-input" inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="· · · · · ·" autoFocus /></Field><Button type="submit" loading={busy}>Verify code <ChevronRight size={17} /></Button><button className="resend-link" type="button" onClick={requestOtp}>Resend code</button><button className="back-form-link" type="button" onClick={() => { setStep('phone'); setOtp(''); setError(''); }}>Use a different number</button></form>}{step === 'new-user' && <form onSubmit={createAccount}><Field label="Your name"><input value={name} onChange={event => setName(event.target.value)} placeholder="How should we call you?" autoFocus /></Field><Button type="submit" loading={busy}>Create my account <ChevronRight size={17} /></Button></form>}</div><p className="auth-legal">By continuing, you agree to My Naai’s <button type="button" onClick={() => softNavigate('/terms')}>Terms &amp; Conditions</button> and <button type="button" onClick={() => softNavigate('/privacy-policy')}>Privacy Policy</button>.</p></div>
       <PermissionGateModal open={permissionGate.open} onClose={() => setPermissionGate(current => ({ ...current, open: false }))} onGranted={handlePermissionGranted} state={permissionGate.state} />
     </div>;
 }
@@ -1759,7 +1744,7 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
       if (route.name === 'schedule') return <ScheduleScreen {...props} params={route.params} />;
       if (route.name === 'notifications') return <NotificationsScreen {...props} />;
       if (route.name === 'delay') return <DelayRequestScreen {...props} params={route.params} />;
-      if (['about', 'faq', 'terms', 'contact'].includes(route.name)) return <InfoScreen type={route.name} navigate={navForScreens} />;
+      if (['about', 'faq', 'terms', 'privacy', 'contact'].includes(route.name)) return <InfoScreen type={route.name} navigate={navForScreens} />;
       return <HomeScreen {...props} />;
     }
     if (route.name === 'queue') return <SalonQueueScreen {...props} />;
