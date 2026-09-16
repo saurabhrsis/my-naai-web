@@ -765,6 +765,35 @@ describe('Home ad carousel', () => {
       expect(backdrop.getAttribute('style')).toContain('ad');
     });
   });
+
+  it('measures the artwork and drives the frame from it, not from a guess', async () => {
+    await mount();
+
+    // None of the test images ever "load" in jsdom, so the frame falls back to
+    // the 3:2 default until an image reports its real size.
+    const wrap = container.querySelector('.ad-carousel-wrap');
+    expect(wrap.getAttribute('style')).toBeNull();
+
+    // A 16:9 creative is the common case from the API. Once it loads, the CSS
+    // variable carries the real ratio — this is what stops a laptop frame from
+    // cropping (and stops a 16:9 ad from being letterboxed inside a 3:2 box).
+    const image = container.querySelector('img.ad-image');
+    Object.defineProperty(image, 'naturalWidth', { configurable: true, value: 1920 });
+    Object.defineProperty(image, 'naturalHeight', { configurable: true, value: 1080 });
+    await act(async () => { image.dispatchEvent(new Event('load', { bubbles: true })); });
+
+    expect(container.querySelector('.ad-carousel-wrap').getAttribute('style')).toContain('1.7778');
+  });
+
+  it('keeps the hero band single-column until there is a promo to sit beside the filters', async () => {
+    userAds.mockResolvedValue({ status: 'SUCCESS', data: { images: [] } });
+    await mount();
+
+    // No ads: the band must not reserve an empty second column on a laptop.
+    const band = container.querySelector('.home-hero-band');
+    expect(band.classList.contains('has-ads')).toBe(false);
+    expect(band.querySelector('.ad-carousel-wrap')).toBeNull();
+  });
 });
 
 // The home-screen location row. Twice reported as "Enable location does nothing":

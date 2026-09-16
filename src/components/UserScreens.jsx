@@ -181,8 +181,24 @@ function getBookingStatus(item) {
 function AdCarousel({ ads }) {
   const [active, setActive] = useState(0);
   const [paused, setPaused] = useState(false);
+  // The frame follows the artwork's own shape instead of a guess. A fixed strip
+  // cropped a third of every ad on a laptop; a guessed 3:2 box then letterboxed
+  // the 16:9 ones. The first image to load reports its real ratio (clamped to a
+  // sane banner range) and the CSS uses it for the frame, so an ad is shown
+  // whole and fills its box — on every screen size.
+  const [ratio, setRatio] = useState(0);
   const startX = useRef(0);
   const slides = Array.isArray(ads) ? ads.filter(item => typeof item === 'string' && item) : [];
+
+  const readRatio = event => {
+    const image = event?.currentTarget;
+    const width = Number(image?.naturalWidth) || 0;
+    const height = Number(image?.naturalHeight) || 0;
+    if (!width || !height) return;
+    const value = width / height;
+    if (!Number.isFinite(value) || value <= 0) return;
+    setRatio(current => current || Number(Math.min(2.4, Math.max(1.1, value)).toFixed(4)));
+  };
   useEffect(() => {
     if (paused || slides.length < 2) return undefined;
     const timer = window.setInterval(() => setActive(index => (index + 1) % slides.length), 3000);
@@ -192,7 +208,7 @@ function AdCarousel({ ads }) {
   if (!slides.length) return null;
   const go = offset => setActive(index => (index + offset + slides.length) % slides.length);
   return (
-    <div className="ad-carousel-wrap">
+    <div className="ad-carousel-wrap" style={ratio ? { '--ad-ratio': ratio } : undefined}>
       <div
         className="ad-carousel"
         aria-label="Promotions"
@@ -214,7 +230,7 @@ function AdCarousel({ ads }) {
                   desktop. The blurred backdrop (the same image, scaled up)
                   fills the frame while the artwork itself is shown whole. */}
               <span className="ad-backdrop" style={{ backgroundImage: `url("${src}")` }} aria-hidden="true" />
-              <ImageWithFallback src={src} fallback="" alt="" className="ad-image" loading="eager" />
+              <ImageWithFallback src={src} fallback="" alt="" className="ad-image" loading="eager" onLoad={readRatio} />
             </div>
           ))}
         </div>
@@ -582,7 +598,7 @@ export function HomeScreen({ session, navigate, notify }) {
       {/* Section 1 — the discovery band: greeting, search and the male/female
           filter (which replaced the old dead-end "For you" button), with the
           ad carousel as its visual anchor. */}
-      <section className="home-band home-hero-band" aria-label="Find a salon">
+      <section className={cx('home-band', 'home-hero-band', ads.length > 0 && 'has-ads')} aria-label="Find a salon">
         <div className="home-topline"><div><span className="eyebrow">{isGuest ? 'SALON BOOKINGS, SIMPLIFIED' : 'NEARBY GROOMING'}</span><h1>{isGuest ? 'Find your salon' : `Hi ${firstName(userName)}`}</h1><p className="muted-line"><LocateFixed size={14} /> {location ? 'Using your current location' : isGuest ? 'Browse trusted salons around you — login only when you book' : 'Discover trusted specialists around you'}</p></div></div>
         <div className="home-search-row"><label className="search-field"><Search size={18} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Find salon, specialist..." aria-label="Search salons" />{search && <button onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label><GenderToggle value={gender} onChange={setGender} /></div>
         <AdCarousel ads={ads} />

@@ -308,11 +308,12 @@ img { display: block; max-width: 100%; }
 .ad-carousel { position: relative; overflow: hidden; border-radius: 16px; background: #1e2625; touch-action: pan-y; cursor: grab; }
 .ad-carousel:active { cursor: grabbing; }
 .ad-track { display: flex; transition: transform .35s ease; }
-/* One decision drives every screen: the ad frame keeps the artwork's own 3:2
-   shape, capped so a laptop band never turns into a full-screen poster. The
-   blurred backdrop fills whatever the cap leaves over, so nothing is ever
-   cropped out of view — the desktop complaint that "part of the ad is cut". */
-.ad-slide { position: relative; min-width: 100%; height: auto; aspect-ratio: 3 / 2; min-height: 150px; max-height: var(--ad-max-height, 300px); overflow: hidden; background: #1e2625; }
+/* The ad frame takes the artwork's OWN shape: `--ad-ratio` is measured from the
+   image once it loads (clamped to a sane banner range), so an ad is shown whole
+   instead of being cropped by a fixed strip — the desktop complaint. The
+   blurred backdrop only fills whatever the height cap leaves over on an unusual
+   shape, and `contain` guarantees no part of the creative is ever cut. */
+.ad-slide { position: relative; min-width: 100%; height: auto; aspect-ratio: var(--ad-ratio, 3 / 2); min-height: 150px; max-height: var(--ad-max-height, 240px); overflow: hidden; background: #1e2625; }
 .ad-backdrop { position: absolute; inset: -8%; background-position: center; background-size: cover; filter: blur(26px) saturate(1.15); opacity: .45; }
 .ad-image { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: contain; }
 .carousel-dots { display: flex; justify-content: center; gap: 6px; margin-top: 10px; }
@@ -1401,7 +1402,7 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .home-topline { margin-bottom: 23px; }
   .home-search-row { max-width: 760px; }
   .home-band { padding: 22px; border-radius: 26px; margin-bottom: 22px; }
-  .ad-slide { --ad-max-height: 380px; }
+  .ad-carousel-wrap { --ad-max-height: min(420px, 50vh); }
   .salon-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
   .product-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
   .detail-hero { flex-direction: row; }
@@ -1492,11 +1493,33 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   /* Laptop/desktop scale-up: the headings and the discovery band grow with the
      rail so a 1366px laptop does not read like a stretched phone. */
   .section-heading h2 { font-size: 24px; }
-  .home-band { padding: 26px; }
-  .ad-slide { --ad-max-height: 460px; }
+  .home-band { padding: 24px 26px; margin-bottom: 18px; }
+  .ad-carousel-wrap { --ad-max-height: min(380px, 44vh); }
+  /* Laptop layout for the hero band: the greeting keeps the full width and the
+     promo moves BESIDE the search row, so the screen is used horizontally
+     instead of stacking a full-width strip under the filters — which is what
+     pushed the salon list so far down the page (and cropped every ad).
+     The guest shell has no sidebar, so it can split from 1024px; the signed-in
+     shell waits for 1200px in its own block below, where the sidebar has left
+     enough room. Either way the width on offer decides, not the window. */
+  .guest-shell .home-hero-band.has-ads { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, clamp(340px, 38%, 520px)); column-gap: 24px; align-items: start; }
+  .guest-shell .home-hero-band.has-ads .home-topline { grid-column: 1 / -1; margin-bottom: 16px; }
+  /* The search row fills its column (its own 760px cap would leave a gap before
+     the promo), so the filter and the ad read as one row. */
+  .guest-shell .home-hero-band.has-ads .home-search-row { max-width: 100%; margin-bottom: 0; }
+  .guest-shell .home-hero-band.has-ads .ad-carousel-wrap { margin-bottom: 0; }
+  .home-topline h1 { font-size: 40px; }
+  .home-topline { margin-bottom: 18px; }
 }
 
 @media (min-width: 1200px) {
+  .app-shell .home-hero-band.has-ads { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, clamp(340px, 38%, 520px)); column-gap: 24px; align-items: start; }
+  .app-shell .home-hero-band.has-ads .home-topline { grid-column: 1 / -1; margin-bottom: 16px; }
+  .app-shell .home-hero-band.has-ads .home-search-row { max-width: 100%; margin-bottom: 0; }
+  .app-shell .home-hero-band.has-ads .ad-carousel-wrap { margin-bottom: 0; }
+  /* A wider laptop gets a slightly taller promo, still measured from the
+     artwork so nothing is cropped. */
+  .ad-carousel-wrap { --ad-max-height: min(400px, 44vh); }
   .sidebar { width: 274px; }
   .workspace { width: calc(100% - 274px); }
   .workspace-content { padding-right: 6%; padding-left: 6%; }
