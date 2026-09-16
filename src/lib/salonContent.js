@@ -17,6 +17,10 @@ export const SALON_FAQ_CONTENT = {
     { title: 'How do I pause bookings?', text: 'Use the booking status switch on your Salon account. Customers will see that your salon is closed.' },
     { title: 'Where do new requests appear?', text: 'New requests appear in Customer queue and in Notifications. You can accept, reject or suggest a delay.' },
     { title: 'How do I manage products?', text: 'Open Product catalog from the bottom navigation to add, edit, hide or delete products.' },
+    { title: 'How do I add or remove a specialist?', text: 'Open Edit salon profile and use the Barbers group to add a specialist, mark one unavailable or remove one who has left.' },
+    { title: 'How do I change my opening hours or weekly off?', text: 'Edit salon profile → Business Hours. Customers see the updated timings on your public salon page straight away.' },
+    { title: 'What happens after I register my salon?', text: 'Your details are checked by the My Naai team and your salon goes live on the customer pages — then booking requests reach your phone with a buzzer.' },
+    { title: 'Why did my salon stop receiving requests?', text: 'Check the booking status switch on your Salon account and your subscription status. A paused salon or an expired plan is hidden from customers until it is switched back on.' },
   ],
 };
 

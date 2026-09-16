@@ -13,6 +13,7 @@ import {
   Info,
   LogOut,
   MapPin,
+  Menu,
   Package,
   Scissors,
   Sparkles,
@@ -1207,6 +1208,12 @@ function AppRoot() {
 // afterwards. No onboarding slides, no marketing wall — salons first.
 function GuestShell({ route, navigate, notifyInstall }) {
   const [toast, setToast] = useState(null);
+  // Phones cannot fit four route labels + Install + Login on one row: the row
+  // used to overflow and pushed the Login pill half off the screen. The links
+  // now fold into a dropdown panel opened from a hamburger, while the brand and
+  // the Login pill stay pinned in the bar itself.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const navbarRef = useRef(null);
   const notify = useCallback((type, message) => { setToast({ type, message }); window.clearTimeout(notify.timer); notify.timer = window.setTimeout(() => setToast(null), 4000); }, []);
   const guestNavigate = useCallback((screen, params = {}, options = {}) => {
     if (screen === -1) { window.history.back(); return; }
@@ -1238,17 +1245,40 @@ function GuestShell({ route, navigate, notifyInstall }) {
     { name: 'partner', label: 'Salon partner' },
     { name: 'contact', label: 'Contact' },
   ];
+  const goToSitePage = name => { setMenuOpen(false); guestNavigate(name); };
+  // A dropdown that outlives the tap is a trap: close it on navigation (any
+  // route change, including back/forward), on Escape, and on any tap outside
+  // the header. No scroll lock — the panel is short and the page stays usable.
+  useEffect(() => { setMenuOpen(false); }, [route.name, route.params?.salonId]);
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onKeyDown = event => { if (event.key === 'Escape') setMenuOpen(false); };
+    const onPointerDown = event => { if (!navbarRef.current?.contains(event.target)) setMenuOpen(false); };
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => { document.removeEventListener('keydown', onKeyDown); document.removeEventListener('pointerdown', onPointerDown); };
+  }, [menuOpen]);
   return <div className="guest-shell">
-    <header className="site-navbar">
-      <button type="button" className="site-navbar-brand" onClick={() => guestNavigate('home')} aria-label="My Naai — home"><Brand /></button>
-      <nav className="site-nav-links" aria-label="Site navigation">
+    <header className={cx('site-navbar', menuOpen && 'menu-open')} ref={navbarRef}>
+      <button type="button" className="site-navbar-brand" onClick={() => goToSitePage('home')} aria-label="My Naai — home"><Brand /></button>
+      <nav className="site-nav-links" id="site-nav-links" aria-label="Site navigation">
         {siteLinks.map(link => (
-          <button key={link.name} type="button" className={cx(currentPage === link.name && 'active')} aria-current={currentPage === link.name ? 'page' : undefined} onClick={() => guestNavigate(link.name)}>{link.label}</button>
+          <button key={link.name} type="button" className={cx(currentPage === link.name && 'active')} aria-current={currentPage === link.name ? 'page' : undefined} onClick={() => goToSitePage(link.name)}>{link.label}</button>
         ))}
       </nav>
       <div className="site-navbar-actions">
         <InstallAppButton onInstall={notifyInstall} />
         <button className="guest-login-button" onClick={() => guestNavigate('login')}><CircleUserRound size={15} /> Login</button>
+        <button
+          type="button"
+          className="site-nav-toggle"
+          aria-expanded={menuOpen}
+          aria-controls="site-nav-links"
+          aria-label={menuOpen ? 'Close site menu' : 'Open site menu'}
+          onClick={() => setMenuOpen(open => !open)}
+        >
+          {menuOpen ? <X size={19} /> : <Menu size={19} />}
+        </button>
       </div>
     </header>
     <main className="guest-content">

@@ -443,7 +443,7 @@ describe('Guest browsing flow', () => {
     expect(footer.querySelector('a[href="/salon-partner"]')).not.toBeNull();
     expect(footer.querySelectorAll('a[href="/login?role=SALON"]').length).toBeGreaterThan(0);
     expect(footer.querySelector('a[href="tel:8380017393"]')).not.toBeNull();
-    expect(footer.querySelector('a[href="mailto:support@mynaai.com"]')).not.toBeNull();
+    expect(footer.querySelector('a[href="mailto:mynaai.in@gmail.com"]')).not.toBeNull();
     expect(footer.textContent).toContain('Salon partners');
   });
 
@@ -467,6 +467,27 @@ describe('Guest browsing flow', () => {
     expect(section.textContent).toContain('Customer');
     expect(section.textContent).not.toContain('Nagpur');
     expect(section.textContent).not.toContain('Sitabuldi');
+  });
+
+  // The card is the whole "does this look like a review?" answer: a person
+  // (avatar + name + role) at the top, the rating under it, the quote last.
+  it('builds each review card as person → rating → quote', async () => {
+    setPath('/');
+    await mount();
+
+    const card = container.querySelector('.testimonial-card');
+    expect(card).not.toBeNull();
+    const top = card.querySelector('.testimonial-card-top');
+    expect(top).not.toBeNull();
+    // The person leads: initials tile, then name and role.
+    expect(top.querySelector('.testimonial-avatar').textContent.trim().length).toBeGreaterThanOrEqual(1);
+    expect(top.querySelector('.testimonial-person strong').textContent.trim().length).toBeGreaterThan(1);
+    expect(['Customer', 'Salon partner']).toContain(top.querySelector('.testimonial-person small').textContent.trim());
+    // Rating and quote follow, in that order, and the quote is the blockquote.
+    const children = Array.from(card.children).map(node => node.className.split(' ')[0] || node.tagName.toLowerCase());
+    expect(children).toEqual(['testimonial-card-top', 'testimonial-stars', 'blockquote']);
+    expect(card.querySelector('.testimonial-stars svg')).not.toBeNull();
+    expect(card.querySelector('blockquote').textContent.trim().length).toBeGreaterThan(20);
   });
 
   it('opens the salon partner page and starts partner registration', async () => {
@@ -527,7 +548,7 @@ describe('Guest browsing flow', () => {
     await flush();
     expect(currentPath()).toBe('/privacy-policy');
     expect(container.textContent).toContain('Privacy Policy');
-    expect(container.textContent).toContain('support@mynaai.com');
+    expect(container.textContent).toContain('mynaai.in@gmail.com');
     expect(container.textContent).toContain('made directly at the salon');
     expect(container.querySelector('.auth-page')).toBeNull();
   });
@@ -546,6 +567,137 @@ describe('Guest browsing flow', () => {
     expect(currentPath()).toBe('/salon/salon-9');
     expect(sessionStorage.getItem('mynaaiPendingRoute')).toBeNull();
     expect(container.querySelector('.detail-screen')).not.toBeNull();
+  });
+
+  // The navbar used to be one non-wrapping row (brand + four route links +
+  // Install + Login) that overflowed a 320-430px phone and pushed the Login
+  // pill off the screen. The links now live behind this toggle below 820px;
+  // these assertions keep the toggle wired, and keep the Login pill in the bar.
+  it('folds the site links into a menu toggle that works and closes itself', async () => {
+    setPath('/');
+    await mount();
+
+    const header = container.querySelector('.site-navbar');
+    const toggle = container.querySelector('.site-nav-toggle');
+    expect(toggle).not.toBeNull();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    // The toggle owns the link list, and it does not sit inside it (the link
+    // labels are menu items, not a fifth menu entry).
+    expect(toggle.getAttribute('aria-controls')).toBe('site-nav-links');
+    expect(container.querySelector('.site-nav-links').contains(toggle)).toBe(false);
+    // The Login pill travels with the bar, never inside the folding panel.
+    expect(container.querySelector('.site-navbar-actions .guest-login-button')).not.toBeNull();
+    expect(header.querySelector('.site-nav-links')).not.toBeNull();
+
+    await act(async () => { toggle.click(); });
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(header.classList.contains('menu-open')).toBe(true);
+
+    // Choosing a destination navigates and folds the menu away again.
+    await act(async () => { Array.from(container.querySelectorAll('.site-nav-links button')).find(node => node.textContent === 'Contact').click(); });
+    await flush();
+    expect(currentPath()).toBe('/contact');
+    expect(container.querySelector('.site-navbar').classList.contains('menu-open')).toBe(false);
+  });
+
+  it('wraps the review carousel in a circle — after the last review comes the first', async () => {    setPath('/');
+    await mount();
+
+    const dots = () => Array.from(container.querySelectorAll('.testimonial-dots .carousel-dot'));
+    const activeDotIndex = () => dots().findIndex(dot => dot.classList.contains('active'));
+    const next = () => Array.from(container.querySelectorAll('button')).find(node => node.getAttribute('aria-label') === 'Next reviews');
+    const previous = () => Array.from(container.querySelectorAll('button')).find(node => node.getAttribute('aria-label') === 'Previous reviews');
+    const reviewCount = container.querySelectorAll('.testimonial-card').length;
+
+    expect(reviewCount).toBeGreaterThanOrEqual(4);
+    expect(dots().length).toBe(reviewCount);
+    expect(activeDotIndex()).toBe(0);
+
+    // Next on the last review returns to the first (circular, not clamped).
+    for (let step = 0; step < reviewCount; step += 1) {
+      await act(async () => { next().click(); });
+    }
+    expect(activeDotIndex()).toBe(0);
+
+    // Previous on the first review wraps backwards to the last.
+    await act(async () => { previous().click(); });
+    expect(activeDotIndex()).toBe(reviewCount - 1);
+    expect(container.querySelectorAll('.testimonial-card.active').length).toBe(1);
+  });
+
+  it('pages past the first 20 salons instead of stopping there', async () => {
+    const pageOf = (page, count) => ({
+      status: 'SUCCESS',
+      data: {
+        salons: Array.from({ length: count }, (item, index) => ({
+          salonId: `salon-${page}-${index}`,
+          salonName: `Salon ${page}-${index}`,
+          genderType: 'UNISEX',
+          address: 'Dharampeth, Nagpur',
+          isOpen: true,
+          waitTime: '5–10 min',
+        })),
+      },
+    });
+    // Page 1 is full (20 records, the API's page size) → there is more to fetch.
+    userSalonListPublic.mockImplementation(payload => Promise.resolve(pageOf(Number(payload?.page) || 1, Number(payload?.page) === 2 ? 5 : 20)));
+
+    setPath('/');
+    await mount();
+    await flush();
+
+    expect(userSalonListPublic).toHaveBeenCalledWith(expect.objectContaining({ page: 1 }));
+    expect(container.querySelectorAll('.salon-card').length).toBe(20);
+    const more = buttonByText('Load more salons');
+    expect(more).not.toBeNull();
+
+    await act(async () => { more.click(); });
+    await flush();
+
+    expect(userSalonListPublic).toHaveBeenCalledWith(expect.objectContaining({ page: 2 }));
+    expect(container.querySelectorAll('.salon-card').length).toBe(25);
+    // A short second page means that was the last one — the footer says so.
+    expect(buttonByText('Load more salons')).toBeUndefined();
+    expect(container.textContent).toContain('every salon we found near you');
+  });
+
+  it('reads the page metadata when the API sends it (total in the header count)', async () => {
+    userSalonListPublic.mockResolvedValue({
+      status: 'SUCCESS',
+      data: {
+        salons: Array.from({ length: 20 }, (item, index) => ({ salonId: `salon-${index}`, salonName: `Salon ${index}`, genderType: 'UNISEX', address: 'Dharampeth, Nagpur', isOpen: true, waitTime: '5–10 min' })),
+        hasMore: true,
+        totalCount: 25,
+      },
+    });
+
+    setPath('/');
+    await mount();
+    await flush();
+
+    // 20 on screen, 25 in the city: the heading says so instead of pretending
+    // the first page is everything.
+    expect(container.textContent).toContain('20 of 25 places');
+    expect(buttonByText('Load more salons')).not.toBeNull();
+  });
+
+  it('stops paging when the API repeats itself instead of looping forever', async () => {
+    const samePage = () => ({ status: 'SUCCESS', data: { salons: Array.from({ length: 20 }, (item, index) => ({ salonId: `salon-${index}`, salonName: `Salon ${index}`, genderType: 'UNISEX', address: 'Dharampeth, Nagpur', isOpen: true, waitTime: '5–10 min' })) } });
+    userSalonListPublic.mockImplementation(() => Promise.resolve(samePage()));
+
+    setPath('/');
+    await mount();
+    await flush();
+    expect(container.querySelectorAll('.salon-card').length).toBe(20);
+
+    await act(async () => { buttonByText('Load more salons').click(); });
+    await flush();
+
+    // The duplicate page added nothing and ended the paging — 20 cards, no
+    // duplicate keys, and no further Load more button.
+    expect(userSalonListPublic).toHaveBeenCalledTimes(2);
+    expect(container.querySelectorAll('.salon-card').length).toBe(20);
+    expect(buttonByText('Load more salons')).toBeUndefined();
   });
 });
 

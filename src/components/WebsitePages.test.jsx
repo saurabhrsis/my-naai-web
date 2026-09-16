@@ -210,6 +210,22 @@ describe('Website pages for guests', () => {
     expect(container.querySelectorAll('.site-info-grid .site-info-card').length).toBeGreaterThanOrEqual(6);
   });
 
+  it('answers the questions customers actually ask on the FAQ page', async () => {
+    setPath('/faq');
+    await mount();
+
+    expect(container.querySelector('.info-screen')).not.toBeNull();
+    expect(container.textContent).toContain('Frequently asked questions');
+    // The page grew well past the original four sections — the FAQ is the
+    // self-service front door, so a thin page sends everyone to support.
+    const cards = container.querySelectorAll('.site-info-grid .site-info-card');
+    expect(cards.length).toBeGreaterThanOrEqual(12);
+    expect(container.textContent).toContain('Is My Naai free for customers?');
+    expect(container.textContent).toContain('What if I am running late?');
+    expect(container.textContent).toContain('Will I be reminded before my appointment?');
+    expect(container.textContent).toContain('How do I delete my account?');
+  });
+
   it('shows My Naai contact details and a working contact form on the Contact page', async () => {
     setPath('/contact');
     await mount();
@@ -218,8 +234,8 @@ describe('Website pages for guests', () => {
     expect(container.querySelector('.page-header')).toBeNull();
     // Company channels: phone, email, site and location.
     expect(container.querySelector('a[href="tel:8380017393"]')).not.toBeNull();
-    expect(container.querySelector('a[href="mailto:support@mynaai.com"]')).not.toBeNull();
-    expect(container.textContent).toContain('support@mynaai.com');
+    expect(container.querySelector('a[href="mailto:mynaai.in@gmail.com"]')).not.toBeNull();
+    expect(container.textContent).toContain('mynaai.in@gmail.com');
     expect(container.textContent).toContain('8380017393');
     expect(container.textContent).toContain('India');
     // The form validates instead of swallowing a message silently.
