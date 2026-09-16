@@ -280,22 +280,30 @@ img { display: block; max-width: 100%; }
 .refresh-text-button:disabled { cursor: default; color: #8d9493; opacity: .72; }
 .catalog-label { color: var(--gold); border-color: var(--line-strong); }
 
-/* Customer home */
+/* Customer home — the public page reads as distinct website sections, each
+   on its own band, instead of one long undifferentiated app feed. */
 .home-screen { position: relative; }
+.home-band { margin-bottom: 16px; padding: 16px 14px; border: 1px solid var(--line); border-radius: 22px; }
+.home-hero-band { background: radial-gradient(130% 150% at 100% 0%, rgba(232, 185, 126, .09), transparent 55%), linear-gradient(180deg, #151b1a, #101514); }
+.home-hero-band .ad-carousel-wrap { margin-bottom: 2px; }
+.home-salons-band { background: #0f1313; }
+.home-salons-band .inline-notice { margin-top: -3px; }
 .home-topline { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 17px; }
 .home-topline > div:first-child { min-width: 0; }
 .home-topline h1 { margin: 7px 0 5px; font-size: clamp(28px, 7vw, 43px); letter-spacing: -.055em; line-height: 1; }
 .home-actions { display: flex; align-items: center; flex: none; gap: 8px; margin-top: 3px; }
-.gender-toggle { display: flex; padding: 3px; border-radius: 22px; background: var(--card); border: 1px solid var(--line); }
-.gender-toggle button { min-height: 29px; padding: 0 10px; border-radius: 18px; color: var(--muted); background: transparent; font-size: 10px; font-weight: 700; }
-.gender-toggle button.active { color: #111; background: var(--gold); }
-.home-search-row { display: flex; gap: 8px; margin-bottom: 15px; }
+/* The male/female filter sits inside the search row (it replaced the inert
+   "For you" button): one tap changes which salons the list shows. */
+.gender-toggle { flex: none; display: flex; align-items: center; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.gender-toggle-label { padding: 0 2px 0 9px; color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; white-space: nowrap; }
+.gender-toggle button { min-height: 39px; padding: 0 13px; border-radius: 10px; color: var(--muted); background: transparent; font-size: 11px; font-weight: 700; }
+.gender-toggle button.active { color: #111; background: var(--gold); box-shadow: 0 2px 10px rgba(232, 185, 126, .22); }
+.home-search-row { display: flex; align-items: stretch; gap: 8px; margin-bottom: 15px; }
 .search-field { min-width: 0; flex: 1; min-height: 48px; display: flex; align-items: center; gap: 9px; padding: 0 14px; border: 1px solid var(--line); border-radius: 14px; color: #7e8887; background: var(--card); }
 .search-field:focus-within { border-color: rgba(232,185,126,.65); box-shadow: 0 0 0 3px rgba(232,185,126,.06); }
 .search-field input { min-width: 0; flex: 1; height: 44px; border: 0; outline: 0; color: var(--white); background: transparent; font-size: 13px; }
 .search-field input::placeholder { color: #707a79; }
 .search-field button { display: flex; padding: 2px; color: var(--muted); background: transparent; }
-.filter-button { min-width: 73px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 14px; color: var(--gold); background: var(--gold-wash); font-size: 10px; font-weight: 700; }
 .ad-carousel-wrap { margin-bottom: 22px; }
 .ad-carousel { position: relative; overflow: hidden; border-radius: 16px; background: #1e2625; touch-action: pan-y; cursor: grab; }
 .ad-carousel:active { cursor: grabbing; }
@@ -313,7 +321,10 @@ img { display: block; max-width: 100%; }
 .inline-notice { display: flex; align-items: center; gap: 7px; margin: -3px 0 15px; padding: 10px 12px; border-radius: 10px; color: #e4c3bf; background: rgba(242,123,116,.08); font-size: 11px; line-height: 1.3; }
 .inline-notice button { margin-left: auto; color: var(--gold); background: transparent; font-size: 11px; font-weight: 700; }
 .salon-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
-.salon-card { overflow: hidden; border: 1px solid var(--line); border-radius: 20px; background: var(--card); transition: transform .22s, border .22s, box-shadow .22s; }
+/* Full width at every size — a card that hugs one side of the phone (the
+   left-aligned look reported on mobile) usually means the grid item never
+   stretched, so it is pinned explicitly here. */
+.salon-card { width: 100%; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 20px; background: var(--card); transition: transform .22s, border .22s, box-shadow .22s; }
 .salon-card:hover { transform: translateY(-3px); border-color: rgba(232,185,126,.28); box-shadow: 0 12px 30px rgba(0,0,0,.2); }
 /* One 16:10 frame everywhere instead of five hard-coded pixel heights (157 /
    177 / 195 / 205 / 220) that gave the same photo a different crop on every
@@ -349,7 +360,9 @@ img { display: block; max-width: 100%; }
 .card-book-button { min-height: 32px; padding: 0 12px; border-radius: 9px; color: #111; background: var(--gold); font-size: 10px; font-weight: 700; }
 .card-book-button.disabled { color: #969b9a; background: #2b3030; }
 .detail-header-actions { display: flex; align-items: center; gap: 4px; }
-.home-trust-row { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 7px; margin: 26px 0 7px; color: #71807c; font-size: 9px; }
+/* The trust strip doubles as the separator between the salon-listings band
+   and the testimonials below it. */
+.home-trust-row { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 7px; margin: 4px 0 7px; padding-top: 20px; border-top: 1px solid var(--line); color: #71807c; font-size: 9px; }
 .home-trust-row svg { color: var(--gold); }
 .home-trust-row i { width: 3px; height: 3px; border-radius: 50%; background: #58605f; }
 
@@ -473,7 +486,7 @@ img { display: block; max-width: 100%; }
 .detail-location svg:first-child { flex: none; }
 .detail-location span { flex: 1; }
 .detail-location svg:last-child { flex: none; margin-top: 2px; color: var(--muted); }
-.detail-stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; margin-top: 19px; }
+.detail-stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 19px; }
 .detail-stat-grid > div { display: flex; align-items: flex-start; gap: 6px; padding: 10px 7px; border-radius: 11px; background: #121717; }
 .detail-stat-grid svg { flex: none; color: var(--gold); }
 .detail-stat-grid span { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -483,6 +496,46 @@ img { display: block; max-width: 100%; }
 .arrival-note svg { flex: none; color: var(--gold); }
 .arrival-note strong { color: var(--gold); }
 .detail-section { margin-top: 25px; }
+/* Inline booking action: the salon page's website-side CTA (the sticky bar
+   below repeats it for phones). Guests see "Login to book". */
+.detail-book-inline { width: 100%; margin-top: 15px; min-height: 50px; font-size: 14px; }
+.detail-book-note { margin: 8px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.4; text-align: center; }
+/* All public salon details — info rows, full service list, hours/days and the
+   team — on the same rail width as the hero above them. */
+.detail-info-card { display: flex; flex-direction: column; gap: 3px; padding: 8px; border: 1px solid var(--line); border-radius: 18px; background: var(--card); }
+.detail-info-row { display: flex; align-items: center; gap: 12px; padding: 9px 8px; border-radius: 12px; color: inherit; text-decoration: none; }
+a.detail-info-row:hover { background: rgba(255, 255, 255, .03); }
+.detail-info-icon { width: 36px; height: 36px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 11px; color: var(--gold); background: var(--gold-wash); }
+.detail-info-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.detail-info-copy small { color: var(--muted); font-size: 9.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+.detail-info-copy strong { color: var(--white); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.detail-info-chev { flex: none; color: var(--muted); }
+.detail-service-list { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.detail-service-row { min-width: 0; display: flex; align-items: center; gap: 11px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.detail-service-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; text-align: left; }
+.detail-service-copy strong { overflow: hidden; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.detail-service-copy small { overflow: hidden; color: var(--muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.detail-service-row > b { flex: none; color: var(--gold); font-size: 12.5px; }
+.detail-hours-card { display: flex; flex-direction: column; gap: 13px; padding: 15px; border: 1px solid var(--line); border-radius: 18px; background: var(--card); }
+.detail-hours-row { display: flex; align-items: center; gap: 12px; }
+.detail-days-block { display: flex; flex-direction: column; gap: 9px; padding-top: 13px; border-top: 1px solid var(--line); }
+.detail-days-block > small { color: var(--muted); font-size: 9.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+.detail-days-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.day-chip { padding: 6px 10px; border: 1px solid rgba(232, 185, 126, .18); border-radius: 9px; color: var(--gold); background: var(--gold-wash); font-size: 10.5px; font-weight: 700; }
+.day-chip.off { border-color: rgba(242, 123, 116, .22); color: var(--red); background: rgba(242, 123, 116, .09); }
+.detail-barber-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.detail-barber-card { min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 15px; background: var(--card); }
+.detail-barber-image { width: 100%; height: 130px; object-fit: cover; object-position: center top; border-radius: 10px; background: #252b2a; }
+@supports (aspect-ratio: 1 / 1) {
+  .detail-barber-image { height: auto; aspect-ratio: 1 / 1; }
+}
+.detail-barber-card strong { overflow: hidden; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.detail-barber-card > span { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 9.5px; }
+.detail-barber-card > span i { width: 5px; height: 5px; border-radius: 50%; background: var(--red); }
+.detail-barber-card > span.available { color: var(--green); }
+.detail-barber-card > span.available i { background: var(--green); }
+.detail-barber-card small { display: inline-flex; align-items: center; gap: 4px; color: var(--gold); font-size: 9.5px; }
+.detail-empty-note { margin: 0; padding: 14px; border: 1px dashed rgba(232, 185, 126, .35); border-radius: 13px; color: var(--muted-light); font-size: 12px; line-height: 1.55; }
 .service-preview-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .service-preview { min-width: 0; display: flex; flex-direction: column; gap: 7px; padding: 12px; border: 1px solid var(--line); border-radius: 13px; background: var(--card); }
 .service-preview svg { color: var(--gold); }
@@ -666,12 +719,62 @@ img { display: block; max-width: 100%; }
 .info-sections ul { display: flex; flex-direction: column; gap: 10px; margin: 10px 0 0; padding: 0; list-style: none; color: var(--muted-light); font-size: 12px; }
 .info-sections li { display: flex; align-items: center; gap: 8px; }
 .info-sections li svg { color: var(--gold); }
+/* Website info pages (About / FAQ / Terms / Privacy / Contact): one shared
+   page hero and a card grid, both on the same rail as every other public
+   page. These replaced the app-style narrow column the pages used before. */
+.site-info-back-row { margin-bottom: 12px; }
+.site-info-hero { margin-bottom: 20px; padding: 22px 18px; border: 1px solid var(--line); border-radius: 22px; background: radial-gradient(130% 160% at 100% 0%, rgba(232, 185, 126, .1), transparent 55%), linear-gradient(180deg, #151b1a, #101413); }
+.site-info-hero h1 { margin: 8px 0 10px; font-size: clamp(27px, 6vw, 40px); line-height: 1.04; letter-spacing: -.05em; }
+.site-info-hero p { margin: 0; max-width: 640px; color: var(--muted-light); font-size: 13px; line-height: 1.6; }
+.site-info-date { margin-bottom: 10px !important; color: var(--muted) !important; font-size: 11px !important; }
+.site-info-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-bottom: 22px; }
+.site-info-card { min-width: 0; padding: 17px 16px; border: 1px solid var(--line); border-radius: 18px; background: var(--card); }
+.site-info-card h2 { margin: 0 0 8px; font-size: 15.5px; line-height: 1.25; letter-spacing: -.02em; }
+.site-info-card p { margin: 0; color: var(--muted-light); font-size: 12.5px; line-height: 1.65; }
+.site-info-card ul { display: flex; flex-direction: column; gap: 9px; margin: 10px 0 0; padding: 0; list-style: none; }
+.site-info-card li { display: flex; align-items: flex-start; gap: 8px; color: var(--muted-light); font-size: 12px; line-height: 1.5; }
+.site-info-card li svg { flex: none; margin-top: 1px; color: var(--gold); }
+.site-info-card .store-badges { margin: 14px 0 2px; }
 .info-contact { display: flex; align-items: center; gap: 10px; margin-top: 23px; padding: 13px; border: 1px solid var(--line); border-radius: 15px; background: var(--card); }
 .info-contact-icon { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; flex: none; border-radius: 10px; color: var(--gold); background: var(--gold-wash); }
 .info-contact > div { min-width: 0; flex: 1; }
 .info-contact strong { display: block; font-size: 12px; }
 .info-contact p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
 .info-contact > button { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 50%; color: #111; background: var(--gold); }
+
+/* ── Contact page ──
+   Company contact channels on one side, the write-to-us form on the other,
+   then a partner CTA band. Same rail width as the rest of the site. */
+.contact-layout { display: grid; grid-template-columns: 1fr; gap: 16px; margin-bottom: 24px; }
+.contact-details { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.contact-details-heading { margin-bottom: 4px; }
+.contact-details-heading h2 { margin: 5px 0 0; font-size: 18px; letter-spacing: -.03em; }
+.contact-detail-card { display: flex; align-items: center; gap: 12px; padding: 13px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); color: inherit; text-decoration: none; }
+a.contact-detail-card:hover { border-color: rgba(232, 185, 126, .35); }
+.contact-detail-icon { width: 40px; height: 40px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 12px; color: var(--gold); background: var(--gold-wash); }
+.contact-detail-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; text-align: left; }
+.contact-detail-copy small { color: var(--muted); font-size: 9.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+.contact-detail-copy strong { color: var(--white); font-size: 14px; overflow-wrap: anywhere; }
+.contact-detail-copy span { color: var(--muted); font-size: 10.5px; line-height: 1.45; }
+.contact-detail-chev { flex: none; color: var(--muted); }
+.contact-hours-note { display: flex; align-items: flex-start; gap: 8px; padding: 12px; border-radius: 12px; color: #b8a58b; background: var(--gold-wash); font-size: 11.5px; line-height: 1.5; }
+.contact-hours-note svg { flex: none; margin-top: 1px; color: var(--gold); }
+.contact-hours-note strong { color: var(--gold); }
+.contact-form-card { min-width: 0; padding: 18px 16px; border: 1px solid var(--line-strong); border-radius: 20px; background: linear-gradient(145deg, rgba(232, 185, 126, .07), rgba(255, 255, 255, .015) 55%), var(--card); }
+.contact-form-card h2 { margin: 6px 0 14px; font-size: 19px; letter-spacing: -.02em; }
+.contact-form { display: flex; flex-direction: column; gap: 14px; }
+.contact-form .form-error { margin-bottom: 0; }
+.contact-form .btn { width: 100%; min-height: 50px; margin-top: 2px; }
+.contact-form-row { display: grid; grid-template-columns: 1fr; gap: 14px; }
+.contact-form-note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; text-align: center; }
+.contact-form-note a { color: var(--gold); font-weight: 700; text-decoration: none; }
+.contact-form-note a:hover { text-decoration: underline; }
+.contact-success { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 4px 0; }
+.contact-success-icon { width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; border-radius: 14px; color: #09120d; background: var(--green); }
+.contact-success strong { font-size: 15px; }
+.contact-success p { margin: 0 0 8px; color: var(--muted-light); font-size: 12.5px; line-height: 1.6; }
+.contact-success a { color: var(--gold); font-weight: 700; }
+.contact-cta-band { margin-top: 0; }
 .delay-card { max-width: 650px; padding: 22px 17px; border: 1px solid var(--line-strong); border-radius: 20px; background: linear-gradient(145deg, rgba(232,185,126,.11), rgba(255,255,255,.02)), var(--card); }
 .delay-icon { width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; margin-bottom: 18px; border-radius: 15px; color: var(--gold); background: var(--gold-wash); }
 .delay-card h2 { max-width: 440px; margin: 11px 0 10px; font-size: 25px; line-height: 1.1; letter-spacing: -.045em; }
@@ -760,10 +863,10 @@ img { display: block; max-width: 100%; }
 .auth-legal button { display: inline; padding: 0; border: 0; background: none; color: var(--gold); font: inherit; text-decoration: underline; cursor: pointer; }
 .auth-legal button:hover { color: var(--white); }
 
-/* Legal pages (Terms, Privacy Policy): a document read, a touch narrower and
-   calmer than the marketing info pages. */
-.legal-screen { max-width: 860px; }
-.legal-screen .info-sections section h2 { font-size: 14px; }
+/* Legal pages (Terms, Privacy Policy) share the site rail — no narrower
+   document column, because every public page must read at the same width.
+   The typography stays a touch calmer than the marketing info pages. */
+.legal-screen .site-info-card h2 { font-size: 14px; }
 @media (min-width: 1490px) {
   .site-navbar { padding-left: calc((100% - 1460px) / 2 + 15px); padding-right: calc((100% - 1460px) / 2 + 15px); }
 }
@@ -805,9 +908,15 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
 .site-footer-bottom a:hover { color: var(--gold); }
 @media (min-width: 560px) {
   .site-footer-grid { grid-template-columns: 1fr 1fr; }
+  .contact-form-row { grid-template-columns: 1fr 1fr; }
 }
 @media (min-width: 900px) {
   .site-footer-grid { grid-template-columns: 1.6fr 1fr 1fr 1fr; }
+  .site-info-hero { padding: 34px 30px; }
+  .site-info-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .contact-layout { grid-template-columns: minmax(0, .95fr) minmax(0, 1.15fr); gap: 20px; align-items: start; }
+  .contact-form-card { padding: 26px 24px; }
+  .detail-service-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* ── Testimonials (above the footer on public pages): a swipeable carousel
@@ -1185,8 +1294,8 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .page-header-leading h1 { font-size: 30px; }
   .home-topline h1 { font-size: 43px; }
   .home-topline { margin-bottom: 23px; }
-  .home-search-row { max-width: 720px; }
-  .filter-button { min-width: 92px; flex-direction: row; gap: 6px; }
+  .home-search-row { max-width: 760px; }
+  .home-band { padding: 22px; border-radius: 26px; margin-bottom: 22px; }
   .ad-slide { height: 230px; }
   .salon-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
   .product-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
@@ -1195,7 +1304,6 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .detail-main-image { height: 400px; aspect-ratio: auto; }
   .detail-overview { flex: 1; padding: 29px; }
   .detail-title-row h2 { font-size: 28px; }
-  .detail-section { max-width: 760px; }
   .select-service-grid { grid-template-columns: 1fr 1fr; gap: 12px; }
   .schedule-screen { max-width: 850px; }
   .time-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); max-height: 380px; }
@@ -1214,7 +1322,6 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .profile-card { max-width: 800px; padding: 23px; }
   .account-card { max-width: 800px; }
   .logout-button { max-width: 800px; }
-  .info-screen { max-width: 850px; }
   .delay-card { padding: 30px; }
   .request-card { padding: 25px; }
   .editor-section { padding: 22px; }
@@ -1264,7 +1371,9 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .sidebar-logout svg { flex: none; }
   .workspace { flex: 1; width: calc(100% - 252px); }
   .workspace-content { padding: 43px 5%; }
-  .utility-content { max-width: 1300px; }
+  /* The in-app detail/info pages ride the same rail width as the home feed,
+     so moving between screens never changes the page's outer size. */
+  .utility-content { max-width: 1460px; }
 }
 
 @media (min-width: 1200px) {
@@ -1289,6 +1398,15 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .home-topline { flex-wrap: wrap; }
   .home-topline > div:first-child { flex: 1 1 180px; }
   .home-actions { margin-left: auto; }
+  /* Mobile salon-card balance: the footer used to pin the wait time to the
+     left edge and the share/book buttons to the right, which read as a
+     left-aligned card. On phones the booking row gets the full width — share
+     keeps its square, Book now fills the rest. */
+  .salon-card-footer { flex-wrap: wrap; row-gap: 11px; }
+  .salon-card .wait-copy { flex: 1 1 100%; font-size: 11px; }
+  .salon-card-cta { flex: 1 1 100%; gap: 8px; }
+  .salon-card-cta .card-book-button { flex: 1 1 auto; min-height: 38px; border-radius: 10px; font-size: 11.5px; }
+  .salon-card-cta .card-share-button { flex: none; width: 38px; height: 38px; }
   .section-heading { align-items: flex-start; flex-wrap: wrap; }
   .section-heading > .result-count { margin-left: auto; }
   .profile-card, .salon-profile-hero { align-items: flex-start; flex-wrap: wrap; }
@@ -1318,7 +1436,8 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .confirm-actions { grid-template-columns: 1fr; }
   .confirm-ok { order: -1; }
   .home-actions { gap: 4px; }
-  .gender-toggle button { padding: 0 7px; }
+  .gender-toggle-label { display: none; }
+  .gender-toggle button { padding: 0 10px; }
   .notification-button { width: 35px; height: 35px; }
   .detail-stat-grid { gap: 4px; }
   .detail-stat-grid > div { padding: 9px 5px; }

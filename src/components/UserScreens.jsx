@@ -11,6 +11,7 @@ import {
   CalendarX2,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   CircleAlert,
   Clock3,
@@ -39,6 +40,7 @@ import {
   Store,
   Timer,
   UserRound,
+  UsersRound,
   X,
   Zap,
   Clock,
@@ -180,7 +182,7 @@ function AdCarousel({ ads }) {
 }
 
 function GenderToggle({ value, onChange }) {
-  return <div className="gender-toggle" role="group" aria-label="Salon type"><button className={value === 'male' ? 'active' : ''} onClick={() => onChange('male')}>Male</button><button className={value === 'female' ? 'active' : ''} onClick={() => onChange('female')}>Female</button></div>;
+  return <div className="gender-toggle" role="group" aria-label="Salon for male or female"><span className="gender-toggle-label">Salons for</span><button className={value === 'male' ? 'active' : ''} onClick={() => onChange('male')} aria-pressed={value === 'male'}>Male</button><button className={value === 'female' ? 'active' : ''} onClick={() => onChange('female')} aria-pressed={value === 'female'}>Female</button></div>;
 }
 
 // Every salon has its own route (`#/salon/<id>`) which is what the share
@@ -419,13 +421,22 @@ export function HomeScreen({ session, navigate, notify }) {
 
   return (
     <div className="screen home-screen">
-      <div className="home-topline"><div><span className="eyebrow">{isGuest ? 'SALON BOOKINGS, SIMPLIFIED' : 'NEARBY GROOMING'}</span><h1>{isGuest ? 'Find your salon' : `Hi ${firstName(userName)}`}</h1><p className="muted-line"><LocateFixed size={14} /> {location ? 'Using your current location' : isGuest ? 'Browse trusted salons around you — login only when you book' : 'Discover trusted specialists around you'}</p></div><div className="home-actions"><GenderToggle value={gender} onChange={setGender} /></div></div>
-      <div className="home-search-row"><label className="search-field"><Search size={18} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Find salon, specialist..." aria-label="Search salons" />{search && <button onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label><button className="filter-button" onClick={() => notify?.('info', 'Use Male or Female to change salon recommendations.')}><Sparkles size={17} /><span>For you</span></button></div>
-      <AdCarousel ads={ads} />
-      <div className="section-heading"><div><span className="eyebrow">CURATED FOR YOU</span><h2>Salons near you</h2></div><span className="result-count">{loading ? 'Updating…' : `${visibleSalons.length} places`}</span></div>
-      {loadError && <div className="inline-notice"><CircleAlert size={16} /> {loadError} <button onClick={loadData}>Try again</button></div>}
-      {!loading && !location && <div className="inline-notice location-fallback-notice"><MapPin size={16} /> <span>Location is unavailable, so we are showing the available salon list without distance sorting.</span><button onClick={loadData}>Enable location</button></div>}
-      {loading ? <div className="salon-grid">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} />)}</div> : visibleSalons.length ? <div className="salon-grid">{visibleSalons.map(salon => <SalonCard key={salon.id} salon={salon} saved={savedId === salon.id || salon.isSaved} onSelect={openSalon} onBook={bookSalon} onShare={item => shareSalon(item, notify)} onBookmark={bookmark} userLocation={location} />)}</div> : <EmptyState icon={Scissors} title="No salons found" message="Try another search or switch the salon type." />}
+      {/* Section 1 — the discovery band: greeting, search and the male/female
+          filter (which replaced the old dead-end "For you" button), with the
+          ad carousel as its visual anchor. */}
+      <section className="home-band home-hero-band" aria-label="Find a salon">
+        <div className="home-topline"><div><span className="eyebrow">{isGuest ? 'SALON BOOKINGS, SIMPLIFIED' : 'NEARBY GROOMING'}</span><h1>{isGuest ? 'Find your salon' : `Hi ${firstName(userName)}`}</h1><p className="muted-line"><LocateFixed size={14} /> {location ? 'Using your current location' : isGuest ? 'Browse trusted salons around you — login only when you book' : 'Discover trusted specialists around you'}</p></div></div>
+        <div className="home-search-row"><label className="search-field"><Search size={18} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Find salon, specialist..." aria-label="Search salons" />{search && <button onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label><GenderToggle value={gender} onChange={setGender} /></div>
+        <AdCarousel ads={ads} />
+      </section>
+      {/* Section 2 — the salon listings, on its own panel so the page reads as
+          distinct website sections instead of one long app feed. */}
+      <section className="home-band home-salons-band" aria-label="Salons near you">
+        <div className="section-heading"><div><span className="eyebrow">CURATED FOR YOU</span><h2>Salons near you</h2></div><span className="result-count">{loading ? 'Updating…' : `${visibleSalons.length} places`}</span></div>
+        {loadError && <div className="inline-notice"><CircleAlert size={16} /> {loadError} <button onClick={loadData}>Try again</button></div>}
+        {!loading && !location && <div className="inline-notice location-fallback-notice"><MapPin size={16} /> <span>Location is unavailable, so we are showing the available salon list without distance sorting.</span><button onClick={loadData}>Enable location</button></div>}
+        {loading ? <div className="salon-grid">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} />)}</div> : visibleSalons.length ? <div className="salon-grid">{visibleSalons.map(salon => <SalonCard key={salon.id} salon={salon} saved={savedId === salon.id || salon.isSaved} onSelect={openSalon} onBook={bookSalon} onShare={item => shareSalon(item, notify)} onBookmark={bookmark} userLocation={location} />)}</div> : <EmptyState icon={Scissors} title="No salons found" message="Try another search or switch the salon type." />}
+      </section>
       <div className="home-trust-row"><ShieldCheck size={16} /><span>Verified listings</span><i /><Clock3 size={16} /><span>Book in minutes</span><i /><Heart size={16} /><span>Made for your time</span></div>
       <TestimonialSection />
       <SiteFooter />
@@ -622,6 +633,21 @@ export function AccountScreen({ session, navigate, onLogout, notify, onSessionUp
   );
 }
 
+// Weekday helpers for the salon business-hours block. The partner editor
+// stores the weekly off as a day index string ("0" = Sunday … "6" = Saturday)
+// while older records may carry the day name itself — render either as a day
+// name so the public page never shows a bare number.
+const WEEK_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function holidayDayName(day) {
+  if (day === null || day === undefined || day === '') return '';
+  const numeric = Number(day);
+  if (Number.isFinite(numeric) && numeric >= 0 && numeric <= 6) return WEEK_DAYS[Math.trunc(numeric)];
+  const label = String(day).trim();
+  const named = WEEK_DAYS.find(name => name.toLowerCase() === label.toLowerCase());
+  return named || label.charAt(0).toUpperCase() + label.slice(1).toLowerCase();
+}
+
 export function SalonDetailScreen({ session, params, navigate, notify }) {
   const [salon, setSalon] = useState(params?.salon || null);
   const [loading, setLoading] = useState(true);
@@ -640,7 +666,6 @@ export function SalonDetailScreen({ session, params, navigate, notify }) {
   const details = { ...salon, ...normalized };
   const images = details.images?.length ? details.images : [details.image];
   const status = getSalonStatus(details.businessHours, details.isOpen);
-  const hours = details.businessHours?.[0];
   const isGuest = !session?.userId;
   // A deep-linked guest's route id is the one id that is always known — the
   // fetched salon payload may arrive later (or lack the field entirely).
@@ -650,13 +675,149 @@ export function SalonDetailScreen({ session, params, navigate, notify }) {
   const continueToBooking = () => {
     if (isGuest) {
       stashPendingRoute(`/salon/${salonRouteId}`);
-      notify?.('info', 'Login to book this salon.');
+      notify?.('info', 'Login is required to book this salon.');
       navigate('login');
       return;
     }
     navigate('services', { salon: details, salonId: salonRouteId });
   };
-  return <div className="screen detail-screen" aria-busy={loading || undefined}><PageHeader title={details.name} subtitle={`${details.genderType || 'UNISEX'} salon`} onBack={() => navigate(-1)} action={<div className="detail-header-actions"><button className="icon-btn ghost" onClick={() => shareSalon(details, notify)} aria-label="Share salon"><Share2 size={18} /></button><button className="icon-btn ghost" onClick={() => window.open(`tel:${details.phoneNumber || ''}`)} aria-label="Call salon"><Phone size={18} /></button></div>} /><div className="detail-hero"><div className="detail-gallery"><ImageWithFallback src={images[active]} fallback={USER_FALLBACK_IMAGE} alt={details.name} className="detail-main-image" onClick={() => setImageOpen(true)} /><button className="gallery-expand" onClick={() => setImageOpen(true)} aria-label="Open image"><ExternalLink size={16} /></button>{images.length > 1 && <div className="gallery-thumbs">{images.map((image, index) => <button key={`${image}-${index}`} className={index === active ? 'active' : ''} onClick={() => setActive(index)}><ImageWithFallback src={image} fallback={USER_FALLBACK_IMAGE} alt="" /></button>)}</div>}</div><div className="detail-overview"><div className="detail-title-row"><div><span className="salon-type">{details.genderType || 'UNISEX'} SALON</span><h2>{details.name}</h2></div></div><div className="detail-status-line"><StatusPill tone={status.isOpen ? 'open' : 'closed'} dot>{status.text}</StatusPill>{hours && <span><Clock3 size={14} /> {formatTime(hours.openingTime)} – {formatTime(hours.closingTime)}</span>}</div><button className="detail-location" onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${details.latitude},${details.longitude}`, '_blank', 'noopener,noreferrer')}><MapPin size={17} /><span>{details.address || 'Address unavailable'}</span><ExternalLink size={14} /></button><div className="detail-stat-grid"><div><Timer size={17} /><span><small>Current wait</small><strong>{details.waitTime || '10–15 min'}</strong></span></div><div><Scissors size={17} /><span><small>Services</small><strong>{details.services?.length || 0} to choose</strong></span></div></div><div className="arrival-note"><Zap size={16} /><span><strong>Before you arrive</strong> Come 10 minutes before your slot and follow the latest appointment status.</span></div></div></div><section className="detail-section"><div className="section-heading compact"><div><span className="eyebrow">WHAT THEY OFFER</span><h2>Services & specialists</h2></div><span className="muted-line">{details.barbers?.length || 0} specialists</span></div><div className="service-preview-grid">{(details.services || []).slice(0, 4).map(service => <div className="service-preview" key={service.serviceId || service.id}><Scissors size={15} /><span>{service.serviceName || service.name}</span><strong>{formatCurrency(service.price)}</strong></div>)}</div></section><SiteFooter /><div className="sticky-continue"><div><span>Ready when you are?</span><small>{isGuest ? 'Login once, then pick services & a time slot' : 'Select services and a time slot'}</small></div><Button onClick={continueToBooking}>{isGuest ? 'Login to book' : 'Continue'} <ArrowRight size={17} /></Button></div><Modal open={imageOpen} onClose={() => setImageOpen(false)} title={details.name} size="image"><ImageWithFallback src={images[active]} fallback={USER_FALLBACK_IMAGE} alt={details.name} className="modal-full-image" /></Modal></div>;
+  // Every public detail the API knows about the salon, normalised once so the
+  // sections below stay declarative.
+  const services = details.services || [];
+  const barbers = details.barbers || [];
+  const schedules = (Array.isArray(details.businessHours) ? details.businessHours : [details.businessHours])
+    .filter(entry => entry && (entry.openingTime || entry.closingTime));
+  const primaryHours = schedules[0] || {};
+  const holidayDays = [...new Set(schedules.flatMap(entry => (entry.holidayDays || []).map(holidayDayName)).filter(Boolean))];
+  const openDays = WEEK_DAYS.filter(day => !holidayDays.includes(day));
+  const fullAddress = [details.addressLine1 || details.address, details.addressLine2, details.city || details.location, details.state, details.pincode]
+    .map(value => String(value || '').trim()).filter(Boolean).join(', ');
+  const infoRows = [
+    details.phoneNumber && { icon: Phone, label: 'Call the salon', value: `+91 ${details.phoneNumber}`, href: `tel:${details.phoneNumber}` },
+    fullAddress && { icon: MapPin, label: 'Address', value: fullAddress, href: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fullAddress)}`, external: true },
+    { icon: Store, label: 'Salon type', value: `${details.genderType || 'UNISEX'} salon` },
+    details.ownerName && { icon: UserRound, label: 'Managed by', value: details.ownerName },
+    details.email && { icon: Mail, label: 'Email', value: details.email, href: `mailto:${details.email}` },
+  ].filter(Boolean);
+  return (
+    <div className="screen detail-screen" aria-busy={loading || undefined}>
+      <PageHeader
+        title={details.name}
+        subtitle={`${details.genderType || 'UNISEX'} salon`}
+        onBack={() => navigate(-1)}
+        action={<div className="detail-header-actions"><button className="icon-btn ghost" onClick={() => shareSalon(details, notify)} aria-label="Share salon"><Share2 size={18} /></button>{details.phoneNumber && <button className="icon-btn ghost" onClick={() => window.open(`tel:${details.phoneNumber}`)} aria-label="Call salon"><Phone size={18} /></button>}</div>}
+      />
+      <div className="detail-hero">
+        <div className="detail-gallery">
+          <ImageWithFallback src={images[active]} fallback={USER_FALLBACK_IMAGE} alt={details.name} className="detail-main-image" onClick={() => setImageOpen(true)} />
+          <button className="gallery-expand" onClick={() => setImageOpen(true)} aria-label="Open image"><ExternalLink size={16} /></button>
+          {images.length > 1 && <div className="gallery-thumbs">{images.map((image, index) => <button key={`${image}-${index}`} className={index === active ? 'active' : ''} onClick={() => setActive(index)}><ImageWithFallback src={image} fallback={USER_FALLBACK_IMAGE} alt="" /></button>)}</div>}
+        </div>
+        <div className="detail-overview">
+          <div className="detail-title-row"><div><span className="salon-type">{details.genderType || 'UNISEX'} SALON</span><h2>{details.name}</h2></div></div>
+          <div className="detail-status-line">
+            <StatusPill tone={status.isOpen ? 'open' : 'closed'} dot>{status.text}</StatusPill>
+            {primaryHours.openingTime && <span><Clock3 size={14} /> {formatTime(primaryHours.openingTime)} – {formatTime(primaryHours.closingTime)}</span>}
+          </div>
+          <button className="detail-location" onClick={() => window.open(fullAddress ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fullAddress)}` : `https://www.google.com/maps/search/?api=1&query=${details.latitude},${details.longitude}`, '_blank', 'noopener,noreferrer')}><MapPin size={17} /><span>{fullAddress || 'Address unavailable'}</span><ExternalLink size={14} /></button>
+          <div className="detail-stat-grid">
+            <div><Timer size={17} /><span><small>Current wait</small><strong>{details.waitTime || '10–15 min'}</strong></span></div>
+            <div><Scissors size={17} /><span><small>Services</small><strong>{services.length || '—'} to choose</strong></span></div>
+            <div><UsersRound size={17} /><span><small>Specialists</small><strong>{barbers.length || '—'}</strong></span></div>
+          </div>
+          <div className="arrival-note"><Zap size={16} /><span><strong>Before you arrive</strong> Come 10 minutes before your slot and follow the latest appointment status.</span></div>
+          <Button className="detail-book-inline" onClick={continueToBooking}>{isGuest ? 'Login to book' : 'Book salon'} <ArrowRight size={17} /></Button>
+          {isGuest && <p className="detail-book-note">Login is required to book this salon — it takes less than a minute.</p>}
+        </div>
+      </div>
+
+      {/* All public details of the salon. */}
+      <section className="detail-section">
+        <div className="section-heading compact"><div><span className="eyebrow">ABOUT THE SALON</span><h2>Salon details</h2></div></div>
+        <div className="detail-info-card">
+          {infoRows.map(row => (
+            <a key={row.label} className="detail-info-row" href={row.href} target={row.external ? '_blank' : undefined} rel={row.external ? 'noopener,noreferrer' : undefined}>
+              <span className="detail-info-icon"><row.icon size={16} /></span>
+              <span className="detail-info-copy"><small>{row.label}</small><strong>{row.value}</strong></span>
+              {row.href && <ChevronRight size={16} className="detail-info-chev" />}
+            </a>
+          ))}
+        </div>
+      </section>
+
+      {/* Every service the salon lists — never just a preview. */}
+      <section className="detail-section">
+        <div className="section-heading compact"><div><span className="eyebrow">SERVICES & PRICES</span><h2>All services</h2></div><span className="result-count">{services.length} services</span></div>
+        {services.length ? (
+          <div className="detail-service-list">
+            {services.map(service => {
+              const serviceKey = service.serviceId || service.id || service.serviceName || service.name;
+              const duration = Number(service.durationMinutes || service.duration || 0);
+              return (
+                <div className="detail-service-row" key={serviceKey}>
+                  <span className="service-select-icon"><Scissors size={16} /></span>
+                  <span className="detail-service-copy"><strong>{service.serviceName || service.name}</strong><small>{[duration ? `${duration} min` : '', service.description || ''].filter(Boolean).join(' · ') || 'Salon service'}</small></span>
+                  <b>{formatCurrency(service.price)}</b>
+                </div>
+              );
+            })}
+          </div>
+        ) : <p className="detail-empty-note">This salon has not listed its services yet — call the salon for the latest prices and offerings.</p>}
+      </section>
+
+      {/* Business hours and the days the salon works, when the owner set them. */}
+      <section className="detail-section">
+        <div className="section-heading compact"><div><span className="eyebrow">TIMINGS</span><h2>Business hours & days</h2></div><StatusPill tone={status.isOpen ? 'open' : 'closed'} dot>{status.text}</StatusPill></div>
+        {schedules.length ? (
+          <div className="detail-hours-card">
+            {schedules.map((entry, index) => (
+              <div className="detail-hours-row" key={entry.businessHourId || entry.id || index}>
+                <span className="detail-info-icon"><Clock3 size={16} /></span>
+                <span className="detail-info-copy"><small>{schedules.length > 1 ? `Schedule ${index + 1}` : 'Working hours'}</small><strong>{formatTime(entry.openingTime)} – {formatTime(entry.closingTime)}</strong></span>
+              </div>
+            ))}
+            {(primaryHours.breakStartTime || primaryHours.breakEndTime) && (
+              <div className="detail-hours-row"><span className="detail-info-icon"><AlarmClock size={16} /></span><span className="detail-info-copy"><small>Break time</small><strong>{formatTime(primaryHours.breakStartTime)} – {formatTime(primaryHours.breakEndTime)}</strong></span></div>
+            )}
+            <div className="detail-days-block">
+              <small>{holidayDays.length ? 'Open days' : 'Open all days of the week'}</small>
+              <div className="detail-days-row">
+                {openDays.map(day => <span key={day} className="day-chip">{day}</span>)}
+                {holidayDays.map(day => <span key={day} className="day-chip off">{day} — weekly off</span>)}
+              </div>
+            </div>
+          </div>
+        ) : <p className="detail-empty-note">The salon has not shared its timings yet — call the salon before you visit.</p>}
+      </section>
+
+      {/* The team — the barbers a customer can pick during booking. */}
+      <section className="detail-section">
+        <div className="section-heading compact"><div><span className="eyebrow">THE TEAM</span><h2>Barbers & specialists</h2></div><span className="result-count">{barbers.length} specialists</span></div>
+        {barbers.length ? (
+          <div className="detail-barber-grid">
+            {barbers.map(barber => {
+              const barberKey = barber.barberId || barber.id || barber.fullName || barber.name;
+              return (
+                <div className="detail-barber-card" key={barberKey}>
+                  <ImageWithFallback src={barber.profileImageUrl || barber.image} fallback={PERSON_PLACEHOLDER} alt={barber.fullName || barber.name} className="detail-barber-image" />
+                  <strong>{barber.fullName || barber.name}</strong>
+                  <span className={barber.isAvailable ? 'available' : 'unavailable'}><i />{barber.isAvailable ? 'Available' : 'Away'}</span>
+                  <small><Star size={12} fill="currentColor" /> {barber.ratingAverage || barber.rating || '0.0'}</small>
+                </div>
+              );
+            })}
+          </div>
+        ) : <p className="detail-empty-note">No specialists added yet — any available barber will take care of you.</p>}
+      </section>
+
+      <SiteFooter />
+      <div className="sticky-continue">
+        <div><span>Ready when you are?</span><small>{isGuest ? 'Login is required to book this salon' : 'Pick services, a specialist and a time slot'}</small></div>
+        <Button onClick={continueToBooking}>{isGuest ? 'Login to book' : 'Book salon'} <ArrowRight size={17} /></Button>
+      </div>
+      <Modal open={imageOpen} onClose={() => setImageOpen(false)} title={details.name} size="image"><ImageWithFallback src={images[active]} fallback={USER_FALLBACK_IMAGE} alt={details.name} className="modal-full-image" /></Modal>
+    </div>
+  );
 }
 
 export function ServicesScreen({ params, navigate, notify }) {
@@ -926,7 +1087,7 @@ const INFO_CONTENT = {
   faq: { title: 'Frequently asked questions', eyebrow: 'NEED TO KNOW', sections: [{ title: 'How do I book a salon?', text: 'Choose your salon, select one or more services, pick an available specialist and time, then confirm your booking request.' }, { title: 'Can I cancel a booking?', text: 'Yes. Open My bookings and choose Cancel booking on a pending or confirmed appointment.' }, { title: 'What happens after I send a request?', text: 'The salon receives your request and confirms it. You will see the latest status in My bookings and receive an update.' }, { title: 'Can I use My Naai as a salon owner?', text: 'Absolutely. Use Continue as Salon Partner on the login screen to sign in or register your salon.' }] },
   terms: { title: 'Terms & Conditions', eyebrow: 'PLEASE READ', date: 'Effective Date: 09 January 2026', intro: 'Welcome to MyNaai. By accessing or using the MyNaai website or app, you accept these Terms and Conditions. If you do not agree with any part of them, please do not continue to use the service.', sections: [{ title: '1. The service', text: 'MyNaai connects you with nearby salons so you can request an appointment, follow its status and keep track of your bookings. Appointments remain requests until the salon confirms them.', bullets: ['Choose a salon, services, specialist and time', 'The salon confirms, declines or proposes a new time', 'Arrive at least 10 minutes before your slot'] }, { title: '2. Your account', text: 'You are responsible for keeping your login OTP and account secure and for everything that happens under it. Please keep your name and mobile number accurate and up to date — booking alerts reach you through them.' }, { title: '3. Bookings, delays and cancellations', text: 'Cancel as early as possible so the salon can offer the slot to another customer. The salon may decline or change a request based on availability, and may propose a small time delay you can accept or decline.', bullets: ['You can cancel from My bookings while the visit is upcoming', 'A salon delay offer needs your acceptance to take effect', 'Repeated last-minute cancellations may limit booking'] }, { title: '4. Payments', text: 'All payments are made directly at the salon — not through MyNaai. Price ranges shown on salon pages are indicative; the salon determines the final amount.' }, { title: '5. Fair use', text: 'Please use MyNaai respectfully: accurate details at booking, no misuse of salons\u2019 or other users\u2019 information, and no attempts to disrupt the service. We may suspend accounts that abuse the platform.' }, { title: '6. Privacy', text: 'Your privacy matters to us. The Privacy Policy on this site explains what we collect, how we use it and the choices you have — it is part of these terms.' }, { title: '7. Service changes', text: 'We may improve, modify or pause parts of the service at any time. We are not liable for any modification, suspension or discontinuance, though we always aim to communicate material changes on this page.' }, { title: '8. Questions', text: 'MyNaai is built in India. For anything about these terms, call 8380017393 or write to support@mynaai.com.' }] },
   privacy: { title: 'Privacy Policy', eyebrow: 'YOUR DATA', date: 'Effective Date: 09 January 2026', intro: 'MyNaai (“we”, “our”, “us”) operates the MyNaai mobile application and website. This Privacy Policy explains how we collect, use and protect your information when you use our services.', sections: [{ title: '1. Information we collect', text: 'Personal information:', bullets: ['Name', 'Mobile number', 'Email address (optional)', 'Location (city/area only)', 'Profile details (optional)'] }, { title: 'Booking information', bullets: ['Selected salon', 'Appointment date & time', 'Service details'] }, { title: 'Device information', bullets: ['Device type', 'Operating system', 'App version', 'IP address (for security & analytics)'] }, { title: '2. What we do NOT collect', text: 'We do not collect or store: credit or debit card details, UPI or wallet information, bank account details or any online payment information. All payments are made directly at the salon and not through the app.' }, { title: '3. How we use your information', bullets: ['To show nearby salons', 'To enable appointment booking', 'To notify you about booking updates and reminders', 'To improve app performance and user experience', 'To prevent fraud and misuse'] }, { title: '4. Location information', text: 'MyNaai may use approximate location (city or area) to show nearby salons. We do not track real-time or background location.' }, { title: '5. Data sharing', text: 'We do not sell or rent your personal data. Information may be shared only:', bullets: ['With the selected salon for booking confirmation', 'When required by law', 'To protect users and platform security'] }, { title: '6. Data security', text: 'We use reasonable security measures such as secure servers and encrypted communication to protect user data. However, no method of transmission over the internet is 100% secure.' }, { title: '7. Children\u2019s privacy', text: 'MyNaai is not intended for children under the age of 13. We do not knowingly collect personal information from children.' }, { title: '8. Your rights', bullets: ['Update or correct your profile', 'Request account deletion', 'Contact us for data-related concerns'] }, { title: '9. Third-party services', text: 'We may use third-party services for analytics, notifications, and app performance monitoring. These services have their own privacy policies.' }, { title: '10. Changes to this policy', text: 'We may update this Privacy Policy from time to time. Changes will be posted on this page with an updated effective date.' }, { title: '11. Contact us', text: 'MyNaai — Email: support@mynaai.com · Location: India. You can also call our support team on 8380017393.' }] },
-  contact: { title: 'Contact us', eyebrow: 'TALK TO US', intro: 'Booking help, account questions or partnership — one call reaches the My Naai team.', sections: [{ title: 'Customer support', text: 'Call 8380017393 for anything about your bookings, reminders or account. You can also tap the call button below.' }, { title: 'Own a salon? Partner with us', text: 'Open Login, switch to Salon partner, and register — our team helps your salon go live with bookings, queue updates and its own shareable page.' }, { title: 'My Naai, everywhere', bullets: ['Android app on Google Play', 'iOS app coming soon', 'Full booking right here on the web — add to Home Screen for the app feel'] }] },
+  contact: { title: 'Contact us', eyebrow: 'TALK TO US', intro: 'Booking help, account questions or a salon partnership — call, email or write to the My Naai team. We answer every day.' },
 };
 
 // The Android app on Google Play — the web version tells visitors it exists.
@@ -1126,7 +1287,136 @@ export function SiteFooter() {
   );
 }
 
-export function InfoScreen({ type, navigate }) {
+// Website-styled info pages (About / FAQ / Terms / Privacy): a full-width page
+// hero and a card grid on the same rail as every other public page, instead of
+// the app-style narrow column these screens used before. Inside the signed-in
+// app shell `showBack` adds the back control — the app chrome keeps the
+// in-app feel the client asked for ("the website stays a website, login is the
+// app").
+export function InfoScreen({ type, navigate, showBack = false }) {
+  if (type === 'contact') return <ContactScreen navigate={navigate} showBack={showBack} />;
   const content = INFO_CONTENT[type] || INFO_CONTENT.about;
-  return <div className={cx('screen info-screen', ['terms', 'privacy'].includes(type) && 'legal-screen')}><PageHeader title={content.title} eyebrow={content.eyebrow} subtitle={content.date || undefined} onBack={() => navigate(-1)} /><div className="info-intro"><Sparkles size={18} /><p>{content.intro || 'Everything you need to know about using My Naai.'}</p></div><div className="info-sections">{content.sections.map(section => <section key={section.title}><h2>{section.title}</h2>{section.text && <p>{section.text}</p>}{section.bullets && <ul>{section.bullets.map(item => <li key={item}><CheckCircle2 size={16} />{item}</li>)}</ul>}{section.app && <StoreBadges />}</section>)}</div><div className="info-contact"><span className="info-contact-icon"><Phone size={18} /></span><div><strong>Need more help?</strong><p>Call our support team on 8380017393</p></div><button onClick={() => window.open('tel:8380017393')}><ArrowRight size={17} /></button></div><SiteFooter /></div>;
+  return (
+    <div className={cx('screen info-screen site-info-screen', ['terms', 'privacy'].includes(type) && 'legal-screen')}>
+      {showBack && <div className="site-info-back-row"><button className="icon-btn ghost" onClick={() => navigate(-1)} aria-label="Go back"><ChevronRight size={19} className="rotate-180" /></button></div>}
+      <header className="site-info-hero">
+        <span className="eyebrow">{content.eyebrow}</span>
+        <h1>{content.title}</h1>
+        {content.date && <p className="site-info-date">{content.date}</p>}
+        <p>{content.intro || 'Everything you need to know about using My Naai.'}</p>
+      </header>
+      <div className="site-info-grid">
+        {content.sections.map(section => (
+          <section key={section.title} className="site-info-card">
+            <h2>{section.title}</h2>
+            {section.text && <p>{section.text}</p>}
+            {section.bullets && <ul>{section.bullets.map(item => <li key={item}><CheckCircle2 size={16} />{item}</li>)}</ul>}
+            {section.app && <StoreBadges />}
+          </section>
+        ))}
+      </div>
+      <div className="info-contact"><span className="info-contact-icon"><Phone size={18} /></span><div><strong>Need more help?</strong><p>Call our support team on 8380017393</p></div><button onClick={() => window.open('tel:8380017393')}><ArrowRight size={17} /></button></div>
+      <SiteFooter />
+    </div>
+  );
+}
+
+// The My Naai company contact channels — one source of truth so the cards
+// and the footer never disagree.
+export const CONTACT_PHONE = '8380017393';
+export const CONTACT_EMAIL = 'support@mynaai.com';
+const CONTACT_CHANNELS = [
+  { icon: Phone, label: 'Call us', value: CONTACT_PHONE, href: `tel:${CONTACT_PHONE}`, note: 'Support, bookings and salon partners — every day.' },
+  { icon: Mail, label: 'Email', value: CONTACT_EMAIL, href: `mailto:${CONTACT_EMAIL}`, note: 'We reply within 24 hours on working days.' },
+  { icon: Globe, label: 'Website', value: 'mynaai.in', href: '/', note: 'Everything works on the web — browse, book, manage.' },
+  { icon: MapPin, label: 'Location', value: 'India', note: 'Built in India, growing salon by salon.' },
+];
+
+const CONTACT_SUBJECTS = ['Booking help', 'My account', 'Salon partnership', 'Feedback', 'Something else'];
+
+// The My Naai contact page as a real website page: company contact details,
+// then a working contact form. There is no contact inbox API, so the form
+// composes a ready-to-send email addressed to support — the visitor's own
+// mail app opens with everything filled in, and the page confirms it.
+export function ContactScreen({ navigate, showBack = false }) {
+  const [form, setForm] = useState({ name: '', contact: '', subject: CONTACT_SUBJECTS[0], message: '' });
+  const [error, setError] = useState('');
+  const [sent, setSent] = useState(false);
+  const set = key => event => setForm(current => ({ ...current, [key]: event.target.value }));
+  const submit = event => {
+    event.preventDefault();
+    setError('');
+    if (!form.name.trim()) return setError('Please tell us your name.');
+    const contact = form.contact.trim();
+    if (!contact) return setError('Please share a phone number or email so we can reach you.');
+    if (!/^\d{10}$/.test(contact) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) return setError('Enter a 10-digit mobile number or a valid email address.');
+    if (!form.message.trim()) return setError('Please write your message — a line or two is enough.');
+    const subject = encodeURIComponent(`My Naai — ${form.subject} (${form.name.trim()})`);
+    const body = encodeURIComponent(`Name: ${form.name.trim()}\nPhone / email: ${contact}\nTopic: ${form.subject}\n\n${form.message.trim()}\n\n— Sent from the mynaai.in contact page`);
+    window.location.href = `mailto:${CONTACT_EMAIL}?subject=${subject}&body=${body}`;
+    setSent(true);
+  };
+  return (
+    <div className="screen info-screen site-info-screen contact-screen">
+      {showBack && <div className="site-info-back-row"><button className="icon-btn ghost" onClick={() => navigate(-1)} aria-label="Go back"><ChevronRight size={19} className="rotate-180" /></button></div>}
+      <header className="site-info-hero">
+        <span className="eyebrow">TALK TO US</span>
+        <h1>Contact us</h1>
+        <p>Questions about a booking, your account or partnering with My Naai — reach the team directly or send a message below. We answer every day.</p>
+      </header>
+      <div className="contact-layout">
+        <div className="contact-details">
+          <div className="contact-details-heading"><span className="eyebrow">MY NAAI SUPPORT</span><h2>Reach us directly</h2></div>
+          {CONTACT_CHANNELS.map(channel => {
+            const inner = <><span className="contact-detail-icon"><channel.icon size={18} /></span><span className="contact-detail-copy"><small>{channel.label}</small><strong>{channel.value}</strong><span>{channel.note}</span></span>{channel.href ? <ChevronRight size={16} className="contact-detail-chev" /> : null}</>;
+            return channel.href
+              ? <a key={channel.label} className="contact-detail-card" href={channel.href} onClick={channel.href === '/' ? footerNav : undefined}>{inner}</a>
+              : <div key={channel.label} className="contact-detail-card">{inner}</div>;
+          })}
+          <div className="contact-hours-note"><Clock3 size={15} /><span>Support is available on call and email <strong>every day</strong> — booking help never waits for Monday.</span></div>
+        </div>
+        <div className="contact-form-card">
+          <span className="eyebrow">SEND A MESSAGE</span>
+          <h2>Write to the My Naai team</h2>
+          {sent ? (
+            <div className="contact-success">
+              <span className="contact-success-icon"><CheckCircle2 size={22} /></span>
+              <strong>Your message is ready to send</strong>
+              <p>We opened your email app with the message filled in — press send there and it reaches us. Nothing opened? Email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> or call <a href={`tel:${CONTACT_PHONE}`}>{CONTACT_PHONE}</a>.</p>
+              <Button variant="secondary" size="small" onClick={() => { setSent(false); setForm({ name: '', contact: '', subject: CONTACT_SUBJECTS[0], message: '' }); }}>Write another message</Button>
+            </div>
+          ) : (
+            <form className="contact-form" onSubmit={submit} noValidate>
+              {error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}
+              <div className="contact-form-row">
+                <Field label="Your name"><input value={form.name} onChange={set('name')} placeholder="Full name" autoComplete="name" /></Field>
+                <Field label="Phone or email"><input value={form.contact} onChange={set('contact')} placeholder="10-digit mobile or email" autoComplete="tel-email" /></Field>
+              </div>
+              <Field label="What is this about?">
+                <span className="select-wrap">
+                  <select value={form.subject} onChange={set('subject')}>
+                    {CONTACT_SUBJECTS.map(subject => <option key={subject} value={subject}>{subject}</option>)}
+                  </select>
+                  <ChevronDown size={16} />
+                </span>
+              </Field>
+              <Field label="Your message"><textarea rows="5" value={form.message} onChange={set('message')} placeholder="Tell us how we can help — we reply within 24 hours." /></Field>
+              <Button type="submit"><Send size={16} /> Send message</Button>
+              <p className="contact-form-note">Prefer to talk? Call <a href={`tel:${CONTACT_PHONE}`}>{CONTACT_PHONE}</a> or WhatsApp us — or write directly to <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.</p>
+            </form>
+          )}
+        </div>
+      </div>
+      {/* The partnership band only makes sense on the public website — inside
+          the signed-in app there is no partner landing route to send a
+          customer to. showBack is the in-app marker. */}
+      {!showBack && (
+        <section className="partner-cta-band contact-cta-band">
+          <div><span className="eyebrow">OWN A SALON?</span><h2>List it on My Naai</h2><p>Register your salon in minutes — customers nearby discover you, book with you and arrive on time.</p></div>
+          <Button onClick={() => navigate('partner')}><Store size={16} /> Explore partnership</Button>
+        </section>
+      )}
+      <SiteFooter />
+    </div>
+  );
 }

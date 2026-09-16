@@ -1768,7 +1768,9 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
       if (route.name === 'schedule') return <ScheduleScreen {...props} params={route.params} />;
       if (route.name === 'notifications') return <NotificationsScreen {...props} />;
       if (route.name === 'delay') return <DelayRequestScreen {...props} params={route.params} />;
-      if (['about', 'faq', 'terms', 'privacy', 'contact'].includes(route.name)) return <InfoScreen type={route.name} navigate={navForScreens} />;
+      // Inside the signed-in shell the info pages keep an in-app back control;
+      // the website versions (GuestShell) render without one.
+      if (['about', 'faq', 'terms', 'privacy', 'contact'].includes(route.name)) return <InfoScreen type={route.name} navigate={navForScreens} showBack />;
       return <HomeScreen {...props} />;
     }
     if (route.name === 'queue') return <SalonQueueScreen {...props} />;
