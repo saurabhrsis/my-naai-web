@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const { salonProfile, userSalonList, userSalonListPublic } = vi.hoisted(() => ({ salonProfile: vi.fn(), userSalonList: vi.fn(), userSalonListPublic: vi.fn() }));
+const { salonProfile, userSalonList, userSalonListPublic, userLogin, verifyLogin } = vi.hoisted(() => ({ salonProfile: vi.fn(), userSalonList: vi.fn(), userSalonListPublic: vi.fn(), userLogin: vi.fn(), verifyLogin: vi.fn() }));
 
 // App.jsx pulls in lib/push.js, which loads the Firebase browser SDK at import
 // time. That SDK needs browser APIs jsdom does not provide, so stub the same
@@ -20,7 +20,7 @@ vi.mock('firebase/messaging', () => ({
 // something specific. The router is what is under test, not the screens' data.
 vi.mock('./lib/api', async () => {
   const actual = await vi.importActual('./lib/api');
-  const api = new Proxy({ salonProfile, userSalonList, userSalonListPublic }, {
+  const api = new Proxy({ salonProfile, userSalonList, userSalonListPublic, userLogin, verifyLogin }, {
     get: (target, key) => (key in target
       ? target[key]
       : vi.fn(() => Promise.resolve({ status: 'SUCCESS', data: {} }))),
@@ -49,6 +49,19 @@ vi.mock('./lib/push', () => {
     watchNotificationPermission: vi.fn(() => () => {}),
   };
 });
+// Device detection (iPhone, embedded frame) decides WHICH permission copy the
+// UI shows, so tests drive it — everything else in lib/permissions (the live
+// permission reads, the gesture-safe asks) stays real.
+vi.mock('./lib/permissions', async () => {
+  const actual = await vi.importActual('./lib/permissions');
+  return {
+    ...actual,
+    isEmbeddedFrame: vi.fn(() => false),
+    isIosDevice: vi.fn(() => false),
+    isIosPwaInstalled: vi.fn(() => false),
+    isStandalone: vi.fn(() => false),
+  };
+});
 vi.mock('./lib/socket', () => ({
   subscribeToLiveUpdates: vi.fn(() => () => {}),
   resetLiveUpdatesSocket: vi.fn(),
@@ -56,6 +69,8 @@ vi.mock('./lib/socket', () => ({
 vi.mock('./lib/buzzer', () => ({ playBuzzer: vi.fn(), unlockBuzzer: vi.fn() }));
 
 import App, { getRouteFromPath, parseRoutePath, resolveResumeRoute, routeToPath } from './App';
+import { api } from './lib/api';
+import * as permissions from './lib/permissions';
 import * as push from './lib/push';
 import { stashPendingRoute, popPendingRoute } from './lib/pendingRoute';
 
@@ -701,16 +716,35 @@ describe('Guest browsing flow', () => {
   });
 });
 
-// Login permission flow: one setup card on the login screen, direct browser
-// popups from the Continue tap, and a real way out when the browser has
-// blocked notifications (the "followed the steps but it still shows blocked"
-// dead end).
+// Login permission flow.
+//
+// What these tests protect (all of it is why users were being lost):
+//   · the browser's permission popup NEVER fires from an unrelated tap — it is
+//     always attached to a labelled button or the Continue tap, so a visitor
+//     cannot lose their alerts to a surprise prompt;
+//   · the ask is ONE tap: the login card sits on the page from the first paint,
+//     and the popup opens inside that tap (gesture-safe);
+//   · a blocked / unsupported browser never blocks sign-in. The API is the only
+//     thing allowed to insist on a deviceToken, and when it does the sheet says
+//     so plainly and retries the exact request by itself once alerts are on.
 describe('Login permission flow', () => {
   let container;
   let root;
 
   const setNotificationPermission = permission => {
     globalThis.Notification = { permission, requestPermission: vi.fn().mockResolvedValue(permission) };
+  };
+
+  // A browser that grants the permission when the user taps Allow: the stub
+  // flips the live value, exactly like a real browser does.
+  const grantOnRequest = () => {
+    globalThis.Notification = {
+      permission: 'default',
+      requestPermission: vi.fn(() => {
+        globalThis.Notification.permission = 'granted';
+        return Promise.resolve('granted');
+      }),
+    };
   };
 
   const typeMobile = value => {
@@ -739,13 +773,18 @@ describe('Login permission flow', () => {
   };
 
   beforeEach(() => {
-    // Browsing is public now, so a bare hash opens the guest home — these
-    // tests target the login flow, which lives at its own route.
+    // Browsing is public now, so a bare path opens the guest home — these tests
+    // target the login flow, which lives at its own route.
     setPath('/login');
     vi.mocked(push.getPushStatus).mockReset().mockResolvedValue({ state: 'needs-permission', reason: '' });
     vi.mocked(push.getPushToken).mockReset().mockResolvedValue('');
     vi.mocked(push.isPushConfigured).mockReset().mockReturnValue(true);
-    vi.mocked(push.isEmbeddedFrame).mockReset().mockReturnValue(false);
+    vi.mocked(permissions.isEmbeddedFrame).mockReset().mockReturnValue(false);
+    vi.mocked(permissions.isIosDevice).mockReset().mockReturnValue(false);
+    vi.mocked(permissions.isIosPwaInstalled).mockReset().mockReturnValue(false);
+    vi.mocked(api.userLogin).mockReset().mockResolvedValue({ status: 'SUCCESS', data: {} });
+    vi.mocked(api.verifyLogin).mockReset().mockResolvedValue({ status: 'SUCCESS', data: { token: 'session-token', userId: 'user-1' } });
+    localStorage.removeItem('mynaaiPermissionAsk:location');
   });
 
   afterEach(() => {
@@ -759,8 +798,8 @@ describe('Login permission flow', () => {
 
   it('without alerts config, login skips the permission gate and sends the OTP', async () => {
     // The alerts setup is not wired into this build (no Firebase env): there
-    // is nothing actionable for a user, so the pill hides, no "not set up"
-    // gate ever opens, and sign-in proceeds without a device token.
+    // is nothing actionable for a user, so no alerts row renders, no sheet ever
+    // opens, and sign-in proceeds without a device token.
     vi.mocked(push.isPushConfigured).mockReturnValue(false);
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'unconfigured', reason: 'Notifications have not been enabled for this build yet.' });
     await mount();
@@ -779,72 +818,160 @@ describe('Login permission flow', () => {
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
   });
 
-  it('asks the browser directly when Continue is tapped, then sends the OTP', async () => {
-    setNotificationPermission('default');
-    vi.mocked(push.getPushToken).mockImplementation(async options => (options?.requestPermission ? 'push-token-1' : ''));
+  it('asks once — from the Allow button, inside the tap, and never as a surprise', async () => {
+    grantOnRequest();
+    vi.mocked(push.getPushToken).mockResolvedValue('push-token-1');
     await mount();
 
-    // The login screen shows the compact setup pills with one clear Allow button.
-    expect(container.querySelector('.login-actions')).not.toBeNull();
+    // The ask is on the page from the first paint: two labelled rows (alerts,
+    // optional location) and nothing else to read.
+    const card = container.querySelector('.login-perm-card');
+    expect(card).not.toBeNull();
+    expect(card.querySelectorAll('.perm-row')).toHaveLength(2);
     expect(buttonByText('Allow alerts')).not.toBeNull();
+    expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
+
+    // An unrelated tap (switching role, tapping the page) must NOT open the
+    // browser popup: that surprise is what made people hit Block for good.
+    await act(async () => { window.dispatchEvent(new Event('pointerdown')); });
+    await act(async () => { buttonByText('Salon partner').click(); });
+    await flush();
+    expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
+
+    // The labelled button does it: one tap, popup, token, row gone.
+    await act(async () => { buttonByText('Allow alerts').click(); });
+    await flush();
+    expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+    expect(push.getPushToken).toHaveBeenCalledWith({ requestPermission: false });
+    // The alerts row removes itself once alerts are on — login carries no dead
+    // weight (the optional location row may still be waiting for an answer).
+    expect(container.querySelector('.allow-alerts-button')).toBeNull();
+  });
+
+  it('asks in the same tap as Continue with OTP, then sends it', async () => {
+    grantOnRequest();
+    // Exactly like the real thing: the silent read finds nothing until the user
+    // has actually granted the permission.
+    vi.mocked(push.getPushToken).mockImplementation(async () => (globalThis.Notification.permission === 'granted' ? 'push-token-2' : ''));
+    await mount();
 
     await act(async () => { typeMobile('9876543210'); });
     await act(async () => { submitPhone(); });
     await flush();
 
-    // The browser's own popup was requested straight from the Continue tap.
-    expect(push.getPushToken).toHaveBeenCalledWith({ requestPermission: true });
-    // And the flow continued to the OTP step.
+    // The submit tap is the gesture, so the browser popup opened right there and
+    // the OTP request went out without any extra step for the user. (The token
+    // itself rides the verify/onboarding call, as the mobile contract does.)
+    expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+    expect(api.userLogin).toHaveBeenCalledWith({ phoneNumber: '9876543210' });
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
   });
 
-  it('asks for notification permission on the first tap of the login page', async () => {
-    setNotificationPermission('default');
-    vi.mocked(push.getPushToken).mockResolvedValue('');
-    await mount();
+  const typeOtp = value => {
+    const input = container.querySelector('.otp-input');
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  };
 
-    // Alerts belong to login: any tap on the page is the gesture that opens
-    // the browser's own permission popup here — never on the home screen.
-    await act(async () => { window.dispatchEvent(new Event('pointerdown')); });
-    await flush();
-    expect(push.getPushToken).toHaveBeenCalledWith({ requestPermission: true });
-  });
+  const submitForm = () => {
+    const form = container.querySelector('form');
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  };
 
-  it('opens the permission gate from the Fix alerts pill and Check again ends the dead end', async () => {
+  it('a blocked browser never blocks sign-in — the API decides, not the popup', async () => {
     setNotificationPermission('denied');
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
     await mount();
 
-    // Blocked state is one honest pill — no Wall-of-text card on the login page.
-    expect(container.querySelector('.perm-panel')).toBeNull();
+    // The blocked state is one honest row (no wall of instructions, no sheet).
+    expect(buttonByText('Fix alerts')).not.toBeNull();
     expect(container.querySelector('.permission-gate-sheet')).toBeNull();
-    const fixButton = buttonByText('Fix alerts');
-    expect(fixButton).not.toBeNull();
 
-    // The pill opens the gate, which carries the per-browser steps and the
-    // recovery actions.
-    await act(async () => { fixButton.click(); });
+    await act(async () => { typeMobile('9876543210'); });
+    await act(async () => { submitPhone(); });
+    await flush();
+
+    // No popup was attempted and sign-in still reached the OTP step, with no
+    // deviceToken key at all (not an empty string).
+    expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
+    expect(api.userLogin).toHaveBeenCalledTimes(1);
+    expect(api.userLogin.mock.calls[0][0]).toEqual({ phoneNumber: '9876543210' });
+    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+    expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
+  });
+
+  it('if the API insists on a deviceToken, the sheet explains it and retries by itself', async () => {
+    // A visitor who blocked alerts earlier: they can still reach the OTP step,
+    // and only the API's own refusal (verification carries the deviceToken in
+    // the mobile contract) turns into the one-tap alerts sheet.
+    setNotificationPermission('denied');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
+    vi.mocked(push.getPushToken).mockResolvedValue('');
+    vi.mocked(api.verifyLogin)
+      .mockRejectedValueOnce(Object.assign(new Error('"deviceToken" is required'), { data: { message: '"deviceToken" is required' } }))
+      .mockResolvedValue({ status: 'SUCCESS', data: { token: 'session-token', userId: 'user-1' } });
+    await mount();
+
+    await act(async () => { typeMobile('9876543210'); });
+    await act(async () => { submitPhone(); });
+    await flush();
+    expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
+
+    await act(async () => { typeOtp('123456'); });
+    await act(async () => { submitForm(); });
+    await flush();
+
+    // The refusal opens the alerts sheet and says why in one plain sentence —
+    // never the raw API string.
+    const sheet = container.querySelector('.permission-gate-sheet');
+    expect(sheet).not.toBeNull();
+    expect(sheet.textContent).toContain('Alerts are blocked');
+    expect(container.querySelector('.form-error').textContent).toContain('Alerts are switched off');
+
+    // The user follows the three steps and taps Try again; the sheet closes, the
+    // token lands and the SAME verification is retried automatically — no second
+    // trip through the form.
+    grantOnRequest();
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'enabled', token: 'push-token-3' });
+    vi.mocked(push.getPushToken).mockImplementation(async () => (globalThis.Notification.permission === 'granted' ? 'push-token-3' : ''));
+    await act(async () => { buttonByText('I allowed it — Try again').click(); });
+    await flush();
+    expect(api.verifyLogin).toHaveBeenCalledTimes(2);
+    expect(api.verifyLogin.mock.calls[1][0]).toEqual({ phoneNumber: '9876543210', otp: '123456', deviceToken: 'push-token-3' });
+    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+  });
+
+  it('opens the sheet with three short steps from the Fix alerts row', async () => {
+    setNotificationPermission('denied');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
+    await mount();
+    await act(async () => { typeMobile('9876543210'); });
+
+    await act(async () => { buttonByText('Fix alerts').click(); });
     await flush();
     const gate = container.querySelector('.permission-gate-sheet');
     expect(gate).not.toBeNull();
-    expect(gate.textContent).toContain('Notifications are blocked');
-    expect(buttonByText('I allowed it — Check')).not.toBeNull();
+    expect(gate.textContent).toContain('Alerts are blocked');
+    // Short by contract: three steps, one primary action, one escape hatch.
+    expect(gate.querySelectorAll('.ios-install-steps li')).toHaveLength(3);
+    expect(buttonByText('I allowed it — Try again')).not.toBeNull();
     expect(buttonByText('Reload page')).not.toBeNull();
 
-    // Still blocked after a first Check — the fix stays up and names the exact
-    // site + reload, the two classic "allowed but still blocked" traps.
-    await act(async () => { buttonByText('I allowed it — Check').click(); });
+    // The "still blocked" help is behind a link, not in the user's face.
+    expect(gate.querySelector('.permission-gate-warn')).toBeNull();
+    await act(async () => { buttonByText('Still blocked? Extra help').click(); });
     await flush();
     expect(container.querySelector('.permission-gate-sheet .permission-gate-warn').textContent).toContain(window.location.host);
+    expect(container.querySelector('.permission-gate-sheet').textContent).toContain('Notifications');
 
-    // The user unblocks in the browser and Checks again — the sheet closes.
-    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'enabled', token: 'push-token-2' });
-    await act(async () => { buttonByText('I allowed it — Check').click(); });
+    // The user unblocks in the browser and taps Try again — the sheet closes and
+    // the token is wired into the flow for the next Continue tap.
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'enabled', token: 'push-token-4' });
+    vi.mocked(push.getPushToken).mockResolvedValue('push-token-4');
+    await act(async () => { buttonByText('I allowed it — Try again').click(); });
     await flush();
     expect(container.querySelector('.permission-gate-sheet')).toBeNull();
 
-    // Sign-in now proceeds without asking again.
-    await act(async () => { typeMobile('9876543210'); });
     await act(async () => { submitPhone(); });
     await flush();
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
@@ -853,10 +980,10 @@ describe('Login permission flow', () => {
   it('puts the open-in-new-tab escape hatch first when an embedded page is blocked', async () => {
     setNotificationPermission('denied');
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
-    vi.mocked(push.isEmbeddedFrame).mockReturnValue(true);
+    vi.mocked(permissions.isEmbeddedFrame).mockReturnValue(true);
     await mount();
 
-    // Embedded + blocked: the pill opens the gate, whose primary action is the
+    // Embedded + blocked: the row opens the sheet, whose primary action is the
     // escape hatch — no failed Check needed to discover it.
     await act(async () => { buttonByText('Fix alerts').click(); });
     await flush();
@@ -872,60 +999,51 @@ describe('Login permission flow', () => {
     openSpy.mockRestore();
   });
 
-  it('opens the gate with the inline fix when a blocked browser cannot pop up', async () => {
-    setNotificationPermission('denied');
-    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
+  it('honours "Not now": the row goes and Continue never pops a prompt at them', async () => {
+    vi.mocked(permissions.isIosDevice).mockReturnValue(true);
+    vi.mocked(permissions.isIosPwaInstalled).mockReturnValue(false);
+    grantOnRequest();
     await mount();
 
+    // iPhone before "Add to Home Screen": the row opens the short install sheet
+    // instead of a popup that iOS would never show.
+    await act(async () => { buttonByText('Allow alerts').click(); });
+    await flush();
+    const sheet = container.querySelector('.permission-gate-sheet');
+    expect(sheet).not.toBeNull();
+    expect(sheet.textContent).toContain('Home Screen');
+    expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
+
+    await act(async () => { buttonByText('Not now').click(); });
+    await flush();
+    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+    expect(container.querySelector('.allow-alerts-button')).toBeNull();
+
+    // …and the form does not fire the browser prompt at somebody who just
+    // declined — that surprise is what turns into a permanent Block.
     await act(async () => { typeMobile('9876543210'); });
     await act(async () => { submitPhone(); });
     await flush();
-
-    // The gate (not a nested help modal) carries the steps itself.
-    const gate = container.querySelector('.permission-gate-sheet');
-    expect(gate).not.toBeNull();
-    expect(gate.textContent).toContain('Notifications are blocked');
-    expect(gate.querySelectorAll('.modal-backdrop').length).toBe(0);
-
-    // The user unblocks in the browser and taps Check — the sheet closes and
-    // the token is wired into the flow for the next Continue tap.
-    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'enabled', token: 'push-token-3' });
-    vi.mocked(push.getPushToken).mockResolvedValue('push-token-3');
-    await act(async () => { buttonByText('I allowed it — Check').click(); });
-    await flush();
-    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
-
-    await act(async () => { submitPhone(); });
-    await flush();
+    expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
   });
 
-  it('keeps the login screen light: one-line subtitle, no perk chips, just the setup pills', async () => {
+  it('keeps the login screen light: one-line subtitle, two one-tap rows, install pill', async () => {
     setNotificationPermission('default');
     await mount();
 
     // No glance chips, no text panel — a phone user taps buttons, not paragraphs.
     expect(container.querySelector('.login-perks')).toBeNull();
     expect(container.querySelector('.perm-panel')).toBeNull();
-
-    // The subtitle stays one short line.
     expect(container.querySelector('.auth-subtitle').textContent).toBe('Sign in and book your next visit.');
 
-    // The two compact pills are the whole setup: Allow alerts (fires the
-    // browser popup or the gate) and Install app (prompt or the short guide).
-    const actions = container.querySelector('.login-actions');
-    expect(actions).not.toBeNull();
+    // The card is two rows of one tap each; the install pill stays a pill.
+    const card = container.querySelector('.login-perm-card');
+    expect(card).not.toBeNull();
+    expect(card.querySelectorAll('.perm-row')).toHaveLength(2);
     expect(buttonByText('Allow alerts')).not.toBeNull();
     const installButton = buttonByText('Install app');
     expect(installButton).not.toBeNull();
-
-    // Allowed directly from the pill: the tap asks the browser and the pill
-    // disappears once permission is granted.
-    vi.mocked(push.getPushToken).mockImplementation(async options => (options?.requestPermission ? 'push-token-pill' : ''));
-    await act(async () => { buttonByText('Allow alerts').click(); });
-    await flush();
-    expect(push.getPushToken).toHaveBeenCalledWith({ requestPermission: true });
-    expect(container.querySelector('.allow-alerts-button')).toBeNull();
 
     // No native prompt was captured (jsdom), so Install opens the short
     // per-browser guide instead of nothing at all.
@@ -937,6 +1055,22 @@ describe('Login permission flow', () => {
     await act(async () => { buttonByText('Got it').click(); });
     await flush();
     expect(container.querySelector('.modal-card')).toBeNull();
+  });
+
+  it('lets a visitor skip the optional location row for good', async () => {
+    setNotificationPermission('granted');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'enabled', token: 'push-token-5' });
+    await mount();
+
+    // Location is the only row left (alerts are on) and it is dismissible.
+    const card = container.querySelector('.login-perm-card');
+    expect(card).not.toBeNull();
+    expect(card.querySelector('.perm-row-copy strong').textContent).toBe('Salons near me');
+
+    await act(async () => { card.querySelector('.perm-dismiss').click(); });
+    await flush();
+    expect(container.querySelector('.login-perm-card')).toBeNull();
+    expect(localStorage.getItem('mynaaiPermissionAsk:location')).toBe('never');
   });
 
   it('swaps the login subtitle for the partner pitch when the Salon partner role is picked', async () => {

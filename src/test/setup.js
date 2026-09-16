@@ -31,4 +31,17 @@ if (typeof window !== 'undefined') {
   if (!('indexedDB' in window)) {
     window.indexedDB = { open: vi.fn() };
   }
+  // jsdom ships no geolocation at all, so `readPermission('location')` used to
+  // read "unsupported" and every location row vanished from the tests. A stub
+  // that reports a refusal (code 1 = PERMISSION_DENIED) matches the real
+  // "not granted yet" state the UI has to handle.
+  if (!('geolocation' in (window.navigator || {}))) {
+    window.navigator.geolocation = {
+      getCurrentPosition: vi.fn((_success, error) => {
+        if (typeof error === 'function') error({ code: 1, message: 'Geolocation is not granted in tests.' });
+      }),
+      watchPosition: vi.fn(() => 0),
+      clearWatch: vi.fn(),
+    };
+  }
 }

@@ -3,64 +3,35 @@ import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import { getErrorMessage } from './components/Shared';
 import { installDevToolsErrorShield } from './lib/devtoolsShield';
+import { registerPushServiceWorker } from './lib/push';
 import './styles.css';
 
 // Swallow the known Chrome DevTools Performance-panel internal crash
 installDevToolsErrorShield();
 
-// Unified PWA Service Worker registration
-// This SW handles both app shell caching AND Firebase messaging
-// Registering at root scope "/" ensures notifications work even when app not in recent
+// ONE service worker for the whole app, registered at root scope "/" (see
+// src/lib/push.js). /firebase-messaging-sw.js is the unified worker: app-shell
+// caching (installable PWA) + Firebase Cloud Messaging, including the Accept /
+// Reject / Delay notification actions when the app is closed.
+//
+// Registering /sw.js here as well used to replace this registration on every
+// load — two scripts competing for the same scope — which is exactly what makes
+// push subscriptions go stale and token generation fail with "no active service
+// worker". Push registration therefore lives in exactly one place.
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    // In production, register sw.js immediately for PWA installability
-    // In dev, also register but with less caching for easier debugging
-    const swUrl = '/sw.js';
-    
-    navigator.serviceWorker.register(swUrl, { scope: '/' })
-      .then(registration => {
-        console.debug('PWA Service Worker registered at root scope:', registration.scope);
-        
-        // Check for updates periodically
-        setInterval(() => {
-          registration.update().catch(() => {});
-        }, 60 * 60 * 1000); // Check every hour
-
-        // Handle SW updates - prompt user to reload if new version available
-        registration.addEventListener('updatefound', () => {
-          const newWorker = registration.installing;
-          if (newWorker) {
-            newWorker.addEventListener('statechange', () => {
-              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                // New version available
-                console.debug('New PWA version available');
-                // Could show a toast here asking user to reload
-                // For now, auto-activate via skipWaiting in SW
-              }
-            });
-          }
-        });
-      })
-      .catch(error => {
-        console.debug(getErrorMessage(error, 'PWA Service Worker registration failed; continuing online.'));
-        // Fallback: try firebase-messaging-sw.js at root
-        navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope: '/' })
-          .then(reg => console.debug('Fallback FCM SW registered:', reg.scope))
-          .catch(err => console.debug('Fallback SW also failed:', err.message));
-      });
-
-    // Also ensure firebase-messaging-sw.js is registered for push
-    // It will update the root registration with Firebase config when needed
-    // This is handled by push.js getPushServiceWorker(), but we pre-register here for faster PWA
-    if (import.meta.env.PROD) {
-      // Small delay to let main SW register first
-      setTimeout(() => {
-        if (!navigator.serviceWorker.controller) {
-          // No controller yet, ensure we have one
-          navigator.serviceWorker.ready.catch(() => {});
-        }
-      }, 1000);
-    }
+    registerPushServiceWorker().then(registration => {
+      if (!registration) {
+        console.debug('Service worker registration did not complete; the app keeps working online.');
+        return;
+      }
+      // Check for updates periodically so a fixed worker reaches installed apps.
+      setInterval(() => {
+        registration.update?.().catch(() => {});
+      }, 60 * 60 * 1000);
+    }).catch(error => {
+      console.debug(getErrorMessage(error, 'PWA Service Worker registration failed; continuing online.'));
+    });
   });
 
   // Handle controller change - new SW took over

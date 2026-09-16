@@ -1719,6 +1719,31 @@ img.image-fallback-tile {
    Phone users tap buttons; they do not read cards, so this row replaced both
    the old three-card stack and the later text panel. */
 .login-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: -10px 0 20px; }
+/* The permission card — one row per permission, one tap per row.
+   It replaced the old walls of instruction: a visitor reads two short lines and
+   taps; a "Not now" is remembered and the rows leave without nagging. */
+.perm-card { display: flex; flex-direction: column; gap: 8px; margin: 2px 0 16px; }
+.login-perm-card { max-width: 460px; }
+.perm-row { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 11px; border: 1px solid rgba(232,185,126,.22); border-radius: 13px; background: rgba(232,185,126,.06); }
+.perm-row-icon { width: 30px; height: 30px; display: flex; flex: none; align-items: center; justify-content: center; border-radius: 9px; color: #111; background: var(--gold); }
+.perm-row-icon-location { background: rgba(110,209,158,.9); }
+.perm-row-copy { min-width: 0; flex: 1; }
+.perm-row-copy strong { display: block; font-size: 12px; color: var(--white); }
+.perm-row-copy p { margin: 3px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.45; }
+.perm-row-actions { display: flex; flex: none; align-items: center; gap: 4px; }
+.perm-row .install-auth-button { flex: none; }
+.perm-location-button { border-color: rgba(110,209,158,.4); background: rgba(110,209,158,.14); color: #cfeede; }
+.perm-location-button:hover { background: rgba(110,209,158,.2); }
+.perm-dismiss { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 9px; background: transparent; color: var(--muted); cursor: pointer; }
+.perm-dismiss:hover { background: rgba(255,255,255,.06); color: var(--white); }
+.perm-state-on { display: inline-flex; flex: none; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 20px; background: rgba(110,209,158,.12); border: 1px solid rgba(110,209,158,.28); color: #9fe0bf; font-size: 10.5px; font-weight: 700; }
+.perm-row-account { margin: 0 0 8px; background: rgba(255,255,255,.03); border-color: var(--line); }
+.permission-gate-required { display: flex; align-items: flex-start; gap: 7px; margin: 0 0 12px; padding: 9px 11px; border-radius: 10px; background: rgba(242,123,116,.10); border: 1px solid rgba(242,123,116,.25); color: #ffb3ad; font-size: 11.5px; line-height: 1.5; }
+.permission-gate-required svg { flex: none; margin-top: 1px; }
+@media (max-width: 420px) {
+  .perm-row { flex-wrap: wrap; }
+  .perm-row-actions { width: 100%; justify-content: flex-end; }
+}
 /* The permission ask is the step sign-in depends on, so its pill carries the
    gold fill; the install pill keeps the outline style of .install-auth-button. */
 .allow-alerts-button { border-color: transparent; background: var(--gold); color: #0d0e0e; }

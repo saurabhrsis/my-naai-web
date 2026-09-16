@@ -52,6 +52,7 @@ import {
 import { STATE_OPTIONS } from '../lib/stateOptions';
 import { SALON_ABOUT_CONTENT, SALON_FAQ_CONTENT, SALON_TERMS_CONTENT } from '../lib/salonContent';
 import { NotificationDiagnostics } from './NotificationDiagnostics';
+import { readPermission, requestLocation } from '../lib/permissions';
 import { LOGOUT_CONFIRM, useConfirm } from './ConfirmDialog';
 import { subscribeToLiveUpdates } from '../lib/socket';
 import {
@@ -775,15 +776,18 @@ export function EditSalonProfileScreen({ params, session, navigate, notify, onSe
     }
   }, []);
 
-  // Ask for the browser location once, and only when the salon has no saved pin
-  // yet — an existing partner editing their menu from home must not have the
-  // salon coordinates silently replaced by wherever they are standing.
+  // Fill in the salon pin automatically ONLY when this device has already
+  // granted location, and only when the salon has no saved pin yet — an existing
+  // partner editing their menu from home must not have the salon coordinates
+  // silently replaced by wherever they are standing. Without a grant the
+  // labelled "Allow location" button below is the ask (its tap is the gesture,
+  // so the browser popup actually appears).
   const autoDetectedLocation = useRef(false);
   useEffect(() => {
     if (loading || autoDetectedLocation.current) return;
     autoDetectedLocation.current = true;
     if (hasCoordinate(latitude) && hasCoordinate(longitude)) return;
-    detectLocation();
+    readPermission('location').then(state => { if (state === 'granted') detectLocation(); });
   }, [detectLocation, latitude, loading, longitude]);
 
   const validateImageFile = file => {
@@ -1094,7 +1098,7 @@ export function EditSalonProfileScreen({ params, session, navigate, notify, onSe
   const hasLocation = locationReady;
   const locationMessage = locationLoading
     ? 'Detecting current location…'
-    : locationError || 'Required — allow location access so nearby customers can discover this salon.';
+    : locationError || 'Allow location so nearby customers can find your salon — the button beside this line asks your browser.';
   const ownerSummary = `${ownerName.trim() || 'Name pending'} · ${phoneDigits ? `+91 ${phoneDigits}` : 'Mobile Number pending'}`;
   const salonSummary = `${salonName.trim() || 'Name pending'} · ${genderType ? genderType.charAt(0) + genderType.slice(1).toLowerCase() : 'Salon Type pending'}`;
   const addressSummary = `${addressLine1.trim() || 'Address pending'}${city.trim() ? `, ${city.trim()}` : ''}`;
@@ -1173,7 +1177,7 @@ export function EditSalonProfileScreen({ params, session, navigate, notify, onSe
       <Field label="Landmark / Address Line 2" hint="Optional"><input value={addressLine2} onChange={event => setAddressLine2(event.target.value)} placeholder="Nearby landmark" /></Field>
       <div className="form-three-col editor-address-grid"><Field label="City" hint="Optional"><input value={city} onChange={event => setCity(event.target.value)} placeholder="City" /></Field><SelectField label="State" hint="Optional" value={state} onChange={event => setState(event.target.value)} options={STATE_OPTIONS} placeholder="Select state" /><Field label="Pincode" hint="Optional · 6 digits"><input inputMode="numeric" maxLength="6" value={pincode} onChange={event => setPincode(event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="Pincode" /></Field></div>
       <div className={cx('editor-location-status', hasLocation ? 'location-ready' : 'location-missing')}><MapPin size={18} /><span><strong>{hasLocation ? 'Salon location saved' : 'Salon location required *'}</strong><small>{hasLocation ? `${Number(latitude).toFixed(6)}, ${Number(longitude).toFixed(6)}` : locationMessage}</small></span></div>
-      <Button type="button" size="small" variant="secondary" onClick={detectLocation} loading={locationLoading}><MapPin size={15} /> {hasLocation ? 'Update to current location' : 'Detect current location'}</Button>
+      <Button type="button" size="small" variant="secondary" onClick={detectLocation} loading={locationLoading}><MapPin size={15} /> {hasLocation ? 'Update to current location' : 'Allow location'}</Button>
     </CollapsibleSection>
     <CollapsibleSection id="images" innerRef={node => { sectionRefs.current.images = node; }} icon={<ImagePlus size={18} />} title="Salon Images" subtitle={EDITOR_SECTION_SUBTITLES.images} summary={sectionSummary('images', `${images.length} of ${MAX_IMAGES} photos added`)} open={openSections.images} onToggle={() => toggleSection('images')}>
       <p className="collapsible-lede">Optional · up to {MAX_IMAGES} photos, each smaller than {MAX_IMAGE_MB} MB. The first photo becomes your main image.</p>

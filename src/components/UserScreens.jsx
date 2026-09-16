@@ -85,6 +85,7 @@ import {
   firstName,
 } from './Shared';
 import { NotificationDiagnostics } from './NotificationDiagnostics';
+import { readPermission, requestLocation } from '../lib/permissions';
 
 const USER_FALLBACK_IMAGE = '/assets/brand/naai-logo-dark.svg';
 // On-brand placeholders for catalog items and specialists without an uploaded
@@ -308,6 +309,7 @@ export function HomeScreen({ session, navigate, notify }) {
   const [ads, setAds] = useState([]);
   const [savedId, setSavedId] = useState(() => localStorage.getItem('mynaaiSavedSalonId') || null);
   const [location, setLocation] = useState(null);
+  const [locationBusy, setLocationBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [userName, setUserName] = useState(session?.user?.fullName || '');
@@ -373,7 +375,13 @@ export function HomeScreen({ session, navigate, notify }) {
     // The mobile dashboard waits for the best available browser location before
     // building the salon-list body. That lets the API do its proximity work as
     // well as giving the UI a reliable distance to sort and display.
-    const currentLocation = await getBrowserLocation();
+    //
+    // The GPS prompt is only opened automatically when this visitor has already
+    // granted location. If they have not, the list still loads (the API's own
+    // ordering is the fallback) and the labelled "Use my location" button in the
+    // notice below opens the browser popup — never a popup nobody asked for.
+    const permission = await readPermission('location');
+    const currentLocation = permission === 'granted' ? await getBrowserLocation() : null;
     if (id !== requestId.current) return;
     setLocation(currentLocation);
 
@@ -471,6 +479,25 @@ export function HomeScreen({ session, navigate, notify }) {
     return salons.filter(salon => !query || `${salon.name} ${salon.address} ${salon.location}`.toLowerCase().includes(query));
   }, [salons, search]);
 
+  // The in-context location ask: one labelled tap, its own popup, and a "no"
+  // that only costs the distance sorting — the list stays exactly as it is.
+  const enableLocation = useCallback(async () => {
+    setLocationBusy(true);
+    try {
+      const result = await requestLocation();
+      if (result.ok) {
+        setLocation({ latitude: result.latitude, longitude: result.longitude });
+        await loadData();
+        return;
+      }
+      notify?.('info', result.state === 'denied'
+        ? 'Location is off for this site. Salons are still listed, just without distances.'
+        : 'We could not read your location. You can still browse every salon.');
+    } finally {
+      setLocationBusy(false);
+    }
+  }, [loadData, notify]);
+
   // Browsing is open to everyone; only booking intent and personal actions
   // (bookmark) require a login. The guest's exact page is stashed so auth
   // returns them straight back here after login/register.
@@ -531,7 +558,7 @@ export function HomeScreen({ session, navigate, notify }) {
       <section className="home-band home-salons-band" aria-label="Salons near you">
         <div className="section-heading"><div><span className="eyebrow">CURATED FOR YOU</span><h2>Salons near you</h2></div><span className="result-count">{loading ? 'Updating…' : `${visibleSalons.length}${totalSalons && totalSalons > visibleSalons.length ? ` of ${totalSalons}` : ''} places`}</span></div>
         {loadError && <div className="inline-notice"><CircleAlert size={16} /> {loadError} <button onClick={loadData}>Try again</button></div>}
-        {!loading && !location && <div className="inline-notice location-fallback-notice"><MapPin size={16} /> <span>Location is unavailable, so we are showing the available salon list without distance sorting.</span><button onClick={loadData}>Enable location</button></div>}
+        {!loading && !location && <div className="inline-notice location-fallback-notice"><MapPin size={16} /> <span>Turn on location to see how far each salon is — optional, and browsing works without it.</span><button onClick={enableLocation} disabled={locationBusy}>{locationBusy ? 'Checking…' : 'Use my location'}</button></div>}
         {loading ? <div className="salon-grid">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} />)}</div> : visibleSalons.length ? <>
           <div className="salon-grid">{visibleSalons.map(salon => <SalonCard key={salon.id} salon={salon} saved={savedId === salon.id || salon.isSaved} onSelect={openSalon} onBook={bookSalon} onShare={item => shareSalon(item, notify)} onBookmark={bookmark} userLocation={location} />)}</div>
           {/* Paging footer: a full-width tap target on phones, an automatic
@@ -675,9 +702,17 @@ export function AccountScreen({ session, navigate, onLogout, notify, onSessionUp
   const toggleReminders = async () => {
     const next = !remindersOn;
     if (next && typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      try { await Notification.requestPermission(); } catch { /* prompt may be blocked */ }
-      if (Notification.permission !== 'granted') {
-        notify?.('info', 'Reminders need notification permission — allow it in the browser prompt.');
+      // The tap is the gesture, so the browser popup opens here (gesture-safe).
+      try { await requestNotifications(); } catch { /* prompt may be blocked */ }
+    }
+    if (next) {
+      // The live permission decides, not the page-load snapshot: somebody who
+      // allowed alerts in browser settings a minute ago must not be told off.
+      const state = await readPermission('notifications');
+      if (state !== 'granted') {
+        notify?.('info', state === 'denied'
+          ? 'Reminders need notifications. Allow them for this site in your browser settings, then switch this on again.'
+          : 'Reminders need notification permission — allow it in the browser prompt.');
         return;
       }
     }
