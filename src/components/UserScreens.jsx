@@ -66,6 +66,7 @@ import {
   formatDistanceInKm,
   getDistanceInKm,
   getErrorMessage,
+  getInitials,
   normalizeDistanceInKm,
   getSalonStatus,
   ImageWithFallback,
@@ -98,6 +99,43 @@ function getList(response, keys = []) {
   if (Array.isArray(response?.data)) return response.data;
   for (const key of keys) if (Array.isArray(response?.data?.[key])) return response.data[key];
   return [];
+}
+
+// The salon-list endpoints return 20 records per page (the same page size the
+// mobile app works with) but the web only ever asked for page 1 — a city with
+// more salons than that simply ended there. Every promise of "how much more is
+// there" the API has ever been seen to send is read here: an explicit flag
+// first, then page counts, then totals. When none of them are present the
+// mobile app's own rule applies: a full page means there is probably another
+// one (the caller still de-dupes by id, so a backend that ignores `page`
+// cannot produce an endless list).
+const SALON_PAGE_SIZE = 20;
+
+function readSalonPagination(response, receivedCount, requestedPage) {
+  const data = response?.data && !Array.isArray(response.data) ? response.data : {};
+  const explicit = [data.hasMore, data.hasNextPage, data.has_more, data.isMore]
+    .find(value => typeof value === 'boolean');
+  const totalPages = Number(data.totalPages ?? data.totalPage ?? data.pages);
+  const total = Number(data.totalCount ?? data.totalSalons ?? data.totalRecords ?? data.totalItems ?? data.total);
+  const totalSalons = Number.isFinite(total) && total > 0 ? total : null;
+  const totalPageCount = Number.isFinite(totalPages) && totalPages > 0 ? totalPages : null;
+  let hasMore;
+  if (typeof explicit === 'boolean') hasMore = explicit;
+  else if (totalPageCount !== null) hasMore = requestedPage < totalPageCount;
+  // With a known total, "more" means this page was full *and* the total is not
+  // already covered by it — a five-salon town must not offer a Load more button.
+  else if (totalSalons !== null) hasMore = receivedCount >= Math.min(SALON_PAGE_SIZE, totalSalons) && receivedCount < totalSalons;
+  else hasMore = receivedCount >= SALON_PAGE_SIZE;
+  return { hasMore, totalSalons, totalPages: totalPageCount };
+}
+
+// Saved salon first, then nearest-first. Stable, so the API's own ordering
+// survives inside equal groups and appended pages keep their order.
+function bySavedThenDistance(left, right) {
+  if (left.isSaved !== right.isSaved) return left.isSaved ? -1 : 1;
+  const leftDistance = Number.isFinite(left.distance) ? left.distance : Infinity;
+  const rightDistance = Number.isFinite(right.distance) ? right.distance : Infinity;
+  return leftDistance - rightDistance;
 }
 
 function getNotificationAction(item = {}, role = '') {
@@ -269,6 +307,15 @@ export function HomeScreen({ session, navigate, notify }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [userName, setUserName] = useState(session?.user?.fullName || '');
+  // Paging state. `page` is the page currently in the list, `hasMore` whether
+  // another one exists, and the id set is the de-dupe guard that keeps a
+  // backend which ignores `page` from looping the same 20 records.
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [totalSalons, setTotalSalons] = useState(null);
+  const loadedIdsRef = useRef(new Set());
+  const loadMoreSentinelRef = useRef(null);
   const requestId = useRef(0);
   const isGuest = !session?.userId;
 
@@ -280,6 +327,39 @@ export function HomeScreen({ session, navigate, notify }) {
       .catch(() => { if (!cancelled) setAds([]); });
     return () => { cancelled = true; };
   }, []);
+
+  // One page of one request. The payload contract is unchanged (page, search,
+  // gender, optional coordinates) — only `page` is allowed to move now.
+  const requestSalonPage = useCallback(async (pageNumber, currentLocation) => {
+    const salonPayload = {
+      page: pageNumber,
+      searchString: search,
+      genderType: gender,
+      ...(currentLocation || {}),
+    };
+    // Guests get the token-free public list (same payload contract);
+    // signed-in customers keep the personalized one (saved-flag etc.).
+    const salonResult = await (session?.userId ? api.userSalonList(salonPayload) : api.userSalonListPublic(salonPayload));
+    const decorated = getList(salonResult, ['salons', 'plans']).map(item => {
+      const normalized = normalizeSalon(item);
+      const distance = currentLocation
+        ? getDistanceInKm(currentLocation.latitude, currentLocation.longitude, item.latitude, item.longitude)
+        : null;
+      return {
+        ...normalized,
+        // A server-side 0 is usually the missing-distance sentinel. Keep a
+        // calculated zero (the salon really is within 50 m), but never carry
+        // an unverified API zero to the card or nearest-first sort.
+        distance: distance ?? normalizeDistanceInKm(item.distance),
+        isSaved: item.isSaved ?? item.saved ?? item.isSavedSalon ?? false,
+      };
+    });
+    // Match the mobile ordering: a saved salon remains prominent, then
+    // listings with a known distance are nearest-first. When geolocation is
+    // denied, the API response is intentionally retained as the fallback list.
+    decorated.sort(bySavedThenDistance);
+    return { decorated, pagination: readSalonPagination(salonResult, decorated.length, pageNumber) };
+  }, [gender, search, session?.userId]);
 
   const loadData = useCallback(async () => {
     const id = ++requestId.current;
@@ -293,45 +373,17 @@ export function HomeScreen({ session, navigate, notify }) {
     if (id !== requestId.current) return;
     setLocation(currentLocation);
 
-    const salonPayload = {
-      page: 1,
-      searchString: search,
-      genderType: gender,
-      ...(currentLocation || {}),
-    };
-
     try {
-      // Guests get the token-free public list (same payload contract);
-      // signed-in customers keep the personalized one (saved-flag etc.).
-      const salonResult = await (session?.userId ? api.userSalonList(salonPayload) : api.userSalonListPublic(salonPayload));
+      const { decorated, pagination } = await requestSalonPage(1, currentLocation);
       if (id !== requestId.current) return;
 
-      const raw = getList(salonResult, ['salons', 'plans']);
-      const decorated = raw.map(item => {
-        const normalized = normalizeSalon(item);
-        const distance = currentLocation
-          ? getDistanceInKm(currentLocation.latitude, currentLocation.longitude, item.latitude, item.longitude)
-          : null;
-        return {
-          ...normalized,
-          // A server-side 0 is usually the missing-distance sentinel. Keep a
-          // calculated zero (the salon really is within 50 m), but never carry
-          // an unverified API zero to the card or nearest-first sort.
-          distance: distance ?? normalizeDistanceInKm(item.distance),
-          isSaved: item.isSaved ?? item.saved ?? item.isSavedSalon ?? false,
-        };
-      });
-
-      // Match the mobile ordering: a saved salon remains prominent, then
-      // listings with a known distance are nearest-first. When geolocation is
-      // denied, the API response is intentionally retained as the fallback list.
-      decorated.sort((left, right) => {
-        if (left.isSaved !== right.isSaved) return left.isSaved ? -1 : 1;
-        const leftDistance = Number.isFinite(left.distance) ? left.distance : Infinity;
-        const rightDistance = Number.isFinite(right.distance) ? right.distance : Infinity;
-        return leftDistance - rightDistance;
-      });
+      loadedIdsRef.current = new Set(decorated.map(salon => salon.id));
       setSalons(decorated);
+      setPage(1);
+      setTotalSalons(pagination.totalSalons);
+      // A full first page means there is more to fetch; the sentinel/button
+      // below then walks the remaining pages as the visitor scrolls.
+      setHasMore(pagination.hasMore);
 
       // Keep the single-bookmark state in step with the API, like the app's
       // savedSalonId (only one salon can be bookmarked at a time).
@@ -362,12 +414,53 @@ export function HomeScreen({ session, navigate, notify }) {
     } finally {
       if (id === requestId.current) setLoading(false);
     }
-  }, [gender, notify, search, session?.userId]);
+  }, [notify, requestSalonPage, session?.userId]);
+
+  // "Load more": the next page of the very same endpoint the mobile app pages
+  // through. Anything already on screen is dropped by id, so a backend that
+  // ignores `page` ends the paging with an honest note instead of repeating
+  // the same cards forever.
+  const loadMore = useCallback(async () => {
+    if (loading || loadingMore || !hasMore) return;
+    const id = requestId.current; // a new search bumps this and cancels us
+    setLoadingMore(true);
+    try {
+      const { decorated, pagination } = await requestSalonPage(page + 1, location);
+      if (id !== requestId.current) return;
+      const fresh = decorated.filter(salon => !loadedIdsRef.current.has(salon.id));
+      fresh.forEach(salon => loadedIdsRef.current.add(salon.id));
+      if (fresh.length) setSalons(current => [...current, ...fresh]);
+      setPage(page + 1);
+      setTotalSalons(pagination.totalSalons ?? totalSalons);
+      const knownTotal = pagination.totalSalons ?? totalSalons;
+      setHasMore(Boolean(pagination.hasMore) && fresh.length > 0 && (knownTotal === null || loadedIdsRef.current.size < knownTotal));
+      if (!fresh.length) notify?.('info', 'That is every salon we found near you.');
+    } catch (error) {
+      if (id !== requestId.current) return;
+      notify?.('error', getErrorMessage(error, 'Could not load more salons.'));
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [hasMore, loading, loadingMore, location, notify, page, requestSalonPage, totalSalons]);
 
   useEffect(() => {
     const timer = window.setTimeout(loadData, search ? 350 : 0);
     return () => window.clearTimeout(timer);
   }, [loadData, search]);
+
+  // Mobile-first infinite scroll: the sentinel sits just under the grid, so the
+  // next page is already arriving by the time a thumb reaches the bottom. The
+  // "Load more salons" button below stays for browsers without
+  // IntersectionObserver (and for anyone who prefers a deliberate tap).
+  useEffect(() => {
+    const node = loadMoreSentinelRef.current;
+    if (!node || !hasMore || typeof IntersectionObserver !== 'function') return undefined;
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) loadMore();
+    }, { rootMargin: '400px 0px' });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMore, loadMore]);
 
   const visibleSalons = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -432,10 +525,22 @@ export function HomeScreen({ session, navigate, notify }) {
       {/* Section 2 — the salon listings, on its own panel so the page reads as
           distinct website sections instead of one long app feed. */}
       <section className="home-band home-salons-band" aria-label="Salons near you">
-        <div className="section-heading"><div><span className="eyebrow">CURATED FOR YOU</span><h2>Salons near you</h2></div><span className="result-count">{loading ? 'Updating…' : `${visibleSalons.length} places`}</span></div>
+        <div className="section-heading"><div><span className="eyebrow">CURATED FOR YOU</span><h2>Salons near you</h2></div><span className="result-count">{loading ? 'Updating…' : `${visibleSalons.length}${totalSalons && totalSalons > visibleSalons.length ? ` of ${totalSalons}` : ''} places`}</span></div>
         {loadError && <div className="inline-notice"><CircleAlert size={16} /> {loadError} <button onClick={loadData}>Try again</button></div>}
         {!loading && !location && <div className="inline-notice location-fallback-notice"><MapPin size={16} /> <span>Location is unavailable, so we are showing the available salon list without distance sorting.</span><button onClick={loadData}>Enable location</button></div>}
-        {loading ? <div className="salon-grid">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} />)}</div> : visibleSalons.length ? <div className="salon-grid">{visibleSalons.map(salon => <SalonCard key={salon.id} salon={salon} saved={savedId === salon.id || salon.isSaved} onSelect={openSalon} onBook={bookSalon} onShare={item => shareSalon(item, notify)} onBookmark={bookmark} userLocation={location} />)}</div> : <EmptyState icon={Scissors} title="No salons found" message="Try another search or switch the salon type." />}
+        {loading ? <div className="salon-grid">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} />)}</div> : visibleSalons.length ? <>
+          <div className="salon-grid">{visibleSalons.map(salon => <SalonCard key={salon.id} salon={salon} saved={savedId === salon.id || salon.isSaved} onSelect={openSalon} onBook={bookSalon} onShare={item => shareSalon(item, notify)} onBookmark={bookmark} userLocation={location} />)}</div>
+          {/* Paging footer: a full-width tap target on phones, an automatic
+              next page on scroll (the sentinel above it), and an honest end
+              line once every salon the API had has been shown. */}
+          <div className="salon-list-more">
+            {hasMore
+              ? <Button variant="secondary" loading={loadingMore} onClick={loadMore}>{loadingMore ? 'Loading salons' : 'Load more salons'}</Button>
+              : salons.length > SALON_PAGE_SIZE && <p className="salon-list-end">That&apos;s every salon we found near you.</p>}
+            <small>{visibleSalons.length}{totalSalons && totalSalons > visibleSalons.length ? ` of ${totalSalons}` : ''} shown</small>
+          </div>
+          {hasMore && <div className="salon-load-sentinel" ref={loadMoreSentinelRef} aria-hidden="true" />}
+        </> : <EmptyState icon={Scissors} title="No salons found" message="Try another search or switch the salon type." />}
       </section>
       <div className="home-trust-row"><ShieldCheck size={16} /><span>Verified listings</span><i /><Clock3 size={16} /><span>Book in minutes</span><i /><Heart size={16} /><span>Made for your time</span></div>
       <TestimonialSection />
@@ -1084,9 +1189,25 @@ const INFO_CONTENT = {
     { title: 'What we value', bullets: ['Time first — both the customer’s and the salon’s', 'Transparency — real prices, real wait times, verified partners', 'Local businesses — neighbourhood salons deserve modern tools', 'Payments stay at the salon — never through an app'] },
     { title: 'About our app', app: true, text: 'My Naai runs right here in your browser — full browsing, booking and live updates. For the app feel on Android, grab it on Google Play; the iOS app is coming soon, and until then adding this site to your Home Screen works the same way.', bullets: ['Android app on Google Play', 'iOS app coming soon', 'Everything works on the web too — nothing is held back'] },
   ] },
-  faq: { title: 'Frequently asked questions', eyebrow: 'NEED TO KNOW', sections: [{ title: 'How do I book a salon?', text: 'Choose your salon, select one or more services, pick an available specialist and time, then confirm your booking request.' }, { title: 'Can I cancel a booking?', text: 'Yes. Open My bookings and choose Cancel booking on a pending or confirmed appointment.' }, { title: 'What happens after I send a request?', text: 'The salon receives your request and confirms it. You will see the latest status in My bookings and receive an update.' }, { title: 'Can I use My Naai as a salon owner?', text: 'Absolutely. Use Continue as Salon Partner on the login screen to sign in or register your salon.' }] },
-  terms: { title: 'Terms & Conditions', eyebrow: 'PLEASE READ', date: 'Effective Date: 09 January 2026', intro: 'Welcome to MyNaai. By accessing or using the MyNaai website or app, you accept these Terms and Conditions. If you do not agree with any part of them, please do not continue to use the service.', sections: [{ title: '1. The service', text: 'MyNaai connects you with nearby salons so you can request an appointment, follow its status and keep track of your bookings. Appointments remain requests until the salon confirms them.', bullets: ['Choose a salon, services, specialist and time', 'The salon confirms, declines or proposes a new time', 'Arrive at least 10 minutes before your slot'] }, { title: '2. Your account', text: 'You are responsible for keeping your login OTP and account secure and for everything that happens under it. Please keep your name and mobile number accurate and up to date — booking alerts reach you through them.' }, { title: '3. Bookings, delays and cancellations', text: 'Cancel as early as possible so the salon can offer the slot to another customer. The salon may decline or change a request based on availability, and may propose a small time delay you can accept or decline.', bullets: ['You can cancel from My bookings while the visit is upcoming', 'A salon delay offer needs your acceptance to take effect', 'Repeated last-minute cancellations may limit booking'] }, { title: '4. Payments', text: 'All payments are made directly at the salon — not through MyNaai. Price ranges shown on salon pages are indicative; the salon determines the final amount.' }, { title: '5. Fair use', text: 'Please use MyNaai respectfully: accurate details at booking, no misuse of salons\u2019 or other users\u2019 information, and no attempts to disrupt the service. We may suspend accounts that abuse the platform.' }, { title: '6. Privacy', text: 'Your privacy matters to us. The Privacy Policy on this site explains what we collect, how we use it and the choices you have — it is part of these terms.' }, { title: '7. Service changes', text: 'We may improve, modify or pause parts of the service at any time. We are not liable for any modification, suspension or discontinuance, though we always aim to communicate material changes on this page.' }, { title: '8. Questions', text: 'MyNaai is built in India. For anything about these terms, call 8380017393 or write to support@mynaai.com.' }] },
-  privacy: { title: 'Privacy Policy', eyebrow: 'YOUR DATA', date: 'Effective Date: 09 January 2026', intro: 'MyNaai (“we”, “our”, “us”) operates the MyNaai mobile application and website. This Privacy Policy explains how we collect, use and protect your information when you use our services.', sections: [{ title: '1. Information we collect', text: 'Personal information:', bullets: ['Name', 'Mobile number', 'Email address (optional)', 'Location (city/area only)', 'Profile details (optional)'] }, { title: 'Booking information', bullets: ['Selected salon', 'Appointment date & time', 'Service details'] }, { title: 'Device information', bullets: ['Device type', 'Operating system', 'App version', 'IP address (for security & analytics)'] }, { title: '2. What we do NOT collect', text: 'We do not collect or store: credit or debit card details, UPI or wallet information, bank account details or any online payment information. All payments are made directly at the salon and not through the app.' }, { title: '3. How we use your information', bullets: ['To show nearby salons', 'To enable appointment booking', 'To notify you about booking updates and reminders', 'To improve app performance and user experience', 'To prevent fraud and misuse'] }, { title: '4. Location information', text: 'MyNaai may use approximate location (city or area) to show nearby salons. We do not track real-time or background location.' }, { title: '5. Data sharing', text: 'We do not sell or rent your personal data. Information may be shared only:', bullets: ['With the selected salon for booking confirmation', 'When required by law', 'To protect users and platform security'] }, { title: '6. Data security', text: 'We use reasonable security measures such as secure servers and encrypted communication to protect user data. However, no method of transmission over the internet is 100% secure.' }, { title: '7. Children\u2019s privacy', text: 'MyNaai is not intended for children under the age of 13. We do not knowingly collect personal information from children.' }, { title: '8. Your rights', bullets: ['Update or correct your profile', 'Request account deletion', 'Contact us for data-related concerns'] }, { title: '9. Third-party services', text: 'We may use third-party services for analytics, notifications, and app performance monitoring. These services have their own privacy policies.' }, { title: '10. Changes to this policy', text: 'We may update this Privacy Policy from time to time. Changes will be posted on this page with an updated effective date.' }, { title: '11. Contact us', text: 'MyNaai — Email: support@mynaai.com · Location: India. You can also call our support team on 8380017393.' }] },
+  faq: { title: 'Frequently asked questions', eyebrow: 'NEED TO KNOW', sections: [
+    { title: 'How do I book a salon?', text: 'Choose your salon, select one or more services, pick an available specialist and time, then confirm your booking request.' },
+    { title: 'Can I cancel a booking?', text: 'Yes. Open My bookings and choose Cancel booking on a pending or confirmed appointment.' },
+    { title: 'What happens after I send a request?', text: 'The salon receives your request and confirms it. You will see the latest status in My bookings and receive an update.' },
+    { title: 'Can I use My Naai as a salon owner?', text: 'Absolutely. Use Continue as Salon Partner on the login screen to sign in or register your salon.' },
+    { title: 'Is My Naai free for customers?', text: 'Browsing and booking are free — there is no booking fee. You pay the salon directly for the service you take, exactly as you would at the counter.' },
+    { title: 'Do I have to install an app?', text: 'No. The website does everything the app does — browsing, booking and booking alerts. If you prefer an app, the Android app is on Google Play and the iOS app is coming soon.' },
+    { title: 'How do I pick a specialist?', text: 'On the salon page choose your services first, then the specialist. Each one shows whether they are available, so you know who can take you before you confirm.' },
+    { title: 'How is the waiting time calculated?', text: 'Every salon page shows the wait the salon is managing at that moment, straight from its live queue. That is why booking ahead beats turning up and hoping.' },
+    { title: 'What if I am running late?', text: 'Call the salon using the number on its page as soon as you know. A salon can also suggest a new time, which you accept or decline from the notification or My bookings.' },
+    { title: 'Will I be reminded before my appointment?', text: 'Yes, once you allow browser notifications: a reminder arrives 30 minutes before your slot. You can switch this on or off any time in Account → Booking reminders.' },
+    { title: 'How do I find salons near me?', text: 'Allow location access on the home page and the list sorts nearest-first with the distance on every card. You can also search by salon name or area, and browse without location if you decline.' },
+    { title: 'Can I save a favourite salon?', text: 'Yes. Tap the bookmark on a salon card to keep it on top of your list — one saved salon at a time, the same as the mobile app.' },
+    { title: 'Are the prices on My Naai final?', text: 'Salons set their own prices and the card on each salon page is the price you should expect. Offers or add-ons are decided by the salon at the time of service.' },
+    { title: 'What information does My Naai collect?', text: 'Only what a booking needs — your name, mobile number, optional email, area-level location and booking details. The Privacy Policy explains it in full, and we never ask for card, UPI or bank details.' },
+    { title: 'How do I delete my account?', text: 'Call or message our support team on 8380017393 or mynaai.in@gmail.com with your registered mobile number and we will delete your account and its data.' },
+  ] },
+  terms: { title: 'Terms & Conditions', eyebrow: 'PLEASE READ', date: 'Effective Date: 09 January 2026', intro: 'Welcome to MyNaai. By accessing or using the MyNaai website or app, you accept these Terms and Conditions. If you do not agree with any part of them, please do not continue to use the service.', sections: [{ title: '1. The service', text: 'MyNaai connects you with nearby salons so you can request an appointment, follow its status and keep track of your bookings. Appointments remain requests until the salon confirms them.', bullets: ['Choose a salon, services, specialist and time', 'The salon confirms, declines or proposes a new time', 'Arrive at least 10 minutes before your slot'] }, { title: '2. Your account', text: 'You are responsible for keeping your login OTP and account secure and for everything that happens under it. Please keep your name and mobile number accurate and up to date — booking alerts reach you through them.' }, { title: '3. Bookings, delays and cancellations', text: 'Cancel as early as possible so the salon can offer the slot to another customer. The salon may decline or change a request based on availability, and may propose a small time delay you can accept or decline.', bullets: ['You can cancel from My bookings while the visit is upcoming', 'A salon delay offer needs your acceptance to take effect', 'Repeated last-minute cancellations may limit booking'] }, { title: '4. Payments', text: 'All payments are made directly at the salon — not through MyNaai. Price ranges shown on salon pages are indicative; the salon determines the final amount.' }, { title: '5. Fair use', text: 'Please use MyNaai respectfully: accurate details at booking, no misuse of salons\u2019 or other users\u2019 information, and no attempts to disrupt the service. We may suspend accounts that abuse the platform.' }, { title: '6. Privacy', text: 'Your privacy matters to us. The Privacy Policy on this site explains what we collect, how we use it and the choices you have — it is part of these terms.' }, { title: '7. Service changes', text: 'We may improve, modify or pause parts of the service at any time. We are not liable for any modification, suspension or discontinuance, though we always aim to communicate material changes on this page.' }, { title: '8. Questions', text: 'MyNaai is built in India. For anything about these terms, call 8380017393 or write to mynaai.in@gmail.com.' }] },
+  privacy: { title: 'Privacy Policy', eyebrow: 'YOUR DATA', date: 'Effective Date: 09 January 2026', intro: 'MyNaai (“we”, “our”, “us”) operates the MyNaai mobile application and website. This Privacy Policy explains how we collect, use and protect your information when you use our services.', sections: [{ title: '1. Information we collect', text: 'Personal information:', bullets: ['Name', 'Mobile number', 'Email address (optional)', 'Location (city/area only)', 'Profile details (optional)'] }, { title: 'Booking information', bullets: ['Selected salon', 'Appointment date & time', 'Service details'] }, { title: 'Device information', bullets: ['Device type', 'Operating system', 'App version', 'IP address (for security & analytics)'] }, { title: '2. What we do NOT collect', text: 'We do not collect or store: credit or debit card details, UPI or wallet information, bank account details or any online payment information. All payments are made directly at the salon and not through the app.' }, { title: '3. How we use your information', bullets: ['To show nearby salons', 'To enable appointment booking', 'To notify you about booking updates and reminders', 'To improve app performance and user experience', 'To prevent fraud and misuse'] }, { title: '4. Location information', text: 'MyNaai may use approximate location (city or area) to show nearby salons. We do not track real-time or background location.' }, { title: '5. Data sharing', text: 'We do not sell or rent your personal data. Information may be shared only:', bullets: ['With the selected salon for booking confirmation', 'When required by law', 'To protect users and platform security'] }, { title: '6. Data security', text: 'We use reasonable security measures such as secure servers and encrypted communication to protect user data. However, no method of transmission over the internet is 100% secure.' }, { title: '7. Children\u2019s privacy', text: 'MyNaai is not intended for children under the age of 13. We do not knowingly collect personal information from children.' }, { title: '8. Your rights', bullets: ['Update or correct your profile', 'Request account deletion', 'Contact us for data-related concerns'] }, { title: '9. Third-party services', text: 'We may use third-party services for analytics, notifications, and app performance monitoring. These services have their own privacy policies.' }, { title: '10. Changes to this policy', text: 'We may update this Privacy Policy from time to time. Changes will be posted on this page with an updated effective date.' }, { title: '11. Contact us', text: 'MyNaai — Email: mynaai.in@gmail.com · Location: India. You can also call our support team on 8380017393.' }] },
   contact: { title: 'Contact us', eyebrow: 'TALK TO US', intro: 'Booking help, account questions or a salon partnership — call, email or write to the My Naai team. We answer every day.' },
 };
 
@@ -1138,43 +1259,122 @@ const TESTIMONIALS = [
 
 // The ratings row sits right above the site footer on the public pages —
 // social proof on the way out. It is a real carousel: swipe/drag on touch,
-// arrows on the heading row, and it auto-advances gently until interacted
-// with, so any number of reviews works.
+// arrows on the heading row, dots for position, and it auto-advances gently
+// until interacted with. The active review is index state rather than raw
+// scroll maths, which is what makes it CIRCULAR: Next on the last review lands
+// back on the first, Previous on the first jumps to the last — the old track
+// simply clamped at both ends. Phones show one review per screen, desktops
+// three (see .testimonial-card in styles.css).
 export function TestimonialSection() {
   const trackRef = useRef(null);
   const userDroveRef = useRef(false);
-  const move = useCallback(direction => {
+  const indexRef = useRef(0);
+  const [index, setIndex] = useState(0);
+  const count = TESTIMONIALS.length;
+
+  // One card plus one gap. Measured, not assumed: the card width changes the
+  // moment the one-per-screen phone rule or the three-up desktop rule applies.
+  const stepSize = useCallback(() => {
     const track = trackRef.current;
-    if (!track) return;
-    const cardWidth = track.firstElementChild?.getBoundingClientRect().width || 300;
-    track.scrollBy({ left: direction * (cardWidth + 12), behavior: 'smooth' });
+    const first = track?.firstElementChild;
+    if (!track || !first) return 0;
+    const gap = parseFloat(window.getComputedStyle(track).columnGap) || 12;
+    return first.getBoundingClientRect().width + gap;
   }, []);
+
+  // Smooth scrolling where the browser has it (every current browser); the
+  // scrollLeft fallback keeps test DOMs — and anything without
+  // Element.scrollTo — from throwing on an arrow tap.
+  const scrollTrackTo = (track, left) => {
+    if (!track) return;
+    if (typeof track.scrollTo === 'function') track.scrollTo({ left, behavior: 'smooth' });
+    else track.scrollLeft = left;
+  };
+
+  // The last index that still shows a full view: phones fit one review
+  // (so the last review is the last index), desktops three (so the last
+  // *view* starts three reviews from the end).
+  const lastIndexFor = track => {
+    const step = stepSize();
+    if (!track || !step) return Math.max(0, count - 1);
+    const visible = Math.max(1, Math.round(track.clientWidth / step));
+    return Math.max(0, count - visible);
+  };
+
+  const goTo = useCallback(nextIndex => {
+    if (count < 1) return;
+    const track = trackRef.current;
+    const target = Math.min(Math.max(0, nextIndex), lastIndexFor(track));
+    indexRef.current = target;
+    setIndex(target);
+    scrollTrackTo(track, target * stepSize());
+  }, [count, stepSize]);
+
+  // Circular in both directions: past the last view comes the first, and
+  // before the first comes the last. This is the behaviour the old
+  // scroll-position carousel could not have — it just stopped at the end.
+  const advance = useCallback(direction => {
+    const limit = lastIndexFor(trackRef.current);
+    const current = Math.min(indexRef.current, limit);
+    const target = direction > 0
+      ? (current >= limit ? 0 : current + 1)
+      : (current <= 0 ? limit : current - 1);
+    goTo(target);
+  }, [goTo]);
+
   useEffect(() => {
     const id = window.setInterval(() => {
       const track = trackRef.current;
       if (!track || userDroveRef.current) return; // nobody fights a user
-      const max = track.scrollWidth - track.clientWidth;
-      if (max <= 0) return; // everything fits — no carousel needed
-      const cardWidth = track.firstElementChild?.getBoundingClientRect().width || 300;
-      const nearEnd = track.scrollLeft + 8 >= max;
-      track.scrollTo({ left: nearEnd ? 0 : track.scrollLeft + cardWidth + 12, behavior: 'smooth' });
+      if (track.scrollWidth - track.clientWidth <= 0) return; // everything fits — no carousel needed
+      advance(1);
     }, 4200);
     return () => window.clearInterval(id);
-  }, []);
+  }, [advance]);
+
+  // Swiping the track by hand must keep the arrows/dots in step, and taking
+  // over means the auto-advance stops for good.
+  const syncIndex = () => {
+    const track = trackRef.current;
+    const step = stepSize();
+    if (!track || !step) return;
+    const clamped = Math.min(lastIndexFor(track), Math.max(0, Math.round(track.scrollLeft / step)));
+    if (clamped !== indexRef.current) { indexRef.current = clamped; setIndex(clamped); }
+  };
   const stopAuto = () => { userDroveRef.current = true; };
   return (
     <section className="testimonial-section" aria-label="What people say about My Naai" onPointerDown={stopAuto}>
-      <div className="section-heading"><div><span className="eyebrow">REAL STORIES</span><h2>What customers & salon owners say</h2></div><div className="testimonial-nav"><button type="button" onClick={() => { stopAuto(); move(-1); }} aria-label="Previous reviews"><ChevronRight size={17} className="rotate-180" /></button><button type="button" onClick={() => { stopAuto(); move(1); }} aria-label="Next reviews"><ChevronRight size={17} /></button></div></div>
-      <div className="testimonial-track" ref={trackRef}>
-        {TESTIMONIALS.map(item => (
-          <figure className="testimonial-card" key={item.name}>
-            <span className="testimonial-quote"><Quote size={16} /></span>
-            <span className="testimonial-stars" aria-label="5 out of 5 stars">{[1, 2, 3, 4, 5].map(star => <Star key={star} size={13} fill="currentColor" />)}</span>
+      <div className="section-heading">
+        <div><span className="eyebrow">REAL STORIES</span><h2>What customers & salon owners say</h2></div>
+        <div className="testimonial-nav">
+          <button type="button" onClick={() => { stopAuto(); advance(-1); }} aria-label="Previous reviews"><ChevronRight size={17} className="rotate-180" /></button>
+          <button type="button" onClick={() => { stopAuto(); advance(1); }} aria-label="Next reviews"><ChevronRight size={17} /></button>
+        </div>
+      </div>
+      <div className="testimonial-track" ref={trackRef} onScroll={syncIndex}>
+        {TESTIMONIALS.map((item, itemIndex) => (
+          // One card, three fixed bands — who said it (avatar + name + role),
+          // the rating, then the quote. The name used to sit *after* the quote,
+          // which is why a full-width card read as a block of grey text; the
+          // person now leads and the quote has a real reading measure.
+          <figure className={cx('testimonial-card', itemIndex === index && 'active')} key={item.name}>
+            <span className="testimonial-card-top">
+              <span className="testimonial-avatar" aria-hidden="true">{getInitials(item.name)}</span>
+              <span className="testimonial-person"><strong>{item.name}</strong><small>{item.meta}</small></span>
+              <span className="testimonial-quote" aria-hidden="true"><Quote size={17} /></span>
+            </span>
+            <span className="testimonial-stars" aria-label="5 out of 5 stars">{[1, 2, 3, 4, 5].map(star => <Star key={star} size={14} fill="currentColor" />)}</span>
             <blockquote>{item.quote}</blockquote>
-            <figcaption><strong>{item.name}</strong><small>{item.meta}</small></figcaption>
           </figure>
         ))}
       </div>
+      {count > 1 && (
+        <div className="carousel-dots testimonial-dots">
+          {TESTIMONIALS.map((item, dotIndex) => (
+            <button key={`testimonial-dot-${item.name}`} type="button" aria-label={`Show review ${dotIndex + 1} of ${count}`} className={cx('carousel-dot', dotIndex === index && 'active')} onClick={() => { stopAuto(); goTo(dotIndex); }} />
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -1274,10 +1474,10 @@ export function SiteFooter() {
           <a href="/login?role=SALON" onClick={footerNav}>Register your salon</a>
           <a href="/login?role=SALON" onClick={footerNav}>Partner sign in</a>
         </nav>
-        <nav className="site-footer-col" aria-label="Support and legal">
+        <nav className="site-footer-col site-footer-support" aria-label="Support and legal">
           <h3>Support & legal</h3>
           <a href="tel:8380017393"><Phone size={13} /> Support: 8380017393</a>
-          <a href="mailto:support@mynaai.com"><Mail size={13} /> support@mynaai.com</a>
+          <a href="mailto:mynaai.in@gmail.com"><Mail size={13} /> mynaai.in@gmail.com</a>
           <a href="/terms" onClick={footerNav}>Terms &amp; Conditions</a>
           <a href="/privacy-policy" onClick={footerNav}>Privacy Policy</a>
         </nav>
@@ -1324,7 +1524,7 @@ export function InfoScreen({ type, navigate, showBack = false }) {
 // The My Naai company contact channels — one source of truth so the cards
 // and the footer never disagree.
 export const CONTACT_PHONE = '8380017393';
-export const CONTACT_EMAIL = 'support@mynaai.com';
+export const CONTACT_EMAIL = 'mynaai.in@gmail.com';
 const CONTACT_CHANNELS = [
   { icon: Phone, label: 'Call us', value: CONTACT_PHONE, href: `tel:${CONTACT_PHONE}`, note: 'Support, bookings and salon partners — every day.' },
   { icon: Mail, label: 'Email', value: CONTACT_EMAIL, href: `mailto:${CONTACT_EMAIL}`, note: 'We reply within 24 hours on working days.' },

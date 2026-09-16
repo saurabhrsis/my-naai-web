@@ -261,7 +261,7 @@ img { display: block; max-width: 100%; }
 .mobile-nav button { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 3px 2px; color: #6f7978; background: transparent; font-size: 9px; font-weight: 700; white-space: nowrap; }
 .mobile-nav button.active { color: var(--gold); }
 .mobile-nav button.active svg { filter: drop-shadow(0 0 5px rgba(232,185,126,.35)); }
-.screen { width: 100%; max-width: 1460px; margin: 0 auto; }
+.screen { width: 100%; max-width: 1460px; min-width: 0; margin: 0 auto; }
 .page-header { display: flex; align-items: center; justify-content: space-between; gap: 15px; min-height: 53px; margin-bottom: 20px; }
 .page-header-leading { min-width: 0; display: flex; align-items: center; gap: 12px; }
 .page-header-leading > div { min-width: 0; }
@@ -359,6 +359,13 @@ img { display: block; max-width: 100%; }
 .card-share-button:hover { background: rgba(232,185,126,.12); }
 .card-book-button { min-height: 32px; padding: 0 12px; border-radius: 9px; color: #111; background: var(--gold); font-size: 10px; font-weight: 700; }
 .card-book-button.disabled { color: #969b9a; background: #2b3030; }
+/* Paging footer under the salon grid: one honest button (plus an automatic
+   next page on scroll), the running count, and the end-of-list line. */
+.salon-list-more { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 16px; }
+.salon-list-more .btn { min-width: min(280px, 100%); }
+.salon-list-more small { color: var(--muted); font-size: 10.5px; }
+.salon-list-end { margin: 0; color: var(--muted); font-size: 11.5px; text-align: center; }
+.salon-load-sentinel { height: 1px; }
 .detail-header-actions { display: flex; align-items: center; gap: 4px; }
 /* The trust strip doubles as the separator between the salon-listings band
    and the testimonials below it. */
@@ -374,7 +381,7 @@ img { display: block; max-width: 100%; }
 .booking-tabs button span { margin-left: 4px; opacity: .7; }
 .booking-list, .queue-groups, .history-list, .notification-list { display: flex; flex-direction: column; gap: 12px; }
 .booking-card { display: flex; min-height: 143px; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: var(--card); }
-.booking-calendar { width: 61px; flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center; border-right: 1px solid var(--line); background: rgba(232,185,126,.045); }
+.booking-calendar { width: 61px; flex: nolex; flex-direction: column; align-items: center; justify-content: center; border-right: 1px solid var(--line); background: rgba(232,185,126,.045); }
 .booking-calendar span { color: var(--gold); font-size: 10px; font-weight: 700; text-transform: uppercase; }
 .booking-calendar strong { margin: 5px 0 2px; font-size: 26px; line-height: 1; }
 .booking-calendar small { color: var(--muted); font-size: 10px; }
@@ -533,7 +540,7 @@ a.detail-info-row:hover { background: rgba(255, 255, 255, .03); }
 .detail-barber-card > span { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 9.5px; }
 .detail-barber-card > span i { width: 5px; height: 5px; border-radius: 50%; background: var(--red); }
 .detail-barber-card > span.available { color: var(--green); }
-.detail-barber-card > span.available i { background: var(--green); }
+.detail-barber-card > sprber-card > span.available i { background: var(--green); }
 .detail-barber-card small { display: inline-flex; align-items: center; gap: 4px; color: var(--gold); font-size: 9.5px; }
 .detail-empty-note { margin: 0; padding: 14px; border: 1px dashed rgba(232, 185, 126, .35); border-radius: 13px; color: var(--muted-light); font-size: 12px; line-height: 1.55; }
 .service-preview-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -764,7 +771,12 @@ a.contact-detail-card:hover { border-color: rgba(232, 185, 126, .35); }
 .contact-form-card h2 { margin: 6px 0 14px; font-size: 19px; letter-spacing: -.02em; }
 .contact-form { display: flex; flex-direction: column; gap: 14px; }
 .contact-form .form-error { margin-bottom: 0; }
-.contact-form .btn { width: 100%; min-height: 50px; margin-top: 2px; }
+/* The Send message button is a form action, not a page banner: full width only
+   while the form itself is one column (thumb reach), then it hugs its label. */
+.contact-form .btn { width: 100%; min-height: 44px; margin-top: 2px; padding: 0 18px; font-size: 12.5px; }
+@media (min-width: 640px) {
+  .contact-form .btn { width: auto; min-width: 168px; min-height: 42px; align-self: flex-start; }
+}
 .contact-form-row { display: grid; grid-template-columns: 1fr; gap: 14px; }
 .contact-form-note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; text-align: center; }
 .contact-form-note a { color: var(--gold); font-weight: 700; text-decoration: none; }
@@ -837,24 +849,68 @@ a.contact-detail-card:hover { border-color: rgba(232, 185, 126, .35); }
    Login right. Sticky with a blurred backdrop so the salon list scrolls under
    it like a modern website header; aligns with the 1460px .screen rail on
    wide laptops. */
-.guest-shell { min-height: var(--viewport-height); display: flex; flex-direction: column; background: var(--black); }
-.site-navbar { position: sticky; top: 0; z-index: 40; flex: none; display: flex; align-items: center; gap: 12px; padding: calc(9px + var(--safe-top)) max(14px, var(--safe-right)) 9px max(14px, var(--safe-left)); background: rgba(15, 17, 17, .9); border-bottom: 1px solid var(--line); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
-.site-navbar-brand { flex: none; display: flex; align-items: center; padding: 0; border: 0; background: none; }
+.guest-shell { min-height: var(--viewport-height); display: flex; flex-direction: column; overflow-x: clip; background: var(--black); }
+/* The bar is a single non-wrapping row at every width: brand, links (desktop),
+   Install + Login + menu. `min-width: 0` on the flexible children is what keeps
+   the row from ever pushing the Login pill past the right edge — the old bar
+   let the links and the pills fight for space and the Login pill lost, landing
+   half off a phone screen. Below 820px the links move into the dropdown panel
+   further down this file. */
+.site-navbar { position: sticky; top: 0; z-index: 40; flex: none; display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; min-width: 0; padding: calc(9px + var(--safe-top)) max(14px, var(--safe-right)) 9px max(14px, var(--safe-left)); background: rgba(15, 17, 17, .9); border-bottom: 1px solid var(--line); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.site-navbar-brand { flex: none; display: flex; align-items: center; min-width: 0; padding: 0; border: 0; background: none; }
+.site-navbar .brand { min-width: 0; gap: 9px; }
 .site-navbar .brand-mark { width: 38px; height: 38px; border-radius: 11px; }
 .site-navbar .brand-cap { font-size: 24px; }
 .site-navbar .brand-lower { font-size: 19px; }
-.site-nav-links { flex: 1; display: flex; justify-content: center; gap: 2px; }
-.site-nav-links button { position: relative; padding: 9px 10px; border: 0; border-radius: 9px; background: none; color: var(--muted-light); font-size: 13px; font-weight: 600; }
+.site-nav-links { flex: 1 1 auto; min-width: 0; display: flex; justify-content: center; gap: 2px; }
+.site-nav-links button { position: relative; padding: 9px 10px; border: 0; border-radius: 9px; background: none; color: var(--muted-light); font-size: 13px; font-weight: 600; white-space: nowrap; }
 .site-nav-links button:hover { color: var(--white); background: rgba(255,255,255,.04); }
 .site-nav-links button.active { color: var(--gold); }
 .site-nav-links button.active::after { content: ''; position: absolute; left: 12px; right: 12px; bottom: 3px; height: 2px; border-radius: 2px; background: var(--gold); }
-.site-navbar-actions { display: flex; align-items: center; gap: 8px; flex: none; }
-@media (max-width: 620px) {
+.site-navbar-actions { display: flex; align-items: center; gap: 8px; flex: none; margin-left: auto; min-width: 0; }
+/* The hamburger that owns the panel below 820px; invisible on desktop. */
+.site-nav-toggle { display: none; align-items: center; justify-content: center; width: 38px; height: 38px; flex: none; border: 1px solid var(--line); border-radius: 12px; color: var(--white); background: var(--card); transition: background .18s, color .18s, border-color .18s; }
+.site-nav-toggle:hover { color: var(--gold); background: var(--card-raised); }
+.site-nav-toggle[aria-expanded="true"] { color: #111; background: var(--gold); border-color: var(--gold); }
+/* Below 1024px — every phone and tablet, portrait or landscape — the four
+   route links move into the dropdown panel; from 1024px up they sit inline in
+   the bar, which is also where the signed-in shell grows its sidebar. */
+@media (max-width: 1023px) {
   .site-navbar { gap: 8px; }
-  .site-navbar .brand-wordmark { display: none; } /* phones: the mark alone, links get the room */
-  .site-nav-links button { padding: 8px 8px; font-size: 12px; }
-  .site-navbar .install-auth-button { width: 34px; height: 34px; gap: 0; padding: 0; font-size: 0; justify-content: center; }
+  .site-navbar .brand-wordmark { display: none; } /* phones: the mark alone, the pills get the room */
+  .site-nav-toggle { display: inline-flex; }
+  .site-navbar .install-auth-button { width: 36px; height: 36px; gap: 0; padding: 0; font-size: 0; justify-content: center; }
   .site-navbar .install-auth-button svg { flex: none; }
+  .guest-login-button { padding: 8px 13px; font-size: 11.5px; }
+  /* The dropdown: the header's own child, so it inherits the sticky bar's
+     z-index and slides in right under it instead of reflowing the bar itself. */
+  .site-nav-links {
+    position: absolute; top: 100%; left: 0; right: 0;
+    flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 4px;
+    padding: 9px max(14px, var(--safe-right)) calc(12px + var(--safe-bottom)) max(14px, var(--safe-left));
+    border-bottom: 1px solid var(--line);
+    background: rgba(11, 13, 13, .985);
+    -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+    box-shadow: 0 22px 48px rgba(0, 0, 0, .5);
+    max-height: calc(var(--viewport-height) - 74px); overflow-y: auto; overscroll-behavior: contain;
+    opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(-6px);
+    transition: opacity .18s ease, transform .18s ease, visibility .18s;
+  }
+  .site-navbar.menu-open .site-nav-links { opacity: 1; visibility: visible; pointer-events: auto; transform: none; }
+  .site-nav-links button { width: 100%; padding: 13px 12px; border-radius: 12px; font-size: 14px; text-align: left; }
+  .site-nav-links button:hover { background: rgba(255, 255, 255, .05); }
+  .site-nav-links button.active { color: var(--gold); background: var(--gold-wash); }
+  .site-nav-links button.active::after { display: none; }
+}
+/* From tablet width the panel stops stretching edge to edge and hangs off the
+   hamburger like a real dropdown menu, so the page behind it stays visible. */
+@media (min-width: 640px) and (max-width: 1023px) {
+  .site-nav-links {
+    left: auto; right: max(14px, var(--safe-right)); top: calc(100% + 8px);
+    min-width: 240px; max-width: 320px;
+    padding: 8px;
+    border: 1px solid var(--line); border-radius: 16px;
+  }
 }
 .site-navbar .install-login-button { margin: 0; } /* pill margin is only for the login page context */
 
@@ -910,6 +966,16 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .site-footer-grid { grid-template-columns: 1fr 1fr; }
   .contact-form-row { grid-template-columns: 1fr 1fr; }
 }
+/* Phones: brand (with the store badges) and the support/legal column keep the
+   full width, while Explore and Salon partners sit side by side so the footer
+   shows its links without a long single-file scroll. */
+@media (max-width: 559px) {
+  .site-footer { padding-left: 0; padding-right: 0; }
+  .site-footer-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 14px; }
+  .site-footer-brand, .site-footer-support { grid-column: 1 / -1; }
+  .site-footer-col a { font-size: 11px; }
+  .site-footer-bottom { flex-wrap: wrap; }
+}
 @media (min-width: 900px) {
   .site-footer-grid { grid-template-columns: 1.6fr 1fr 1fr 1fr; }
   .site-info-hero { padding: 34px 30px; }
@@ -920,23 +986,49 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
 }
 
 /* ── Testimonials (above the footer on public pages): a swipeable carousel
-   with arrow controls + gentle auto-advance — any number of reviews works. */
-.testimonial-section { margin: 30px 0 0; }
+   with arrow controls, dots and gentle auto-advance — any number of reviews
+   works, and the loop is circular (see TestimonialSection). ── */
+.testimonial-section { margin: 34px 0 0; }
 .testimonial-nav { display: flex; gap: 6px; }
 .testimonial-nav button { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; background: var(--card); border: 1px solid var(--line); border-radius: 50%; color: var(--muted-light); }
 .testimonial-nav button:hover { color: var(--gold); border-color: rgba(232, 185, 126, .4); }
 .testimonial-nav .rotate-180 { transform: rotate(180deg); }
-.testimonial-track { display: flex; gap: 12px; margin-top: 14px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; -ms-overflow-style: none; padding-bottom: 4px; }
+.testimonial-track { display: flex; align-items: stretch; gap: 14px; margin-top: 16px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; -ms-overflow-style: none; padding: 2px 1px 6px; }
 .testimonial-track::-webkit-scrollbar { display: none; }
-.testimonial-card { margin: 0; flex: 0 0 min(84vw, 320px); scroll-snap-align: start; padding: 15px 15px 13px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; display: flex; flex-direction: column; gap: 8px; position: relative; }
-.testimonial-quote { position: absolute; top: 12px; right: 13px; color: rgba(232, 185, 126, .35); }
+/* One review card = three bands in reading order: who said it, the rating,
+   then the quote. The name/role used to trail the quote, which is what made a
+   full-width phone card read as an untidy block of grey text. */
+.testimonial-card { position: relative; display: flex; flex-direction: column; gap: 12px; min-width: 0; margin: 0; padding: 18px 17px 16px; overflow: hidden; scroll-snap-align: start; border: 1px solid var(--line); border-radius: 18px; background: linear-gradient(158deg, rgba(232, 185, 126, .07), rgba(255, 255, 255, .012) 46%), var(--card); }
+/* Oversized decorative quote mark tucked into the corner, behind the content —
+   the card reads as a review before a single word is parsed. */
+.testimonial-card::before { content: '\201C'; position: absolute; top: -14px; right: 12px; color: rgba(232, 185, 126, .13); font-family: Georgia, 'Times New Roman', serif; font-size: 86px; line-height: 1; pointer-events: none; }
+.testimonial-card.active { border-color: rgba(232, 185, 126, .32); }
+.testimonial-card-top { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.testimonial-avatar { width: 42px; height: 42px; flex: none; display: inline-flex; align-items: center; justify-content: center; border-radius: 13px; color: #111; background: var(--gold); font-size: 13px; font-weight: 800; letter-spacing: .02em; }
+.testimonial-person { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.testimonial-person strong { overflow: hidden; color: var(--white); font-size: 13.5px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.testimonial-person small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.testimonial-quote { position: relative; flex: none; color: rgba(232, 185, 126, .42); }
 .testimonial-stars { display: inline-flex; gap: 2px; color: var(--gold); }
-.testimonial-card blockquote { margin: 0; color: #d7dbda; font-size: 12.5px; line-height: 1.55; }
-.testimonial-card figcaption { display: flex; flex-direction: column; gap: 1px; margin-top: 2px; }
-.testimonial-card figcaption strong { color: var(--white); font-size: 12px; }
-.testimonial-card figcaption small { color: var(--muted); font-size: 10.5px; }
+.testimonial-card blockquote { margin: 0; color: #dfe3e2; font-size: 13.5px; line-height: 1.65; letter-spacing: -.005em; overflow-wrap: anywhere; }
+/* The dot row is the position indicator on every width, so each dot keeps its
+   tiny look but gains a thumb-sized tap area. */
+.testimonial-dots { margin-top: 14px; }
+.testimonial-dots .carousel-dot { position: relative; background: rgba(255, 255, 255, .22); }
+.testimonial-dots .carousel-dot.active { background: var(--gold); }
+.testimonial-dots .carousel-dot::after { content: ''; position: absolute; inset: -9px; }
+/* Phones show exactly ONE review per screen — the card fills the track, so a
+   quote is never half-cut at the edge and a swipe moves a whole review.
+   Tablets see two, laptops and desktops three. */
+.testimonial-card { flex: 0 0 100%; }
+@media (max-width: 899px) {
+  .testimonial-nav button { width: 36px; height: 36px; }
+}
+@media (min-width: 640px) {
+  .testimonial-card { flex-basis: calc((100% - 14px) / 2); }
+}
 @media (min-width: 900px) {
-  .testimonial-card { flex-basis: calc((100% - 24px) / 3); }
+  .testimonial-card { flex-basis: calc((100% - 28px) / 3); }
 }
 
 /* ── Salon partner landing page (/salon-partner) ── */
@@ -968,13 +1060,19 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
 .partner-cta-band { margin-top: 30px; padding: 20px 18px; background: linear-gradient(135deg, rgba(232, 185, 126, .14), rgba(232, 185, 126, .05)); border: 1px solid rgba(232, 185, 126, .35); border-radius: 20px; display: flex; flex-direction: column; gap: 14px; }
 .partner-cta-band h2 { margin: 6px 0 4px; color: var(--white); font-size: 21px; letter-spacing: -.03em; }
 .partner-cta-band p { margin: 0; color: var(--muted-light); font-size: 12px; line-height: 1.55; }
+/* The three-step grid only fits three across once each column can hold its copy
+   (the number badge eats 60px of every card) — at 560px three columns left
+   ~95px of text per step, so phones/small tablets get two. */
 @media (min-width: 560px) {
-  .partner-benefit-grid { grid-template-columns: repeat(2, 1fr); }
-  .partner-step-grid { grid-template-columns: repeat(3, 1fr); }
+  .partner-benefit-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .partner-step-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 760px) {
   .partner-cta-band { flex-direction: row; align-items: center; justify-content: space-between; }
 }
 @media (min-width: 900px) {
   .partner-hero { grid-template-columns: 1.5fr 1fr; padding: 34px 30px; }
+  .partner-step-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 /* Salon editor and subscription */
@@ -1288,9 +1386,11 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   /* .auth-form-wrap keeps its `margin: 0 auto` from the base rule; the brand is
      hidden at this width, so nothing has to reserve room for it. */
   .registration-page { padding: calc(28px + var(--safe-top)) max(28px, var(--safe-right)) 28px max(28px, var(--safe-left)); }
-  .workspace-content { padding: 36px 34px 50px; }
-  .mobile-shell-bar { display: none; }
-  .mobile-nav { display: none; }
+  /* Tablets (760–1023px) keep the phone chrome — sticky top bar + bottom nav —
+     because the sidebar only appears at 1024px. Hiding both here left the whole
+     tablet range with NO navigation at all: no sidebar, no top bar, no bottom
+     bar. The bottom padding still clears the fixed bottom nav. */
+  .workspace-content { padding: 30px 34px calc(100px + var(--safe-bottom)); }
   .page-header-leading h1 { font-size: 30px; }
   .home-topline h1 { font-size: 43px; }
   .home-topline { margin-bottom: 23px; }
@@ -1333,15 +1433,25 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .plan-card > strong { font-size: 30px; }
   .subscription-continue { width: auto; padding: 0 32px; }
   .toast-position { bottom: 26px; left: auto; }
+  /* Tablets: the phone's bottom nav becomes a centred pill instead of a
+     full-width strip, and the public pages get their tablet gutters. */
+  .mobile-nav { max-width: 620px; margin-right: auto; margin-left: auto; }
+  .guest-content { padding: 20px max(28px, var(--safe-right)) calc(32px + var(--safe-bottom)) max(28px, var(--safe-left)); }
+  .site-info-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (min-width: 1024px) {
   .app-shell { display: flex; }
+  /* The sidebar replaces the phone chrome from here up, so this is where the
+     sticky top bar and the fixed bottom nav finally go away. They used to be
+     hidden at 760px — three widths before the sidebar existed. */
+  .mobile-shell-bar { display: none; }
+  .mobile-nav { display: none; }
   /* overflow-y keeps .sidebar-bottom reachable: on short windows (1024-1200px
      tablets, laptops with a 700px-tall viewport) the brand + role + nav + tip
      stack exceeds 100svh, and the Sign out button spilled below the viewport of
      a fixed-height sticky box where it could never be scrolled to. */
-  .sidebar { position: sticky; top: 0; width: 252px; height: var(--viewport-height); flex: none; display: flex; flex-direction: column; padding: calc(29px + var(--safe-top)) max(18px, var(--safe-right)) calc(21px + var(--safe-bottom)) max(18px, var(--safe-left)); border-right: 1px solid var(--line); background: #0d1010; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+  .sidebar { position: sticky; top: 0; width: 240px; height: var(--viewport-height); flex: none; display: flex; flex-direction: column; padding: calc(29px + var(--safe-top)) max(18px, var(--safe-right)) calc(21px + var(--safe-bottom)) max(18px, var(--safe-left)); border-right: 1px solid var(--line); background: #0d1010; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
   .sidebar > .brand, .sidebar-role, .sidebar-nav, .sidebar-bottom { flex: none; }
   .sidebar > .brand { padding: 0 8px; margin-bottom: 28px; gap: 12px; }
   .sidebar > .brand .brand-mark { width: 58px; height: 58px; border-radius: 16px; }
@@ -1369,11 +1479,16 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .sidebar-logout { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 8px 11px; border: 1px solid rgba(242, 123, 116, .2); border-radius: 11px; color: #ff9d95; background: rgba(242, 123, 116, .07); font-size: 11px; font-weight: 700; }
   .sidebar-logout:hover { background: rgba(242, 123, 116, .14); border-color: rgba(242, 123, 116, .34); color: #ffc2bd; }
   .sidebar-logout svg { flex: none; }
-  .workspace { flex: 1; width: calc(100% - 252px); }
+  .workspace { flex: 1; width: calc(100% - 240px); }
   .workspace-content { padding: 43px 5%; }
   /* The in-app detail/info pages ride the same rail width as the home feed,
      so moving between screens never changes the page's outer size. */
   .utility-content { max-width: 1460px; }
+  /* Laptop/desktop scale-up: the headings and the discovery band grow with the
+     rail so a 1366px laptop does not read like a stretched phone. */
+  .section-heading h2 { font-size: 24px; }
+  .home-band { padding: 26px; }
+  .ad-slide { height: 260px; }
 }
 
 @media (min-width: 1200px) {
@@ -1398,15 +1513,14 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .home-topline { flex-wrap: wrap; }
   .home-topline > div:first-child { flex: 1 1 180px; }
   .home-actions { margin-left: auto; }
-  /* Mobile salon-card balance: the footer used to pin the wait time to the
-     left edge and the share/book buttons to the right, which read as a
-     left-aligned card. On phones the booking row gets the full width — share
-     keeps its square, Book now fills the rest. */
-  .salon-card-footer { flex-wrap: wrap; row-gap: 11px; }
-  .salon-card .wait-copy { flex: 1 1 100%; font-size: 11px; }
-  .salon-card-cta { flex: 1 1 100%; gap: 8px; }
-  .salon-card-cta .card-book-button { flex: 1 1 auto; min-height: 38px; border-radius: 10px; font-size: 11.5px; }
-  .salon-card-cta .card-share-button { flex: none; width: 38px; height: 38px; }
+  /* Mobile salon-card balance: the wait time keeps the left edge; Share and a
+     compact Book now sit on the right. The booking CTA is a card helper, not a
+     banner — a full-width 38px button dwarfed the card content it belonged to. */
+  .salon-card-footer { flex-wrap: nowrap; gap: 10px; }
+  .salon-card .wait-copy { flex: 1 1 auto; min-width: 0; font-size: 10.5px; }
+  .salon-card-cta { flex: none; gap: 6px; }
+  .salon-card-cta .card-book-button { flex: none; min-height: 32px; padding: 0 13px; border-radius: 9px; font-size: 10.5px; }
+  .salon-card-cta .card-share-button { flex: none; width: 32px; height: 32px; }
   .section-heading { align-items: flex-start; flex-wrap: wrap; }
   .section-heading > .result-count { margin-left: auto; }
   .profile-card, .salon-profile-hero { align-items: flex-start; flex-wrap: wrap; }
@@ -1431,6 +1545,14 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
 }
 
 @media (max-width: 380px) {
+  /* Smallest phones: shave the bar chrome rather than ever let a pill fold —
+     the Login button must stay whole at 320px, next to the install icon and
+     the menu toggle. */
+  .site-navbar { gap: 6px; padding-right: max(11px, var(--safe-right)); padding-left: max(11px, var(--safe-left)); }
+  .site-navbar .brand-mark { width: 34px; height: 34px; border-radius: 10px; }
+  .guest-login-button { gap: 5px; padding: 7px 11px; font-size: 11px; }
+  .site-nav-toggle { width: 34px; height: 34px; }
+  .site-footer-grid { gap: 18px 11px; }
   .workspace-content { padding-right: max(12px, var(--safe-right)); padding-left: max(12px, var(--safe-left)); }
   .mobile-shell-bar { padding-right: max(12px, var(--safe-right)); padding-left: max(12px, var(--safe-left)); }
   .confirm-actions { grid-template-columns: 1fr; }
@@ -1442,6 +1564,8 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .detail-stat-grid { gap: 4px; }
   .detail-stat-grid > div { padding: 9px 5px; }
   .detail-stat-grid strong { font-size: 9px; }
+  .salon-card-cta .card-book-button { padding: 0 10px; }
+  .salon-card .wait-copy { font-size: 10px; }
   .booking-calendar { width: 53px; }
   .booking-main { padding: 12px 10px; }
   .booking-title-row h3 { font-size: 13px; }
