@@ -67,7 +67,12 @@ export function NotificationDiagnostics({ onEnabled }) {
   }, [readStates]);
 
   const failing = (diagnostics?.checks || []).filter(check => check.state === 'fail');
+  // `pushConfigured` false means this deployment has no Firebase web config: the
+  // permission can still be granted, but nothing can be delivered until that is
+  // set. Saying "alerts are on" there would be a lie.
+  const pushConfigured = isPushConfigured();
   const alertsOn = alerts === 'granted';
+  const alertsLive = alertsOn && pushConfigured;
   const locationOn = locationState === 'granted';
   const blocked = alerts === 'denied';
   const unsupported = alerts === 'unsupported';
@@ -175,9 +180,11 @@ export function NotificationDiagnostics({ onEnabled }) {
     }
   };
 
-  const alertsSummary = alertsOn
+  const alertsSummary = alertsLive
     ? 'Alerts are on for this device'
-    : blocked
+    : alertsOn
+      ? 'Notifications allowed — alerts not switched on yet'
+      : blocked
       ? `Blocked in ${browserLabel(detectBrowser())}`
       : unsupported
         ? 'Not supported in this browser'
@@ -196,9 +203,9 @@ export function NotificationDiagnostics({ onEnabled }) {
         <span className="account-menu-icon"><Bell size={18} /></span>
         <span className="diagnostics-heading">
           <strong>Alerts &amp; permissions</strong>
-          <small>{alertsOn && locationOn ? 'Both on — you are all set' : alertsOn ? alertsSummary : `${alertsSummary}${locationOn ? '' : ' · Location optional'}`}</small>
+          <small>{alertsLive && locationOn ? 'Both on — you are all set' : alertsLive ? alertsSummary : `${alertsSummary}${locationOn ? '' : ' · Location optional'}`}</small>
         </span>
-        {alertsOn
+        {alertsLive
           ? <CheckCircle2 size={17} className="diagnostics-mark ok" />
           : blocked || unsupported
             ? <CircleAlert size={17} className="diagnostics-mark fail" />
@@ -212,14 +219,16 @@ export function NotificationDiagnostics({ onEnabled }) {
             <span className="perm-row-icon"><BellRing size={15} /></span>
             <div className="perm-row-copy">
               <strong>Booking alerts</strong>
-              <p>{alertsOn
+              <p>{alertsLive
                 ? 'On. Booking requests, confirmations, delay updates and the buzzer all reach this device.'
+                : alertsOn
+                  ? 'Notifications are allowed on this device. Booking alerts start as soon as My Naai switches them on — nothing else to do here.'
                 : blocked ? `Blocked in ${siteHost()}'s ${browserLabel(detectBrowser())} settings — three taps to switch back on.`
                   : unsupported ? 'This browser cannot receive web alerts. Chrome, Edge, Samsung Internet — or the installed app on iPhone — can.'
                     : 'Booking requests, confirmations, delay updates and the buzzer.'}</p>
             </div>
             {alertsOn
-              ? <span className="perm-state-on"><CheckCircle2 size={14} /> On</span>
+              ? <span className="perm-state-on"><CheckCircle2 size={14} /> Allowed</span>
               : <button type="button" className="install-auth-button allow-alerts-button" onClick={blocked || unsupported ? () => setSheet({ open: true, state: blocked ? 'denied' : 'unsupported', kind: 'notifications' }) : turnOnAlerts} disabled={busy === 'alerts'}>
                 {busy === 'alerts' ? <Spinner size={14} /> : blocked ? <Settings size={14} /> : <Bell size={14} />}
                 {blocked ? 'How to allow' : 'Turn on'}
@@ -243,13 +252,13 @@ export function NotificationDiagnostics({ onEnabled }) {
               </button>}
           </div>
 
-          {alertsOn && !failing.length && (
+          {alertsLive && !failing.length && (
             <p className="diagnostics-note">Alerts are allowed in this browser. Missing one? Copy the support report below and we will trace it for you.</p>
           )}
           {testMessage && <p className="diagnostics-note">{testMessage}</p>}
           <div className="diagnostics-actions">
-            {alertsOn && <Button size="small" variant="secondary" onClick={testBuzzer} loading={busy === 'test'}><BellRing size={14} /> Test buzzer</Button>}
-            {isPushConfigured() && !alertsOn && <Button size="small" variant="secondary" onClick={run} loading={busy === 'run'}><RefreshCw size={14} /> Check again</Button>}
+            {alertsLive && <Button size="small" variant="secondary" onClick={testBuzzer} loading={busy === 'test'}><BellRing size={14} /> Test buzzer</Button>}
+            {pushConfigured && !alertsOn && <Button size="small" variant="secondary" onClick={run} loading={busy === 'run'}><RefreshCw size={14} /> Check again</Button>}
             <Button size="small" variant="secondary" onClick={copyReport}><Copy size={14} /> {copied ? 'Copied' : 'Support report'}</Button>
           </div>
           <p className="permission-help-note">Need a hand? Call <a href="tel:8380017393">8380017393</a> — we will turn it on with you.</p>

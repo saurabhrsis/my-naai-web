@@ -73,9 +73,21 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
   const embedded = isEmbeddedFrame();
 
   const readAlerts = useCallback(async () => {
+    // Alerts may not be wired into this build yet (no Firebase web config). The
+    // *notification permission* is still exactly what the visitor can give, and
+    // it is what this row exists for — so the row stays on the page, the button
+    // opens the browser's own prompt, and the device is ready the moment booking
+    // alerts go live. (Hiding the row here is why "the login page has no
+    // notification permission" was reported.)
     if (!isPushConfigured()) {
-      setAlerts('unconfigured');
-      return 'unconfigured';
+      const permission = await readPermission('notifications');
+      const state = permission === 'granted' ? 'enabled'
+        : permission === 'denied' ? 'denied'
+          : permission === 'unsupported' ? 'unsupported'
+            : 'needs-permission';
+      setAlerts(state);
+      setAlertsReason('');
+      return state;
     }
     try {
       const status = await getPushStatus();
@@ -121,37 +133,54 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
   const allowAlerts = async () => {
     setBusy('alerts');
     try {
-      if (alerts === 'unavailable') {
-        const token = await getPushToken({ requestPermission: false });
-        if (token) { onTokenRef.current?.(token); setAlerts('enabled'); return; }
-        await readAlerts();
-        setSheet({ open: true, state: 'unavailable', kind: 'notifications' });
+      // The few states where a popup cannot possibly appear: the permission is
+      // blocked, iOS needs the app on the Home Screen first, the page is inside
+      // another page's frame, or the browser has no support at all. Those get the
+      // sheet with the exact fix instead of a button that silently does nothing.
+      if (alerts === 'denied' || embedded) {
+        setSheet({ open: true, state: 'denied', kind: 'notifications' });
         return;
       }
-      if (alerts === 'needs-permission' && !needsInstall && !embedded) {
-        const permission = await requestNotifications();
-        if (permission === 'granted') {
-          const token = await getPushToken({ requestPermission: false });
-          if (token) {
-            onTokenRef.current?.(token);
-            rememberAskChoice('notifications', ASK_CHOICES.allowed);
-            setAlerts('enabled');
-            return;
-          }
-          setAlerts('unavailable');
-          return;
-        }
-        if (permission === 'denied') {
-          setAlerts('denied');
-          setSheet({ open: true, state: 'denied', kind: 'notifications' });
-          return;
-        }
+      if (needsInstall) {
+        setSheet({ open: true, state: 'needs-permission', kind: 'notifications' });
+        return;
+      }
+      if (alerts === 'unsupported') {
+        setSheet({ open: true, state: 'unsupported', kind: 'notifications' });
+        return;
+      }
+
+      // Everything else — never asked yet, or a token that needs one more try —
+      // asks the browser RIGHT HERE. This tap is the user gesture, and
+      // requestNotifications() calls the browser API synchronously, so Safari
+      // keeps the gesture and the Allow popup actually appears.
+      const permission = await requestNotifications();
+      if (permission === 'denied') {
+        setAlerts('denied');
+        setSheet({ open: true, state: 'denied', kind: 'notifications' });
+        return;
+      }
+      if (permission !== 'granted') {
         setAlerts('needs-permission');
         return;
       }
-      // Blocked, iPhone before install, or an embedded page: no popup can help,
-      // so the sheet names the exact fix instead of a button that cannot work.
-      setSheet({ open: true, state: alerts === 'denied' ? 'denied' : alerts === 'unsupported' ? 'unsupported' : 'needs-permission', kind: 'notifications' });
+
+      rememberAskChoice('notifications', ASK_CHOICES.allowed);
+      if (!isPushConfigured()) {
+        // Permission banked; no device token can be minted until booking alerts
+        // are configured for this build. Nothing left to ask on this page.
+        setAlerts('enabled');
+        return;
+      }
+      const token = await getPushToken({ requestPermission: false });
+      if (token) {
+        onTokenRef.current?.(token);
+        setAlerts('enabled');
+        return;
+      }
+      // Allowed, but minting the token did not finish (a slow first worker):
+      // keep the row so "Try again" can complete it.
+      setAlerts('unavailable');
     } finally {
       setBusy('');
     }
@@ -178,13 +207,18 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
     setLocationDismissed(true);
   };
 
-  const alertsRowVisible = pushConfigured && !alertsSuppressed && !['checking', 'unconfigured', 'enabled'].includes(alerts);
+  const alertsRowVisible = !alertsSuppressed && !['checking', 'enabled'].includes(alerts);
   const locationRowVisible = !locationDismissed && !['granted', 'checking', 'unsupported'].includes(location);
   if (!alertsRowVisible && !locationRowVisible) return null;
 
   const alertsCopy = {
-    'needs-permission': { title: 'Booking alerts & buzzer', body: 'One tap — your browser asks, and booking requests reach you with sound and vibration.' },
-    denied: { title: 'Alerts are blocked', body: `Turn Notifications back on for ${siteHost()} in ${browserLabel(detectBrowser())}.` },
+    'needs-permission': {
+      title: 'Notification permission',
+      body: pushConfigured
+        ? 'Tap Allow notifications — your browser asks once, and booking alerts arrive with the buzzer (sound + vibration).'
+        : 'Tap Allow notifications — your browser asks once. My Naai uses it for booking alerts and the buzzer.',
+    },
+    denied: { title: 'Notifications are blocked', body: `Turn Notifications back on for ${siteHost()} in ${browserLabel(detectBrowser())}.` },
     unsupported: { title: 'Alerts need an install', body: needsInstall ? 'Add My Naai to your Home Screen — that is the only way iPhone allows alerts and the buzzer.' : 'This browser cannot receive web alerts, but you can still book normally.' },
     unavailable: { title: 'Alerts almost ready', body: alertsReason || 'The last setup step did not finish. Tap Try again — it usually works on the second try.' },
   }[alerts] || { title: 'Booking alerts', body: '' };
@@ -207,7 +241,7 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
             {busy === 'alerts'
               ? <Spinner size={14} />
               : alerts === 'denied' ? <CircleAlert size={14} /> : alerts === 'unsupported' ? <Smartphone size={14} /> : alerts === 'unavailable' ? <RefreshCw size={14} /> : <Bell size={14} />}
-            {alerts === 'denied' ? 'Fix alerts' : alerts === 'unsupported' ? 'How to turn on' : alerts === 'unavailable' ? 'Try again' : 'Allow alerts'}
+            {alerts === 'denied' ? 'Fix alerts' : alerts === 'unsupported' ? 'How to turn on' : alerts === 'unavailable' ? 'Try again' : 'Allow notifications'}
           </button>
         </div>
       )}
@@ -223,7 +257,7 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
           <div className="perm-row-actions">
             <button type="button" className="install-auth-button perm-location-button" onClick={allowLocation} disabled={busy === 'location'}>
               {busy === 'location' ? <Spinner size={14} /> : <MapPin size={14} />}
-              {location === 'denied' ? 'How to allow' : 'Allow'}
+              {location === 'denied' ? 'How to allow' : 'Allow location'}
             </button>
             <button type="button" className="perm-dismiss" onClick={dismissLocation} aria-label="Not now — do not ask again">
               <X size={14} />

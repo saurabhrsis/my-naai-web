@@ -989,25 +989,34 @@ describe('Login permission flow', () => {
     vi.clearAllMocks();
   });
 
-  it('without alerts config, login skips the permission gate and sends the OTP', async () => {
-    // The alerts setup is not wired into this build (no Firebase env): there
-    // is nothing actionable for a user, so no alerts row renders, no sheet ever
-    // opens, and sign-in proceeds without a device token.
+  it('still shows the notification row without alerts config, and the tap asks the browser', async () => {
+    // A build with no Firebase config cannot mint a device token, but the
+    // notification PERMISSION is still exactly what the visitor can give — and
+    // it is the thing the login page exists to ask for. The row must be on the
+    // page, and its button must open the browser's own prompt.
+    grantOnRequest();
     vi.mocked(push.isPushConfigured).mockReturnValue(false);
-    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'unconfigured', reason: 'Notifications have not been enabled for this build yet.' });
     await mount();
 
     expect(container.querySelector('.setup-splash')).toBeNull();
     expect(container.textContent).not.toContain('not set up for web alerts');
-    expect(container.textContent).not.toContain('need a second try');
-    expect(buttonByText('Allow alerts')).toBeUndefined();
+    const row = container.querySelector('.login-perm-card .perm-row-copy strong');
+    expect(row.textContent).toBe('Notification permission');
+    const allowButton = buttonByText('Allow notifications');
+    expect(allowButton).not.toBeNull();
 
+    await act(async () => { allowButton.click(); });
+    await flush();
+    expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+    // Permission banked, nothing left to ask on this page — and no broken state.
+    expect(container.querySelector('.allow-alerts-button')).toBeNull();
+    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+
+    // Sign-in still proceeds without a device token.
     await act(async () => { typeMobile('9876543210'); });
     await act(async () => { submitPhone(); });
     await flush();
-
     expect(push.getPushToken).not.toHaveBeenCalled();
-    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
   });
 
@@ -1022,8 +1031,8 @@ describe('Login permission flow', () => {
     const card = container.querySelector('.login-perm-card');
     expect(card).not.toBeNull();
     expect(card.querySelectorAll('.perm-row')).toHaveLength(2);
-    expect(card.querySelector('.perm-row-copy strong').textContent).toBe('Booking alerts & buzzer');
-    expect(buttonByText('Allow alerts')).not.toBeNull();
+    expect(card.querySelector('.perm-row-copy strong').textContent).toBe('Notification permission');
+    expect(buttonByText('Allow notifications')).not.toBeNull();
     expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
 
     // An unrelated tap (switching role, tapping the page) must NOT open the
@@ -1034,7 +1043,7 @@ describe('Login permission flow', () => {
     expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
 
     // The labelled button does it: one tap, popup, token, row gone.
-    await act(async () => { buttonByText('Allow alerts').click(); });
+    await act(async () => { buttonByText('Allow notifications').click(); });
     await flush();
     expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
     expect(push.getPushToken).toHaveBeenCalledWith({ requestPermission: false });
@@ -1202,7 +1211,7 @@ describe('Login permission flow', () => {
 
     // iPhone before "Add to Home Screen": the row opens the short install sheet
     // instead of a popup that iOS would never show.
-    await act(async () => { buttonByText('Allow alerts').click(); });
+    await act(async () => { buttonByText('Allow notifications').click(); });
     await flush();
     const sheet = container.querySelector('.permission-gate-sheet');
     expect(sheet).not.toBeNull();
@@ -1268,7 +1277,7 @@ describe('Login permission flow', () => {
     const card = container.querySelector('.login-perm-card');
     expect(card).not.toBeNull();
     expect(card.querySelectorAll('.perm-row')).toHaveLength(2);
-    expect(buttonByText('Allow alerts')).not.toBeNull();
+    expect(buttonByText('Allow notifications')).not.toBeNull();
     const installButton = buttonByText('Install app');
     expect(installButton).not.toBeNull();
 
