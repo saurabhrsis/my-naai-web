@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="No salon photo yet">
+  <!-- Neutral salon placeholder: open scissors, the classic grooming mark, in the
+       same near-black tile and white mark language as the person and product
+       placeholders, with a gold pivot rivet as the My Naai accent. A salon card
+       without an uploaded photo used to show the brand logo tile; this reads as
+       "no photo yet" instead of repeating the app icon. ImageWithFallback
+       letterboxes SVG fallbacks on the branded gradient (.image-fallback-tile). -->
+  <rect width="512" height="512" rx="96" fill="#0a0a0a" />
+  <g transform="translate(76 76) scale(15)" fill="none" stroke="#ffffff" stroke-opacity=".88" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="6" cy="6" r="3" />
+    <circle cx="6" cy="18" r="3" />
+    <path d="M8.12 8.12 20 20" />
+    <path d="M20 4 8.12 15.88" />
+  </g>
+  <circle cx="256" cy="256" r="16" fill="#e8b97e" />
+</svg>

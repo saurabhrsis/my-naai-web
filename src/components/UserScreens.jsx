@@ -94,6 +94,10 @@ const USER_FALLBACK_IMAGE = '/assets/brand/naai-logo-dark.svg';
 // SVG tiles on a branded gradient (.image-fallback-tile).
 const PRODUCT_PLACEHOLDER = '/assets/brand/product-placeholder.svg';
 const PERSON_PLACEHOLDER = '/assets/brand/person-placeholder.svg';
+// Salon cards without an uploaded photo show an on-brand scissors tile instead
+// of the app logo — a list of identical logo tiles read as branding, not as a
+// missing salon photo.
+const SALON_PLACEHOLDER = '/assets/brand/salon-placeholder.svg';
 
 function getList(response, keys = []) {
   if (Array.isArray(response?.data)) return response.data;
@@ -277,7 +281,7 @@ function SalonCard({ salon, saved, onSelect, onBook, onShare, onBookmark, userLo
   return (
     <article className="salon-card" onClick={() => onSelect(salon)}>
       <div className="salon-card-image-wrap">
-        <ImageWithFallback src={salon.image} fallback={USER_FALLBACK_IMAGE} alt={salon.name} className="salon-card-image" />
+        <ImageWithFallback src={salon.image} fallback={SALON_PLACEHOLDER} alt={salon.name} className="salon-card-image" />
         <span className="image-overlay-label"><i className={cx('status-dot', salon.isOpen && 'open')} />{salon.isOpen ? 'Open now' : 'Closed'}</span>
         {distanceLabel && <span className="distance-chip"><Navigation size={11} /> {distanceLabel}</span>}
         <button className={cx('bookmark-button', saved && 'saved')} onClick={event => { event.stopPropagation(); onBookmark(salon.id); }} aria-label={saved ? 'Remove bookmark' : 'Save salon'}>{saved ? <BookmarkCheck size={18} fill="currentColor" /> : <Bookmark size={18} />}</button>

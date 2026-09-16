@@ -1711,7 +1711,10 @@ img.image-fallback-tile {
 .push-setup-card.push-setup-prominent .push-setup-icon { box-shadow: 0 4px 14px rgba(232,185,126,.25); }
 
 /* Login improvements */
-.login-hero-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 20px; background: rgba(232,185,126,.12); border: 1px solid rgba(232,185,126,.22); color: var(--gold); font-size: 10px; font-weight: 700; letter-spacing: .04em; margin-bottom: 10px; }
+/* The badge used to sit flush under the "WELCOME TO MY NAAI" eyebrow — the chip
+   is itself a tiny 10px gold line, so without air the two read as one crammed
+   block. The top margin gives the greeting and the chip clear separation. */
+.login-hero-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 20px; background: rgba(232,185,126,.12); border: 1px solid rgba(232,185,126,.22); color: var(--gold); font-size: 10px; font-weight: 700; letter-spacing: .04em; margin: 14px 0 10px; }
 /* The login setup — Allow alerts + Install app — as compact pills on one row.
    Phone users tap buttons; they do not read cards, so this row replaced both
    the old three-card stack and the later text panel. */
