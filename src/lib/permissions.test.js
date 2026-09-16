@@ -5,8 +5,10 @@ import {
   browserLabel,
   buzzerHint,
   detectBrowser,
+  frameAllowsFeature,
   isDeviceTokenError,
   isIosPwaInstalled,
+  promptsAvailable,
   permissionSteps,
   readAskChoice,
   readPermission,
@@ -229,6 +231,44 @@ describe('permissions', () => {
       expect(isIosPwaInstalled()).toBe(true);
       agent.mockRestore();
       window.matchMedia = originalMatchMedia;
+    });
+  });
+
+  // Whether a permission popup can appear at all. An embedded page gets told
+  // 'denied' by the browser even when the visitor has blocked nothing, so this
+  // question has to be answered separately from the permission itself.
+  describe('frameAllowsFeature / promptsAvailable', () => {
+    afterEach(() => { delete document.permissionsPolicy; delete document.featurePolicy; });
+
+    it('trusts the effective permissions policy', () => {
+      const allowsFeature = vi.fn(feature => feature !== 'notifications');
+      Object.defineProperty(document, 'permissionsPolicy', { value: { allowsFeature }, configurable: true });
+
+      expect(frameAllowsFeature('notifications')).toBe(false);
+      expect(frameAllowsFeature('geolocation')).toBe(true);
+      expect(promptsAvailable('notifications')).toBe(false);
+      expect(promptsAvailable('location')).toBe(true);
+      // The location flow must ask about geolocation, not notifications.
+      expect(allowsFeature.mock.calls.map(call => call[0])).toEqual(['notifications', 'geolocation', 'notifications', 'geolocation']);
+    });
+
+    it('falls back to the older featurePolicy name', () => {
+      Object.defineProperty(document, 'featurePolicy', { value: { allowsFeature: () => false }, configurable: true });
+      expect(frameAllowsFeature('notifications')).toBe(false);
+    });
+
+    it('assumes a normal page when the browser exposes no policy API', () => {
+      // jsdom exposes neither object: not embedded, so prompts are available.
+      expect(frameAllowsFeature('notifications')).toBe(true);
+      expect(promptsAvailable('location')).toBe(true);
+    });
+
+    it('treats a policy object that throws as unavailable, not as allowed', () => {
+      Object.defineProperty(document, 'permissionsPolicy', { value: { allowsFeature: () => { throw new Error('nope'); } }, configurable: true });
+      // Not embedded in jsdom, so the frame fallback still allows it here — the
+      // point is that a throw never becomes an unhandled error.
+      expect(() => frameAllowsFeature('notifications')).not.toThrow();
+      expect(frameAllowsFeature('notifications')).toBe(true);
     });
   });
 

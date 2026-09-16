@@ -73,6 +73,29 @@ export function isEmbeddedFrame() {
   }
 }
 
+// Browsers refuse to show a permission prompt inside an embedded page unless the
+// page that embedded us delegates the feature with allow="...". Without that
+// delegation the browser answers 'denied' the instant we ask — which looks exactly
+// like the visitor having blocked us, and sends them hunting through browser
+// settings that are not the problem. The Permissions Policy API is the only way to
+// tell the two cases apart, and it reports the *effective* policy, so a frame that
+// has been delegated the feature behaves like a normal page.
+export function frameAllowsFeature(feature) {
+  if (typeof document === 'undefined') return true;
+  try {
+    const policy = document.permissionsPolicy || document.featurePolicy;
+    if (policy && typeof policy.allowsFeature === 'function') return policy.allowsFeature(feature) === true;
+  } catch {
+    // A policy object that refuses to answer: fall through to the frame check.
+  }
+  return !isEmbeddedFrame();
+}
+
+// Convenience for the two permissions this app asks for.
+export function promptsAvailable(kind) {
+  return frameAllowsFeature(kind === 'location' ? 'geolocation' : 'notifications');
+}
+
 export function detectBrowser() {
   if (typeof navigator === 'undefined') return 'other';
   const agent = navigator.userAgent || '';

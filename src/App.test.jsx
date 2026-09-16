@@ -1020,6 +1020,61 @@ describe('Login permission flow', () => {
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
   });
 
+  it('blames the embedder, not the visitor, when a frame blocks the prompt', async () => {
+    // Reported from the preview pane: "Notifications are blocked — turn them back
+    // on for <host> in Chrome". That instruction was wrong. Chrome (and Safari)
+    // never show a permission prompt inside a page that is embedded in another
+    // app unless the embedder delegates the feature, and they answer 'denied' to
+    // every question — so the visitor was being sent through browser settings that
+    // were never the problem, on a site where nothing was ever blocked.
+    setNotificationPermission('denied');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
+    const policy = { allowsFeature: vi.fn(feature => feature !== 'notifications') };
+    Object.defineProperty(document, 'permissionsPolicy', { value: policy, configurable: true });
+    try {
+      await mount();
+
+      const card = container.querySelector('.login-perm-card');
+      const copy = card.textContent;
+      expect(copy).toContain('Notifications need their own tab');
+      expect(copy).toContain('browsers hide the Allow prompt');
+      expect(copy).not.toContain('Turn Notifications back on');
+      expect(copy).not.toContain('in Chrome');
+      const escape = buttonByText('Open in a new tab');
+      expect(escape).not.toBeNull();
+
+      // The tap opens the page as its own tab, where the real Allow button works.
+      const openSpy = vi.spyOn(window, 'open').mockReturnValue({});
+      await act(async () => { escape.click(); });
+      await flush();
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(String(openSpy.mock.calls[0][0])).toContain(window.location.href.split('?')[0]);
+      // A frame cannot mint a token either, so nothing pretends otherwise.
+      expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+      expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
+      openSpy.mockRestore();
+    } finally {
+      delete document.permissionsPolicy;
+    }
+  });
+
+  it('still reports a genuine block when the frame DOES allow prompts', async () => {
+    // A same-origin frame (or one embedded with allow="notifications") behaves
+    // like a normal page: 'denied' there means the visitor blocked us, and the
+    // browser-settings instructions are the right ones.
+    setNotificationPermission('denied');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
+    Object.defineProperty(document, 'permissionsPolicy', { value: { allowsFeature: () => true }, configurable: true });
+    try {
+      await mount();
+      expect(container.textContent).toContain('Notifications are blocked');
+      expect(container.textContent).toContain('Turn Notifications back on');
+      expect(buttonByText('Fix alerts')).not.toBeNull();
+    } finally {
+      delete document.permissionsPolicy;
+    }
+  });
+
   it('asks once — from the Allow button, inside the tap, and never as a surprise', async () => {
     grantOnRequest();
     vi.mocked(push.getPushToken).mockResolvedValue('push-token-1');
@@ -1184,23 +1239,29 @@ describe('Login permission flow', () => {
   it('puts the open-in-new-tab escape hatch first when an embedded page is blocked', async () => {
     setNotificationPermission('denied');
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
-    vi.mocked(permissions.isEmbeddedFrame).mockReturnValue(true);
-    await mount();
+    // An embedder that did NOT delegate notifications: the popup is impossible in
+    // here, whatever the permission says.
+    Object.defineProperty(document, 'permissionsPolicy', { value: { allowsFeature: () => false }, configurable: true });
+    try {
+      await mount();
 
-    // Embedded + blocked: the row opens the sheet, whose primary action is the
-    // escape hatch — no failed Check needed to discover it.
-    await act(async () => { buttonByText('Fix alerts').click(); });
-    await flush();
-    const gate = container.querySelector('.permission-gate-sheet');
-    expect(gate).not.toBeNull();
-    expect(gate.textContent).toContain('inside another page');
-    const openButton = buttonByText('Open My Naai in a new tab');
-    expect(openButton).not.toBeNull();
+      // Embedded + blocked: the sheet's primary action is the escape hatch — no
+      // failed Check needed to discover it.
+      await act(async () => { buttonByText('Open in a new tab').click(); });
+      await flush();
+      const gate = container.querySelector('.permission-gate-sheet');
+      expect(gate).not.toBeNull();
+      expect(gate.textContent).toContain('inside another app or page');
+      const openButton = buttonByText('Open My Naai in a new tab');
+      expect(openButton).not.toBeNull();
 
-    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
-    await act(async () => { openButton.click(); });
-    expect(openSpy).toHaveBeenCalledWith(window.location.href, '_blank', 'noopener');
-    openSpy.mockRestore();
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+      await act(async () => { openButton.click(); });
+      expect(openSpy).toHaveBeenCalledWith(window.location.href, '_blank', 'noopener');
+      openSpy.mockRestore();
+    } finally {
+      delete document.permissionsPolicy;
+    }
   });
 
   it('honours "Not now": the row goes and Continue never pops a prompt at them', async () => {
