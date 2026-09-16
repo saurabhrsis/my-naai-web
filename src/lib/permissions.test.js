@@ -3,6 +3,7 @@ import {
   ASK_CHOICES,
   androidAppNotificationHint,
   browserLabel,
+  buzzerHint,
   detectBrowser,
   isDeviceTokenError,
   isIosPwaInstalled,
@@ -164,6 +165,21 @@ describe('permissions', () => {
 
     it('sends iPhone users to the Home Screen instead of a popup that never appears', () => {
       expect(permissionSteps('ios-safari', 'notifications').join(' ')).toContain('Home Screen');
+      ['ios-chrome', 'ios-firefox', 'ios-edge'].forEach(browser => {
+        expect(permissionSteps(browser, 'notifications').join(' ')).toMatch(/Safari → Share → Add to Home Screen/);
+      });
+    });
+
+    it('includes the Android app-level switch that keeps the site setting stuck', () => {
+      ['chrome-android', 'samsung'].forEach(browser => {
+        expect(permissionSteps(browser, 'notifications').join(' ')).toContain('Settings → Apps');
+      });
+    });
+
+    it('explains how the buzzer is heard on each device', () => {
+      expect(buzzerHint('chrome-android')).toContain('off silent');
+      expect(buzzerHint('samsung')).toContain('off silent');
+      expect(buzzerHint('chrome-desktop')).toContain('not muted');
     });
 
     it('names the Android app-level setting only on Android browsers', () => {
@@ -193,6 +209,16 @@ describe('permissions', () => {
       });
       withUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile Safari/604.1', () => {
         expect(detectBrowser()).toBe('ios-safari');
+      });
+      withUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 CriOS/120.0 Mobile/15E148 Safari/604.1', () => {
+        expect(detectBrowser()).toBe('ios-chrome');
+        expect(browserLabel('ios-chrome')).toBe('Chrome on iPhone/iPad');
+      });
+      withUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 FxiOS/120.0 Mobile/15E148 Safari/605.1.15', () => {
+        expect(detectBrowser()).toBe('ios-firefox');
+      });
+      withUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 EdgiOS/120.0 Mobile/15E148 Safari/605.1.15', () => {
+        expect(detectBrowser()).toBe('ios-edge');
       });
     });
 

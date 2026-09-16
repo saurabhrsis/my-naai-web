@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell, BellRing, CheckCircle2, ChevronDown, CircleAlert, Copy, MapPin, RefreshCw, Settings } from 'lucide-react';
-import { formatPushDiagnostics, getPushDiagnostics, getPushToken, isPushConfigured, watchNotificationPermission } from '../lib/push';
+import { displayNotification, formatPushDiagnostics, getPushDiagnostics, getPushToken, isPushConfigured, watchNotificationPermission } from '../lib/push';
+import { playBuzzer, unlockBuzzer } from '../lib/buzzer';
 import { browserLabel, detectBrowser, isEmbeddedFrame, readPermission, rememberAskChoice, requestLocation, requestNotifications, ASK_CHOICES, siteHost } from '../lib/permissions';
 import { PermissionSheet } from './PermissionUI';
 import { Button, Modal, Spinner, cx } from './Shared';
@@ -22,6 +23,7 @@ export function NotificationDiagnostics({ onEnabled }) {
   const [alerts, setAlerts] = useState(() => (typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'));
   const [locationState, setLocationState] = useState('checking');
   const [sheet, setSheet] = useState({ open: false, state: 'needs-permission', kind: 'notifications' });
+  const [testMessage, setTestMessage] = useState('');
   const reportRef = useRef(null);
   const onEnabledRef = useRef(onEnabled);
   onEnabledRef.current = onEnabled;
@@ -102,6 +104,27 @@ export function NotificationDiagnostics({ onEnabled }) {
         setSheet({ open: true, state: 'denied', kind: 'location' });
       }
       await readStates();
+    } finally {
+      setBusy('');
+    }
+  };
+
+  // End-to-end proof on THIS device: the same notification + buzzer a booking
+  // request produces. An alert that arrives silently is worse than none for a
+  // salon, so the buzzer is testable instead of trusted.
+  const testBuzzer = async () => {
+    setBusy('test');
+    try {
+      unlockBuzzer();
+      playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1 });
+      const shown = await displayNotification({
+        title: 'Test alert — My Naai',
+        body: 'This is how a booking request looks and sounds on this device.',
+        data: { type: 'TEST' },
+      });
+      setTestMessage(shown
+        ? 'Test sent. Heard nothing? Turn the phone off silent and check the media volume.'
+        : 'The buzzer played, but this browser would not show the alert banner — check the site notification setting.');
     } finally {
       setBusy('');
     }
@@ -223,7 +246,9 @@ export function NotificationDiagnostics({ onEnabled }) {
           {alertsOn && !failing.length && (
             <p className="diagnostics-note">Alerts are allowed in this browser. Missing one? Copy the support report below and we will trace it for you.</p>
           )}
+          {testMessage && <p className="diagnostics-note">{testMessage}</p>}
           <div className="diagnostics-actions">
+            {alertsOn && <Button size="small" variant="secondary" onClick={testBuzzer} loading={busy === 'test'}><BellRing size={14} /> Test buzzer</Button>}
             {isPushConfigured() && !alertsOn && <Button size="small" variant="secondary" onClick={run} loading={busy === 'run'}><RefreshCw size={14} /> Check again</Button>}
             <Button size="small" variant="secondary" onClick={copyReport}><Copy size={14} /> {copied ? 'Copied' : 'Support report'}</Button>
           </div>

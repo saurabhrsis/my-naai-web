@@ -77,7 +77,16 @@ export function detectBrowser() {
   if (typeof navigator === 'undefined') return 'other';
   const agent = navigator.userAgent || '';
   const android = /android/i.test(agent);
-  if (isIosDevice()) return /crios/i.test(agent) ? 'ios-chrome' : 'ios-safari';
+  if (isIosDevice()) {
+    // Every browser on iOS is a WebKit shell, but the *steps* differ: only a
+    // Home Screen web app can receive web push, and Safari is the browser whose
+    // "Add to Home Screen" reliably creates one — so the copy has to name the
+    // browser the visitor actually opened.
+    if (/crios/i.test(agent)) return 'ios-chrome';
+    if (/fxios/i.test(agent)) return 'ios-firefox';
+    if (/edgios/i.test(agent)) return 'ios-edge';
+    return 'ios-safari';
+  }
   if (/samsungbrowser/i.test(agent)) return 'samsung';
   if (/firefox|fxios/i.test(agent)) return 'firefox';
   if (/edg\//i.test(agent)) return 'edge';
@@ -92,6 +101,8 @@ export const BROWSER_LABELS = {
   'chrome-desktop': 'Chrome',
   'ios-safari': 'Safari on iPhone/iPad',
   'ios-chrome': 'Chrome on iPhone/iPad',
+  'ios-firefox': 'Firefox on iPhone/iPad',
+  'ios-edge': 'Edge on iPhone/iPad',
   samsung: 'Samsung Internet',
   firefox: 'Firefox',
   edge: 'Microsoft Edge',
@@ -107,6 +118,19 @@ export function browserLabel(browser) {
 // Android switches site notifications off for the whole browser when the
 // browser app's own notifications are off at OS level — the site setting then
 // stays Blocked no matter what the user taps in the browser.
+// A buzzer the salon cannot hear is the same as no alert at all, and the
+// OS-level sound switches sit outside the browser permission. One line, only
+// where it is true for the device actually in use.
+export function buzzerHint(browser) {
+  if (browser === 'chrome-android' || browser === 'samsung') {
+    return 'Keep the phone off silent and media volume up — the buzzer plays as a sound plus vibration.';
+  }
+  if (isIosDevice()) {
+    return 'The iPhone silent switch mutes the buzzer sound (the alert still arrives and vibrates).';
+  }
+  return 'Check that this device is not muted — the buzzer plays a sound and vibrates where supported.';
+}
+
 export function androidAppNotificationHint(browser) {
   return browser === 'chrome-android' || browser === 'samsung'
     ? ` Also check the browser app itself: Android Settings → Apps → ${browserLabel(browser)} → Notifications must be On.`
@@ -199,9 +223,8 @@ export function requestNotifications() {
     }));
 }
 
-export function requestLocation(options = {}) {
+function locateOnce(options) {
   return new Promise(resolve => {
-    if (typeof navigator === 'undefined' || !navigator.geolocation) return resolve({ ok: false, state: 'unsupported' });
     navigator.geolocation.getCurrentPosition(
       position => resolve({
         ok: true,
@@ -209,10 +232,27 @@ export function requestLocation(options = {}) {
         latitude: position.coords.latitude,
         longitude: position.coords.longitude,
       }),
-      error => resolve({ ok: false, state: error?.code === 1 ? 'denied' : 'unavailable' }),
-      { enableHighAccuracy: false, timeout: 12000, maximumAge: 300000, ...options },
+      error => resolve({
+        ok: false,
+        // 1 = PERMISSION_DENIED, 2 = POSITION_UNAVAILABLE, 3 = TIMEOUT
+        code: error?.code || 0,
+        state: error?.code === 1 ? 'denied' : 'unavailable',
+      }),
+      options,
     );
   });
+}
+
+// One call, gesture-safe (no await before the browser API), with a single retry
+// when the first attempt times out: a laptop with no GPS gets its position from
+// Wi-Fi and often needs longer than the first window, and that cold timeout was
+// one more way "Use my location" looked broken. The retry reuses the grant, so
+// it never pops a second prompt.
+export async function requestLocation(options = {}) {
+  if (typeof navigator === 'undefined' || !navigator.geolocation) return { ok: false, state: 'unsupported', code: 0 };
+  const first = await locateOnce({ enableHighAccuracy: false, timeout: 12000, maximumAge: 300000, ...options });
+  if (first.ok || first.state === 'denied' || first.code !== 3) return first;
+  return locateOnce({ enableHighAccuracy: false, timeout: 25000, maximumAge: 600000, ...options });
 }
 
 // ── Short, honest instructions ───────────────────────────────────────────────
@@ -223,9 +263,13 @@ export function permissionSteps(browser, kind) {
   const name = kind === 'location' ? 'Location' : 'Notifications';
   const back = 'Come back to My Naai — it updates by itself, or tap Try again.';
   const steps = {
-    'chrome-android': [
+    'chrome-android': kind === 'location' ? [
       'Tap the lock (or settings) icon next to the address bar.',
       `Choose Permissions → ${name} → Allow.`,
+      back,
+    ] : [
+      `In this page: tap the lock icon → Permissions → ${name} → Allow.`,
+      'In Android: Settings → Apps → Chrome → Notifications → On.',
       back,
     ],
     'chrome-desktop': [
@@ -233,9 +277,13 @@ export function permissionSteps(browser, kind) {
       `Switch ${name} to Allow.`,
       back,
     ],
-    samsung: [
+    samsung: kind === 'location' ? [
       'Tap the lock icon next to the address bar.',
       `Open Permissions → ${name} → Allow.`,
+      back,
+    ] : [
+      `In this page: tap the lock icon → ${name} → Allow.`,
+      'In Android: Settings → Apps → Samsung Internet → Notifications → On.',
       back,
     ],
     firefox: [
@@ -271,9 +319,31 @@ export function permissionSteps(browser, kind) {
         back,
       ]
       : [
-        'iPhone only allows notifications for installed apps.',
-        'Open mynaai.in in Safari → Share → Add to Home Screen.',
-        'Open My Naai from the Home Screen and tap Allow.',
+        'On iPhone, notifications only work for apps added to the Home Screen.',
+        'Open mynaai.in in Safari → Share → Add to Home Screen → Add.',
+        'Open My Naai from the Home Screen and tap Allow alerts.',
+      ],
+    'ios-firefox': kind === 'location'
+      ? [
+        'Open iPhone Settings → Privacy & Security → Location Services.',
+        'Find Firefox and choose While Using the App.',
+        back,
+      ]
+      : [
+        'Firefox on iPhone cannot receive web notifications — iPhone only allows them for apps added to the Home Screen.',
+        'Open mynaai.in in Safari → Share → Add to Home Screen → Add.',
+        'Open My Naai from the Home Screen and tap Allow alerts.',
+      ],
+    'ios-edge': kind === 'location'
+      ? [
+        'Open iPhone Settings → Privacy & Security → Location Services.',
+        'Find Edge and choose While Using the App.',
+        back,
+      ]
+      : [
+        'On iPhone, notifications only work for apps added to the Home Screen.',
+        'Open mynaai.in in Safari → Share → Add to Home Screen → Add.',
+        'Open My Naai from the Home Screen and tap Allow alerts.',
       ],
     'safari-desktop': [
       'Open Safari → Settings → Websites.',

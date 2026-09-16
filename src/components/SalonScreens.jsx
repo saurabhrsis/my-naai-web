@@ -53,6 +53,7 @@ import { STATE_OPTIONS } from '../lib/stateOptions';
 import { SALON_ABOUT_CONTENT, SALON_FAQ_CONTENT, SALON_TERMS_CONTENT } from '../lib/salonContent';
 import { NotificationDiagnostics } from './NotificationDiagnostics';
 import { readPermission, requestLocation } from '../lib/permissions';
+import { PermissionSheet } from './PermissionUI';
 import { LOGOUT_CONFIRM, useConfirm } from './ConfirmDialog';
 import { subscribeToLiveUpdates } from '../lib/socket';
 import {
@@ -667,6 +668,7 @@ export function EditSalonProfileScreen({ params, session, navigate, notify, onSe
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(!routeProfile);
   const [locationLoading, setLocationLoading] = useState(false);
+  const [locationSheetOpen, setLocationSheetOpen] = useState(false);
   // A salon that already has saved coordinates does not need a fresh GPS fix
   // before it can be edited again; only a missing pin forces re-detection.
   const [locationVerified, setLocationVerified] = useState(() => hasCoordinate(initial.latitude) && hasCoordinate(initial.longitude));
@@ -760,13 +762,27 @@ export function EditSalonProfileScreen({ params, session, navigate, notify, onSe
     setLocationVerified(false);
     setLocationError('');
     try {
-      const current = await getBrowserLocation();
-      if (!current || !hasCoordinate(current.latitude) || !hasCoordinate(current.longitude)) {
-        setLocationError('Location permission is unavailable. Allow location for this site, then try again.');
+      // A blocked permission can never be re-prompted from JavaScript, so the
+      // partner gets the short settings sheet instead of a button that silently
+      // does nothing.
+      const permission = await readPermission('location');
+      if (permission === 'denied' || permission === 'unsupported') {
+        setLocationError('Location is blocked for this site — open the steps and switch Location to Allow.');
+        setLocationSheetOpen(true);
         return;
       }
-      setLatitude(Number(current.latitude));
-      setLongitude(Number(current.longitude));
+      const result = await requestLocation();
+      if (!result.ok || !hasCoordinate(result.latitude) || !hasCoordinate(result.longitude)) {
+        if (result.state === 'denied') {
+          setLocationError('Location is blocked for this site — open the steps and switch Location to Allow.');
+          setLocationSheetOpen(true);
+          return;
+        }
+        setLocationError('We could not read the location this time. Stand near a window or try again.');
+        return;
+      }
+      setLatitude(Number(result.latitude));
+      setLongitude(Number(result.longitude));
       setLocationVerified(true);
       setLocationError('');
     } catch (error) {
@@ -1177,7 +1193,13 @@ export function EditSalonProfileScreen({ params, session, navigate, notify, onSe
       <Field label="Landmark / Address Line 2" hint="Optional"><input value={addressLine2} onChange={event => setAddressLine2(event.target.value)} placeholder="Nearby landmark" /></Field>
       <div className="form-three-col editor-address-grid"><Field label="City" hint="Optional"><input value={city} onChange={event => setCity(event.target.value)} placeholder="City" /></Field><SelectField label="State" hint="Optional" value={state} onChange={event => setState(event.target.value)} options={STATE_OPTIONS} placeholder="Select state" /><Field label="Pincode" hint="Optional · 6 digits"><input inputMode="numeric" maxLength="6" value={pincode} onChange={event => setPincode(event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="Pincode" /></Field></div>
       <div className={cx('editor-location-status', hasLocation ? 'location-ready' : 'location-missing')}><MapPin size={18} /><span><strong>{hasLocation ? 'Salon location saved' : 'Salon location required *'}</strong><small>{hasLocation ? `${Number(latitude).toFixed(6)}, ${Number(longitude).toFixed(6)}` : locationMessage}</small></span></div>
-      <Button type="button" size="small" variant="secondary" onClick={detectLocation} loading={locationLoading}><MapPin size={15} /> {hasLocation ? 'Update to current location' : 'Allow location'}</Button>
+      <Button type="button" size="small" variant="secondary" onClick={detectLocation} loading={locationLoading}><MapPin size={15} /> {hasLocation ? 'Update to current location' : 'Allow location'}</Button><PermissionSheet
+        open={locationSheetOpen}
+        kind="location"
+        state="denied"
+        onClose={() => setLocationSheetOpen(false)}
+        onGranted={() => { setLocationSheetOpen(false); detectLocation(); }}
+      />
     </CollapsibleSection>
     <CollapsibleSection id="images" innerRef={node => { sectionRefs.current.images = node; }} icon={<ImagePlus size={18} />} title="Salon Images" subtitle={EDITOR_SECTION_SUBTITLES.images} summary={sectionSummary('images', `${images.length} of ${MAX_IMAGES} photos added`)} open={openSections.images} onToggle={() => toggleSection('images')}>
       <p className="collapsible-lede">Optional · up to {MAX_IMAGES} photos, each smaller than {MAX_IMAGE_MB} MB. The first photo becomes your main image.</p>

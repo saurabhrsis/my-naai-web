@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const { salonProfile, userSalonList, userSalonListPublic, userLogin, verifyLogin } = vi.hoisted(() => ({ salonProfile: vi.fn(), userSalonList: vi.fn(), userSalonListPublic: vi.fn(), userLogin: vi.fn(), verifyLogin: vi.fn() }));
+const { salonProfile, userSalonList, userSalonListPublic, userLogin, verifyLogin, userAds } = vi.hoisted(() => ({ salonProfile: vi.fn(), userSalonList: vi.fn(), userSalonListPublic: vi.fn(), userLogin: vi.fn(), verifyLogin: vi.fn(), userAds: vi.fn(() => Promise.resolve({ status: 'SUCCESS', data: {} })) }));
 
 // App.jsx pulls in lib/push.js, which loads the Firebase browser SDK at import
 // time. That SDK needs browser APIs jsdom does not provide, so stub the same
@@ -20,7 +20,7 @@ vi.mock('firebase/messaging', () => ({
 // something specific. The router is what is under test, not the screens' data.
 vi.mock('./lib/api', async () => {
   const actual = await vi.importActual('./lib/api');
-  const api = new Proxy({ salonProfile, userSalonList, userSalonListPublic, userLogin, verifyLogin }, {
+  const api = new Proxy({ salonProfile, userSalonList, userSalonListPublic, userLogin, verifyLogin, userAds }, {
     get: (target, key) => (key in target
       ? target[key]
       : vi.fn(() => Promise.resolve({ status: 'SUCCESS', data: {} }))),
@@ -716,6 +716,170 @@ describe('Guest browsing flow', () => {
   });
 });
 
+// The ad band on the guest home. A laptop frame is far wider than the artwork,
+// so `object-fit: cover` used to crop a third of every ad away on desktop while
+// phones looked fine. Each slide now carries its own blurred backdrop and shows
+// the artwork whole — this pins the markup that the CSS depends on.
+describe('Home ad carousel', () => {
+  let container;
+  let root;
+
+  const mount = async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => { root.render(<App />); });
+    await flush();
+  };
+
+  beforeEach(() => {
+    setPath('/');
+    localStorage.clear();
+    userSalonListPublic.mockResolvedValue({ status: 'SUCCESS', data: { salons: [] } });
+    userAds.mockResolvedValue({
+      status: 'SUCCESS',
+      data: { images: ['/assets/naai/ad1.jpg', '/assets/naai/ad2.jpg'] },
+    });
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'needs-permission', reason: '' });
+  });
+
+  afterEach(() => {
+    if (root) act(() => root.unmount());
+    container?.remove();
+    root = null;
+    container = null;
+    vi.clearAllMocks();
+  });
+
+  it('renders every ad whole, with the backdrop that fills the frame', async () => {
+    await mount();
+
+    const slides = container.querySelectorAll('.ad-slide');
+    expect(slides.length).toBe(2);
+    slides.forEach(slide => {
+      // The artwork itself (shown in full, never cropped)…
+      expect(slide.querySelector('img.ad-image')).not.toBeNull();
+      // …and the blurred copy that fills whatever the frame leaves over.
+      const backdrop = slide.querySelector('.ad-backdrop');
+      expect(backdrop).not.toBeNull();
+      expect(backdrop.getAttribute('style')).toContain('ad');
+    });
+  });
+});
+
+// The home-screen location row. Twice reported as "Enable location does nothing":
+// once because a blocked permission can never be re-prompted from JavaScript
+// (the tap did nothing at all), and once because the button only reloaded the
+// list instead of asking. Both states are now explicit — and the GPS retry for a
+// cold desktop fix lives in requestLocation itself.
+describe('Home location permission', () => {
+  let container;
+  let root;
+
+  const buttonByText = text => Array.from(container.querySelectorAll('button')).find(node => node.textContent.trim().includes(text));
+  const notice = () => container.querySelector('.location-fallback-notice');
+
+  const mount = async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => { root.render(<App />); });
+    await flush();
+  };
+
+  const salonPayload = () => ({
+    status: 'SUCCESS',
+    data: {
+      salons: [{
+        salonId: 'salon-9', salonName: 'Golden Scissors', genderType: 'UNISEX',
+        address: 'Dharampeth, Nagpur', isOpen: true, waitTime: '5–10 min',
+      }],
+    },
+  });
+
+  const setLivePermission = state => {
+    Object.defineProperty(navigator, 'permissions', {
+      configurable: true,
+      value: { query: vi.fn(async () => ({ state, onchange: null })) },
+    });
+  };
+
+  beforeEach(() => {
+    setPath('/');
+    localStorage.clear();
+    userSalonListPublic.mockResolvedValue(salonPayload());
+    vi.mocked(push.getPushStatus).mockReset().mockResolvedValue({ state: 'needs-permission', reason: '' });
+    vi.mocked(push.getPushToken).mockReset().mockResolvedValue('');
+    vi.mocked(permissions.isIosDevice).mockReset().mockReturnValue(false);
+    vi.mocked(permissions.isEmbeddedFrame).mockReset().mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    if (root) act(() => root.unmount());
+    container?.remove();
+    root = null;
+    container = null;
+    delete navigator.permissions;
+    vi.clearAllMocks();
+  });
+
+  it('asks the browser and re-sorts the list when the tap can actually prompt', async () => {
+    // jsdom ships no geolocation; this is the "user allows the prompt" path.
+    navigator.geolocation = {
+      getCurrentPosition: vi.fn(success => success({ coords: { latitude: 21.1458, longitude: 79.0882 } })),
+    };
+    await mount();
+
+    const enableButton = buttonByText('Use my location');
+    expect(enableButton).not.toBeNull();
+    expect(notice().textContent).toContain('not sorted by distance');
+
+    await act(async () => { enableButton.click(); });
+    await flush();
+
+    expect(navigator.geolocation.getCurrentPosition).toHaveBeenCalledTimes(1);
+    // The coordinates reached the salon list, so distances can be shown.
+    const lastCall = userSalonListPublic.mock.calls.at(-1)[0];
+    expect(lastCall.latitude).toBeCloseTo(21.1458, 3);
+    expect(lastCall.longitude).toBeCloseTo(79.0882, 3);
+    // …and the notice retires itself because the list is now distance-sorted.
+    expect(container.querySelector('.location-fallback-notice')).toBeNull();
+  });
+
+  it('never lets a click event leak into the salon-list request', async () => {
+    // The same loader is wired to onClick handlers ("Try again"), and a
+    // PointerEvent is not a coordinate. A failed load must not turn into a
+    // request carrying an event object.
+    userSalonListPublic.mockRejectedValueOnce(new Error('network down'));
+    await mount();
+    await act(async () => { buttonByText('Try again')?.click(); });
+    await flush();
+
+    const lastCall = userSalonListPublic.mock.calls.at(-1)[0];
+    expect(lastCall).toEqual({ page: 1, searchString: '', genderType: 'male' });
+  });
+
+  it('gives the settings steps when the browser has already blocked location', async () => {
+    // The reported bug: a blocked permission never prompts again, so the button
+    // looked dead. It now opens the short sheet with the real fix.
+    setLivePermission('denied');
+    const getCurrentPosition = vi.fn();
+    navigator.geolocation = { getCurrentPosition };
+    await mount();
+
+    await act(async () => { buttonByText('Use my location').click(); });
+    await flush();
+
+    // No point calling the browser: it cannot prompt. The steps are shown.
+    expect(getCurrentPosition).not.toHaveBeenCalled();
+    const sheet = container.querySelector('.permission-gate-sheet');
+    expect(sheet).not.toBeNull();
+    expect(sheet.textContent).toContain('Location is blocked');
+    expect(sheet.querySelectorAll('.ios-install-steps li')).toHaveLength(3);
+    expect(buttonByText('I allowed it — Try again')).not.toBeNull();
+  });
+});
+
 // Login permission flow.
 //
 // What these tests protect (all of it is why users were being lost):
@@ -824,10 +988,12 @@ describe('Login permission flow', () => {
     await mount();
 
     // The ask is on the page from the first paint: two labelled rows (alerts,
-    // optional location) and nothing else to read.
+    // optional location) and nothing else to read. Alerts say what they bring —
+    // sound and vibration, the buzzer a salon cannot do without.
     const card = container.querySelector('.login-perm-card');
     expect(card).not.toBeNull();
     expect(card.querySelectorAll('.perm-row')).toHaveLength(2);
+    expect(card.querySelector('.perm-row-copy strong').textContent).toBe('Booking alerts & buzzer');
     expect(buttonByText('Allow alerts')).not.toBeNull();
     expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
 
@@ -1026,6 +1192,38 @@ describe('Login permission flow', () => {
     await flush();
     expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
+  });
+
+  it('tells every device how the buzzer will actually be heard', async () => {
+    // Blocked is the state where the sheet carries the explanation. The copy has
+    // to be device-specific: Android keeps the browser app's own notification
+    // switch, iOS mutes the buzzer with the silent switch, desktop is volume.
+    setNotificationPermission('denied');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
+    await mount();
+
+    await act(async () => { buttonByText('Fix alerts').click(); });
+    await flush();
+    const sheet = container.querySelector('.permission-gate-sheet');
+    expect(sheet).not.toBeNull();
+    expect(sheet.textContent).toMatch(/buzzer/i);
+
+    // Android gets the whole path, including the OS-level app switch that keeps
+    // the site setting stuck on Blocked when it is off.
+    const agent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36');
+    await act(async () => { buttonByText('Fix alerts').click(); });
+    await flush();
+    const androidSheet = container.querySelector('.permission-gate-sheet');
+    expect(androidSheet.textContent).toContain('Android: Settings → Apps → Chrome → Notifications → On');
+    expect(androidSheet.textContent).toContain('Keep the phone off silent');
+    agent.mockRestore();
+
+    // iPhone before "Add to Home Screen" never sees a popup it cannot have.
+    vi.mocked(permissions.isIosDevice).mockReturnValue(true);
+    vi.mocked(permissions.isIosPwaInstalled).mockReturnValue(false);
+    await act(async () => { buttonByText('Fix alerts').click(); });
+    await flush();
+    expect(container.querySelector('.permission-gate-sheet').textContent).toContain('Home Screen');
   });
 
   it('keeps the login screen light: one-line subtitle, two one-tap rows, install pill', async () => {

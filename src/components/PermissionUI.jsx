@@ -33,6 +33,7 @@ import {
   ASK_CHOICES,
   androidAppNotificationHint,
   browserLabel,
+  buzzerHint,
   detectBrowser,
   isEmbeddedFrame,
   isIosDevice,
@@ -182,10 +183,10 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
   if (!alertsRowVisible && !locationRowVisible) return null;
 
   const alertsCopy = {
-    'needs-permission': { title: 'Booking alerts', body: 'Booking confirmations, delay updates and the buzzer — one tap to allow.' },
+    'needs-permission': { title: 'Booking alerts & buzzer', body: 'One tap — your browser asks, and booking requests reach you with sound and vibration.' },
     denied: { title: 'Alerts are blocked', body: `Turn Notifications back on for ${siteHost()} in ${browserLabel(detectBrowser())}.` },
-    unsupported: { title: 'Alerts need an install', body: needsInstall ? 'Add My Naai to your Home Screen — that is how iPhone allows alerts.' : 'This browser cannot receive web alerts, but you can still book normally.' },
-    unavailable: { title: 'Alerts almost ready', body: alertsReason || 'The last setup step did not finish. Tap Try again.' },
+    unsupported: { title: 'Alerts need an install', body: needsInstall ? 'Add My Naai to your Home Screen — that is the only way iPhone allows alerts and the buzzer.' : 'This browser cannot receive web alerts, but you can still book normally.' },
+    unavailable: { title: 'Alerts almost ready', body: alertsReason || 'The last setup step did not finish. Tap Try again — it usually works on the second try.' },
   }[alerts] || { title: 'Booking alerts', body: '' };
 
   return (
@@ -420,6 +421,7 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
             </ol>
             {!isLocation && (
               <>
+                <p className="permission-help-note">{buzzerHint(browser)}</p>
                 <button type="button" className="permission-help-link" onClick={() => setExtraHelp(help => !help)}>
                   {extraHelp ? 'Hide extra help' : 'Still blocked? Extra help'}
                 </button>
@@ -463,8 +465,9 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
             </>
           ) : (
             <>
-              <span><BellRing size={14} /> Booking requests and confirmations reach you instantly</span>
+              <span><BellRing size={14} /> Booking requests and confirmations reach you instantly — even in the background</span>
               <span><Volume2 size={14} /> Buzzer sound + vibration for time-critical alerts</span>
+              <span><Smartphone size={14} /> {buzzerHint(browser)}</span>
             </>
           )}
         </div>
