@@ -1,60 +1,146 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bell, CheckCircle2, ChevronDown, CircleAlert, Copy, RefreshCw } from 'lucide-react';
-import { formatPushDiagnostics, getPushDiagnostics, getPushToken, isEmbeddedFrame, readNotificationPermission } from '../lib/push';
-import { Button, Modal, cx } from './Shared';
+import { Bell, BellRing, CheckCircle2, ChevronDown, CircleAlert, Copy, MapPin, RefreshCw, Settings } from 'lucide-react';
+import { displayNotification, formatPushDiagnostics, getPushDiagnostics, getPushToken, isPushConfigured, watchNotificationPermission } from '../lib/push';
+import { playBuzzer, unlockBuzzer } from '../lib/buzzer';
+import { browserLabel, detectBrowser, isEmbeddedFrame, readPermission, rememberAskChoice, requestLocation, requestNotifications, ASK_CHOICES, siteHost } from '../lib/permissions';
+import { PermissionSheet } from './PermissionUI';
+import { Button, Modal, Spinner, cx } from './Shared';
 
-// "Notifications are not working" can come from several layers — browser
-// permission, Firebase config, the messaging worker or the FCM token. Users
-// never need to see those internals: this card explains notification status
-// and gives them one plain way to hand the team the facts when
-// something does not arrive ("Copy report"). The full detail stays inside the
-// copied report, never on screen.
+// Alerts & permissions — the calm home for the two permissions My Naai uses.
+//
+// This is where a user who said "Not now" (or was blocked by their browser)
+// fixes things later, on their own terms: one row per permission, one tap per
+// row, plain words, and no scolding. The technical report support may need lives
+// behind "Support report" so the everyday view stays human — "notifications are
+// not working" gets pinned to a specific layer, but nobody has to read it unless
+// they want to send it to us.
 export function NotificationDiagnostics({ onEnabled }) {
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState('');
   const [copied, setCopied] = useState(false);
   const [diagnostics, setDiagnostics] = useState(null);
   const [report, setReport] = useState(null);
-  const [permission, setPermission] = useState(() => (typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'));
+  const [alerts, setAlerts] = useState(() => (typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'));
+  const [locationState, setLocationState] = useState('checking');
+  const [sheet, setSheet] = useState({ open: false, state: 'needs-permission', kind: 'notifications' });
+  const [testMessage, setTestMessage] = useState('');
   const reportRef = useRef(null);
+  const onEnabledRef = useRef(onEnabled);
+  onEnabledRef.current = onEnabled;
 
-  const run = useCallback(async () => {
-    setBusy(true);
-    try {
-      setDiagnostics(await getPushDiagnostics());
-      // Live read (Permissions API first): `Notification.permission` can keep
-      // saying "denied" after the user has just allowed the site again.
-      setPermission(await readNotificationPermission());
-    } finally {
-      setBusy(false);
-    }
+  const readStates = useCallback(async () => {
+    const [notification, geo] = await Promise.all([readPermission('notifications'), readPermission('location')]);
+    setAlerts(notification);
+    setLocationState(geo);
+    return { notification, geo };
   }, []);
 
-  useEffect(() => { if (open && !diagnostics && !busy) run(); }, [busy, diagnostics, open, run]);
+  const run = useCallback(async () => {
+    setBusy('run');
+    try {
+      setDiagnostics(await getPushDiagnostics());
+      await readStates();
+    } finally {
+      setBusy('');
+    }
+  }, [readStates]);
+
+  useEffect(() => { readStates(); }, [readStates]);
+  // The technical report is collected the first time the panel is opened, so the
+  // "Support report" button always has something to copy.
+  useEffect(() => { if (open && !diagnostics && busy !== 'run') run(); }, [busy, diagnostics, open, run]);
+
+  // Follow both permissions live: a switch flipped in the browser's own settings
+  // updates this card the moment the browser reports it, and again on return.
+  useEffect(() => watchNotificationPermission(() => { readStates(); }), [readStates]);
+  useEffect(() => {
+    const recheck = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      readStates();
+    };
+    window.addEventListener('focus', recheck);
+    document.addEventListener('visibilitychange', recheck);
+    return () => {
+      window.removeEventListener('focus', recheck);
+      document.removeEventListener('visibilitychange', recheck);
+    };
+  }, [readStates]);
 
   const failing = (diagnostics?.checks || []).filter(check => check.state === 'fail');
-  const working = permission === 'granted' && failing.length === 0;
-  const canRequestPermission = permission === 'default';
+  // `pushConfigured` false means this deployment has no Firebase web config: the
+  // permission can still be granted, but nothing can be delivered until that is
+  // set. Saying "alerts are on" there would be a lie.
+  const pushConfigured = isPushConfigured();
+  const alertsOn = alerts === 'granted';
+  const alertsLive = alertsOn && pushConfigured;
+  const locationOn = locationState === 'granted';
+  const blocked = alerts === 'denied';
+  const unsupported = alerts === 'unsupported';
 
-  const summary = !diagnostics
-    ? 'Required for booking buzzers and updates'
-    : working
-      ? 'Allowed in this browser'
-      : permission === 'denied'
-        ? 'Blocked in this browser'
-        : permission === 'unsupported'
-          ? 'Not supported in this browser'
-          : failing.length
-            ? 'Allowed, but something needs a fix'
-            : 'Required — enable notifications to continue';
+  const turnOnAlerts = async () => {
+    setBusy('alerts');
+    try {
+      const permission = await requestNotifications();
+      if (permission === 'granted') {
+        const token = await getPushToken({ requestPermission: false });
+        if (token) {
+          rememberAskChoice('notifications', ASK_CHOICES.allowed);
+          onEnabledRef.current?.();
+        } else {
+          setSheet({ open: true, state: 'unavailable', kind: 'notifications' });
+        }
+      } else if (permission === 'denied') {
+        setSheet({ open: true, state: 'denied', kind: 'notifications' });
+      }
+      await readStates();
+      setDiagnostics(null);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const turnOnLocation = async () => {
+    setBusy('location');
+    try {
+      const result = await requestLocation();
+      if (result.ok) {
+        rememberAskChoice('location', ASK_CHOICES.allowed);
+      } else if (result.state === 'denied') {
+        setSheet({ open: true, state: 'denied', kind: 'location' });
+      }
+      await readStates();
+    } finally {
+      setBusy('');
+    }
+  };
+
+  // End-to-end proof on THIS device: the same notification + buzzer a booking
+  // request produces. An alert that arrives silently is worse than none for a
+  // salon, so the buzzer is testable instead of trusted.
+  const testBuzzer = async () => {
+    setBusy('test');
+    try {
+      unlockBuzzer();
+      playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1 });
+      const shown = await displayNotification({
+        title: 'Test alert — My Naai',
+        body: 'This is how a booking request looks and sounds on this device.',
+        data: { type: 'TEST' },
+      });
+      setTestMessage(shown
+        ? 'Test sent. Heard nothing? Turn the phone off silent and check the media volume.'
+        : 'The buzzer played, but this browser would not show the alert banner — check the site notification setting.');
+    } finally {
+      setBusy('');
+    }
+  };
 
   const buildReport = () => `My Naai web push report · ${new Date().toLocaleString('en-IN')}\n${formatPushDiagnostics(diagnostics)}`;
 
   // Clipboard access is refused in enough real situations (iOS Safari outside a
-  // user gesture, Chrome on iOS, an installed PWA resumed from the background,
-  // any non-secure context) that a fallback is mandatory. It is an in-app sheet
-  // with a selectable textarea — never `window.prompt`, which an installed PWA
-  // cannot style and may suppress outright.
+  // user gesture, an installed PWA resumed from the background, any non-secure
+  // context) that a fallback is mandatory: an in-app sheet with a selectable
+  // textarea — never `window.prompt`, which an installed PWA cannot style.
   const writeClipboard = async text => {
     try {
       if (navigator.clipboard?.writeText) {
@@ -78,71 +164,115 @@ export function NotificationDiagnostics({ onEnabled }) {
     }
   };
 
-  const markCopied = () => {
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2200);
-  };
-
   const copyReport = async () => {
-    if (await writeClipboard(buildReport())) return markCopied();
+    if (await writeClipboard(buildReport())) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2200);
+      return;
+    }
     setReport(buildReport());
   };
 
   const copyFromSheet = async () => {
-    if (await writeClipboard(report || buildReport())) markCopied();
-  };
-
-  const enable = async () => {
-    setBusy(true);
-    try {
-      await getPushToken({ requestPermission: true });
-      await run();
-      onEnabled?.();
-    } finally {
-      setBusy(false);
+    if (await writeClipboard(report || '')) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2200);
     }
   };
 
-  const note = permission === 'denied'
-    ? (isEmbeddedFrame()
-      ? 'My Naai is open inside another page, and browsers switch notifications off for embedded pages. Open My Naai in its own browser tab, tap Turn on there and choose Allow.'
-      : 'Notifications are blocked in this browser. Open the site’s permission settings and set Notifications to Allow, so booking buzzers, delay requests and appointment updates can reach you. If it still says blocked after allowing, reload this page once.')
-    : permission === 'unsupported'
-      ? 'This browser cannot show notifications. Use Chrome, Edge or Samsung Internet — or install the My Naai app on iPhone/iPad.'
-      : permission === 'default'
-        ? 'You must enable notifications. Tap Allow so My Naai can log you in and send booking buzzers, delay requests and appointment updates.'
-        : failing.length
-          ? 'Notifications are allowed in this browser, but something is stopping them on this device.'
-          : 'Notifications are allowed in this browser, so booking buzzers, delay requests and appointment updates can reach you.';
+  const alertsSummary = alertsLive
+    ? 'Alerts are on for this device'
+    : alertsOn
+      ? 'Notifications allowed — alerts not switched on yet'
+      : blocked
+      ? `Blocked in ${browserLabel(detectBrowser())}`
+      : unsupported
+        ? 'Not supported in this browser'
+        : 'Off — turn them on in one tap';
+  const locationSummary = locationOn
+    ? 'On — salons sorted by distance'
+    : locationState === 'denied'
+      ? 'Off for this site — optional'
+      : locationState === 'checking'
+        ? 'Checking…'
+        : 'Off — optional, shows distances';
 
   return (
     <section className={cx('account-card', 'notification-diagnostics', open && 'open')}>
       <button type="button" className="diagnostics-toggle" onClick={() => setOpen(value => !value)} aria-expanded={open} aria-controls="notification-diagnostics-body">
         <span className="account-menu-icon"><Bell size={18} /></span>
         <span className="diagnostics-heading">
-          <strong>Notifications</strong>
-          <small>{summary}</small>
+          <strong>Alerts &amp; permissions</strong>
+          <small>{alertsLive && locationOn ? 'Both on — you are all set' : alertsLive ? alertsSummary : `${alertsSummary}${locationOn ? '' : ' · Location optional'}`}</small>
         </span>
-        {diagnostics && (working
+        {alertsLive
           ? <CheckCircle2 size={17} className="diagnostics-mark ok" />
-          : permission === 'denied' || permission === 'unsupported' || failing.length
+          : blocked || unsupported
             ? <CircleAlert size={17} className="diagnostics-mark fail" />
-            : <CircleAlert size={17} className="diagnostics-mark warn" />)}
+            : <CircleAlert size={17} className="diagnostics-mark warn" />}
         <ChevronDown size={17} className="collapsible-chevron" />
       </button>
-      {open && <div className="diagnostics-body" id="notification-diagnostics-body">
-        {!diagnostics
-          ? <p className="diagnostics-note">{busy ? 'Checking this browser…' : 'You must enable notifications. Tap Enable so My Naai can send booking buzzers, delay requests and appointment updates.'}</p>
-          : <>
-            <p className="diagnostics-note">{note}</p>
-            <p className="diagnostics-note">Missing a notification? Copy the report and share it with My Naai support — we can check it from there.</p>
-          </>}
-        <div className="diagnostics-actions">
-          <Button size="small" variant="secondary" onClick={run} loading={busy}><RefreshCw size={14} /> Check again</Button>
-          {canRequestPermission && <Button size="small" variant="secondary" onClick={enable} loading={busy}>Enable</Button>}
-          {diagnostics && <Button size="small" variant="secondary" onClick={copyReport}><Copy size={14} /> {copied ? 'Copied' : 'Copy report'}</Button>}
+
+      {open && (
+        <div className="diagnostics-body" id="notification-diagnostics-body">
+          <div className="perm-row perm-row-account">
+            <span className="perm-row-icon"><BellRing size={15} /></span>
+            <div className="perm-row-copy">
+              <strong>Booking alerts</strong>
+              <p>{alertsLive
+                ? 'On. Booking requests, confirmations, delay updates and the buzzer all reach this device.'
+                : alertsOn
+                  ? 'Notifications are allowed on this device. Booking alerts start as soon as My Naai switches them on — nothing else to do here.'
+                : blocked ? `Blocked in ${siteHost()}'s ${browserLabel(detectBrowser())} settings — three taps to switch back on.`
+                  : unsupported ? 'This browser cannot receive web alerts. Chrome, Edge, Samsung Internet — or the installed app on iPhone — can.'
+                    : 'Booking requests, confirmations, delay updates and the buzzer.'}</p>
+            </div>
+            {alertsOn
+              ? <span className="perm-state-on"><CheckCircle2 size={14} /> Allowed</span>
+              : <button type="button" className="install-auth-button allow-alerts-button" onClick={blocked || unsupported ? () => setSheet({ open: true, state: blocked ? 'denied' : 'unsupported', kind: 'notifications' }) : turnOnAlerts} disabled={busy === 'alerts'}>
+                {busy === 'alerts' ? <Spinner size={14} /> : blocked ? <Settings size={14} /> : <Bell size={14} />}
+                {blocked ? 'How to allow' : 'Turn on'}
+              </button>}
+          </div>
+
+          <div className="perm-row perm-row-account">
+            <span className="perm-row-icon perm-row-icon-location"><MapPin size={15} /></span>
+            <div className="perm-row-copy">
+              <strong>Location</strong>
+              <p>{locationOn
+                ? 'On. Salons are sorted by distance for you.'
+                : locationState === 'denied' ? 'Off for this site. Optional — it only shows how far each salon is.'
+                  : 'Optional. Shows how far each salon is and puts the nearest first.'}</p>
+            </div>
+            {locationOn
+              ? <span className="perm-state-on"><CheckCircle2 size={14} /> On</span>
+              : <button type="button" className="install-auth-button perm-location-button" onClick={locationState === 'denied' ? () => setSheet({ open: true, state: 'denied', kind: 'location' }) : turnOnLocation} disabled={busy === 'location'}>
+                {busy === 'location' ? <Spinner size={14} /> : <MapPin size={14} />}
+                {locationState === 'denied' ? 'How to allow' : 'Turn on'}
+              </button>}
+          </div>
+
+          {alertsLive && !failing.length && (
+            <p className="diagnostics-note">Alerts are allowed in this browser. Missing one? Copy the support report below and we will trace it for you.</p>
+          )}
+          {testMessage && <p className="diagnostics-note">{testMessage}</p>}
+          <div className="diagnostics-actions">
+            {alertsLive && <Button size="small" variant="secondary" onClick={testBuzzer} loading={busy === 'test'}><BellRing size={14} /> Test buzzer</Button>}
+            {pushConfigured && !alertsOn && <Button size="small" variant="secondary" onClick={run} loading={busy === 'run'}><RefreshCw size={14} /> Check again</Button>}
+            <Button size="small" variant="secondary" onClick={copyReport}><Copy size={14} /> {copied ? 'Copied' : 'Support report'}</Button>
+          </div>
+          <p className="permission-help-note">Need a hand? Call <a href="tel:8380017393">8380017393</a> — we will turn it on with you.</p>
         </div>
-      </div>}
+      )}
+
+      <PermissionSheet
+        open={sheet.open}
+        state={sheet.state}
+        kind={sheet.kind}
+        onClose={() => { setSheet(current => ({ ...current, open: false })); readStates(); }}
+        onGranted={token => { if (token) onEnabledRef.current?.(); }}
+      />
+
       <Modal
         open={Boolean(report)}
         onClose={() => setReport(null)}

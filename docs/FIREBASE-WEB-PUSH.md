@@ -51,9 +51,9 @@ The implementation is in `src/lib/push.js`:
 
 1. `isPushConfigured()` checks that the Firebase web config and VAPID key exist. If they do not, push is safely disabled and the rest of the portal still works — the login page hides every alerts control instead of warning the user, and OTP sign-in is sent without a `deviceToken` so an unconfigured build never blocks anyone.
 2. The Firebase Messaging SDK checks whether this browser supports messaging and service workers.
-3. When the user verifies OTP or finishes customer onboarding, the app requests browser notification permission. Salon registration requests permission before the plan/registration submission.
-4. After permission is granted, the app registers `public/firebase-messaging-sw.js` with the separate scope `/firebase-cloud-messaging-push-scope`.
-5. Firebase `getToken()` uses the VAPID public key and that registration to create or retrieve the browser’s FCM registration token.
+3. The login page offers **Booking alerts** as one labelled row. That tap (or the Continue-with-OTP tap while permission is still unanswered) calls `Notification.requestPermission()` synchronously inside the gesture, so Safari keeps the gesture and the popup actually appears — the live permission is then re-read from the Permissions API rather than the stale `Notification.permission` snapshot. Salon registration offers the same one-tap card on its steps.
+4. After permission is granted, the app registers `public/firebase-messaging-sw.js` — the ONE root-scope worker — at scope `/`. `src/lib/push.js` is the only place that registers it; the app shell is cached by that same worker. (A second script registered at `/` used to replace this registration on every load, which is what produced stale subscriptions and "no active service worker" token errors.)
+5. Firebase `getToken()` uses the VAPID public key and that registration to create or retrieve the browser's FCM registration token, retrying up to four times (a slow first worker start-up is the usual "the first tap did nothing" report).
 6. The token is cached locally as `FCM_TOKEN` and sent to the existing MyNaai API as `deviceToken`:
 
 ```js
@@ -64,9 +64,11 @@ The implementation is in `src/lib/push.js`:
 }
 ```
 
-The API payload differs slightly between login and onboarding, but `deviceToken` follows the mobile app’s existing contract. Because MyNaai treats push as a required feature, the portal obtains a non-empty token before it sends the OTP request and again before verification/onboarding. If the browser cannot obtain a token, the portal blocks the authentication action with a clear, non-technical retry message instead of sending an empty string. The backend can therefore keep its required, non-empty `deviceToken` validation for these auth flows. It should associate the token with the authenticated user or salon and use it when sending FCM messages.
+The API payload differs slightly between login and onboarding, but `deviceToken` follows the mobile app’s existing contract. The portal obtains a token before verification/onboarding whenever the browser allows one, and the key is simply omitted (never sent as `''`) when it cannot — so a backend that validates `deviceToken` only when present keeps working, and alerts attach as soon as the visitor allows them.
 
-On the initial onboarding/login flow, the portal offers **Enable alerts** only when permission or token setup still needs attention. Authenticated pages do not show a global notification card; the same focused retry action is available from the Account screen when permission is missing or blocked. Configuration details stay out of the user-facing experience. If permission is denied, the action explains that the user must change this origin’s browser/site setting before trying again; the state is never silently discarded.
+**Sign-in is never blocked on alerts.** Blocking it cost real users: a visitor whose browser had already blocked the permission could not sign in at all, and there is no way for a page to re-ask once a permission is denied. The portal therefore tries the API with whatever token it has. If the API answers with a `deviceToken` refusal, `isDeviceTokenError()` recognises it, the Alerts sheet opens with the exact fix for the detected browser, and the same request is retried automatically the moment a token arrives — one tap from the user, no re-typing.
+
+Both Account screens keep a collapsible **Alerts & permissions** card (rows for booking alerts and location, live states, one-tap **Turn on** / **How to allow**, a **Test buzzer** that fires the real notification + sound, and a **Support report** for the technical detail). The blocked-state steps are per browser *and* per OS: Android includes the app-level notification switch (`Settings → Apps → Chrome/Samsung Internet → Notifications`), which stays in the way even after the site permission is set, and iOS browsers name the browser the visitor actually opened. Configuration details and check names stay out of the everyday view. A blocked permission is explained with three short steps for the browser actually in use, never a wall of text.
 
 Permission is read live, not from the `Notification.permission` snapshot: `readNotificationPermission()` (src/lib/push.js) queries `navigator.permissions.query({ name: 'notifications' })` first and falls back to the static value. This matters because several browsers (Chrome and Samsung Internet on Android especially) keep the stale `denied` value on an already-loaded page after the user re-allows notifications in site settings, which used to make the login card’s “I allowed — Check” keep reporting Blocked. `watchNotificationPermission()` additionally subscribes to the Permissions API `change` event so the login card, the sign-in gate and the Account card refresh themselves the moment the browser reports a change, and every blocked state also offers a one-tap page **Reload** for browsers that only hand over the fresh value on a new load. The login page also opens the browser’s own permission popups on the user’s first tap — notifications first, then location — exactly like the splash screen, so a returning visitor coming from Google gets the same one-tap ask instead of a card that only describes it. Blocked hints also cover the two silent blockers: pages embedded inside another page’s `<iframe>` (browsers hide the permission popup there; `isEmbeddedFrame()` makes the new-tab escape hatch the primary action — preview panes only, never a normal mynaai.in visit) and the Android OS-level block (site notifications stay off when the browser app’s own notifications are disabled in Android Settings → Apps). When permission is granted but the token mint has not completed, the card says the browser **allowed** notifications and one automatic retry (capped at two) runs quietly before the user ever sees a “Try again”.
 
@@ -155,14 +157,24 @@ If a `notification` block must stay (for example because one sender serves mobil
 
 Nothing else changes server-side: the same FCM sender, the same `data.type` vocabulary and the same `deviceToken` column work for web. The web registration token is simply longer than an Android token, so make sure the column is not truncated (store at least 255 characters).
 
-## 4.1 Backend validation requirement
+## 4.1 Backend validation of `deviceToken`
 
-MyNaai intentionally treats push as a required feature because booking notifications, buzzer behavior and notification actions are part of the core workflow. Keep `deviceToken` required and non-empty on the authentication/onboarding endpoints. The portal now obtains the browser token before sending the OTP request and blocks the request with a clear setup error if it cannot obtain one; it never sends `deviceToken: ''`.
+Booking notifications, buzzer behavior and notification actions are core workflow, so the token still matters — but it must not become a login toll gate. The portal now:
 
-If the backend uses Joi or a similar validator, a required rule can remain, for example:
+- sends a real token whenever the browser gives one (verification/onboarding carry it, exactly like the mobile contract);
+- omits the key entirely when no token is available — it never sends `deviceToken: ''`;
+- recognises a `deviceToken` refusal from the API (`isDeviceTokenError()`), opens the one-tap Alerts sheet, and retries the same request automatically once a token arrives.
+
+A required, non-empty rule can therefore remain for the flows that genuinely need it — the app answers it with a fix, not a dead end:
 
 ```js
 deviceToken: Joi.string().trim().min(1).required()
+```
+
+If the endpoint should tolerate a token-less sign-in (so a visitor whose browser has blocked notifications can still get in), relax it to a non-empty-when-present rule instead:
+
+```js
+deviceToken: Joi.string().trim().min(1).optional()
 ```
 
 The backend must still accept a browser-generated FCM registration token as a valid token string. No separate “Firebase ID” format is needed. The web app should be registered in the same Firebase project used by the mobile app so the existing Firebase Admin/server sender can send to it.
@@ -267,18 +279,19 @@ Do not replace `public/sw.js` with the Firebase worker and do not register both 
 
 ## 8. Troubleshooting
 
-### Start with the Notification status card
+### Start with the Alerts & permissions card
 
-Open the Account screen (salon or customer) and expand **Notification status**. It reports the HTTPS context, browser APIs, Firebase web config, permission, messaging client, service worker, push subscription, masked token and last foreground message in one place, and **Copy report** produces a text block that pinpoints the layer. The remaining sections explain how to fix what it reports.
+Open the Account screen (salon or customer) and expand **Alerts & permissions**. Each permission has its own row with a live state and one action (**Turn on** / **How to allow**), and **Support report** copies the HTTPS context, browser APIs, Firebase web config, permission, messaging client, service worker, push subscription, masked token and last foreground message in one place, pinpointing the layer. The remaining sections explain how to fix what it reports.
 
 ### No permission prompt
 
 - Confirm every `VITE_FIREBASE_*` variable is present at build time.
 - Restart Vite after changing `.env.local`.
-- The portal now names the reason instead of failing silently: an unconfigured deployment, an unsupported browser context (iPhone/iPad needs the installed PWA), a denied permission and a token failure all render their own card, because sign-in cannot continue without a `deviceToken`.
+- The portal names the reason instead of failing silently: an unconfigured deployment, an unsupported browser context (iPhone/iPad needs the installed PWA), a denied permission and a token failure each render their own row/sheet state.
 - Confirm the site is HTTPS (or running on `localhost`).
-- Check that the browser has not permanently blocked notifications for the origin.
-- The app offers an explicit notification action on its initial onboarding/login view and again in the authenticated workspace; OTP actions also request permission when needed.
+- Check that the browser has not permanently blocked notifications for the origin — a blocked permission can only be fixed in the browser's own site settings, which is what the three-step sheet walks through, and **Try again** re-reads the live permission so the fix is picked up without a logout.
+- The app offers the one-tap alert action on the login page (**Booking alerts**), on the salon registration steps, and in the Account screen's **Alerts & permissions** card.
+- Sign-in is NOT blocked by a missing token: if a login still fails, look at the API response (`deviceToken`) in the copied report rather than at the permission state.
 
 ### Token is empty
 

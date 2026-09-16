@@ -85,6 +85,8 @@ import {
   firstName,
 } from './Shared';
 import { NotificationDiagnostics } from './NotificationDiagnostics';
+import { readPermission, requestLocation } from '../lib/permissions';
+import { PermissionSheet } from './PermissionUI';
 
 const USER_FALLBACK_IMAGE = '/assets/brand/naai-logo-dark.svg';
 // On-brand placeholders for catalog items and specialists without an uploaded
@@ -179,8 +181,24 @@ function getBookingStatus(item) {
 function AdCarousel({ ads }) {
   const [active, setActive] = useState(0);
   const [paused, setPaused] = useState(false);
+  // The frame follows the artwork's own shape instead of a guess. A fixed strip
+  // cropped a third of every ad on a laptop; a guessed 3:2 box then letterboxed
+  // the 16:9 ones. The first image to load reports its real ratio (clamped to a
+  // sane banner range) and the CSS uses it for the frame, so an ad is shown
+  // whole and fills its box — on every screen size.
+  const [ratio, setRatio] = useState(0);
   const startX = useRef(0);
   const slides = Array.isArray(ads) ? ads.filter(item => typeof item === 'string' && item) : [];
+
+  const readRatio = event => {
+    const image = event?.currentTarget;
+    const width = Number(image?.naturalWidth) || 0;
+    const height = Number(image?.naturalHeight) || 0;
+    if (!width || !height) return;
+    const value = width / height;
+    if (!Number.isFinite(value) || value <= 0) return;
+    setRatio(current => current || Number(Math.min(2.4, Math.max(1.1, value)).toFixed(4)));
+  };
   useEffect(() => {
     if (paused || slides.length < 2) return undefined;
     const timer = window.setInterval(() => setActive(index => (index + 1) % slides.length), 3000);
@@ -190,7 +208,7 @@ function AdCarousel({ ads }) {
   if (!slides.length) return null;
   const go = offset => setActive(index => (index + offset + slides.length) % slides.length);
   return (
-    <div className="ad-carousel-wrap">
+    <div className="ad-carousel-wrap" style={ratio ? { '--ad-ratio': ratio } : undefined}>
       <div
         className="ad-carousel"
         aria-label="Promotions"
@@ -207,7 +225,12 @@ function AdCarousel({ ads }) {
         <div className="ad-track" style={{ transform: `translateX(-${active * 100}%)` }}>
           {slides.map((src, index) => (
             <div className="ad-slide" key={`${src}-${index}`}>
-              <ImageWithFallback src={src} fallback="" alt="" className="ad-image" />
+              {/* The frame is a wide band on a laptop and a phone-shaped box on
+                  mobile, so `cover` used to crop a third of the artwork away on
+                  desktop. The blurred backdrop (the same image, scaled up)
+                  fills the frame while the artwork itself is shown whole. */}
+              <span className="ad-backdrop" style={{ backgroundImage: `url("${src}")` }} aria-hidden="true" />
+              <ImageWithFallback src={src} fallback="" alt="" className="ad-image" loading="eager" onLoad={readRatio} />
             </div>
           ))}
         </div>
@@ -308,6 +331,12 @@ export function HomeScreen({ session, navigate, notify }) {
   const [ads, setAds] = useState([]);
   const [savedId, setSavedId] = useState(() => localStorage.getItem('mynaaiSavedSalonId') || null);
   const [location, setLocation] = useState(null);
+  const [locationBusy, setLocationBusy] = useState(false);
+  // A browser that has ALREADY blocked location will never show its prompt
+  // again — tapping "Use my location" then looks completely dead. That state
+  // opens the short settings sheet instead (this is the fix for the report
+  // "Enable location does not enable it and never asks").
+  const [locationSheetOpen, setLocationSheetOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [userName, setUserName] = useState(session?.user?.fullName || '');
@@ -365,7 +394,7 @@ export function HomeScreen({ session, navigate, notify }) {
     return { decorated, pagination: readSalonPagination(salonResult, decorated.length, pageNumber) };
   }, [gender, search, session?.userId]);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (freshLocation = null) => {
     const id = ++requestId.current;
     setLoading(true);
     setLoadError('');
@@ -373,7 +402,22 @@ export function HomeScreen({ session, navigate, notify }) {
     // The mobile dashboard waits for the best available browser location before
     // building the salon-list body. That lets the API do its proximity work as
     // well as giving the UI a reliable distance to sort and display.
-    const currentLocation = await getBrowserLocation();
+    //
+    // The GPS prompt is only opened automatically when this visitor has already
+    // granted location. If they have not, the list still loads (the API's own
+    // ordering is the fallback) and the labelled "Use my location" button in the
+    // notice below opens the browser prompt — never a prompt nobody asked for.
+    //
+    // `freshLocation` is passed by that button: the fix the user just granted
+    // must be used immediately, without re-reading a permission the browser may
+    // still be catching up on (which would silently reload the list unsorted).
+    // It is validated rather than trusted, because the same function is also
+    // wired straight to onClick handlers, which hand it a PointerEvent.
+    const fix = Number.isFinite(Number(freshLocation?.latitude)) && Number.isFinite(Number(freshLocation?.longitude))
+      ? { latitude: Number(freshLocation.latitude), longitude: Number(freshLocation.longitude) }
+      : null;
+    const permission = fix ? 'granted' : await readPermission('location');
+    const currentLocation = fix || (permission === 'granted' ? await getBrowserLocation() : null);
     if (id !== requestId.current) return;
     setLocation(currentLocation);
 
@@ -471,6 +515,39 @@ export function HomeScreen({ session, navigate, notify }) {
     return salons.filter(salon => !query || `${salon.name} ${salon.address} ${salon.location}`.toLowerCase().includes(query));
   }, [salons, search]);
 
+  // The in-context location ask: one labelled tap, its own popup, and a "no"
+  // that only costs the distance sorting — the list stays exactly as it is.
+  //
+  // The permission is read FIRST, because the two states need opposite actions:
+  //   · never asked ('default') → this tap opens the browser's own prompt;
+  //   · blocked ('denied')      → the browser will not prompt again, so the
+  //     sheet with the settings steps opens instead of a dead button;
+  //   · granted                 → just take a fresh fix and re-sort the list.
+  const enableLocation = useCallback(async () => {
+    setLocationBusy(true);
+    try {
+      const permission = await readPermission('location');
+      if (permission === 'denied' || permission === 'unsupported') {
+        setLocationSheetOpen(true);
+        return;
+      }
+      const result = await requestLocation();
+      if (result.ok) {
+        const fix = { latitude: result.latitude, longitude: result.longitude };
+        setLocation(fix);
+        await loadData(fix);
+        return;
+      }
+      if (result.state === 'denied') {
+        setLocationSheetOpen(true);
+        return;
+      }
+      notify?.('info', 'We could not read your location this time. Salons are still listed — try again in a moment.');
+    } finally {
+      setLocationBusy(false);
+    }
+  }, [loadData, notify]);
+
   // Browsing is open to everyone; only booking intent and personal actions
   // (bookmark) require a login. The guest's exact page is stashed so auth
   // returns them straight back here after login/register.
@@ -521,7 +598,7 @@ export function HomeScreen({ session, navigate, notify }) {
       {/* Section 1 — the discovery band: greeting, search and the male/female
           filter (which replaced the old dead-end "For you" button), with the
           ad carousel as its visual anchor. */}
-      <section className="home-band home-hero-band" aria-label="Find a salon">
+      <section className={cx('home-band', 'home-hero-band', ads.length > 0 && 'has-ads')} aria-label="Find a salon">
         <div className="home-topline"><div><span className="eyebrow">{isGuest ? 'SALON BOOKINGS, SIMPLIFIED' : 'NEARBY GROOMING'}</span><h1>{isGuest ? 'Find your salon' : `Hi ${firstName(userName)}`}</h1><p className="muted-line"><LocateFixed size={14} /> {location ? 'Using your current location' : isGuest ? 'Browse trusted salons around you — login only when you book' : 'Discover trusted specialists around you'}</p></div></div>
         <div className="home-search-row"><label className="search-field"><Search size={18} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Find salon, specialist..." aria-label="Search salons" />{search && <button onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label><GenderToggle value={gender} onChange={setGender} /></div>
         <AdCarousel ads={ads} />
@@ -530,8 +607,8 @@ export function HomeScreen({ session, navigate, notify }) {
           distinct website sections instead of one long app feed. */}
       <section className="home-band home-salons-band" aria-label="Salons near you">
         <div className="section-heading"><div><span className="eyebrow">CURATED FOR YOU</span><h2>Salons near you</h2></div><span className="result-count">{loading ? 'Updating…' : `${visibleSalons.length}${totalSalons && totalSalons > visibleSalons.length ? ` of ${totalSalons}` : ''} places`}</span></div>
-        {loadError && <div className="inline-notice"><CircleAlert size={16} /> {loadError} <button onClick={loadData}>Try again</button></div>}
-        {!loading && !location && <div className="inline-notice location-fallback-notice"><MapPin size={16} /> <span>Location is unavailable, so we are showing the available salon list without distance sorting.</span><button onClick={loadData}>Enable location</button></div>}
+        {loadError && <div className="inline-notice"><CircleAlert size={16} /> {loadError} <button onClick={() => loadData()}>Try again</button></div>}
+        {!loading && !location && <div className="inline-notice location-fallback-notice"><MapPin size={16} /> <span>Location is off, so this list is not sorted by distance — optional, and browsing works without it.</span><button onClick={enableLocation} disabled={locationBusy}>{locationBusy ? 'Checking…' : 'Use my location'}</button></div>}
         {loading ? <div className="salon-grid">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} />)}</div> : visibleSalons.length ? <>
           <div className="salon-grid">{visibleSalons.map(salon => <SalonCard key={salon.id} salon={salon} saved={savedId === salon.id || salon.isSaved} onSelect={openSalon} onBook={bookSalon} onShare={item => shareSalon(item, notify)} onBookmark={bookmark} userLocation={location} />)}</div>
           {/* Paging footer: a full-width tap target on phones, an automatic
@@ -549,6 +626,21 @@ export function HomeScreen({ session, navigate, notify }) {
       <div className="home-trust-row"><ShieldCheck size={16} /><span>Verified listings</span><i /><Clock3 size={16} /><span>Book in minutes</span><i /><Heart size={16} /><span>Made for your time</span></div>
       <TestimonialSection />
       <SiteFooter />
+      <PermissionSheet
+        open={locationSheetOpen}
+        kind="location"
+        state="denied"
+        onClose={() => { setLocationSheetOpen(false); }}
+        onGranted={async () => {
+          setLocationSheetOpen(false);
+          const current = await getBrowserLocation();
+          if (current) {
+            const fix = { latitude: current.latitude, longitude: current.longitude };
+            setLocation(fix);
+            await loadData(fix);
+          }
+        }}
+      />
     </div>
   );
 }
@@ -675,9 +767,17 @@ export function AccountScreen({ session, navigate, onLogout, notify, onSessionUp
   const toggleReminders = async () => {
     const next = !remindersOn;
     if (next && typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      try { await Notification.requestPermission(); } catch { /* prompt may be blocked */ }
-      if (Notification.permission !== 'granted') {
-        notify?.('info', 'Reminders need notification permission — allow it in the browser prompt.');
+      // The tap is the gesture, so the browser popup opens here (gesture-safe).
+      try { await requestNotifications(); } catch { /* prompt may be blocked */ }
+    }
+    if (next) {
+      // The live permission decides, not the page-load snapshot: somebody who
+      // allowed alerts in browser settings a minute ago must not be told off.
+      const state = await readPermission('notifications');
+      if (state !== 'granted') {
+        notify?.('info', state === 'denied'
+          ? 'Reminders need notifications. Allow them for this site in your browser settings, then switch this on again.'
+          : 'Reminders need notification permission — allow it in the browser prompt.');
         return;
       }
     }

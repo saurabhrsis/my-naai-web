@@ -308,8 +308,14 @@ img { display: block; max-width: 100%; }
 .ad-carousel { position: relative; overflow: hidden; border-radius: 16px; background: #1e2625; touch-action: pan-y; cursor: grab; }
 .ad-carousel:active { cursor: grabbing; }
 .ad-track { display: flex; transition: transform .35s ease; }
-.ad-slide { min-width: 100%; height: 176px; background: #1e2625; }
-.ad-image { width: 100%; height: 100%; object-fit: cover; }
+/* The ad frame takes the artwork's OWN shape: `--ad-ratio` is measured from the
+   image once it loads (clamped to a sane banner range), so an ad is shown whole
+   instead of being cropped by a fixed strip — the desktop complaint. The
+   blurred backdrop only fills whatever the height cap leaves over on an unusual
+   shape, and `contain` guarantees no part of the creative is ever cut. */
+.ad-slide { position: relative; min-width: 100%; height: auto; aspect-ratio: var(--ad-ratio, 3 / 2); min-height: 150px; max-height: var(--ad-max-height, 240px); overflow: hidden; background: #1e2625; }
+.ad-backdrop { position: absolute; inset: -8%; background-position: center; background-size: cover; filter: blur(26px) saturate(1.15); opacity: .45; }
+.ad-image { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: contain; }
 .carousel-dots { display: flex; justify-content: center; gap: 6px; margin-top: 10px; }
 .carousel-dot { width: 7px; height: 7px; padding: 0; border-radius: 7px; background: #555; }
 .carousel-dot.active { width: 18px; background: var(--gold); }
@@ -1396,7 +1402,7 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .home-topline { margin-bottom: 23px; }
   .home-search-row { max-width: 760px; }
   .home-band { padding: 22px; border-radius: 26px; margin-bottom: 22px; }
-  .ad-slide { height: 230px; }
+  .ad-carousel-wrap { --ad-max-height: min(420px, 50vh); }
   .salon-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
   .product-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
   .detail-hero { flex-direction: row; }
@@ -1487,11 +1493,33 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   /* Laptop/desktop scale-up: the headings and the discovery band grow with the
      rail so a 1366px laptop does not read like a stretched phone. */
   .section-heading h2 { font-size: 24px; }
-  .home-band { padding: 26px; }
-  .ad-slide { height: 260px; }
+  .home-band { padding: 24px 26px; margin-bottom: 18px; }
+  .ad-carousel-wrap { --ad-max-height: min(380px, 44vh); }
+  /* Laptop layout for the hero band: the greeting keeps the full width and the
+     promo moves BESIDE the search row, so the screen is used horizontally
+     instead of stacking a full-width strip under the filters — which is what
+     pushed the salon list so far down the page (and cropped every ad).
+     The guest shell has no sidebar, so it can split from 1024px; the signed-in
+     shell waits for 1200px in its own block below, where the sidebar has left
+     enough room. Either way the width on offer decides, not the window. */
+  .guest-shell .home-hero-band.has-ads { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, clamp(340px, 38%, 520px)); column-gap: 24px; align-items: start; }
+  .guest-shell .home-hero-band.has-ads .home-topline { grid-column: 1 / -1; margin-bottom: 16px; }
+  /* The search row fills its column (its own 760px cap would leave a gap before
+     the promo), so the filter and the ad read as one row. */
+  .guest-shell .home-hero-band.has-ads .home-search-row { max-width: 100%; margin-bottom: 0; }
+  .guest-shell .home-hero-band.has-ads .ad-carousel-wrap { margin-bottom: 0; }
+  .home-topline h1 { font-size: 40px; }
+  .home-topline { margin-bottom: 18px; }
 }
 
 @media (min-width: 1200px) {
+  .app-shell .home-hero-band.has-ads { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, clamp(340px, 38%, 520px)); column-gap: 24px; align-items: start; }
+  .app-shell .home-hero-band.has-ads .home-topline { grid-column: 1 / -1; margin-bottom: 16px; }
+  .app-shell .home-hero-band.has-ads .home-search-row { max-width: 100%; margin-bottom: 0; }
+  .app-shell .home-hero-band.has-ads .ad-carousel-wrap { margin-bottom: 0; }
+  /* A wider laptop gets a slightly taller promo, still measured from the
+     artwork so nothing is cropped. */
+  .ad-carousel-wrap { --ad-max-height: min(400px, 44vh); }
   .sidebar { width: 274px; }
   .workspace { width: calc(100% - 274px); }
   .workspace-content { padding-right: 6%; padding-left: 6%; }
@@ -1719,6 +1747,31 @@ img.image-fallback-tile {
    Phone users tap buttons; they do not read cards, so this row replaced both
    the old three-card stack and the later text panel. */
 .login-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: -10px 0 20px; }
+/* The permission card — one row per permission, one tap per row.
+   It replaced the old walls of instruction: a visitor reads two short lines and
+   taps; a "Not now" is remembered and the rows leave without nagging. */
+.perm-card { display: flex; flex-direction: column; gap: 8px; margin: 2px 0 16px; }
+.login-perm-card { max-width: 460px; }
+.perm-row { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 11px; border: 1px solid rgba(232,185,126,.22); border-radius: 13px; background: rgba(232,185,126,.06); }
+.perm-row-icon { width: 30px; height: 30px; display: flex; flex: none; align-items: center; justify-content: center; border-radius: 9px; color: #111; background: var(--gold); }
+.perm-row-icon-location { background: rgba(110,209,158,.9); }
+.perm-row-copy { min-width: 0; flex: 1; }
+.perm-row-copy strong { display: block; font-size: 12px; color: var(--white); }
+.perm-row-copy p { margin: 3px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.45; }
+.perm-row-actions { display: flex; flex: none; align-items: center; gap: 4px; }
+.perm-row .install-auth-button { flex: none; }
+.perm-location-button { border-color: rgba(110,209,158,.4); background: rgba(110,209,158,.14); color: #cfeede; }
+.perm-location-button:hover { background: rgba(110,209,158,.2); }
+.perm-dismiss { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 9px; background: transparent; color: var(--muted); cursor: pointer; }
+.perm-dismiss:hover { background: rgba(255,255,255,.06); color: var(--white); }
+.perm-state-on { display: inline-flex; flex: none; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 20px; background: rgba(110,209,158,.12); border: 1px solid rgba(110,209,158,.28); color: #9fe0bf; font-size: 10.5px; font-weight: 700; }
+.perm-row-account { margin: 0 0 8px; background: rgba(255,255,255,.03); border-color: var(--line); }
+.permission-gate-required { display: flex; align-items: flex-start; gap: 7px; margin: 0 0 12px; padding: 9px 11px; border-radius: 10px; background: rgba(242,123,116,.10); border: 1px solid rgba(242,123,116,.25); color: #ffb3ad; font-size: 11.5px; line-height: 1.5; }
+.permission-gate-required svg { flex: none; margin-top: 1px; }
+@media (max-width: 420px) {
+  .perm-row { flex-wrap: wrap; }
+  .perm-row-actions { width: 100%; justify-content: flex-end; }
+}
 /* The permission ask is the step sign-in depends on, so its pill carries the
    gold fill; the install pill keeps the outline style of .install-auth-button. */
 .allow-alerts-button { border-color: transparent; background: var(--gold); color: #0d0e0e; }

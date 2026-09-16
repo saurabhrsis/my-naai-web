@@ -2,6 +2,21 @@ import { getApps, initializeApp } from 'firebase/app';
 import { deleteToken, getMessaging, getToken, isSupported, onMessage } from 'firebase/messaging';
 import { getErrorMessage } from '../components/Shared';
 import { softNavigate } from './routes';
+import {
+  detectBrowser,
+  isEmbeddedFrame,
+  isIosDevice,
+  isIosPwaInstalled,
+  readPermission,
+  requestNotifications,
+  watchPermission,
+} from './permissions';
+
+// The permission plumbing (live reads, change watching, gesture-safe asks and
+// the browser/device detection) lives in ./permissions so the login card, the
+// Alerts & permissions centre and this module can never drift apart. The names
+// below are re-exported because they were public API here first.
+export { detectBrowser, isEmbeddedFrame, isIosDevice, isIosPwaInstalled };
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -69,103 +84,94 @@ function waitForActiveWorker(registration, timeout = 8000) {
   });
 }
 
-// Unified push service worker registration at ROOT scope "/"
-// This is critical for PWA: when app is installed and not in recent, the root SW is woken by push
-// Old registrations at sub-scope are migrated automatically
-async function getPushServiceWorker() {
-  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return null;
-  if (registrationPromise) {
-    try {
-      const existing = await registrationPromise;
-      if (existing) return existing;
-    } catch {
-      // fall through
-    }
-    registrationPromise = undefined;
-  }
+// ONE service worker, ONE scope.
+//
+// /firebase-messaging-sw.js is the unified worker: it caches the app shell (so
+// the PWA stays installable) AND handles Firebase Cloud Messaging, including
+// the Accept / Reject / Delay action buttons when the app is closed. Registering
+// a second script (the old /sw.js) at the same "/" scope replaced this
+// registration on every load, which is a genuine cause of both "notifications
+// stopped after a while" and "no active service worker" token errors.
+export const PUSH_SW_URL = '/firebase-messaging-sw.js';
+export const PUSH_SW_SCOPE = '/';
 
-  // Try to find existing registration at root scope first (new unified SW)
-  try {
-    if (navigator.serviceWorker.getRegistration) {
-      // Check root scope - this is where PWA lives and where push should be for background when closed
-      const rootReg = await navigator.serviceWorker.getRegistration('/');
-      if (rootReg) {
-        const script = rootReg.active?.scriptURL || rootReg.waiting?.scriptURL || rootReg.installing?.scriptURL || '';
-        // If root SW is ours (contains firebase or is sw.js), use it
-        if (String(script).includes('firebase-messaging-sw') || String(script).includes('sw.js')) {
-          const active = await waitForActiveWorker(rootReg, 3000);
-          if (active) return active;
-        }
-      }
-      // Fallback: check old sub-scope for migration
-      const oldScope = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope');
-      if (oldScope) {
-        const active = await waitForActiveWorker(oldScope, 2000);
+// Only the unified FCM worker is reusable. A root registration left by an older
+// release (plain /sw.js, registered without the Firebase config in its query
+// string) cannot receive background pushes, so it is replaced by the unified
+// worker instead of being trusted.
+function isPushWorkerScript(url) {
+  return String(url || '').includes('firebase-messaging-sw');
+}
+
+function isOurWorkerScript(url) {
+  const value = String(url || '');
+  return value.includes('firebase-messaging-sw') || value.includes('sw.js');
+}
+
+// Called once from main.jsx and reused by every token request. The Firebase web
+// config travels in the query string (the worker cannot read Vite env).
+export function registerPushServiceWorker() {
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return Promise.resolve(null);
+  if (registrationPromise) return registrationPromise;
+  registrationPromise = (async () => {
+    try {
+      try {
+        await Promise.race([navigator.serviceWorker.ready, delay(1500)]);
+      } catch { /* no worker yet — register below */ }
+
+      const existing = navigator.serviceWorker.getRegistration
+        ? await navigator.serviceWorker.getRegistration(PUSH_SW_SCOPE)
+        : null;
+      if (existing && isPushWorkerScript(existing.active?.scriptURL || existing.waiting?.scriptURL || existing.installing?.scriptURL)) {
+        const active = await waitForActiveWorker(existing, 3000);
         if (active) return active;
       }
-      // Check all registrations
-      if (navigator.serviceWorker.getRegistrations) {
-        const all = await navigator.serviceWorker.getRegistrations();
-        const ours = all.find(r => {
-          const url = r.active?.scriptURL || r.waiting?.scriptURL || r.installing?.scriptURL || '';
-          return String(url).includes('firebase-messaging-sw') || (String(url).includes('sw.js') && r.scope === location.origin + '/');
-        });
-        if (ours) {
-          const active = await waitForActiveWorker(ours, 3000);
-          if (active) return active;
-        }
+
+      const registration = await navigator.serviceWorker.register(
+        `${PUSH_SW_URL}?${queryConfig()}`,
+        { scope: PUSH_SW_SCOPE },
+      );
+      const active = await waitForActiveWorker(registration, 8000);
+      try {
+        await Promise.race([navigator.serviceWorker.ready, delay(1000)]);
+      } catch {}
+      return active || registration;
+    } catch (error) {
+      console.debug(getErrorMessage(error, 'Firebase push service worker registration failed.'));
+      registrationPromise = undefined;
+      return null;
+    }
+  })();
+  return registrationPromise;
+}
+
+// The registration every push call uses. It never registers a competing script:
+// either the existing root worker is ours and active, or the unified worker is
+// registered — once.
+async function getPushServiceWorker() {
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return null;
+
+  try {
+    if (navigator.serviceWorker.getRegistration) {
+      const rootReg = await navigator.serviceWorker.getRegistration(PUSH_SW_SCOPE);
+      const script = rootReg?.active?.scriptURL || rootReg?.waiting?.scriptURL || rootReg?.installing?.scriptURL || '';
+      if (rootReg && isPushWorkerScript(script)) {
+        const active = await waitForActiveWorker(rootReg, 3000);
+        if (active) return active;
+      }
+      // An old sub-scope registration from a previous release: use it if it is
+      // still the only worker, so those users keep their push subscription.
+      const oldScope = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope');
+      if (oldScope && !rootReg) {
+        const active = await waitForActiveWorker(oldScope, 2000);
+        if (active) return active;
       }
     }
   } catch (error) {
     console.debug(getErrorMessage(error, 'Could not read existing service worker registration.'));
   }
 
-  // Register fresh at ROOT scope "/" - critical for PWA background notifications when not in recent
-  if (!registrationPromise) {
-    registrationPromise = (async () => {
-      try {
-        try {
-          await Promise.race([navigator.serviceWorker.ready, delay(1500)]);
-        } catch {}
-
-        // Try root scope with firebase-messaging-sw.js first (unified SW)
-        let registration;
-        try {
-          registration = await navigator.serviceWorker.register(
-            `/firebase-messaging-sw.js?${queryConfig()}`,
-            { scope: '/' }
-          );
-        } catch (rootError) {
-          console.debug('Root scope FCM registration failed, trying sw.js', rootError);
-          // Fallback to sw.js at root
-          try {
-            registration = await navigator.serviceWorker.register(
-              `/sw.js?${queryConfig()}`,
-              { scope: '/' }
-            );
-          } catch (swError) {
-            console.debug('sw.js registration also failed, trying sub-scope', swError);
-            // Last resort: sub-scope (old behavior)
-            registration = await navigator.serviceWorker.register(
-              `/firebase-messaging-sw.js?${queryConfig()}`,
-              { scope: '/firebase-cloud-messaging-push-scope' }
-            );
-          }
-        }
-
-        const active = await waitForActiveWorker(registration, 8000);
-        try {
-          await Promise.race([navigator.serviceWorker.ready, delay(1000)]);
-        } catch {}
-        return active || registration;
-      } catch (error) {
-        console.debug(getErrorMessage(error, 'Firebase push service worker registration failed.'));
-        registrationPromise = undefined;
-        return null;
-      }
-    })();
-  }
-  return registrationPromise;
+  return registerPushServiceWorker();
 }
 
 async function peekPushServiceWorker() {
@@ -187,101 +193,22 @@ async function peekPushServiceWorker() {
   }
 }
 
-export function isIosDevice() {
-  if (typeof navigator === 'undefined') return false;
-  return /iphone|ipad|ipod/i.test(navigator.userAgent || '') || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+// Live notification permission ('granted' | 'denied' | 'default' |
+// 'unsupported'), read from ./permissions — see that module for why the static
+// `Notification.permission` snapshot is never trusted first.
+export function readNotificationPermission() {
+  return readPermission('notifications');
 }
 
-export function isIosPwaInstalled() {
-  return isIosDevice() && (window.matchMedia?.('(display-mode: standalone)').matches === true || navigator.standalone === true);
-}
-
-export function detectBrowser() {
-  if (typeof navigator === 'undefined') return 'other';
-  const agent = navigator.userAgent || '';
-  const android = /android/i.test(agent);
-  if (isIosDevice()) return /crios/i.test(agent) ? 'ios-chrome' : 'ios-safari';
-  if (/samsungbrowser/i.test(agent)) return 'samsung';
-  if (/firefox|fxios/i.test(agent)) return 'firefox';
-  if (/edg\//i.test(agent)) return 'edge';
-  if (/opr\/|opera/i.test(agent)) return 'opera';
-  if (/chrome|crios/i.test(agent)) return android ? 'chrome-android' : 'chrome-desktop';
-  if (/safari/i.test(agent)) return 'safari-desktop';
-  return android ? 'chrome-android' : 'other';
-}
-
-// `Notification.permission` is a snapshot from when the page loaded, so it can
-// keep reading "denied" after the user has just switched notifications back on
-// in the browser's own settings (Chrome and Samsung Internet on Android are the
-// usual offenders — the fresh value only arrives after a reload). The
-// Permissions API is the live source of truth: it is what the browser's
-// settings UI writes to, and it fires change events. Read it first and fall
-// back to the static snapshot only when it is unavailable.
-export async function readNotificationPermission() {
-  if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
-  try {
-    if (navigator.permissions?.query) {
-      const status = await navigator.permissions.query({ name: 'notifications' });
-      if (status && ['granted', 'denied', 'prompt'].includes(status.state)) {
-        return status.state === 'prompt' ? 'default' : status.state;
-      }
-    }
-  } catch (permissionError) {
-    console.debug(getErrorMessage(permissionError, 'Live notification permission was not available.'));
-  }
-  return Notification.permission || 'default';
-}
-
-// Calls back the moment the browser reports a permission change: the
-// Permissions API fires `change` when the user flips the setting in the
-// browser's own UI (lock icon, site settings, Android app settings). This is
-// what lets the login card flip from "Blocked" to "On" by itself, without
-// waiting for a tap on Check. Returns an unsubscribe function.
+// Calls back the moment the browser reports a permission change. Returns an
+// unsubscribe function.
 export function watchNotificationPermission(callback) {
-  if (typeof window === 'undefined' || !navigator.permissions?.query) return () => {};
-  let stopped = false;
-  let status = null;
-  navigator.permissions
-    .query({ name: 'notifications' })
-    .then(result => {
-      if (stopped) return;
-      status = result;
-      status.onchange = () => {
-        try { callback(); } catch (callbackError) { console.debug(getErrorMessage(callbackError, 'Permission change handler failed.')); }
-      };
-    })
-    .catch(() => { /* older browsers: the focus re-check still covers this */ });
-  return () => {
-    stopped = true;
-    try { if (status) status.onchange = null; } catch {}
-  };
+  return watchPermission('notifications', callback);
 }
 
-// True when My Naai is rendered inside another page's <iframe> (an embedded
-// preview, a web view, a portal). Browsers force notification permission to
-// "denied" for embedded frames, so the lock-icon unblock steps can never fix
-// the block from inside the frame — the only honest advice is to open My Naai
-// in its own browser tab.
-export function isEmbeddedFrame() {
-  try {
-    return typeof window !== 'undefined' && window.top !== window.self;
-  } catch {
-    return true; // reading window.top threw: a cross-origin frame for sure
-  }
-}
-
-export async function requestNotificationPermission() {
-  if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
-  const current = await readNotificationPermission();
-  if (current === 'granted') return 'granted';
-  if (current === 'denied') return 'denied';
-  try {
-    const result = await Notification.requestPermission();
-    return result || 'default';
-  } catch (error) {
-    console.debug(getErrorMessage(error, 'Notification permission request failed.'));
-    return (await readNotificationPermission()) || 'default';
-  }
+// Gesture-safe: safe (and correct) to call straight from a tap handler.
+export function requestNotificationPermission() {
+  return requestNotifications();
 }
 
 export async function getPushStatus() {
@@ -321,12 +248,26 @@ export async function getPushStatus() {
   return { state: 'unavailable', reason: 'Notifications are allowed in this browser — the final connection step did not finish yet. Tap Try again; one retry usually completes it.' };
 }
 
+// The one function that turns "the browser is allowed to notify" into the FCM
+// registration token the API stores as `deviceToken`.
+//
+// Two failure modes used to cost real users here:
+//   · the permission was read from the static `Notification.permission`
+//     snapshot, so a visitor who had just switched alerts back on in their
+//     browser settings was still treated as blocked;
+//   · a token was demanded immediately after `requestPermission()` resolved,
+//     before the fresh grant had propagated through the browser.
+// The token is now minted from the LIVE permission with retries that survive a
+// slow service-worker start-up (the usual "first tap did nothing" report), and
+// callers are never blocked on it — signing in works without alerts.
 export async function getPushToken({ requestPermission = false } = {}) {
   if (!isPushConfigured() || typeof window === 'undefined' || !('Notification' in window)) return '';
   const messaging = await getMessagingClient();
   if (!messaging) return '';
-  let permission = Notification.permission;
+
+  let permission = await readNotificationPermission();
   if (permission === 'default' && requestPermission) {
+    // Gesture-safe ask (see ./permissions): resolves with what the user chose.
     permission = await requestNotificationPermission();
   }
   if (permission !== 'granted') {
@@ -334,19 +275,22 @@ export async function getPushToken({ requestPermission = false } = {}) {
     return '';
   }
 
+  const ATTEMPTS = 4;
   let lastError = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) await delay(600 * attempt);
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    if (attempt > 0) await delay(500 * attempt);
     try {
       const registration = await getPushServiceWorker();
       if (!registration) {
         registrationPromise = undefined;
-        if (attempt < 2) continue;
+        if (attempt < ATTEMPTS - 1) continue;
         return '';
       }
-      if (attempt === 1) {
+      if (attempt > 0) {
+        // A just-updated grant often needs the registration to be fully
+        // active before Firebase will mint a token.
         try {
-          await Promise.race([navigator.serviceWorker.ready, delay(1000)]);
+          await Promise.race([navigator.serviceWorker.ready, delay(1200)]);
         } catch {}
       }
       const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: registration });
@@ -354,7 +298,7 @@ export async function getPushToken({ requestPermission = false } = {}) {
         try { localStorage.setItem('FCM_TOKEN', token); } catch {}
         return token;
       }
-      if (attempt === 2) {
+      if (attempt === ATTEMPTS - 1) {
         try { localStorage.removeItem('FCM_TOKEN'); } catch {}
         return '';
       }
@@ -364,9 +308,9 @@ export async function getPushToken({ requestPermission = false } = {}) {
       console.debug(getErrorMessage(error, 'Firebase could not generate a browser notification token.'));
       if (msg.includes('no active service worker') || msg.includes('push subscription') || msg.includes('abort') || msg.includes('network')) {
         registrationPromise = undefined;
-        if (attempt < 2) continue;
+        if (attempt < ATTEMPTS - 1) continue;
       }
-      if (attempt === 2) {
+      if (attempt === ATTEMPTS - 1) {
         return '';
       }
     }
