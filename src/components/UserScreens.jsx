@@ -83,9 +83,10 @@ import {
   formatDateTime,
   formatTime,
   firstName,
+  useIsAppSurface,
 } from './Shared';
 import { NotificationDiagnostics } from './NotificationDiagnostics';
-import { readPermission, requestLocation } from '../lib/permissions';
+import { readPermission, requestLocation, requestNotifications } from '../lib/permissions';
 import { PermissionSheet } from './PermissionUI';
 
 const USER_FALLBACK_IMAGE = '/assets/brand/naai-logo-dark.svg';
@@ -1370,6 +1371,10 @@ const TESTIMONIALS = [
 // simply clamped at both ends. Phones show one review per screen, desktops
 // three (see .testimonial-card in styles.css).
 export function TestimonialSection() {
+  // Reviews are marketing: they belong on the public website, not inside the
+  // signed-in app. Hooks still run above this gate so the component obeys the
+  // rules of hooks on every render.
+  const isApp = useIsAppSurface();
   const trackRef = useRef(null);
   const userDroveRef = useRef(false);
   const indexRef = useRef(0);
@@ -1446,6 +1451,7 @@ export function TestimonialSection() {
     if (clamped !== indexRef.current) { indexRef.current = clamped; setIndex(clamped); }
   };
   const stopAuto = () => { userDroveRef.current = true; };
+  if (isApp) return null;
   return (
     <section className="testimonial-section" aria-label="What people say about My Naai" onPointerDown={stopAuto}>
       <div className="section-heading">
@@ -1556,6 +1562,11 @@ export function PartnerScreen({ navigate }) {
 }
 
 export function SiteFooter() {
+  // The website footer is website chrome. Inside the signed-in shell the app
+  // already carries the sidebar (desktop) or the bottom nav (phone/tablet), so
+  // a second navigation block stacked under every screen is noise — and on
+  // phones it sat beneath the fixed bottom bar. App surface renders nothing.
+  if (useIsAppSurface()) return null;
   return (
     <footer className="site-footer">
       <div className="site-footer-grid">

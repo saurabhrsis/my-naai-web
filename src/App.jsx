@@ -5,6 +5,7 @@ import {
   ChevronRight,
   CircleAlert,
   CircleUserRound,
+  Download,
   HelpCircle,
   History,
   Info,
@@ -67,7 +68,7 @@ import {
 import { SubscriptionScreen } from './components/SubscriptionScreen';
 import { ConfirmProvider, LOGOUT_CONFIRM, useConfirm } from './components/ConfirmDialog';
 import { SALON_ABOUT_CONTENT, SALON_FAQ_CONTENT, SALON_TERMS_CONTENT } from './lib/salonContent';
-import { Button, Field, Modal, SelectField, Spinner, getBrowserLocation, getErrorMessage, cx } from './components/Shared';
+import { Button, Field, Modal, SelectField, Spinner, SurfaceProvider, getBrowserLocation, getErrorMessage, cx } from './components/Shared';
 
 const USER_NAV = [
   { name: 'home', label: 'Discover', icon: Scissors },
@@ -1063,10 +1064,20 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
       : render();
   // Navigation for shell chrome should also respect the paywall.
   const shellNavigate = isSubscriptionLocked ? safeNavigate : navigate;
-  return <div className={cx('app-shell', isSalon && 'salon-shell', isSubscriptionGateScreen && 'subscription-gate-shell', !showBottomNav && 'utility-shell')}>
+  // Everything below is the APP, not the website: the screens shared with the
+  // public site (home, salon page, About/FAQ/Terms/Privacy, Contact) drop their
+  // marketing footer and review carousel here. See SurfaceProvider in Shared.jsx.
+  return <SurfaceProvider value="app"><div className={cx('app-shell', isSalon && 'salon-shell', isSubscriptionGateScreen && 'subscription-gate-shell', !showBottomNav && 'utility-shell')}>
     {!isSubscriptionGateScreen && <Sidebar session={session} nav={nav} route={route} navigate={shellNavigate} onLogout={onLogout} notifyInstall={notifyInstall} />}
     <main className="workspace">
-      {!isSubscriptionGateScreen && <div className="mobile-shell-bar"><Brand /><button className="notification-button" aria-label="Notifications" onClick={() => shellNavigate('notifications')}><Bell size={18} /><span className="notification-ping" /></button></div>}
+      {!isSubscriptionGateScreen && <MobileShellBar
+        session={session}
+        nav={nav}
+        route={route}
+        navigate={shellNavigate}
+        onLogout={onLogout}
+        notifyInstall={notifyInstall}
+      />}
       <div className={cx('workspace-content', (isSubscriptionGateScreen || utilityRoutes.includes(route.name)) && 'utility-content', isSubscriptionGateScreen && 'subscription-gate-content')}>
         {isSubscriptionLocked && (
           <div className="subscription-lock-notice" role="alert">
@@ -1080,7 +1091,7 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
     </main>
     {!isSubscriptionGateScreen && showBottomNav && <MobileNav nav={nav} route={route} navigate={shellNavigate} />}
     {toast && <div className="toast-position"><div className={cx('toast', `toast-${toast.type || 'info'}`)} role="status"><span className="toast-mark">{toast.type === 'error' ? '!' : '✓'}</span><span>{toast.message}</span><button onClick={() => setToast(null)} aria-label="Dismiss"><X size={15} /></button></div></div>}
-  </div>;
+  </div></SurfaceProvider>;
 }
 
 function SubscriptionGateLoading() {
@@ -1092,6 +1103,75 @@ function Sidebar({ session, nav, route, navigate, onLogout, notifyInstall }) {
   const confirm = useConfirm();
   const signOut = async () => { if (await confirm(LOGOUT_CONFIRM)) onLogout?.(); };
   return <aside className="sidebar"><Brand /><div className="sidebar-role"><span className="role-mark">{isSalon ? <Store size={15} /> : <Scissors size={15} />}</span><span><small>Signed in as</small><strong>{isSalon ? 'Salon partner' : 'Customer'}</strong></span></div><nav className="sidebar-nav"><button className={route.name === 'notifications' ? 'active' : ''} onClick={() => navigate('notifications')}><Bell size={18} /><span>Notifications</span>{route.name === 'notifications' && <i />}</button>{nav.map(item => <button key={item.name} className={route.name === item.name ? 'active' : ''} onClick={() => navigate(item.name)}><item.icon size={18} /><span>{item.label}</span>{route.name === item.name && <i />}</button>)}</nav><div className="sidebar-bottom">{notifyInstall && <button className="install-side-button" onClick={notifyInstall}><Download size={16} /><span>Install My Naai</span></button>}<div className="sidebar-tip"><Sparkles size={16} /><p>{isSalon ? 'Keep your profile fresh to stand out nearby.' : 'Your next great look is closer than you think.'}</p></div><button className="sidebar-logout" onClick={signOut}><LogOut size={16} /> Sign out</button></div></aside>;
+}
+
+// The in-app top bar for phones and tablets (the sidebar takes over at 1024px).
+//
+// It used to be a brand + a bell and nothing else, which left two holes:
+//   1. No menu. Below 1024px there is no sidebar, and the bottom nav only
+//      renders on the four primary routes — so every utility screen (salon
+//      detail, schedule, notifications, subscription, the profile editor…) had
+//      NO navigation at all on an iPad. The hamburger fixes that: every route,
+//      Sign out and Install now live one tap away at every width.
+//   2. The bell had no real hit area and no accessible state.
+// `.mobile-menu-button` existed in the stylesheet for this control but was
+// never rendered — this is that button, finally wired up.
+function MobileShellBar({ session, nav, route, navigate, onLogout, notifyInstall }) {
+  const isSalon = session.role === 'SALON';
+  const [menuOpen, setMenuOpen] = useState(false);
+  const barRef = useRef(null);
+  const confirm = useConfirm();
+  // Close on navigation (including browser back/forward), on Escape and on any
+  // tap outside the bar — a drawer that outlives its tap is a trap.
+  useEffect(() => { setMenuOpen(false); }, [route.name, route.params?.salonId]);
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onKeyDown = event => { if (event.key === 'Escape') setMenuOpen(false); };
+    const onPointerDown = event => { if (!barRef.current?.contains(event.target)) setMenuOpen(false); };
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => { document.removeEventListener('keydown', onKeyDown); document.removeEventListener('pointerdown', onPointerDown); };
+  }, [menuOpen]);
+  const go = name => { setMenuOpen(false); navigate(name); };
+  const signOut = async () => { setMenuOpen(false); if (await confirm(LOGOUT_CONFIRM)) onLogout?.(); };
+  const notificationsActive = route.name === 'notifications';
+  return <div className={cx('mobile-shell-bar', menuOpen && 'menu-open')} ref={barRef}>
+    <Brand />
+    <div className="mobile-shell-actions">
+      <button
+        className={cx('notification-button', notificationsActive && 'active')}
+        aria-label="Notifications"
+        aria-current={notificationsActive ? 'page' : undefined}
+        onClick={() => go('notifications')}
+      >
+        <Bell size={18} />
+        <span className="notification-ping" />
+      </button>
+      <button
+        type="button"
+        className="mobile-menu-button"
+        aria-expanded={menuOpen}
+        aria-controls="app-shell-menu"
+        aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+        onClick={() => setMenuOpen(open => !open)}
+      >
+        {menuOpen ? <X size={19} /> : <Menu size={19} />}
+      </button>
+    </div>
+    <nav className="mobile-shell-menu" id="app-shell-menu" aria-label="App navigation">
+      <span className="mobile-shell-menu-role">{isSalon ? <Store size={14} /> : <Scissors size={14} />}{isSalon ? 'Salon partner' : 'Customer'}</span>
+      {nav.map(item => (
+        <button key={item.name} className={cx(route.name === item.name && 'active')} aria-current={route.name === item.name ? 'page' : undefined} onClick={() => go(item.name)}>
+          <item.icon size={18} /><span>{item.label}</span>
+        </button>
+      ))}
+      <button className={cx(notificationsActive && 'active')} aria-current={notificationsActive ? 'page' : undefined} onClick={() => go('notifications')}>
+        <Bell size={18} /><span>Notifications</span>
+      </button>
+      {notifyInstall && <button onClick={() => { setMenuOpen(false); notifyInstall(); }}><Download size={18} /><span>Install My Naai</span></button>}
+      <button className="mobile-shell-menu-logout" onClick={signOut}><LogOut size={18} /><span>Sign out</span></button>
+    </nav>
+  </div>;
 }
 
 function MobileNav({ nav, route, navigate }) { return <nav className="mobile-nav">{nav.map(item => <button key={item.name} className={route.name === item.name ? 'active' : ''} onClick={() => navigate(item.name)}><item.icon size={20} /><span>{item.label.replace('Customer ', '').replace('My ', '')}</span></button>)}</nav>; }
