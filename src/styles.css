@@ -223,7 +223,7 @@ img { display: block; max-width: 100%; }
 .registration-progress span { height: 4px; flex: 1; border-radius: 4px; background: var(--card); }
 .registration-progress span.active { background: var(--gold); }
 .registration-card .auth-subtitle { margin-bottom: 26px; }
-.type-option-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+.type-option-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
 .type-option-grid button { min-height: 45px; border: 1px solid var(--line); border-radius: 11px; background: var(--card); color: var(--muted); font-size: 12px; font-weight: 700; }
 .type-option-grid button.active { border-color: var(--gold); color: #111; background: var(--gold); }
 .registration-location { display: flex; align-items: center; gap: 7px; margin-top: 13px; padding: 10px 11px; border: 1px solid rgba(243,200,110,.24); border-radius: 11px; color: var(--yellow); background: rgba(243,200,110,.07); font-size: 10px; line-height: 1.35; }
@@ -251,13 +251,48 @@ img { display: block; max-width: 100%; }
    edge-to-edge), which used to cut the app name and the notification bell in
    half. Painting the bar with the app background also stops scrolled content
    from showing through the status bar strip. */
+/* `position: relative` anchors the dropdown panel below. */
 .mobile-shell-bar { position: sticky; top: 0; z-index: 30; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: calc(6px + var(--safe-top)) max(15px, var(--safe-right)) 12px max(15px, var(--safe-left)); background: var(--black); }
 .mobile-shell-bar .brand { min-width: 0; }
 .mobile-shell-bar .brand-mark { width: 44px; height: 44px; border-radius: 13px; }
 .mobile-shell-bar .brand-cap { font-size: 29px; }
 .mobile-shell-bar .brand-lower { font-size: 23px; }
-.mobile-menu-button { display: none; align-items: center; justify-content: center; width: 35px; height: 35px; border-radius: 50%; color: var(--white); background: var(--card); }
-.mobile-nav { position: fixed; z-index: 40; left: max(10px, var(--safe-left)); right: max(10px, var(--safe-right)); bottom: max(9px, var(--safe-bottom)); display: grid; grid-template-columns: repeat(4, 1fr); padding: 8px 5px 7px; border: 1px solid rgba(255,255,255,.1); border-radius: 20px; background: rgba(17,20,20,.94); box-shadow: 0 12px 45px rgba(0,0,0,.5); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
+.mobile-shell-actions { display: flex; flex: none; align-items: center; gap: 9px; }
+/* The in-app hamburger. This rule used to be `display: none` for a button that
+   was never rendered at all, which is why tablets had no menu: below 1024px
+   there is no sidebar, and the bottom nav only appears on the four primary
+   routes. It is a real 40px control now, matched in size to the bell beside it
+   so the pair reads as one set instead of two mismatched circles. */
+.mobile-menu-button { position: relative; display: inline-flex; flex: none; align-items: center; justify-content: center; width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 50%; color: var(--white); background: var(--card); transition: background .18s, color .18s, border-color .18s; }
+.mobile-menu-button svg { flex: none; }
+/* Grow the tap target to Apple's 44pt minimum without changing the visual. */
+.mobile-menu-button::after { content: ''; position: absolute; inset: -3px; }
+.mobile-menu-button:hover { color: var(--gold); background: var(--card-raised); }
+.mobile-menu-button[aria-expanded="true"] { color: #111; background: var(--gold); border-color: var(--gold); }
+/* The drawer: a child of the sticky bar, so it inherits its stacking context
+   and slides in directly underneath instead of reflowing the bar. */
+.mobile-shell-menu {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 1;
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 9px max(15px, var(--safe-right)) calc(12px + var(--safe-bottom)) max(15px, var(--safe-left));
+  border-bottom: 1px solid var(--line);
+  background: rgba(11, 13, 13, .985);
+  -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+  box-shadow: 0 22px 48px rgba(0, 0, 0, .5);
+  max-height: calc(var(--viewport-height) - 78px); overflow-y: auto; overscroll-behavior: contain;
+  opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(-6px);
+  transition: opacity .18s ease, transform .18s ease, visibility .18s;
+}
+.mobile-shell-bar.menu-open .mobile-shell-menu { opacity: 1; visibility: visible; pointer-events: auto; transform: none; }
+.mobile-shell-menu-role { display: flex; align-items: center; gap: 7px; padding: 4px 12px 8px; color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.mobile-shell-menu-role svg { color: var(--gold); }
+.mobile-shell-menu button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; padding: 0 12px; border-radius: 12px; color: var(--muted-light); background: transparent; font-size: 14px; font-weight: 600; text-align: left; }
+.mobile-shell-menu button svg { flex: none; }
+.mobile-shell-menu button:hover { color: var(--white); background: rgba(255, 255, 255, .05); }
+.mobile-shell-menu button.active { color: var(--gold); background: var(--gold-wash); }
+.mobile-shell-menu-logout { margin-top: 5px; color: #ff9d95 !important; border-top: 1px solid var(--line); border-radius: 0 0 12px 12px !important; }
+.mobile-shell-menu-logout:hover { background: rgba(242, 123, 116, .1) !important; }
+.mobile-nav { position: fixed; z-index: 40; left: max(10px, var(--safe-left)); right: max(10px, var(--safe-right)); bottom: max(9px, var(--safe-bottom)); display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 8px 5px 7px; border: 1px solid rgba(255,255,255,.1); border-radius: 20px; background: rgba(17,20,20,.94); box-shadow: 0 12px 45px rgba(0,0,0,.5); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
 .mobile-nav button { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 3px 2px; color: #6f7978; background: transparent; font-size: 9px; font-weight: 700; white-space: nowrap; }
 .mobile-nav button.active { color: var(--gold); }
 .mobile-nav button.active svg { filter: drop-shadow(0 0 5px rgba(232,185,126,.35)); }
@@ -271,11 +306,23 @@ img { display: block; max-width: 100%; }
 .page-header-action { display: flex; align-items: center; flex: none; gap: 8px; }
 .page-actions { display: flex; align-items: center; gap: 7px; }
 .notification-button, .refresh-icon-button { position: relative; flex: none; width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--gold); color: #111; }
+/* The icon must never be squeezed by the flex parent — a shrunk lucide glyph is
+   what made the bell look clipped/lopsided next to the menu button. */
+.notification-button svg, .refresh-icon-button svg { flex: none; }
 /* 44pt is Apple's minimum hit target; the bell is 38px, so the tap area is grown
    without changing how the button looks. */
 .notification-button::after { content: ''; position: absolute; inset: -4px; }
+/* In the shell bar the bell is sized to its neighbour, the hamburger, so the
+   two form an even pair. */
+.mobile-shell-bar .notification-button { width: 40px; height: 40px; }
+.mobile-shell-bar .notification-button.active { box-shadow: 0 0 0 2px rgba(232, 185, 126, .35); }
 .refresh-icon-button { background: var(--card); color: var(--gold); border: 1px solid var(--line); }
-.notification-ping { position: absolute; top: 8px; right: 8px; width: 6px; height: 6px; border: 1px solid #111; border-radius: 50%; background: var(--red); }
+/* The unread dot belongs ON the rim of the round button, not floating inside
+   it. At top/right 8px on a 38-40px circle it landed well within the gold disc
+   and read as a stray speck in the middle of the bell. Pinning it to the
+   top-right corner puts it where a badge is expected, and the ring is the page
+   background so it reads as a separate badge rather than a hole in the icon. */
+.notification-ping { position: absolute; top: -1px; right: -1px; width: 10px; height: 10px; border: 2px solid var(--black); border-radius: 50%; background: var(--red); }
 .refresh-text-button, .catalog-label { display: inline-flex; align-items: center; gap: 6px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 10px; color: #d6dcdb; background: var(--card); font-size: 11.5px; font-weight: 700; }
 .refresh-text-button:disabled { cursor: default; color: #8d9493; opacity: .72; }
 .catalog-label { color: var(--gold); border-color: var(--line-strong); }
@@ -387,7 +434,13 @@ img { display: block; max-width: 100%; }
 .booking-tabs button span { margin-left: 4px; opacity: .7; }
 .booking-list, .queue-groups, .history-list, .notification-list { display: flex; flex-direction: column; gap: 12px; }
 .booking-card { display: flex; min-height: 143px; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: var(--card); }
-.booking-calendar { width: 61px; flex: nolex; flex-direction: column; align-items: center; justify-content: center; border-right: 1px solid var(--line); background: rgba(232,185,126,.045); }
+/* The date rail. This rule used to read `flex: nolex` — not a value, so the
+   whole declaration was dropped AND the intended `display: flex` was never
+   there to begin with. The result: `flex-direction`, `align-items` and
+   `justify-content` had nothing to act on, so Mon/24/Sat rendered as inline
+   text that wrapped inside a 61px column and blew the card's height out on
+   iPad. It is an explicit, non-shrinking flex column now. */
+.booking-calendar { width: 61px; flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center; border-right: 1px solid var(--line); background: rgba(232,185,126,.045); }
 .booking-calendar span { color: var(--gold); font-size: 10px; font-weight: 700; text-transform: uppercase; }
 .booking-calendar strong { margin: 5px 0 2px; font-size: 26px; line-height: 1; }
 .booking-calendar small { color: var(--muted); font-size: 10px; }
@@ -397,10 +450,20 @@ img { display: block; max-width: 100%; }
 .booking-label { color: var(--gold); font-size: 8px; letter-spacing: .14em; font-weight: 700; }
 .booking-title-row h3 { overflow: hidden; margin: 5px 0 2px; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
 .booking-title-row p { margin: 0; color: var(--muted); font-size: 11px; }
-.booking-details { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; color: var(--muted-light); font-size: 10px; }
-.booking-details span { display: flex; align-items: center; gap: 6px; }
+/* A responsive grid rather than a fixed column: phones get one detail per row,
+   and from 520px up the row count follows the width instead of leaving a
+   half-empty card (the iPad complaint — three short facts stacked down the
+   left edge of a very wide card). */
+.booking-details { display: grid; grid-template-columns: 1fr; gap: 5px 14px; margin-top: 12px; color: var(--muted-light); font-size: 10px; }
+.booking-details span { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* The value can be a long salon/service/specialist name — it must ellipsize
+   instead of widening the card or wrapping under its own icon. */
+.booking-details span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .booking-details svg { flex: none; color: var(--gold); }
-.cancel-booking { display: inline-flex; align-items: center; gap: 5px; margin-top: 12px; padding: 0; color: var(--red); background: transparent; font-size: 10px; font-weight: 700; }
+/* 10px red text with no padding is a poor tap target on a touch screen; this
+   keeps the look but gives it a real 44px-tall hit area via the pseudo-element. */
+.cancel-booking { position: relative; display: inline-flex; align-items: center; gap: 5px; margin-top: 12px; padding: 0; color: var(--red); background: transparent; font-size: 10px; font-weight: 700; }
+.cancel-booking::after { content: ''; position: absolute; inset: -12px -10px; }
 .product-search { margin-bottom: 17px; }
 .product-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
 .product-card { overflow: hidden; border: 1px solid var(--line); border-radius: 17px; background: var(--card); }
@@ -499,7 +562,7 @@ img { display: block; max-width: 100%; }
 .detail-location svg:first-child { flex: none; }
 .detail-location span { flex: 1; }
 .detail-location svg:last-child { flex: none; margin-top: 2px; color: var(--muted); }
-.detail-stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 19px; }
+.detail-stat-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 19px; }
 .detail-stat-grid > div { display: flex; align-items: flex-start; gap: 6px; padding: 10px 7px; border-radius: 11px; background: #121717; }
 .detail-stat-grid svg { flex: none; color: var(--gold); }
 .detail-stat-grid span { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -590,7 +653,7 @@ a.detail-info-row:hover { background: rgba(255, 255, 255, .03); }
 .barber-card > span.available { color: var(--green); }
 .barber-card > span.available i { background: var(--green); }
 .barber-card small { display: inline-flex; align-items: center; gap: 4px; color: var(--gold); font-size: 9px; }
-.date-choice-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.date-choice-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .date-choice { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 84px; gap: 4px; border: 1px solid var(--line); border-radius: 15px; color: var(--muted); background: var(--card); }
 .date-choice.active { border-color: var(--gold); color: #111; background: var(--gold); }
 .date-choice small { font-size: 9px; font-weight: 700; }
@@ -707,7 +770,7 @@ a.detail-info-row:hover { background: rgba(255, 255, 255, .03); }
 .salon-live-status strong { font-size: 12px; }
 .salon-live-status small { color: var(--muted); font-size: 9px; line-height: 1.3; }
 .salon-live-status .toggle { flex: none; flex-direction: column-reverse; gap: 5px; color: var(--gold); font-weight: 700; }
-.salon-profile-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; margin-bottom: 15px; }
+.salon-profile-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-bottom: 15px; }
 .salon-profile-stats > div { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 11px 5px; border-radius: 12px; background: var(--card); }
 .salon-profile-stats strong { color: var(--gold); font-size: 17px; }
 .salon-profile-stats span { color: var(--muted); font-size: 9px; }
@@ -1376,7 +1439,9 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .workspace-content { padding-right: 24px; padding-left: 24px; }
   .mobile-shell-bar { padding-right: max(24px, var(--safe-right)); padding-left: max(24px, var(--safe-left)); }
   .booking-main { padding: 17px; }
-  .request-detail-grid { grid-template-columns: repeat(3, 1fr); }
+  /* Big phones and up: the three facts pair off instead of stacking. */
+  .booking-details { grid-template-columns: repeat(2, minmax(0, 1fr)); font-size: 11px; }
+  .request-detail-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .modal-backdrop { align-items: center; }
   .modal-card { border-radius: 22px; }
   .confirm-backdrop { align-items: center; }
@@ -1414,6 +1479,17 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .schedule-screen { max-width: 850px; }
   .time-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); max-height: 380px; }
   .schedule-total { max-width: 850px; }
+  /* iPad and up: the booking card gets the same 850px reading rail as the
+     queue/history/notification cards. Without it the card stretched the full
+     tablet width while its contents stayed phone-sized, which is the
+     "not responsive on iPad" report — a very wide box holding a 61px date rail,
+     one short line of text and acres of empty space. The three facts also go
+     to a single row here, so the card reads across instead of down. */
+  .booking-card { max-width: 850px; min-height: 0; }
+  .booking-calendar { width: 74px; }
+  .booking-calendar strong { font-size: 30px; }
+  .booking-details { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 16px; }
+  .booking-title-row h3 { font-size: 17px; }
   .queue-card { max-width: 850px; padding: 15px 17px; }
   .queue-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 18px; }
   .queue-avatar { width: 46px; height: 46px; }
@@ -1434,7 +1510,7 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .editor-photo, .add-photo { min-height: 130px; }
   .editor-photo img { min-height: 130px; }
   .editor-photo-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .plan-grid { grid-template-columns: repeat(3, 1fr); gap: 13px; }
+  .plan-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; }
   .plan-card { min-height: 205px; }
   .plan-card > strong { font-size: 30px; }
   .subscription-continue { width: auto; padding: 0 32px; }
@@ -1589,6 +1665,10 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .gender-toggle-label { display: none; }
   .gender-toggle button { padding: 0 10px; }
   .notification-button { width: 35px; height: 35px; }
+  /* Keep the shell-bar pair in step on the narrowest phones — the bell and the
+     hamburger must shrink together or the bar looks lopsided. */
+  .mobile-shell-bar .notification-button, .mobile-menu-button { width: 36px; height: 36px; }
+  .mobile-shell-actions { gap: 7px; }
   .detail-stat-grid { gap: 4px; }
   .detail-stat-grid > div { padding: 9px 5px; }
   .detail-stat-grid strong { font-size: 9px; }

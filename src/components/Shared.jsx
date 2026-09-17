@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import {
   ArrowLeft,
   Check,
@@ -21,6 +21,35 @@ import { getFileUrl } from '../lib/api';
 export const GOLD = '#e8b97e';
 export const GREEN = '#6ed19e';
 export const RED = '#f27b74';
+
+// ── Surface: "website" vs "app" ──────────────────────────────────────────────
+// Several screens (home/discovery, the salon page, About/FAQ/Terms/Privacy,
+// Contact) are rendered in BOTH places: the public marketing website for
+// logged-out visitors, and inside the signed-in shell where the product must
+// behave like the mobile app.
+//
+// The website sells — it ends pages with the testimonial carousel and the
+// multi-column site footer. The app does not: inside the shell those blocks are
+// dead weight below a bottom nav bar, so the shell marks itself as 'app' and
+// the marketing blocks render nothing.
+//
+// Default is 'website' so a screen rendered outside any provider (the public
+// pages, and every existing test that mounts a screen directly) keeps the
+// marketing chrome it has today.
+const SurfaceContext = createContext('website');
+
+export function SurfaceProvider({ value = 'website', children }) {
+  return <SurfaceContext.Provider value={value}>{children}</SurfaceContext.Provider>;
+}
+
+export function useSurface() {
+  return useContext(SurfaceContext);
+}
+
+// True inside the signed-in shell (customer app or salon partner portal).
+export function useIsAppSurface() {
+  return useContext(SurfaceContext) === 'app';
+}
 
 export function cx(...classes) {
   return classes.filter(Boolean).join(' ');
@@ -175,13 +204,17 @@ function isLogoFallback(src, resolved, fallback) {
   return /\.svg(?:[?#]|$)/i.test(String(resolved || ''));
 }
 
-export function ImageWithFallback({ src, fallback = '/assets/brand/naai-logo-dark.svg', alt = '', className = '', loading = 'lazy', decoding = 'async', ...props }) {
+// forwardRef so a caller can reach the underlying <img> — the ad carousel needs
+// it to read `naturalWidth/Height` off an image that was already cached (whose
+// onLoad therefore never fires).
+export const ImageWithFallback = React.forwardRef(function ImageWithFallback({ src, fallback = '/assets/brand/naai-logo-dark.svg', alt = '', className = '', loading = 'lazy', decoding = 'async', ...props }, ref) {
   const [current, setCurrent] = useState(src ? getFileUrl(src) : fallback);
   useEffect(() => setCurrent(src ? getFileUrl(src) : fallback), [src, fallback]);
   const resolved = current || fallback;
   if (!resolved) return <span className={className} aria-hidden="true" />;
   return (
     <img
+      ref={ref}
       src={resolved}
       alt={alt}
       className={cx(className, isLogoFallback(src, resolved, fallback) && 'image-fallback-tile')}
@@ -191,7 +224,7 @@ export function ImageWithFallback({ src, fallback = '/assets/brand/naai-logo-dar
       {...props}
     />
   );
-}
+});
 
 export function PageHeader({ title, subtitle, onBack, action, eyebrow, compact = false }) {
   return (

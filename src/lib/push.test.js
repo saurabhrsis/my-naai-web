@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Firebase browser SDK does not run under node/jsdom; stub the entry points so
 // the module import itself (and the feature-detection gates) stay safe.
