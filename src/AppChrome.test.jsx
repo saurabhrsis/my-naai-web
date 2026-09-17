@@ -303,3 +303,40 @@ describe('In-app top bar', () => {
     expect(bell().getAttribute('aria-current')).toBe('page');
   });
 });
+
+// ── 4. Bottom-bar labels ────────────────────────────────────────────────────
+// The bar used to build its text with
+//   label.replace('Customer ', '').replace('My ', '')
+// which chopped the capital off the front of the word: an iPad screenshot
+// showed a lowercase "bookings" tab sitting between "Discover" and "Products".
+describe('Bottom navigation labels', () => {
+  const tabLabels = () => Array.from(container.querySelectorAll('.mobile-nav button span')).map(node => node.textContent);
+
+  it('capitalises every customer tab', async () => {
+    signIn('USER', '/home');
+    await mount();
+
+    const labels = tabLabels();
+    expect(labels).toEqual(['Discover', 'Bookings', 'Products', 'Account']);
+    // Nothing may start lowercase — that is the exact defect.
+    labels.forEach(label => expect(label[0]).toBe(label[0].toUpperCase()));
+  });
+
+  it('capitalises every salon tab', async () => {
+    signIn('SALON', '/queue');
+    await mount();
+
+    const labels = tabLabels();
+    expect(labels).toEqual(['Queue', 'History', 'Products', 'Account']);
+    labels.forEach(label => expect(label[0]).toBe(label[0].toUpperCase()));
+  });
+
+  it('marks the open tab for assistive tech', async () => {
+    signIn('USER', '/bookings');
+    await mount();
+
+    const current = container.querySelector('.mobile-nav button[aria-current="page"]');
+    expect(current).not.toBeNull();
+    expect(current.textContent).toContain('Bookings');
+  });
+});

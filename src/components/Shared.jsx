@@ -204,13 +204,17 @@ function isLogoFallback(src, resolved, fallback) {
   return /\.svg(?:[?#]|$)/i.test(String(resolved || ''));
 }
 
-export function ImageWithFallback({ src, fallback = '/assets/brand/naai-logo-dark.svg', alt = '', className = '', loading = 'lazy', decoding = 'async', ...props }) {
+// forwardRef so a caller can reach the underlying <img> — the ad carousel needs
+// it to read `naturalWidth/Height` off an image that was already cached (whose
+// onLoad therefore never fires).
+export const ImageWithFallback = React.forwardRef(function ImageWithFallback({ src, fallback = '/assets/brand/naai-logo-dark.svg', alt = '', className = '', loading = 'lazy', decoding = 'async', ...props }, ref) {
   const [current, setCurrent] = useState(src ? getFileUrl(src) : fallback);
   useEffect(() => setCurrent(src ? getFileUrl(src) : fallback), [src, fallback]);
   const resolved = current || fallback;
   if (!resolved) return <span className={className} aria-hidden="true" />;
   return (
     <img
+      ref={ref}
       src={resolved}
       alt={alt}
       className={cx(className, isLogoFallback(src, resolved, fallback) && 'image-fallback-tile')}
@@ -220,7 +224,7 @@ export function ImageWithFallback({ src, fallback = '/assets/brand/naai-logo-dar
       {...props}
     />
   );
-}
+});
 
 export function PageHeader({ title, subtitle, onBack, action, eyebrow, compact = false }) {
   return (

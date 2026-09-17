@@ -70,17 +70,21 @@ import { ConfirmProvider, LOGOUT_CONFIRM, useConfirm } from './components/Confir
 import { SALON_ABOUT_CONTENT, SALON_FAQ_CONTENT, SALON_TERMS_CONTENT } from './lib/salonContent';
 import { Button, Field, Modal, SelectField, Spinner, SurfaceProvider, getBrowserLocation, getErrorMessage, cx } from './components/Shared';
 
+// `label` is the full sidebar/menu wording; `short` is what the bottom bar
+// shows when the full one will not fit. Both are written out properly — the bar
+// must never derive its text by trimming a prefix off `label` (that is what
+// produced a lowercase "bookings" tab).
 const USER_NAV = [
-  { name: 'home', label: 'Discover', icon: Scissors },
-  { name: 'bookings', label: 'My bookings', icon: CalendarCheck2 },
-  { name: 'products', label: 'Products', icon: Package },
-  { name: 'account', label: 'Account', icon: CircleUserRound },
+  { name: 'home', label: 'Discover', short: 'Discover', icon: Scissors },
+  { name: 'bookings', label: 'My bookings', short: 'Bookings', icon: CalendarCheck2 },
+  { name: 'products', label: 'Products', short: 'Products', icon: Package },
+  { name: 'account', label: 'Account', short: 'Account', icon: CircleUserRound },
 ];
 const SALON_NAV = [
-  { name: 'queue', label: 'Customer queue', icon: UsersRound },
-  { name: 'history', label: 'History', icon: History },
-  { name: 'salonProducts', label: 'Products', icon: Package },
-  { name: 'account', label: 'Account', icon: CircleUserRound },
+  { name: 'queue', label: 'Customer queue', short: 'Queue', icon: UsersRound },
+  { name: 'history', label: 'History', short: 'History', icon: History },
+  { name: 'salonProducts', label: 'Products', short: 'Products', icon: Package },
+  { name: 'account', label: 'Account', short: 'Account', icon: CircleUserRound },
 ];
 
 function readStoredSession() {
@@ -1174,6 +1178,12 @@ function MobileShellBar({ session, nav, route, navigate, onLogout, notifyInstall
   </div>;
 }
 
-function MobileNav({ nav, route, navigate }) { return <nav className="mobile-nav">{nav.map(item => <button key={item.name} className={route.name === item.name ? 'active' : ''} onClick={() => navigate(item.name)}><item.icon size={20} /><span>{item.label.replace('Customer ', '').replace('My ', '')}</span></button>)}</nav>; }
+// Bottom-bar labels are SHORT versions of the sidebar labels, not string
+// surgery on them. The old code did `.replace('Customer ', '').replace('My ', '')`
+// on the nav label, which chopped the capital off the front of the word and
+// shipped a lowercase "bookings" / "queue" sitting next to "Discover",
+// "Products" and "Account" — visible on every phone and tablet. Each nav entry
+// now carries its own `short` label and the bar just renders it.
+function MobileNav({ nav, route, navigate }) { return <nav className="mobile-nav">{nav.map(item => <button key={item.name} className={route.name === item.name ? 'active' : ''} aria-current={route.name === item.name ? 'page' : undefined} onClick={() => navigate(item.name)}><item.icon size={20} /><span>{item.short || item.label}</span></button>)}</nav>; }
 
 function PartnerInfo({ type, navigate }) { const content = type === 'about' ? SALON_ABOUT_CONTENT : type === 'faq' ? SALON_FAQ_CONTENT : SALON_TERMS_CONTENT; return <div className="screen info-screen"><div className="page-header"><div className="page-header-leading"><button className="icon-btn ghost" onClick={() => navigate(-1)} aria-label="Go back"><ChevronRight size={19} className="rotate-180" /></button><div><span className="eyebrow">{content.eyebrow}</span><h1>{content.title}</h1></div></div></div><div className="info-intro"><Sparkles size={18} /><p>{content.intro || 'Everything you need to know about partnering with My Naai.'}</p></div><div className="info-sections">{content.sections.map(section => <section key={section.title}><h2>{section.title}</h2><p>{section.text}</p></section>)}</div><div className="info-contact"><span className="info-contact-icon"><HelpCircle size={18} /></span><div><strong>Need more help?</strong><p>Call our partner team on 8380017393</p></div><button onClick={() => window.open('tel:8380017393')}><ChevronRight size={17} /></button></div></div>; }

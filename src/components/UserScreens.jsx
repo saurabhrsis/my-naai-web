@@ -184,22 +184,36 @@ function AdCarousel({ ads }) {
   const [paused, setPaused] = useState(false);
   // The frame follows the artwork's own shape instead of a guess. A fixed strip
   // cropped a third of every ad on a laptop; a guessed 3:2 box then letterboxed
-  // the 16:9 ones. The first image to load reports its real ratio (clamped to a
-  // sane banner range) and the CSS uses it for the frame, so an ad is shown
-  // whole and fills its box — on every screen size.
-  const [ratio, setRatio] = useState(0);
+  // the 16:9 ones.
+  //
+  // The ratio is measured PER SLIDE, not once for the whole carousel. Taking
+  // the first image's shape and applying it to every ad meant any ad shaped
+  // differently from the first was letterboxed — thick empty bands above and
+  // below the artwork, which is what a tablet screenshot showed. Each slide now
+  // sizes to its own image and the carousel takes the tallest, so no ad is
+  // cropped and none floats in a half-empty box.
+  const [ratios, setRatios] = useState({});
   const startX = useRef(0);
   const slides = Array.isArray(ads) ? ads.filter(item => typeof item === 'string' && item) : [];
 
-  const readRatio = event => {
-    const image = event?.currentTarget;
+  const measure = (key, image) => {
     const width = Number(image?.naturalWidth) || 0;
     const height = Number(image?.naturalHeight) || 0;
     if (!width || !height) return;
     const value = width / height;
     if (!Number.isFinite(value) || value <= 0) return;
-    setRatio(current => current || Number(Math.min(2.4, Math.max(1.1, value)).toFixed(4)));
+    const clamped = Number(Math.min(2.4, Math.max(1.1, value)).toFixed(4));
+    setRatios(current => (current[key] === clamped ? current : { ...current, [key]: clamped }));
   };
+  // A cached image can finish loading before React attaches onLoad, in which
+  // case the event never fires and the slide keeps the default ratio forever.
+  // The ref callback reads `complete` to cover exactly that case.
+  const slideRef = key => node => { if (node?.complete) measure(key, node); };
+  const readRatio = key => event => measure(key, event?.currentTarget);
+  // The frame is the tallest (smallest-ratio) ad, so switching slides never
+  // makes the page jump.
+  const values = Object.values(ratios);
+  const ratio = values.length ? Math.min(...values) : 0;
   useEffect(() => {
     if (paused || slides.length < 2) return undefined;
     const timer = window.setInterval(() => setActive(index => (index + 1) % slides.length), 3000);
@@ -231,7 +245,7 @@ function AdCarousel({ ads }) {
                   desktop. The blurred backdrop (the same image, scaled up)
                   fills the frame while the artwork itself is shown whole. */}
               <span className="ad-backdrop" style={{ backgroundImage: `url("${src}")` }} aria-hidden="true" />
-              <ImageWithFallback src={src} fallback="" alt="" className="ad-image" loading="eager" onLoad={readRatio} />
+              <ImageWithFallback src={src} fallback="" alt="" className="ad-image" loading="eager" ref={slideRef(`${src}-${index}`)} onLoad={readRatio(`${src}-${index}`)} />
             </div>
           ))}
         </div>

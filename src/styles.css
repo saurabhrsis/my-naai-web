@@ -317,7 +317,12 @@ img { display: block; max-width: 100%; }
 .mobile-shell-bar .notification-button { width: 40px; height: 40px; }
 .mobile-shell-bar .notification-button.active { box-shadow: 0 0 0 2px rgba(232, 185, 126, .35); }
 .refresh-icon-button { background: var(--card); color: var(--gold); border: 1px solid var(--line); }
-.notification-ping { position: absolute; top: 8px; right: 8px; width: 6px; height: 6px; border: 1px solid #111; border-radius: 50%; background: var(--red); }
+/* The unread dot belongs ON the rim of the round button, not floating inside
+   it. At top/right 8px on a 38-40px circle it landed well within the gold disc
+   and read as a stray speck in the middle of the bell. Pinning it to the
+   top-right corner puts it where a badge is expected, and the ring is the page
+   background so it reads as a separate badge rather than a hole in the icon. */
+.notification-ping { position: absolute; top: -1px; right: -1px; width: 10px; height: 10px; border: 2px solid var(--black); border-radius: 50%; background: var(--red); }
 .refresh-text-button, .catalog-label { display: inline-flex; align-items: center; gap: 6px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 10px; color: #d6dcdb; background: var(--card); font-size: 11.5px; font-weight: 700; }
 .refresh-text-button:disabled { cursor: default; color: #8d9493; opacity: .72; }
 .catalog-label { color: var(--gold); border-color: var(--line-strong); }
