@@ -161,6 +161,111 @@ function alertIdentity(data = {}, type = '') {
   return `${value || 'NOTIFICATION'}:${id}`;
 }
 
+// The `tag` is the alert's identity as the notification centre knows it: the
+// same booking's alert replaces itself instead of stacking, and the app can
+// close it again by posting the plain bookingRequestId (MYNAAI_CLOSE_NOTIFICATION).
+function alertTag(data = {}, type = '') {
+  return String(data.bookingRequestId || data.bookingId || data.notificationId || data.id || type || 'mynaai-notification');
+}
+
+// A notification carries only as many buttons as the platform is willing to
+// render — Chromium on Android renders 3, Chromium on a laptop renders 2,
+// Safari renders none. `Notification.maxActions` is the browser's own answer,
+// so ask it. Requesting three on a laptop is how one of the two buttons that
+// *would* have been usable gets dropped instead: Accept and Reject are the pair
+// the salon has to reach, and "Update time" stays one tap away by opening the
+// notification itself, which lands on the request screen with the delay dialog.
+function notificationActionLimit() {
+  const max = Number(self.Notification?.maxActions);
+  return Number.isFinite(max) && max > 0 ? max : 2;
+}
+
+function alertActions(type) {
+  const value = String(type || '').toUpperCase();
+  const actions = value === 'BOOKING_REQUEST'
+    ? [
+      { action: ACTION_ACCEPT, title: 'Accept' },
+      { action: ACTION_REJECT, title: 'Reject' },
+      { action: ACTION_DELAY, title: 'Delay' },
+    ]
+    : value === 'DELAY_BOOKING' || value === 'DELAY_TIME_PROPOSAL'
+      ? [{ action: ACTION_DELAY, title: 'View & Delay' }]
+      : [];
+  return actions.slice(0, notificationActionLimit());
+}
+
+// ── Still ringing when the app is not running ───────────────────────────────
+// With the app closed there is no page, no AudioContext and no way to play My
+// Naai's own buzzer file: the Notifications standard has no custom-sound option
+// (it was removed in 2018 and no browser ever implemented it), so the sound is
+// whatever the device plays for the notification itself. The one lever left is
+// to raise that notification again — a repeat with the same tag and
+// `renotify: true` alerts and vibrates again instead of silently replacing the
+// banner. A booking request gives the salon 60 seconds to answer, so the worker
+// repeats twice inside that window (after ~20s and ~40s) and then stops. The
+// repeat is a live alert being kept alive, never an old alert replayed: an
+// answer, a dismissal, or the app opening the request cancels what is left.
+const BOOKING_ALERT_WINDOW_MS = 60000;
+const BOOKING_ALERT_REPEAT_MS = [20000, 40000];
+const alertRepeats = new Map(); // tag -> { cancelled, timer, wake }
+
+function cancelAlertRepeats(tag) {
+  const key = String(tag || '');
+  const state = alertRepeats.get(key);
+  if (!state) return;
+  alertRepeats.delete(key);
+  state.cancelled = true;
+  if (state.timer) {
+    try { clearTimeout(state.timer); } catch (e) {}
+  }
+  // Let the sequence awaiting the sleep finish instead of holding the push
+  // event open until the browser kills the worker.
+  if (state.wake) {
+    try { state.wake(); } catch (e) {}
+  }
+}
+
+function repeatBody(body, elapsedMs) {
+  const seconds = Math.max(0, Math.round((BOOKING_ALERT_WINDOW_MS - elapsedMs) / 1000));
+  return `${body} · ${seconds}s left to respond`;
+}
+
+// Runs inside the push event's waitUntil, which is what keeps the worker alive
+// across the gap between repeats. A browser that terminates the worker anyway
+// (iOS is quick to) simply shows the first alert — the degradations are silent.
+function runAlertRepeats({ tag, title, body, options, type }) {
+  if (String(type || '').toUpperCase() !== 'BOOKING_REQUEST') return Promise.resolve();
+  cancelAlertRepeats(tag);
+  const state = { cancelled: false, timer: null, wake: null };
+  alertRepeats.set(tag, state);
+  const sleep = ms => new Promise(resolve => {
+    state.wake = resolve;
+    state.timer = setTimeout(resolve, ms);
+  });
+  return (async () => {
+    let elapsed = 0;
+    for (const delay of BOOKING_ALERT_REPEAT_MS) {
+      await sleep(Math.max(0, delay - elapsed));
+      elapsed = delay;
+      if (state.cancelled) return;
+      // Answered or dismissed in the meantime? Then the salon has seen it and a
+      // third ring is nagging, not alerting.
+      const existing = await self.registration.getNotifications({ tag }).catch(() => null);
+      if (!existing || !existing.length) {
+        cancelAlertRepeats(tag);
+        return;
+      }
+      await self.registration.showNotification(title, {
+        ...options,
+        body: repeatBody(body, elapsed),
+        renotify: true,
+        silent: false,
+      }).catch(() => {});
+    }
+    cancelAlertRepeats(tag);
+  })();
+}
+
 // The one alert message every page understands (see src/lib/buzzer.js).
 function buzzerMessage(type, data = {}) {
   return {
@@ -371,6 +476,12 @@ self.addEventListener('fetch', event => {
 // Notification click with actions - works even when app not in recent / closed
 self.addEventListener('notificationclick', event => {
   const action = event.action || '';
+  const clickedTag = alertTag(event.notification?.data || {}, '');
+  const clickedInternal = event.notification?.data?.FCM_MSG || null;
+  // The salon has answered (or opened) the alert: whatever repeats were queued
+  // for it are no longer news, so they stop before the phone rings again.
+  cancelAlertRepeats(clickedTag);
+  cancelAlertRepeats(alertTag(clickedInternal?.data || {}, ''));
 
   if (action === ACTION_ACCEPT || action === ACTION_REJECT || action === ACTION_DELAY) {
     event.stopImmediatePropagation();
@@ -409,6 +520,9 @@ self.addEventListener('notificationclick', event => {
 self.addEventListener('message', event => {
   const data = event.data || {};
   if (data.type === 'MYNAAI_CLOSE_NOTIFICATION' && data.tag) {
+    // Acting from inside the app (accept, reject, expiry) closes the banner —
+    // and with it any repeat the notification centre still had queued.
+    cancelAlertRepeats(data.tag);
     event.waitUntil(self.registration.getNotifications({ tag: String(data.tag) }).then(notifications => {
       notifications.forEach(notification => notification.close());
     }));
@@ -453,27 +567,20 @@ if (firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagin
     const target = notificationRoute(data);
 
     // This notification will show even when app is not in recent / closed
-    // because SW is woken by push event
+    // because SW is woken by push event. (Buzzer types never get here — the
+    // push listener above owns them — so this is the informational path, and it
+    // stays deliberately calm: no buttons to miss, a single banner, one sound.)
     return self.registration.showNotification(title, {
       body,
       icon: '/icons/icon-192.png',
       badge: '/icons/icon-192.png',
-      tag: data.bookingRequestId || data.bookingId || data.type || 'mynaai-notification',
+      tag: alertTag(data, type),
       data: { ...data, target },
-      requireInteraction: isBookingRequest || type === 'DELAY_TIME_PROPOSAL' || isDelayBooking,
-      vibrate: buzzer ? [260, 120, 260, 120, 520] : undefined,
+      requireInteraction: false,
+      vibrate: [200, 100, 200],
       silent: false,
-      actions: isBookingRequest
-        ? [
-            { action: ACTION_ACCEPT, title: 'Accept' },
-            { action: ACTION_REJECT, title: 'Reject' },
-            { action: ACTION_DELAY, title: 'Delay' },
-          ]
-        : isDelayBooking
-          ? [
-            { action: ACTION_DELAY, title: 'View & Delay' },
-          ]
-          : undefined,
+      renotify: true,
+      actions: alertActions(type).length ? alertActions(type) : undefined,
     });
   });
 }
@@ -496,8 +603,6 @@ self.addEventListener('push', event => {
     // onBackgroundMessage callback is still there for messages without one.
     if (!isBuzzerNotificationType(type)) return;
 
-    const isBookingRequest = type === 'BOOKING_REQUEST';
-    const isDelayBooking = type === 'DELAY_BOOKING';
     const title = payload.notification?.title || data.title || 'My Naai update';
     const body = payload.notification?.body || data.body || 'You have a new update from My Naai.';
     const target = notificationRoute(data);
@@ -515,24 +620,24 @@ self.addEventListener('push', event => {
         return;
       }
       let shown = false;
+      const tag = alertTag(data, type);
+      const options = {
+        body,
+        icon: '/icons/icon-192.png',
+        badge: '/icons/icon-192.png',
+        tag,
+        data: { ...data, target },
+        requireInteraction: true,
+        vibrate: [260, 120, 260, 120, 520],
+        silent: false,
+        // A second delivery of the same alert (a retry, a reminder push) has to
+        // sound and vibrate again instead of quietly replacing the banner that
+        // is already on screen.
+        renotify: true,
+        actions: alertActions(type),
+      };
       try {
-        await self.registration.showNotification(title, {
-          body,
-          icon: '/icons/icon-192.png',
-          badge: '/icons/icon-192.png',
-          tag: data.bookingRequestId || data.bookingId || data.type || 'mynaai-notification',
-          data: { ...data, target },
-          requireInteraction: true,
-          vibrate: [260, 120, 260, 120, 520],
-          silent: false,
-          actions: isBookingRequest ? [
-            { action: ACTION_ACCEPT, title: 'Accept' },
-            { action: ACTION_REJECT, title: 'Reject' },
-            { action: ACTION_DELAY, title: 'Delay' },
-          ] : isDelayBooking ? [
-            { action: ACTION_DELAY, title: 'View & Delay' },
-          ] : undefined,
-        });
+        await self.registration.showNotification(title, options);
         shown = true;
       } finally {
         // Our alert (or nothing, if it failed) replaces the SDK's suppressed
@@ -544,6 +649,10 @@ self.addEventListener('push', event => {
       // arrival stamp, so a tab that receives this late (restored, still
       // loading, woken by the app switch) stays silent.
       ringOpenClients(windows, type, data);
+      // …and keep the phone ringing from the notification centre for the length
+      // of the salon's 60-second answer window, since a closed app has no other
+      // way to make a sound.
+      await runAlertRepeats({ tag, title, body, options, type });
     })());
   } catch (e) {
     restoreSuppressedSdkNotification();

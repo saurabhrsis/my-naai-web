@@ -18,6 +18,7 @@ vi.mock('../lib/push', async () => {
   return {
     ...actual,
     isPushConfigured: vi.fn(() => true),
+    notificationActionLimit: vi.fn(() => 2),
     getPushToken: vi.fn(() => Promise.resolve('')),
     getPushDiagnostics: vi.fn(() => Promise.resolve({ ok: true, checks: [] })),
     watchNotificationPermission: vi.fn(() => () => {}),

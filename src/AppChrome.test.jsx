@@ -46,6 +46,7 @@ vi.mock('./lib/push', () => {
     getPushToken: stub('getPushToken'),
     getPushStatus: stub('getPushStatus'),
     isPushConfigured: vi.fn(() => true),
+    notificationActionLimit: vi.fn(() => 2),
     deletePushToken: stub('deletePushToken'),
     displayNotification: noop,
     closeNotification: noop,

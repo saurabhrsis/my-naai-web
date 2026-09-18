@@ -17,6 +17,8 @@ import {
   readPushTokenFailure,
   describePushTokenFailure,
   bookingRequestActions,
+  notificationActionLimit,
+  notificationTag,
   normalizePushPayload,
   isActionableNotification,
   getNotificationRoute,
@@ -46,10 +48,37 @@ describe('isPushConfigured', () => {
 });
 
 describe('bookingRequestActions', () => {
-  it('returns Accept / Reject / Delay', () => {
+  it('returns Accept / Reject / Delay in that order, sized to what this browser renders', () => {
     const actions = bookingRequestActions();
-    expect(actions).toHaveLength(3);
-    expect(actions.map(a => a.action)).toEqual(['ACCEPT_BOOKING', 'REJECT_BOOKING', 'DELAY_BOOKING']);
+    expect(actions.map(a => a.action)).toEqual(['ACCEPT_BOOKING', 'REJECT_BOOKING', 'DELAY_BOOKING'].slice(0, notificationActionLimit()));
+    expect(actions.length).toBeGreaterThan(0);
+  });
+
+  it('never asks a laptop for the third button it will silently drop', () => {
+    // Chromium on a laptop renders two actions; Android renders three. Asking
+    // for three on a laptop is how one of the two usable buttons disappears.
+    const original = Object.getOwnPropertyDescriptor(Notification, 'maxActions');
+    try {
+      Object.defineProperty(Notification, 'maxActions', { configurable: true, value: 2 });
+      expect(bookingRequestActions().map(a => a.title)).toEqual(['Accept', 'Reject']);
+      Object.defineProperty(Notification, 'maxActions', { configurable: true, value: 3 });
+      expect(bookingRequestActions().map(a => a.title)).toEqual(['Accept', 'Reject', 'Delay']);
+    } finally {
+      if (original) Object.defineProperty(Notification, 'maxActions', original);
+      else delete Notification.maxActions;
+    }
+  });
+});
+
+describe('notificationTag', () => {
+  it('is the booking request id, so the request screen can close the banner it raised', () => {
+    expect(notificationTag({ bookingRequestId: 'req-7', type: 'BOOKING_REQUEST' })).toBe('req-7');
+    expect(notificationTag({ bookingId: 'bk-9' })).toBe('bk-9');
+  });
+
+  it('falls back to the alert type, and never to an empty tag', () => {
+    expect(notificationTag({}, 'DELAY_BOOKING')).toBe('DELAY_BOOKING');
+    expect(notificationTag({}, '')).toBe('mynaai-notification');
   });
 });
 

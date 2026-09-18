@@ -40,6 +40,7 @@ import {
 } from './lib/permissions';
 import { InstallAppButton, LoginPermissionCard, NotificationSetupCard, PermissionSheet } from './components/PermissionUI';
 import { BuzzerTestCard } from './components/BuzzerTestCard';
+import { BOOKING_ALERT_WINDOW_MS, BookingRequestAlert } from './components/BookingRequestAlert';
 // The deviceToken rule is shared (lib/apiPayload) so the Alerts & permissions
 // card's end-to-end test alert follows the same mobile contract as sign-in.
 import { withDeviceToken } from './lib/apiPayload';
@@ -922,6 +923,15 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
   const showBottomNav = primaryRoutes.includes(route.name);
   const [toast, setToast] = useState(null);
   const notify = useCallback((type, message) => { setToast({ type, message }); window.clearTimeout(notify.timer); notify.timer = window.setTimeout(() => setToast(null), 4000); }, []);
+  // A new booking request is the one alert that asks for a decision, so it is
+  // the one alert drawn as a card with buttons (and a countdown) instead of a
+  // toast that disappears. See src/components/BookingRequestAlert.jsx.
+  const [bookingAlert, setBookingAlert] = useState(null);
+  const dismissBookingAlert = useCallback(() => setBookingAlert(null), []);
+  const resolveBookingAlert = useCallback(() => {
+    setBookingAlert(null);
+    navigate('queue');
+  }, [navigate]);
   const cachedSubscription = useMemo(() => getSalonSubscriptionState(session), [session]);
   const [subscriptionGate, setSubscriptionGate] = useState(() => {
     if (!isSalon || session.isNewSalon) return 'active';
@@ -1085,6 +1095,14 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
           },
         });
         notify('info', `${message.title}${message.body && message.body !== message.title ? ` — ${message.body}` : ''}`);
+        // A new booking request gets the actionable card: the mobile app's 60
+        // seconds, the three answers, on whatever screen the salon is on. While
+        // the plan is locked the card stays away — renewal is the only action
+        // that screen allows, and the OS notification above still says a request
+        // came in.
+        if (!isLocked && String(session.role).toUpperCase() === 'SALON' && message.type === 'BOOKING_REQUEST' && !isOnBookingRequestScreen(message.data.bookingRequestId)) {
+          setBookingAlert({ data: message.data, sentAt: arrivedAt });
+        }
         // Time-critical notification: the buzzer + vibration were already
         // sounded above, at the instant this message arrived — never here, where
         // it would be a second ring for the same alert. Informational messages
@@ -1104,6 +1122,38 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
     });
     return () => { cancelled = true; unsubscribe(); };
   }, [safeNavigate, notify, session.role, session.userId]);
+
+  // A booking request that arrived while this app was in the background never
+  // reached the handler above — Firebase hands a foreground message only to a
+  // visible page. The worker rings the hidden tabs itself, with an arrival
+  // envelope (alertId + sentAt), and that same message is what raises the
+  // actionable card here: the salon switches back to the app and finds the
+  // request waiting with whatever is left of its minute.
+  useEffect(() => {
+    if (String(session.role).toUpperCase() !== 'SALON') return undefined;
+    const onDelivery = payload => {
+      const data = payload?.data || {};
+      const type = String(payload?.notificationType || data.type || '').toUpperCase();
+      if (type !== 'BOOKING_REQUEST') return;
+      const sentAt = Number(payload?.sentAt) || 0;
+      // Only a live alert opens the card. A relay delivered late — a queued
+      // channel message, a tab that was still loading — is not news any more.
+      if (!sentAt || Date.now() - sentAt > BOOKING_ALERT_WINDOW_MS) return;
+      if (isOnBookingRequestScreen(data.bookingRequestId)) return;
+      setBookingAlert({ data, sentAt });
+    };
+    const onMessage = event => { if (event?.data?.type === 'MYNAAI_PLAY_BUZZER') onDelivery(event.data); };
+    try { navigator.serviceWorker?.addEventListener('message', onMessage); } catch { /* no service worker */ }
+    let channel = null;
+    try {
+      channel = new BroadcastChannel('mynaai-notifications');
+      channel.addEventListener('message', onMessage);
+    } catch { /* BroadcastChannel unsupported */ }
+    return () => {
+      try { navigator.serviceWorker?.removeEventListener('message', onMessage); } catch { /* ignore */ }
+      try { channel?.close(); } catch { /* ignore */ }
+    };
+  }, [session.role]);
 
   // NOTE: deliberately not keyed on `session`. Screens list this callback in the
   // dependency array of their data loader (SalonAccountScreen, SubscriptionScreen)
@@ -1197,7 +1247,10 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
       </div>
     </main>
     {!isSubscriptionGateScreen && showBottomNav && <MobileNav nav={nav} route={route} navigate={shellNavigate} />}
-    {toast && <div className="toast-position"><div className={cx('toast', `toast-${toast.type || 'info'}`)} role="status"><span className="toast-mark">{toast.type === 'error' ? '!' : '✓'}</span><span>{toast.message}</span><button onClick={() => setToast(null)} aria-label="Dismiss"><X size={15} /></button></div></div>}
+    <div className="alert-dock">
+      {toast && <div className={cx('toast', `toast-${toast.type || 'info'}`)} role="status"><span className="toast-mark">{toast.type === 'error' ? '!' : '✓'}</span><span>{toast.message}</span><button onClick={() => setToast(null)} aria-label="Dismiss"><X size={15} /></button></div>}
+      {isSalon && bookingAlert && <BookingRequestAlert key={`${bookingAlert.data?.bookingRequestId || ''}:${bookingAlert.sentAt}`} alert={bookingAlert} notify={notify} navigate={shellNavigate} onDone={resolveBookingAlert} onDismiss={dismissBookingAlert} />}
+    </div>
   </div></SurfaceProvider>;
 }
 
@@ -1206,6 +1259,21 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
 // browser (or the previous container) already signed in. It resolves in
 // milliseconds; without it the user sees a login form, taps nothing, and is let
 // into the app a moment later — which reads as "it logged me out".
+// Is the salon already looking at this very request? The request screen shows
+// the same details, the same countdown and the same three answers, so a card on
+// top of it would be a second copy of one alert — and answering the card would
+// also navigate away from the screen the owner deliberately opened.
+function isOnBookingRequestScreen(bookingRequestId) {
+  if (typeof window === 'undefined') return false;
+  try {
+    if (!window.location.pathname.endsWith('/bookingRequest')) return false;
+    const showing = new URLSearchParams(window.location.search).get('bookingRequestId') || '';
+    return !showing || !bookingRequestId || showing === String(bookingRequestId);
+  } catch {
+    return false;
+  }
+}
+
 function SessionRestoreSplash() {
   return <div className="subscription-gate-loading" role="status" aria-live="polite">
     <div className="subscription-gate-mark"><Sparkles size={22} /></div>

@@ -1405,6 +1405,28 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
 .toast-success .toast-mark { background: var(--green); }
 .toast button { display: flex; padding: 2px; color: var(--muted); background: transparent; }
 
+/* The actionable booking-request card — the one alert that is a decision, not an
+   announcement. It rides above the toast (same dock, column-reverse) so the two
+   can never cover each other, and it keeps its 60-second countdown on whichever
+   screen the salon happens to be on. */
+.alert-dock { position: fixed; z-index: 160; right: max(12px, var(--safe-right)); bottom: max(82px, calc(var(--safe-bottom) + 78px)); left: max(12px, var(--safe-left)); display: flex; flex-direction: column-reverse; align-items: center; gap: 10px; pointer-events: none; }
+.alert-dock > * { pointer-events: auto; }
+.booking-alert { width: 100%; max-width: 520px; padding: 13px; border: 1px solid rgba(232, 185, 126, .42); border-radius: 18px; background: linear-gradient(150deg, #212826, #161b1a 72%); box-shadow: 0 22px 60px rgba(0, 0, 0, .55); animation: confirm-rise .26s cubic-bezier(.2, .9, .25, 1) both; }
+.booking-alert-top { display: flex; align-items: center; gap: 10px; }
+.booking-alert-mark { width: 30px; height: 30px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 50%; color: var(--gold); background: var(--gold-wash); border: 1px solid rgba(232, 185, 126, .3); }
+.booking-alert-avatar { width: 34px; height: 34px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 50%; color: #111; background: var(--gold); font-size: 12px; font-weight: 800; }
+.booking-alert-who { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.booking-alert-who .eyebrow { font-size: 8.5px; }
+.booking-alert-who strong { color: var(--white); font-size: 14px; }
+.booking-alert-who > span { color: var(--muted); font-size: 11px; }
+.booking-alert-close { align-self: flex-start; display: flex; padding: 3px; color: var(--muted); background: transparent; }
+.booking-alert-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.booking-alert-actions .btn { flex: 1 1 auto; }
+.booking-alert-more { display: inline-flex; align-items: center; gap: 3px; padding: 0 6px; color: var(--gold); background: transparent; font-size: 11.5px; font-weight: 700; }
+.booking-alert-expired { display: flex; align-items: center; gap: 8px; margin-top: 11px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 12px; color: #c9d2d1; background: rgba(0, 0, 0, .22); font-size: 11.5px; line-height: 1.45; }
+.booking-alert-expired svg { flex: none; color: var(--muted); }
+.booking-alert-expired button { margin-left: auto; flex: none; padding: 5px 10px; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--white); background: var(--card-raised); font-size: 11px; font-weight: 700; }
+
 /* Confirmation dialog (replaces window.confirm everywhere in the app).
    Mobile: an iOS-style sheet anchored above the home indicator.
    >=520px: a centered card. Both clear the device safe areas, which a native
@@ -1515,6 +1537,8 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .plan-card > strong { font-size: 30px; }
   .subscription-continue { width: auto; padding: 0 32px; }
   .toast-position { bottom: 26px; left: auto; }
+  .alert-dock { bottom: 26px; left: auto; align-items: flex-end; }
+  .booking-alert { max-width: 420px; }
   /* Tablets: the phone's bottom nav becomes a centred pill instead of a
      full-width strip, and the public pages get their tablet gutters. */
   .mobile-nav { max-width: 620px; margin-right: auto; margin-left: auto; }

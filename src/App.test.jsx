@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const { salonProfile, userSalonList, userSalonListPublic, userLogin, verifyLogin, userAds } = vi.hoisted(() => ({ salonProfile: vi.fn(), userSalonList: vi.fn(), userSalonListPublic: vi.fn(), userLogin: vi.fn(), verifyLogin: vi.fn(), userAds: vi.fn(() => Promise.resolve({ status: 'SUCCESS', data: {} })) }));
+const { salonProfile, userSalonList, userSalonListPublic, userLogin, verifyLogin, userAds, getBookingRequestById, bookingRequestOwnerAction } = vi.hoisted(() => ({ salonProfile: vi.fn(), userSalonList: vi.fn(), userSalonListPublic: vi.fn(), userLogin: vi.fn(), verifyLogin: vi.fn(), userAds: vi.fn(() => Promise.resolve({ status: 'SUCCESS', data: {} })), getBookingRequestById: vi.fn(() => Promise.resolve({ status: 'SUCCESS', data: {} })), bookingRequestOwnerAction: vi.fn(() => Promise.resolve({ status: 'SUCCESS' })) }));
 
 // App.jsx pulls in lib/push.js, which loads the Firebase browser SDK at import
 // time. That SDK needs browser APIs jsdom does not provide, so stub the same
@@ -20,7 +20,7 @@ vi.mock('firebase/messaging', () => ({
 // something specific. The router is what is under test, not the screens' data.
 vi.mock('./lib/api', async () => {
   const actual = await vi.importActual('./lib/api');
-  const api = new Proxy({ salonProfile, userSalonList, userSalonListPublic, userLogin, verifyLogin, userAds }, {
+  const api = new Proxy({ salonProfile, userSalonList, userSalonListPublic, userLogin, verifyLogin, userAds, getBookingRequestById, bookingRequestOwnerAction }, {
     get: (target, key) => (key in target
       ? target[key]
       : vi.fn(() => Promise.resolve({ status: 'SUCCESS', data: {} }))),
@@ -44,6 +44,7 @@ vi.mock('./lib/push', () => {
     getPushToken: stub('getPushToken'),
     getPushStatus: stub('getPushStatus'),
     isPushConfigured: vi.fn(() => true),
+    notificationActionLimit: vi.fn(() => 2),
     deletePushToken: stub('deletePushToken'),
     displayNotification: vi.fn(() => Promise.resolve(true)),
     closeNotification: noop,
@@ -95,6 +96,20 @@ import { stashPendingRoute, popPendingRoute } from './lib/pendingRoute';
 import { playBuzzer } from './lib/buzzer';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+// jsdom has no BroadcastChannel, and the app's only cross-tab channel is exactly
+// what the "app open in another tab" case travels on.
+class FakeChannel {
+  static instances = [];
+  constructor(name) {
+    this.name = name;
+    this.listeners = [];
+    FakeChannel.instances.push(this);
+  }
+  addEventListener(type, handler) { this.listeners.push(handler); }
+  close() {}
+  emit(data) { this.listeners.forEach(handler => handler({ data })); }
+}
 
 // Tests drive the real browser history API (paths, not hashes) — exactly
 // what the address bar hands the router. `goto` performs an SPA navigation
@@ -1635,5 +1650,148 @@ describe('foreground notification handling', () => {
     expect(playBuzzer).not.toHaveBeenCalled();
     // The alert itself is still shown and recorded.
     expect(push.displayNotification).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The salon's side of a new booking request: the mobile app asks for an answer
+// within 60 seconds, and the web app has to put that answer in front of the
+// owner on whatever screen they are on — not just ring and hope.
+describe('the in-app booking request alert', () => {
+  let container;
+  let root;
+
+  const signInSalon = () => {
+    localStorage.setItem('isLoggedIn', 'true');
+    localStorage.setItem('userType', 'SALON');
+    localStorage.setItem('isNewSalon', 'false');
+    localStorage.setItem('mynaai', JSON.stringify({ token: 'test-token' }));
+    localStorage.setItem('mynaaiUser', JSON.stringify({ salon: { salonId: 'salon-1', profileCompleted: true } }));
+  };
+
+  const mount = async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => { root.render(<App />); });
+    await flush();
+  };
+
+  const deliver = async message => {
+    await act(async () => { pushHarness.onMessage(message); });
+    await flush();
+  };
+
+  const byText = label => Array.from(container.querySelectorAll('button'))
+    .find(node => node.textContent.trim().replace(/\s+/g, ' ') === label);
+
+  beforeEach(() => {
+    localStorage.clear();
+    signInSalon();
+    setPath('/queue');
+    salonProfile.mockReset().mockResolvedValue({ status: 'SUCCESS', data: { salon: { salonId: 'salon-1', profileCompleted: true } } });
+    getBookingRequestById.mockReset().mockResolvedValue({ status: 'SUCCESS', data: { customerName: 'Riya Sharma', bookingDate: '2099-09-07', startTime: '18:30:00' } });
+    bookingRequestOwnerAction.mockReset().mockResolvedValue({ status: 'SUCCESS' });
+    vi.mocked(playBuzzer).mockClear().mockReturnValue(true);
+    vi.mocked(push.isActionableNotification).mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    if (root) act(() => root.unmount());
+    container?.remove();
+    root = null;
+    container = null;
+    vi.mocked(push.isActionableNotification).mockReturnValue(false);
+    vi.clearAllMocks();
+  });
+
+  it('offers Accept, Reject and Update time the moment a request arrives', async () => {
+    await mount();
+    await deliver({ type: 'BOOKING_REQUEST', notification: { title: 'New booking request', body: 'Riya wants a fade' }, data: { type: 'BOOKING_REQUEST', bookingRequestId: 'req-21' } });
+
+    const card = container.querySelector('.booking-alert');
+    expect(card).toBeTruthy();
+    expect(byText('Accept')).toBeTruthy();
+    expect(byText('Reject')).toBeTruthy();
+    expect(byText('Update time')).toBeTruthy();
+  });
+
+  it('answers from the card without leaving the screen the salon was on', async () => {
+    await mount();
+    await deliver({ type: 'BOOKING_REQUEST', notification: { title: 'New booking request', body: 'Riya wants a fade' }, data: { type: 'BOOKING_REQUEST', bookingRequestId: 'req-22' } });
+
+    await act(async () => { byText('Accept').click(); });
+    await flush();
+
+    expect(bookingRequestOwnerAction).toHaveBeenCalledWith('req-22', { action: 'ACCEPT' });
+    // The card retires itself once the answer is in.
+    expect(container.querySelector('.booking-alert')).toBeNull();
+  });
+
+  it('raises the card for a request that arrived while the app was in another tab', async () => {
+    // A hidden window is not handed the FCM message — the worker rings it over
+    // the notification channel with the arrival stamp instead, and that is the
+    // only reason the salon, on switching back, finds the request waiting.
+    globalThis.BroadcastChannel = FakeChannel;
+    try {
+      await mount();
+      const channel = FakeChannel.instances.find(instance => instance.name === 'mynaai-notifications');
+      expect(channel).toBeTruthy();
+
+      await act(async () => {
+        channel.emit({ type: 'MYNAAI_PLAY_BUZZER', notificationType: 'BOOKING_REQUEST', alertId: 'BOOKING_REQUEST:req-31', sentAt: Date.now(), data: { bookingRequestId: 'req-31' } });
+      });
+      await flush();
+
+      expect(container.querySelector('.booking-alert')).toBeTruthy();
+      expect(byText('Accept')).toBeTruthy();
+    } finally {
+      delete globalThis.BroadcastChannel;
+      FakeChannel.instances.length = 0;
+    }
+  });
+
+  it('ignores a relay that arrives long after the alert did', async () => {
+    // A queued channel message from five minutes ago is not a live request; it
+    // must not open a countdown for a window that has already closed.
+    globalThis.BroadcastChannel = FakeChannel;
+    try {
+      await mount();
+      const channel = FakeChannel.instances.find(instance => instance.name === 'mynaai-notifications');
+      await act(async () => {
+        channel.emit({ type: 'MYNAAI_PLAY_BUZZER', notificationType: 'BOOKING_REQUEST', alertId: 'BOOKING_REQUEST:req-32', sentAt: Date.now() - 300000, data: { bookingRequestId: 'req-32' } });
+      });
+      await flush();
+      expect(container.querySelector('.booking-alert')).toBeNull();
+    } finally {
+      delete globalThis.BroadcastChannel;
+      FakeChannel.instances.length = 0;
+    }
+  });
+
+  it('does not stack a second copy of the request the salon already has open', async () => {
+    setPath('/bookingRequest?bookingRequestId=req-41');
+    await mount();
+    await deliver({ type: 'BOOKING_REQUEST', notification: { title: 'New booking request' }, data: { type: 'BOOKING_REQUEST', bookingRequestId: 'req-41' } });
+    // The screen itself asks for an answer; the card is for every other screen.
+    expect(container.querySelector('.booking-alert')).toBeNull();
+  });
+
+  it('never shows the actionable card to a customer, or for a quiet message', async () => {
+    await mount();
+    await deliver({ type: 'BOOKING_CONFIRMED', notification: { title: 'Booking confirmed', body: 'See you at 6pm' }, data: { type: 'BOOKING_CONFIRMED', bookingId: 'b-2' } });
+    expect(container.querySelector('.booking-alert')).toBeNull();
+
+    // …and the same booking request means nothing to a customer account.
+    localStorage.clear();
+    localStorage.setItem('isLoggedIn', 'true');
+    localStorage.setItem('userType', 'USER');
+    localStorage.setItem('mynaai', JSON.stringify({ token: 'test-token' }));
+    localStorage.setItem('mynaaiUser', JSON.stringify({ userId: 'user-1' }));
+    if (root) act(() => root.unmount());
+    container.remove();
+    setPath('/bookings');
+    await mount();
+    await deliver({ type: 'BOOKING_REQUEST', notification: { title: 'New booking request', body: 'Riya wants a fade' }, data: { type: 'BOOKING_REQUEST', bookingRequestId: 'req-23' } });
+    expect(container.querySelector('.booking-alert')).toBeNull();
   });
 });
