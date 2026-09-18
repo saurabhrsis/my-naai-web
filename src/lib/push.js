@@ -479,12 +479,29 @@ export async function getPushToken({ requestPermission = false } = {}) {
   return '';
 }
 
+// How many buttons this device will actually render. Chromium on Android shows
+// three, Chromium on a laptop two, Safari none — `Notification.maxActions` is
+// the browser's own answer, and asking for more than it renders is how a
+// usable button silently disappears. The worker (public/firebase-messaging-sw.js)
+// slices the same way, so the banner looks the same from either side.
+export function notificationActionLimit() {
+  const max = typeof Notification !== 'undefined' ? Number(Notification.maxActions) : NaN;
+  return Number.isFinite(max) && max > 0 ? max : 2;
+}
+
+// The alert's identity in the notification centre. The plain booking request id
+// whenever there is one, so `closeNotification(bookingRequestId)` — what the
+// request screen calls when it acts or expires — still finds the banner.
+export function notificationTag(data = {}, type = '') {
+  return String(data.bookingRequestId || data.bookingId || data.notificationId || data.id || type || 'mynaai-notification');
+}
+
 export function bookingRequestActions() {
   return [
     { action: 'ACCEPT_BOOKING', title: 'Accept' },
     { action: 'REJECT_BOOKING', title: 'Reject' },
     { action: 'DELAY_BOOKING', title: 'Delay' },
-  ];
+  ].slice(0, notificationActionLimit());
 }
 
 function broadcastToClients(message) {
@@ -524,11 +541,14 @@ export async function displayNotification({ title, body, data = {}, onClick } = 
     body: finalBody,
     icon: '/icons/icon-192.png',
     badge: '/icons/icon-192.png',
-    tag: data.bookingRequestId || data.bookingId || data.type || 'mynaai-notification',
+    tag: notificationTag(data, type),
     data: { ...data, target },
     requireInteraction: type === 'BOOKING_REQUEST' || type === 'DELAY_TIME_PROPOSAL' || type === 'DELAY_BOOKING',
     vibrate: isBuzzerType ? [260, 120, 260, 120, 520] : undefined,
     silent: false,
+    // A repeat of the same alert must sound again, not quietly replace the
+    // banner that is already on screen.
+    renotify: true,
     actions: type === 'BOOKING_REQUEST' ? bookingRequestActions() : type === 'DELAY_BOOKING' ? [{ action: 'DELAY_BOOKING', title: 'View Delay' }] : undefined,
   };
 

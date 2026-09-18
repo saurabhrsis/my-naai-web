@@ -21,6 +21,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { api, clearSession, getToken, isPlanExpiredResponse, isUnknownSalonResponse, setToken } from './lib/api';
+import { persistSession, readLocalSession, restoreSession } from './lib/session';
 import { closeNotification, deletePushToken, displayNotification, getNotificationRoute, getPushStatus, getPushToken, isActionableNotification, isPushConfigured, normalizePushPayload, recordForegroundMessage, setupPush, watchNotificationPermission } from './lib/push';
 import {
   ALERTS_BLOCKED_MESSAGE,
@@ -33,15 +34,17 @@ import {
   isEmbeddedFrame,
   isIosDevice,
   isIosPwaInstalled,
+  isStandalone,
   readPermission,
   requestNotifications,
 } from './lib/permissions';
 import { InstallAppButton, LoginPermissionCard, NotificationSetupCard, PermissionSheet } from './components/PermissionUI';
 import { BuzzerTestCard } from './components/BuzzerTestCard';
+import { BOOKING_ALERT_WINDOW_MS, BookingRequestAlert } from './components/BookingRequestAlert';
 // The deviceToken rule is shared (lib/apiPayload) so the Alerts & permissions
 // card's end-to-end test alert follows the same mobile contract as sign-in.
 import { withDeviceToken } from './lib/apiPayload';
-import { playBuzzer, unlockBuzzer } from './lib/buzzer';
+import { alertIdentity, claimAlertDelivery, playBuzzer, unlockBuzzer } from './lib/buzzer';
 import { resetLiveUpdatesSocket } from './lib/socket';
 import { armStoredReminders } from './lib/reminders';
 import { popPendingRoute, stashPendingRoute } from './lib/pendingRoute';
@@ -94,26 +97,28 @@ const SALON_NAV = [
   { name: 'account', label: 'Account', short: 'Account', icon: CircleUserRound },
 ];
 
+// The stored session is owned by src/lib/session.js, which keeps three copies of
+// it: localStorage (the synchronous one every render reads), IndexedDB (the one
+// the notification worker reads for Accept/Reject/Delay) and CacheStorage (the
+// only one an app installed *after* signing in can still reach on a platform
+// that isolates Web Storage, which iOS does). Reading here is deliberately
+// forgiving — a session that lost one of its companion keys is repaired rather
+// than treated as "please log in again".
 function readStoredSession() {
-  const loggedIn = localStorage.getItem('isLoggedIn') === 'true';
-  const role = localStorage.getItem('userType');
-  if (!loggedIn || !role || !getToken()) return null;
-  let user = {};
-  try { user = JSON.parse(localStorage.getItem('mynaaiUser') || '{}'); } catch (parseError) { console.debug(getErrorMessage(parseError, 'Stored session data was invalid.')); user = {}; }
-  const userId = user?.userId || user?.salon?.salonId || user?.salonId || user?.id || '';
-  const incompleteSalon = String(role).toUpperCase() === 'SALON' && (flagIsTrue(user?.isNewSalon) || flagIsFalse(user?.profileCompleted) || flagIsFalse(user?.salon?.profileCompleted));
-  return { role, user, userId, isNewSalon: localStorage.getItem('isNewSalon') === 'true' || incompleteSalon };
+  const stored = readLocalSession();
+  if (!stored) return null;
+  return { role: stored.role, user: stored.user, userId: stored.userId, isNewSalon: stored.isNewSalon };
 }
 
 function saveSession(session) {
   const role = String(session.role || '').toUpperCase();
   const user = session.user || {};
   if (session.token) setToken(session.token);
-  localStorage.setItem('mynaaiUser', JSON.stringify(user));
-  localStorage.setItem('userType', role);
-  localStorage.setItem('isLoggedIn', 'true');
-  localStorage.setItem('isNewSalon', session.isNewSalon ? 'true' : 'false');
-  return { ...session, role, userId: session.userId || user?.userId || user?.salon?.salonId || user?.salonId || user?.id || '' };
+  // persistSession writes localStorage synchronously (so the very next read in
+  // this same tick sees the session) and mirrors the rest in the background.
+  const stored = persistSession({ token: session.token || getToken(), role, user, isNewSalon: session.isNewSalon, userId: session.userId });
+  const userId = stored?.userId || session.userId || user?.userId || user?.salon?.salonId || user?.salonId || user?.id || '';
+  return { ...session, role, user, userId, isNewSalon: Boolean(stored?.isNewSalon || session.isNewSalon) };
 }
 
 // History routing (real paths, no hashes, in src/lib/routes.js): `/` is the
@@ -225,6 +230,39 @@ function AppRoot() {
     }
     return getRouteFromPath(session.role);
   });
+  // Installing the app must not cost the user a sign-in.
+  //
+  // An installed app is a separate storage container on iOS (Web Storage,
+  // IndexedDB and cookies are all per-container), so a device that is signed in
+  // in the browser starts the installed app as a stranger — even though the
+  // person installed the app *because* they were signed in. The one store both
+  // containers share is the CacheStorage the session is mirrored into (see
+  // src/lib/session.js), so an installed app that has no local session asks the
+  // shared copies before it believes it is signed out.
+  //
+  // `restoring` is the splash that keeps that lookup from flashing a login form
+  // at somebody who is already signed in. It only ever appears inside an
+  // installed app with no local session; a browser tab renders immediately,
+  // exactly as before.
+  const [restoring, setRestoring] = useState(() => !session && isStandalone());
+  useEffect(() => {
+    if (session) return undefined;
+    let cancelled = false;
+    const finish = restored => {
+      if (cancelled) return;
+      setRestoring(false);
+      if (!restored) return;
+      setSession({ role: restored.role, user: restored.user, userId: restored.userId, isNewSalon: restored.isNewSalon });
+      const target = getRouteFromPath(restored.role);
+      setRoute(target);
+      window.history.replaceState({}, '', routeToPath(target.name, target.params));
+    };
+    restoreSession().then(finish).catch(() => finish(null));
+    // A browser that refuses IndexedDB and CacheStorage must not hold the app
+    // hostage: the splash ends either way.
+    const timer = window.setTimeout(() => finish(null), 2500);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, []);
   const [installPrompt, setInstallPrompt] = useState(() => {
     // Check if prompt was already captured in index.html
     if (typeof window !== 'undefined' && window.deferredPWAInstallPrompt) {
@@ -318,11 +356,13 @@ function AppRoot() {
   const updateSessionUser = useCallback((user, sessionPatch = {}) => setSession(current => {
     if (!current) return current;
     const nextUser = { ...current.user, ...user };
-    localStorage.setItem('mynaaiUser', JSON.stringify(nextUser));
-    if (Object.prototype.hasOwnProperty.call(sessionPatch, 'isNewSalon')) {
-      localStorage.setItem('isNewSalon', sessionPatch.isNewSalon ? 'true' : 'false');
-    }
-    return { ...current, ...sessionPatch, user: nextUser };
+    const next = { ...current, ...sessionPatch, user: nextUser };
+    // Every copy of the session has to stay current, not just localStorage: an
+    // app installed later restores the salon profile it finds in the shared
+    // cache, and a stale copy would open the installed app with the previous
+    // profile (or, after onboarding, without it).
+    persistSession(next);
+    return next;
   }), []);
   useEffect(() => {
     const onRouteChange = () => {
@@ -409,6 +449,9 @@ function AppRoot() {
   }, []);
 
   if (!session) {
+    // An installed app with no local session checks the shared copies first
+    // (the block above). Anything else renders immediately, exactly as before.
+    if (restoring) return <SessionRestoreSplash />;
     const showLogin = route.name === 'login' || !PUBLIC_ROUTE_NAMES.includes(route.name);
     if (showLogin) return <AuthFlow onComplete={completeAuth} notifyInstall={installPrompt ? install : null} onBrowseBack={backToBrowse} initialRole={String(route.params?.role || '').toUpperCase() === 'SALON' ? 'SALON' : 'USER'} />;
     // /salon-partner (the salon-owner landing page) is where a partner tries
@@ -880,6 +923,15 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
   const showBottomNav = primaryRoutes.includes(route.name);
   const [toast, setToast] = useState(null);
   const notify = useCallback((type, message) => { setToast({ type, message }); window.clearTimeout(notify.timer); notify.timer = window.setTimeout(() => setToast(null), 4000); }, []);
+  // A new booking request is the one alert that asks for a decision, so it is
+  // the one alert drawn as a card with buttons (and a countdown) instead of a
+  // toast that disappears. See src/components/BookingRequestAlert.jsx.
+  const [bookingAlert, setBookingAlert] = useState(null);
+  const dismissBookingAlert = useCallback(() => setBookingAlert(null), []);
+  const resolveBookingAlert = useCallback(() => {
+    setBookingAlert(null);
+    navigate('queue');
+  }, [navigate]);
   const cachedSubscription = useMemo(() => getSalonSubscriptionState(session), [session]);
   const [subscriptionGate, setSubscriptionGate] = useState(() => {
     if (!isSalon || session.isNewSalon) return 'active';
@@ -1010,6 +1062,27 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
         if (cancelled) return;
         const message = normalizePushPayload(payload);
         recordForegroundMessage(message);
+        // An FCM message handed to this page is a live delivery: the arrival
+        // stamp is now. The id is what makes a single alert ring once even when
+        // the worker's broadcast and this handler both see it, and it is what
+        // lets a second delivery of the same alert (a restored tab, a repeated
+        // message) be recognised as one alert instead of a new one — see
+        // claimAlertDelivery in src/lib/buzzer.js.
+        const alertId = alertIdentity(message.data, message.type);
+        const arrivedAt = Date.now();
+        const actionable = isActionableNotification(message.type, session.role);
+        // The arrival gate first, before anything is shown: a repeated or stale
+        // delivery of one alert is not a new alert, and handling it again would
+        // be a second banner, a second toast and a second navigation.
+        if (!claimAlertDelivery({ alertId, sentAt: arrivedAt })) return;
+        // …and then every notification makes a sound — not only the ones with
+        // buttons. The buzzer picks its own sound from the type (the piercing
+        // one for a booking request, the softer one for everything else), and
+        // when this page cannot make a sound at all — audio never unlocked, a
+        // muted tab — the device still does: the notification raised below
+        // carries the system alert sound. The ring is therefore never allowed to
+        // decide whether the alert is *shown*.
+        playBuzzer({ type: message.type, alertId, sentAt: arrivedAt, claimed: true });
         // If locked, still show the OS notification but do not auto-navigate
         // away from the renewal paywall.
         const isLocked = subscriptionGateRef.current === 'locked';
@@ -1029,14 +1102,21 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
           },
         });
         notify('info', `${message.title}${message.body && message.body !== message.title ? ` — ${message.body}` : ''}`);
-        // Time-critical notification: sound the booking buzzer + vibrate, like
-        // the mobile app. Informational messages stay silent by design.
+        // A new booking request gets the actionable card: the mobile app's 60
+        // seconds, the three answers, on whatever screen the salon is on. While
+        // the plan is locked the card stays away — renewal is the only action
+        // that screen allows, and the OS notification above still says a request
+        // came in.
+        if (!isLocked && String(session.role).toUpperCase() === 'SALON' && message.type === 'BOOKING_REQUEST' && !isOnBookingRequestScreen(message.data.bookingRequestId)) {
+          setBookingAlert({ data: message.data, sentAt: arrivedAt });
+        }
+        // Time-critical notification: the buzzer + vibration were already
+        // sounded above, at the instant this message arrived — never here, where
+        // it would be a second ring for the same alert. Informational messages
+        // stay silent by design.
         // Suppress buzzer navigation when locked — renewal is the only focus.
         if (isLocked) return;
-        if (isActionableNotification(message.type, session.role)) {
-          playBuzzer({ type: message.type });
-        }
-        if (!isActionableNotification(message.type, session.role)) return;
+        if (!actionable) return;
         const next = getNotificationRoute(message.data, session.role);
         if (!next.name || next.name === routeName.current) return;
         safeNavigate(next.name, next.params);
@@ -1049,6 +1129,38 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
     });
     return () => { cancelled = true; unsubscribe(); };
   }, [safeNavigate, notify, session.role, session.userId]);
+
+  // A booking request that arrived while this app was in the background never
+  // reached the handler above — Firebase hands a foreground message only to a
+  // visible page. The worker rings the hidden tabs itself, with an arrival
+  // envelope (alertId + sentAt), and that same message is what raises the
+  // actionable card here: the salon switches back to the app and finds the
+  // request waiting with whatever is left of its minute.
+  useEffect(() => {
+    if (String(session.role).toUpperCase() !== 'SALON') return undefined;
+    const onDelivery = payload => {
+      const data = payload?.data || {};
+      const type = String(payload?.notificationType || data.type || '').toUpperCase();
+      if (type !== 'BOOKING_REQUEST') return;
+      const sentAt = Number(payload?.sentAt) || 0;
+      // Only a live alert opens the card. A relay delivered late — a queued
+      // channel message, a tab that was still loading — is not news any more.
+      if (!sentAt || Date.now() - sentAt > BOOKING_ALERT_WINDOW_MS) return;
+      if (isOnBookingRequestScreen(data.bookingRequestId)) return;
+      setBookingAlert({ data, sentAt });
+    };
+    const onMessage = event => { if (event?.data?.type === 'MYNAAI_PLAY_BUZZER') onDelivery(event.data); };
+    try { navigator.serviceWorker?.addEventListener('message', onMessage); } catch { /* no service worker */ }
+    let channel = null;
+    try {
+      channel = new BroadcastChannel('mynaai-notifications');
+      channel.addEventListener('message', onMessage);
+    } catch { /* BroadcastChannel unsupported */ }
+    return () => {
+      try { navigator.serviceWorker?.removeEventListener('message', onMessage); } catch { /* ignore */ }
+      try { channel?.close(); } catch { /* ignore */ }
+    };
+  }, [session.role]);
 
   // NOTE: deliberately not keyed on `session`. Screens list this callback in the
   // dependency array of their data loader (SalonAccountScreen, SubscriptionScreen)
@@ -1142,8 +1254,40 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
       </div>
     </main>
     {!isSubscriptionGateScreen && showBottomNav && <MobileNav nav={nav} route={route} navigate={shellNavigate} />}
-    {toast && <div className="toast-position"><div className={cx('toast', `toast-${toast.type || 'info'}`)} role="status"><span className="toast-mark">{toast.type === 'error' ? '!' : '✓'}</span><span>{toast.message}</span><button onClick={() => setToast(null)} aria-label="Dismiss"><X size={15} /></button></div></div>}
+    <div className="alert-dock">
+      {toast && <div className={cx('toast', `toast-${toast.type || 'info'}`)} role="status"><span className="toast-mark">{toast.type === 'error' ? '!' : '✓'}</span><span>{toast.message}</span><button onClick={() => setToast(null)} aria-label="Dismiss"><X size={15} /></button></div>}
+      {isSalon && bookingAlert && <BookingRequestAlert key={`${bookingAlert.data?.bookingRequestId || ''}:${bookingAlert.sentAt}`} alert={bookingAlert} notify={notify} navigate={shellNavigate} onDone={resolveBookingAlert} onDismiss={dismissBookingAlert} />}
+    </div>
   </div></SurfaceProvider>;
+}
+
+// The one moment My Naai shows a splash before its shell: an *installed* app
+// starting with no session of its own, while it looks for the account the
+// browser (or the previous container) already signed in. It resolves in
+// milliseconds; without it the user sees a login form, taps nothing, and is let
+// into the app a moment later — which reads as "it logged me out".
+// Is the salon already looking at this very request? The request screen shows
+// the same details, the same countdown and the same three answers, so a card on
+// top of it would be a second copy of one alert — and answering the card would
+// also navigate away from the screen the owner deliberately opened.
+function isOnBookingRequestScreen(bookingRequestId) {
+  if (typeof window === 'undefined') return false;
+  try {
+    if (!window.location.pathname.endsWith('/bookingRequest')) return false;
+    const showing = new URLSearchParams(window.location.search).get('bookingRequestId') || '';
+    return !showing || !bookingRequestId || showing === String(bookingRequestId);
+  } catch {
+    return false;
+  }
+}
+
+function SessionRestoreSplash() {
+  return <div className="subscription-gate-loading" role="status" aria-live="polite">
+    <div className="subscription-gate-mark"><Sparkles size={22} /></div>
+    <h1>Welcome back to My Naai</h1>
+    <p>Checking the account already signed in on this device…</p>
+    <Spinner label="Restoring your session…" />
+  </div>;
 }
 
 function SubscriptionGateLoading() {

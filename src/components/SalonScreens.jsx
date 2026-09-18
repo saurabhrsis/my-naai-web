@@ -363,23 +363,23 @@ export function SalonQueueScreen({ session, navigate, notify }) {
     setDoneId(bookingId);
     try { const response = await api.bookingDone({ salonId: session.userId, bookingId }); if (response?.status && response.status !== 'SUCCESS') throw new Error(response.message || 'Could not complete service'); setItems(current => current.filter(item => item.bookingId !== bookingId)); notify?.('success', 'Service marked as completed.'); } catch (error) { notify?.('error', getErrorMessage(error, 'Could not complete service.')); } finally { setDoneId(''); }
   };
-  // Sends the new time and lets the backend dispatch the customer notification
-  // through the stored deviceToken — the same owner-action contract the booking
-  // request screen and the mobile app use, so there is one delay pipeline, not
-  // two. The queue row is updated optimistically and rolled back on failure.
+  // Salon Queue → "Update time": the customer is already booked and confirmed,
+  // and the salon is moving *that* time (running late, or a chair freed up
+  // early). It is not the booking-request flow — accept / reject / delay of a
+  // new request lives on the booking request screen — so it has its own
+  // endpoint and is addressed by bookingId, which every queue row carries.
+  // The row is updated optimistically and rolled back on failure.
   const submitTimeUpdate = async ({ preview, reason }) => {
     const booking = timeTarget;
-    // The request id is what owner-action addresses; some queue payloads only
-    // carry bookingId, so fall back rather than posting to `/undefined/`.
-    const requestId = booking?.bookingRequestId || booking?.requestId || booking?.bookingId;
-    if (!booking || !preview || !requestId) {
+    const bookingId = booking?.bookingId;
+    if (!booking || !preview || !bookingId) {
       notify?.('error', 'This booking cannot be updated. Refresh the queue and try again.');
       return;
     }
     setSavingTime(true);
     const previous = items;
     try {
-      const response = await api.salonUpdateBookingTime(requestId, {
+      const response = await api.salonUpdateBookingTime(bookingId, {
         offsetMinutes: preview.offsetMinutes,
         proposedTime: preview.updatedLabel,
         bookingDate: preview.apiDate,

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { vibrate, isBuzzerSupported, unlockBuzzer, playBuzzer } from './buzzer';
+import { vibrate, isBuzzerSupported, unlockBuzzer, playBuzzer, claimAlertDelivery, alertIdentity } from './buzzer';
 
 // A stand-in AudioContext: records every burst that is actually handed to the
 // audio clock, so a test can prove that nothing was queued for later.
@@ -72,6 +72,9 @@ async function freshBuzzer() {
 }
 
 beforeEach(() => {
+  // The single-ring record lives in localStorage (that is what lets two tabs of
+  // the same origin agree), so every test starts from a clean origin.
+  localStorage.clear();
   window.navigator.vibrate = vi.fn(() => true);
   global.fetch = vi.fn(() => Promise.resolve({
     ok: true, arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
@@ -97,10 +100,17 @@ describe('isBuzzerSupported', () => {
 });
 
 describe('playBuzzer', () => {
-  it('returns true and vibrates', () => {
-    const result = playBuzzer({ type: 'BOOKING_REQUEST' });
+  it('returns true and vibrates for an alert that just arrived', () => {
+    const result = playBuzzer({ type: 'BOOKING_REQUEST', alertId: 'BOOKING_REQUEST:req-9', sentAt: Date.now() });
     expect(result).toBe(true);
     expect(window.navigator.vibrate).toHaveBeenCalled();
+  });
+
+  it('refuses an alert that carries no arrival stamp at all', () => {
+    // Nothing the app did not witness arriving may start the alarm: an unstamped
+    // message is how a push from before the reload used to ring on load.
+    expect(playBuzzer({ type: 'BOOKING_REQUEST', alertId: 'BOOKING_REQUEST:req-9' })).toBe(false);
+    expect(window.navigator.vibrate).not.toHaveBeenCalled();
   });
 });
 
@@ -113,7 +123,8 @@ describe('unlockBuzzer', () => {
 
 // ── WHEN the buzzer sounds ──────────────────────────────────────────────────
 // The reported bug this suite pins down: the alarm rang when the salon owner
-// opened the app again, not when the booking notification actually arrived.
+// opened the app again, or reloaded the site — not when the notification
+// actually arrived.
 describe('buzzer timing', () => {
   beforeEach(() => {
     setVisibility('visible');
@@ -134,7 +145,7 @@ describe('buzzer timing', () => {
 
   it('plays at the moment the alert arrives when audio can start right now', async () => {
     const { playBuzzer } = await freshBuzzer();
-    playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1 });
+    playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1, alertId: 'BOOKING_REQUEST:b1', sentAt: Date.now() });
     await flush();
     await flush();
 
@@ -152,7 +163,7 @@ describe('buzzer timing', () => {
     setVisibility('hidden');
     vi.useFakeTimers();
     try {
-      playBuzzer({ type: 'BOOKING_REQUEST', repeats: 3 });
+      playBuzzer({ type: 'BOOKING_REQUEST', repeats: 3, alertId: 'BOOKING_REQUEST:b2', sentAt: Date.now() });
       const ctx = FakeAudioContext.instance;
       // The app stays away well past the buzz window (the salon owner opens it
       // minutes later, not 2ms later).
@@ -181,7 +192,7 @@ describe('buzzer timing', () => {
     const { playBuzzer } = await freshBuzzer();
     setVisibility('hidden');
 
-    playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1 });
+    playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1, alertId: 'BOOKING_REQUEST:b3', sentAt: Date.now() });
     await flush();
     await flush();
 
@@ -203,7 +214,7 @@ describe('buzzer timing', () => {
     };
     try {
       const { playBuzzer } = await freshBuzzer();
-      playBuzzer({ type: 'BOOKING_REQUEST', repeats: 3 });
+      playBuzzer({ type: 'BOOKING_REQUEST', repeats: 3, alertId: 'BOOKING_REQUEST:b4', sentAt: Date.now() });
       await flush();
       await flush();
       setVisibility('hidden');
@@ -241,5 +252,138 @@ describe('buzzer unlock is silent', () => {
 
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every(muted => muted === true)).toBe(true);
+  });
+});
+
+// ── The arrival envelope ────────────────────────────────────────────────────
+// The second half of the reported bug: the buzzer also sounded on a plain page
+// load or refresh. Every delivered alert now carries its id and the moment the
+// push arrived, and a delivery that cannot prove it is happening *now* is
+// dropped instead of played late.
+describe('alert arrival gate', () => {
+  beforeEach(() => {
+    setVisibility('visible');
+    window.AudioContext = FakeAudioContext;
+    FakeAudioContext.instance = null;
+    FakeAudioContext.state = 'running';
+    FakeAudioContext.resumeMode = 'immediate';
+  });
+
+  afterEach(() => {
+    setVisibility('visible');
+    delete window.AudioContext;
+    delete window.webkitAudioContext;
+    FakeAudioContext.instance = null;
+  });
+
+  it('names one alert the same way every handler does', async () => {
+    const { alertIdentity } = await freshBuzzer();
+    expect(alertIdentity({ bookingRequestId: 'abc' }, 'BOOKING_REQUEST')).toBe('BOOKING_REQUEST:abc');
+    expect(alertIdentity({ bookingId: 'abc' }, 'booking_request')).toBe('BOOKING_REQUEST:abc');
+    expect(alertIdentity({}, 'DELAY_TIME_PROPOSAL')).toBe('DELAY_TIME_PROPOSAL:');
+  });
+
+  it('drops an alert that arrived long before this page did — the refresh case', async () => {
+    // A page is reloaded a minute after the notification arrived (the worker
+    // hands the message to whichever page is listening). The alert is real, the
+    // arrival is not now, so nothing may ring.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T10:00:00Z'));
+      const { playBuzzer } = await freshBuzzer();
+      vi.setSystemTime(new Date('2026-01-01T10:01:00Z'));
+
+      expect(playBuzzer({ type: 'BOOKING_REQUEST', repeats: 3, alertId: 'BOOKING_REQUEST:stale', sentAt: Date.parse('2026-01-01T10:00:30Z') })).toBe(false);
+      await vi.advanceTimersByTimeAsync(1000);
+      // No AudioContext was even created: the alert never reached the audio
+      // engine, let alone played late.
+      expect(FakeAudioContext.instance).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops an alert stamped before this page started, even seconds old', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T10:00:10Z'));
+      const { playBuzzer } = await freshBuzzer();   // this page starts running now
+      vi.setSystemTime(new Date('2026-01-01T10:00:14Z'));
+
+      // Arrived four seconds ago (well inside the freshness window) but *before*
+      // this document existed: a page that loads into a queued delivery must not
+      // ring for it. The notification banner is still the user's alert.
+      expect(playBuzzer({ type: 'BOOKING_REQUEST', repeats: 3, alertId: 'BOOKING_REQUEST:queued', sentAt: Date.parse('2026-01-01T10:00:06Z') })).toBe(false);
+      expect(FakeAudioContext.instance).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rings a fresh alert delivered to a page that is already running', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T10:00:00Z'));
+      const { playBuzzer } = await freshBuzzer();
+      vi.setSystemTime(new Date('2026-01-01T10:00:20Z'));
+
+      expect(playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1, alertId: 'BOOKING_REQUEST:live', sentAt: Date.parse('2026-01-01T10:00:19.800Z') })).toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(FakeAudioContext.instance.started.length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rings a single notification once, however many times it is delivered', async () => {
+    // The worker posts the alert to every window AND broadcasts it on the
+    // BroadcastChannel; the two copies used to ring twice.
+    const { playBuzzer } = await freshBuzzer();
+    const alert = { type: 'BOOKING_REQUEST', repeats: 3, alertId: 'BOOKING_REQUEST:once', sentAt: Date.now() };
+
+    expect(playBuzzer({ ...alert })).toBe(true);
+    expect(playBuzzer({ ...alert })).toBe(false);
+    expect(playBuzzer({ ...alert })).toBe(false);
+  });
+
+  it('keeps one tab silent when another tab of the same origin already rang', async () => {
+    // Two tabs, one notification: the alarm is one sound, not one per tab.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T10:00:00Z'));
+      const firstTab = await freshBuzzer();
+      const { claimAlertDelivery } = firstTab;
+      expect(claimAlertDelivery({ alertId: 'BOOKING_REQUEST:twotabs', sentAt: Date.now() })).toBe(true);
+
+      // A second tab is a second module instance with the same localStorage.
+      const secondTab = await freshBuzzer();
+      expect(secondTab.claimAlertDelivery({ alertId: 'BOOKING_REQUEST:twotabs', sentAt: Date.now() })).toBe(false);
+      // …and a different alert still rings there.
+      expect(secondTab.claimAlertDelivery({ alertId: 'BOOKING_REQUEST:other', sentAt: Date.now() })).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rings for a delivery the caller already cleared, without claiming it twice', async () => {
+    // The app claims the arrival first (so a page that cannot make a sound still
+    // shows the banner and the toast) and then asks for the ring. Claiming again
+    // inside playBuzzer would refuse the very alert the caller just accepted.
+    const { playBuzzer, claimAlertDelivery } = await freshBuzzer();
+    const envelope = { alertId: 'BOOKING_REQUEST:req-claimed', sentAt: Date.now() };
+    expect(claimAlertDelivery(envelope)).toBe(true);
+    expect(playBuzzer({ type: 'BOOKING_REQUEST', ...envelope, claimed: true })).toBe(true);
+  });
+
+  it('never lets the gate swallow a buzzer the user asked for', async () => {
+    const { playBuzzer } = await freshBuzzer();
+    expect(playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1, manual: true })).toBe(true);
+    expect(playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1, manual: true })).toBe(true);
+  });
+
+  it('exposes the same identity helper the app and the worker use', () => {
+    expect(alertIdentity({ bookingRequestId: 'xyz' }, 'DELAY_BOOKING')).toBe('DELAY_BOOKING:xyz');
+    expect(claimAlertDelivery({ alertId: 'DELAY_BOOKING:xyz', sentAt: Date.now() })).toBe(true);
+    expect(claimAlertDelivery({ alertId: 'DELAY_BOOKING:xyz', sentAt: Date.now() })).toBe(false);
   });
 });

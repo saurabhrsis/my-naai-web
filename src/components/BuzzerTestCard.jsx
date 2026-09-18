@@ -85,8 +85,11 @@ export function BuzzerTestCard({ notify, className = '' }) {
           : 'This browser cannot show web alerts, so the alert banner is skipped — the buzzer sound still plays.');
       }
       // The tap itself is the gesture browsers need before audio may play.
+      // `manual` says so explicitly: this ring is the user asking for it, so the
+      // arrival gate (which exists to stop a *delivered* alert ringing late)
+      // never swallows a test the user just asked for.
       unlockBuzzer();
-      playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1 });
+      playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1, manual: true });
       const alert = simulatedBooking();
       const shown = state === 'granted'
         ? await displayNotification(alert)

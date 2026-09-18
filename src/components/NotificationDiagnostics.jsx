@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell, BellRing, CheckCircle2, ChevronDown, CircleAlert, Copy, MapPin, RefreshCw, Send, Settings } from 'lucide-react';
-import { displayNotification, formatPushDiagnostics, getPushDiagnostics, getPushToken, isPushConfigured, watchNotificationPermission } from '../lib/push';
+import { displayNotification, formatPushDiagnostics, getPushDiagnostics, getPushToken, isPushConfigured, notificationActionLimit, watchNotificationPermission } from '../lib/push';
 import { playBuzzer, unlockBuzzer } from '../lib/buzzer';
 import { browserLabel, detectBrowser, isEmbeddedFrame, isIosDevice, readPermission, rememberAskChoice, requestLocation, requestNotifications, ASK_CHOICES, siteHost } from '../lib/permissions';
 import { PermissionSheet } from './PermissionUI';
@@ -137,7 +137,9 @@ export function NotificationDiagnostics({ onEnabled }) {
     setBusy('test');
     try {
       unlockBuzzer();
-      playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1 });
+      // A user-initiated ring: bypass the arrival gate deliberately (see
+      // src/lib/buzzer.js — the gate only exists to stop late *deliveries*).
+      playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1, manual: true });
       const shown = await displayNotification({
         title: 'Test alert — My Naai',
         body: 'This is how a booking request looks and sounds on this device.',
@@ -231,6 +233,31 @@ export function NotificationDiagnostics({ onEnabled }) {
     }
   };
 
+  // What this particular device will do with an alert, in plain words, because
+  // two real questions keep coming back: "how do I answer the notification on a
+  // laptop?" and "why is there no sound when the app is closed?".
+  //   · Buttons: a web notification renders only as many actions as the browser
+  //     allows (Chromium on a laptop: 2, Android: 3, Safari: none). The app asks
+  //     for `Notification.maxActions`, so what is shown here is what will show.
+  //   · Sound: the Notifications standard has no custom-sound option — the phone
+  //     or computer plays its own alert sound for the notification. With the app
+  //     closed nothing of My Naai is running, so the buzzer file cannot play; the
+  //     alert is re-raised twice inside the 60-second answer window so a missed
+  //     first sound is not the only chance, and the OS silent switch / channel
+  //     setting is what can mute it entirely.
+  const deviceAlertNote = () => {
+    const limit = notificationActionLimit();
+    const buttons = limit >= 3
+      ? 'Accept, Reject and Delay buttons appear in the alert.'
+      : limit >= 2
+        ? 'The alert shows Accept and Reject buttons; tap the alert itself to open the request and change the time.'
+        : 'This browser shows no buttons in the alert — tap it to open the request and answer there.';
+    const sound = isIosDevice()
+      ? 'Sound comes from the alert itself (iPhone plays it with the app open or closed unless the phone is on silent).'
+      : 'Sound comes from the alert itself, so the device volume and the browser\u2019s notification setting decide how loud it is.';
+    return `${buttons} ${sound} With the app closed the alert repeats twice within the 60-second answer window.`;
+  };
+
   const alertsSummary = alertsLive
     ? 'Alerts are on for this device'
     : alertsOn
@@ -303,6 +330,11 @@ export function NotificationDiagnostics({ onEnabled }) {
               </button>}
           </div>
 
+          {alertsLive && (
+            <p className="diagnostics-note">
+              {deviceAlertNote()}
+            </p>
+          )}
           {alertsLive && !failing.length && (
             <p className="diagnostics-note">Alerts are allowed in this browser. Missing one? Copy the support report below and we will trace it for you.</p>
           )}

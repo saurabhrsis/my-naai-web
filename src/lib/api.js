@@ -1,3 +1,10 @@
+import {
+  SESSION_TOKEN_KEY,
+  clearStoredSession,
+  setNotificationApiBase,
+  writeNotificationAuth as writeNotificationAuthMirror,
+} from './session';
+
 // The web client intentionally keeps the same REST contract as the React Native app.
 // Set VITE_API_BASE_URL for a staging API; production defaults to the mobile app's API.
 const configuredApiUrl = import.meta.env.VITE_API_BASE_URL;
@@ -6,7 +13,7 @@ const configuredApiUrl = import.meta.env.VITE_API_BASE_URL;
 // directly (or set VITE_API_BASE_URL to the deployed reverse proxy).
 export const API_BASE_URL = (configuredApiUrl || (import.meta.env.DEV ? '' : 'https://backend.mynaai.in')).replace(/\/$/, '');
 
-const TOKEN_KEY = 'mynaai';
+const TOKEN_KEY = SESSION_TOKEN_KEY;
 
 // Mirrors the mobile Axios interceptor's `isPlanAlertShown` guard. A busy salon
 // can make several API requests at once; one response should produce one global
@@ -17,81 +24,56 @@ export function resetPlanExpiredAlert() {
   isPlanAlertShown = false;
 }
 
-// The Firebase messaging service worker needs to perform the ACCEPT/REJECT/DELAY
-// booking actions from a notification action button even when the PWA is closed.
-// A service worker cannot read localStorage, so the session token is mirrored
-// into IndexedDB (same origin) which the worker *can* read.
-const AUTH_DB_NAME = 'mynaai-notification-actions';
-const AUTH_DB_STORE = 'auth';
-const AUTH_DB_ID = 'auth';
-
-function openAuthDb() {
-  return new Promise((resolve, reject) => {
-    if (typeof indexedDB === 'undefined') {
-      reject(new Error('IndexedDB is unavailable.'));
-      return;
-    }
-    const request = indexedDB.open(AUTH_DB_NAME, 1);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(AUTH_DB_STORE)) db.createObjectStore(AUTH_DB_STORE, { keyPath: 'id' });
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
+// The session itself — the token, the role, the profile, and the copies that
+// survive installing the app — lives in ./session. Two facts from there matter
+// here: the token can be read synchronously from localStorage (what `request()`
+// needs for its Authorization header), and a browser that refuses to store it
+// (Safari private mode, storage full) must never make sign-in itself fail.
+//
+// Tell the session store which API this build talks to, so the token it mirrors
+// into IndexedDB for the notification worker carries the right server.
+setNotificationApiBase(API_BASE_URL);
 
 export async function writeNotificationAuth(token, apiBaseUrl = API_BASE_URL) {
-  try {
-    const db = await openAuthDb();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(AUTH_DB_STORE, 'readwrite');
-      tx.objectStore(AUTH_DB_STORE).put({ id: AUTH_DB_ID, token, apiBaseUrl });
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-  } catch (error) {
-    // Non-fatal: action buttons from a closed app simply won't be able to call
-    // the API without a mirror token; the in-app screen still works.
-  }
-}
-
-export async function clearNotificationAuth() {
-  try {
-    const db = await openAuthDb();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(AUTH_DB_STORE, 'readwrite');
-      tx.objectStore(AUTH_DB_STORE).delete(AUTH_DB_ID);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-  } catch (error) {
-    // ignore
-  }
+  return writeNotificationAuthMirror(token, apiBaseUrl);
 }
 
 export function getToken() {
-  const stored = localStorage.getItem(TOKEN_KEY);
-  if (!stored) return '';
   try {
-    const parsed = JSON.parse(stored);
-    return parsed?.token || '';
+    const stored = localStorage.getItem(TOKEN_KEY);
+    if (!stored) return '';
+    try {
+      const parsed = JSON.parse(stored);
+      return parsed?.token || '';
+    } catch {
+      // Some older builds wrote the bare token string.
+      return stored;
+    }
   } catch {
-    return stored;
+    // Storage blocked: the caller simply makes an unauthenticated request and
+    // the session store still knows about the account.
+    return '';
   }
 }
 
 export function setToken(token) {
-  if (token) {
+  if (!token) return;
+  try {
     localStorage.setItem(TOKEN_KEY, JSON.stringify({ token }));
-    writeNotificationAuth(token);
+  } catch (error) {
+    // Never let a storage refusal break sign-in — see ./session for the mirror.
+    console.debug('My Naai could not save the access token to this browser\'s storage.', error);
   }
+  writeNotificationAuth(token);
 }
 
 export function clearSession() {
   resetPlanExpiredAlert();
-  ['mynaai', 'mynaaiUser', 'isLoggedIn', 'userType', 'isNewSalon', 'FCM_TOKEN'].forEach(key => localStorage.removeItem(key));
-  clearNotificationAuth();
+  // The whole session goes, everywhere it was mirrored: localStorage, the
+  // IndexedDB copy the notification worker reads, and the CacheStorage copy an
+  // installed app restores from. Anything less leaves a signed-in ghost behind.
+  clearStoredSession();
+  try { localStorage.removeItem('FCM_TOKEN'); } catch { /* storage blocked */ }
   if (typeof window !== 'undefined') window.dispatchEvent(new Event('mynaai:session-expired'));
 }
 
@@ -317,27 +299,30 @@ export const api = {
   bookingRequestOwnerAction: (bookingRequestId, payload) => post(`/api/bookingRequest/owner-action/${bookingRequestId}/`, payload),
   // The mobile owner-action contract also dispatches the customer delay notification.
   salonDelayBooking: (bookingRequestId, delayMinutes) => post(`/api/bookingRequest/owner-action/${bookingRequestId}/`, { action: 'DELAY', delayMinutes: String(delayMinutes) }),
-  // Queue-side time update. Same owner-action endpoint and the same DELAY
-  // action the mobile app uses (so the backend keeps dispatching the customer
-  // notification through the stored deviceToken), with the extra fields a
-  // queue update needs:
-  //   delayMinutes  — signed: negative means the salon can take the customer
-  //                   EARLIER. Sent as a string like every other numeric field
-  //                   in this API.
-  //   proposedTime  — the resulting wall-clock time, so the notification can
-  //                   say "6:50 PM" instead of only "+20 minutes".
-  //   newBookingDate/newBookingTime — the resolved slot, for backends that
-  //                   store the moved appointment rather than just an offset.
-  // Extra fields are ignored by a backend that only reads action/delayMinutes,
-  // so this stays compatible with the current server.
-  salonUpdateBookingTime: (bookingRequestId, { offsetMinutes, proposedTime, bookingDate, bookingTime, reason } = {}) => post(
-    `/api/bookingRequest/owner-action/${bookingRequestId}/`,
+  // Salon Queue → "Update time". This is a DIFFERENT flow from the owner-action
+  // call above (`salonDelayBooking`), and deliberately a different endpoint:
+  //
+  //   · `salonDelayBooking` answers a first-time booking REQUEST (accept /
+  //     reject / delay) on the booking-request endpoint.
+  //   · this moves the time of a booking the salon has ALREADY ACCEPTED, from
+  //     the queue screen. The booking is confirmed, nothing is being accepted
+  //     here — only its clock changes — so posting it to owner-action would be
+  //     refused ("Booking cannot be actioned") or, worse, answered as if the
+  //     customer had just asked for the slot.
+  //   · addressed by bookingId, because that is what every queue row carries.
+  //
+  // The payload is the resolved slot, not just an offset:
+  //   offsetMinutes  — signed: negative means the salon can take them EARLIER.
+  //   proposedTime   — the human label ("6:50 PM") for backends that store copy.
+  //   newBookingTime — the resolved wall clock ('HH:mm:ss').
+  //   newBookingDate — only sent when the new slot crosses midnight.
+  salonUpdateBookingTime: (bookingId, { offsetMinutes, proposedTime, bookingDate, bookingTime, reason } = {}) => post(
+    `/api/booking/salon/queue/update-time/${bookingId}`,
     {
-      action: 'DELAY',
-      delayMinutes: String(offsetMinutes),
+      offsetMinutes,
       ...(proposedTime ? { proposedTime } : {}),
-      ...(bookingDate ? { newBookingDate: bookingDate } : {}),
       ...(bookingTime ? { newBookingTime: bookingTime } : {}),
+      ...(bookingDate ? { newBookingDate: bookingDate } : {}),
       ...(reason ? { reason } : {}),
     },
   ),

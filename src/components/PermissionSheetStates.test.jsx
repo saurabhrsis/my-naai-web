@@ -12,6 +12,7 @@ vi.mock('../lib/push', () => ({
   getPushDiagnostics: vi.fn(() => Promise.resolve({ ok: true, checks: [] })),
   formatPushDiagnostics: vi.fn(() => 'OK · test: Yes'),
   isPushConfigured: vi.fn(() => true),
+    notificationActionLimit: vi.fn(() => 2),
   watchNotificationPermission: vi.fn(() => () => {}),
 }));
 
