@@ -7,7 +7,7 @@
  * - Works on Android, iOS (PWA), Chrome, Edge, Firefox, Samsung Internet, Safari
  */
 
-const CACHE_NAME = 'mynaai-shell-v7';
+const CACHE_NAME = 'mynaai-shell-v8';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -198,10 +198,16 @@ self.addEventListener('install', event => {
 });
 
 // App Shell - Activate
+// The session mirror (src/lib/session.js) lives in CacheStorage too — it is the
+// only store an app installed *after* signing in can still reach on iOS, so a
+// worker update must never evict it. Anything else from an older release goes.
+// Keep this release's app shell and the session mirror; drop everything else.
+const SESSION_CACHE_PREFIX = 'mynaai-session';
+
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys().then(keys => Promise.all(
-      keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key))
+      keys.filter(key => key !== CACHE_NAME && !key.startsWith(SESSION_CACHE_PREFIX)).map(key => caches.delete(key))
     )).then(() => self.clients.claim())
   );
 });

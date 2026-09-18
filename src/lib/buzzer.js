@@ -11,7 +11,8 @@
  * WHEN the buzzer sounds — the rule this file exists to enforce
  * ------------------------------------------------------------
  * The buzzer sounds at the moment the notification arrives, or not at all. It
- * must never sound later, when the user brings the app back to the front:
+ * must never sound later, when the user brings the app back to the front or
+ * when a page is reloaded:
  *
  *   · a phone that receives a push while the app is in the background suspends
  *     the AudioContext ('suspended' / 'interrupted' on iOS). Scheduling audio
@@ -23,10 +24,30 @@
  *   · the HTMLAudio fallback could not be used as a retry chain either: a
  *     rejected play() that was retried in the background started the alarm on
  *     the next foreground. It is now one attempt, while visible.
+ *   · the old "play the element even while hidden" path is gone. A media element
+ *     that a backgrounded browser defers, or a page restored from the
+ *     back/forward cache, started the sound whenever the browser felt like it —
+ *     on the next app open. The Web Audio path (bounded resume, right now)
+ *     covers Android's backgrounded tab; with the app closed the worker's own
+ *     notification plays the phone's alert sound, which is the honest answer
+ *     for a page that is not running at all.
+ *   · every alert now carries an ARRIVAL ENVELOPE — an id and the moment the
+ *     push arrived (`alertId` + `sentAt`, stamped by the service worker when
+ *     the push event fired, or by the page for a live foreground message). An
+ *     alert is dropped, silently, when it is older than ALERT_MAX_AGE_MS, when
+ *     it was stamped before this page even started loading, or when this alert
+ *     has already been rung (this page, or another tab of the same origin).
+ *     Late deliveries — a queued BroadcastChannel message, a postMessage handed
+ *     to a page that was still loading, a tab restored from the bfcache — carry
+ *     an old stamp and can no longer ring.
  *   · `unlockBuzzer()` used to "unlock" the HTML audio elements by playing the
  *     real buzzer file and pausing it — an audible blip on the very first tap
  *     after opening the app. Unlocking is silent now (muted element + a silence
  *     buffer through Web Audio).
+ *
+ * The delivered notification itself is never suppressed: the alert banner, the
+ * route, the toast and the booking are all still handled. Only the *sound* is
+ * tied to the arrival instant.
  *
  * While the app cannot sound anything (backgrounded, locked phone, or the very
  * first seconds before a gesture) the alert is still delivered by the system
@@ -51,6 +72,22 @@ const SOUNDS = {
   booking: '/assets/audio/buzzer_old.wav', // mobile 'booking' channel - piercing
   default: '/assets/audio/buzzer.wav',      // mobile 'default_channel'
 };
+
+// ── Arrival envelopes ───────────────────────────────────────────────────────
+// How long after a push arrives its buzz is still allowed to start. Everything
+// slower than this is a delivery the user has already been told about (the
+// worker's notification), so ringing now would be the late alarm.
+export const ALERT_MAX_AGE_MS = 10000;
+// One alert, one sound: a repeated delivery of the same alert (the worker's
+// postMessage *and* the BroadcastChannel copy, or two tabs of the same origin)
+// must not ring twice inside this window.
+export const ALERT_DEDUPE_MS = 10000;
+// A device clock slightly ahead of ours must not make a fresh alert look stale.
+const ALERT_CLOCK_SKEW_MS = 60000;
+// The instant this page's script started. An alert stamped before it was
+// delivered to a page that did not exist yet — the exact shape of a buzz that
+// "happens when the website loads or refreshes".
+const PAGE_STARTED_AT = Date.now();
 
 let audioContext = null;
 let unlocked = false;
@@ -219,6 +256,84 @@ export function isBuzzerType(type = '') {
   return value === 'BOOKING_REQUEST' || value === 'DELAY_BOOKING' || value === 'DELAY_TIME_PROPOSAL';
 }
 
+// The identity of one alert, derived the same way everywhere it is handled: the
+// type plus whatever id the API put on it. The service worker, the foreground
+// onMessage handler and the test cards all describe the same booking request
+// with the same string, which is what makes the single-ring rule enforceable.
+export function alertIdentity(data = {}, type = '') {
+  const value = String(type || data?.type || data?.notificationType || '').toUpperCase();
+  const id = data?.bookingRequestId || data?.bookingId || data?.tag || data?.notificationId || data?.id || '';
+  return `${value || 'NOTIFICATION'}:${id}`;
+}
+
+// Alerts already rung, per page, and the shared record that keeps two tabs of
+// the same origin from sounding the alarm at once (localStorage is the only
+// synchronous storage every tab can see — IndexedDB would need an await inside
+// the very moment the sound has to start).
+const rungAlerts = new Map();
+const SHARED_CLAIM_PREFIX = 'mynaai:alert-rung:';
+let lastSharedPrune = 0;
+
+function claimInMemory(key, now) {
+  const previous = rungAlerts.get(key);
+  if (previous && now - previous < ALERT_DEDUPE_MS) return false;
+  rungAlerts.set(key, now);
+  if (rungAlerts.size > 24) {
+    for (const [storedKey, at] of rungAlerts) {
+      if (now - at >= ALERT_DEDUPE_MS) rungAlerts.delete(storedKey);
+    }
+  }
+  return true;
+}
+
+function pruneSharedClaims(now) {
+  if (now - lastSharedPrune < 60000) return;
+  lastSharedPrune = now;
+  try {
+    for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+      const key = localStorage.key(index);
+      if (!key || !key.startsWith(SHARED_CLAIM_PREFIX)) continue;
+      const at = Number(localStorage.getItem(key));
+      if (!Number.isFinite(at) || now - at >= ALERT_DEDUPE_MS) localStorage.removeItem(key);
+    }
+  } catch {
+    // Storage blocked (private mode) — the in-memory claim still applies.
+  }
+}
+
+function claimAcrossTabs(key, now) {
+  try {
+    if (typeof localStorage === 'undefined') return true;
+    const stored = Number(localStorage.getItem(`${SHARED_CLAIM_PREFIX}${key}`));
+    if (Number.isFinite(stored) && stored > 0 && now - stored < ALERT_DEDUPE_MS) return false;
+    localStorage.setItem(`${SHARED_CLAIM_PREFIX}${key}`, String(now));
+    pruneSharedClaims(now);
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+// The gate every delivered alert passes through exactly once. It says: this
+// alert arrived while this page existed, moments ago, and nobody has rung it
+// yet. A manual test (a tap on "Test booking buzzer") never comes through here —
+// it is the user asking for the sound right now.
+export function claimAlertDelivery({ alertId = '', sentAt = 0 } = {}) {
+  const arrivedAt = Number(sentAt);
+  // An alert with no arrival stamp cannot be told apart from yesterday's alert
+  // reaching this page for the first time (a queued channel message, a tab that
+  // was reloading when the push came in). That is the exact shape of the bug
+  // this gate exists for, so it is refused: only a stamped delivery rings.
+  if (!Number.isFinite(arrivedAt) || arrivedAt <= 0) return false;
+  const now = Date.now();
+  const key = alertId || 'mynaai-alert';
+  if (arrivedAt > now + ALERT_CLOCK_SKEW_MS) return false;          // a clock far ahead of ours
+  if (now - arrivedAt > ALERT_MAX_AGE_MS) return false;             // arrived long ago: never ring late
+  if (arrivedAt < PAGE_STARTED_AT) return false;                    // arrived before this page loaded
+  if (!claimInMemory(key, now)) return false;                       // already rung on this page
+  return claimAcrossTabs(key, now);                                 // already rung in another tab
+}
+
 function setupBroadcastListener() {
   if (broadcastListenerSetup || typeof window === 'undefined') return;
   broadcastListenerSetup = true;
@@ -226,12 +341,19 @@ function setupBroadcastListener() {
 
   // The service worker broadcasts this to every client the moment a push
   // arrives — the one place a background push turns into sound in a live page.
+  // The envelope it carries (alertId + sentAt, stamped when the push event
+  // fired) is what lets the sound happen now and never later.
   try {
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.addEventListener('message', event => {
         const data = event.data || {};
         if (data.type === 'MYNAAI_PLAY_BUZZER') {
-          playBuzzer({ type: data.notificationType || data.data?.type || 'BOOKING_REQUEST', repeats: 3 });
+          playBuzzer({
+            type: data.notificationType || data.data?.type || 'BOOKING_REQUEST',
+            repeats: 3,
+            alertId: data.alertId || alertIdentity(data.data, data.notificationType),
+            sentAt: data.sentAt,
+          });
         }
       });
     }
@@ -247,7 +369,12 @@ function setupBroadcastListener() {
       channel.addEventListener('message', event => {
         const data = event.data || {};
         if (data.type === 'MYNAAI_PLAY_BUZZER') {
-          playBuzzer({ type: data.notificationType || data.data?.type || 'BOOKING_REQUEST', repeats: 3 });
+          playBuzzer({
+            type: data.notificationType || data.data?.type || 'BOOKING_REQUEST',
+            repeats: 3,
+            alertId: data.alertId || alertIdentity(data.data, data.notificationType),
+            sentAt: data.sentAt,
+          });
         }
       });
     }
@@ -310,52 +437,14 @@ export function unlockBuzzer() {
   }
 }
 
-// Last resort for a page that is *hidden* and whose audio clock would not start
-// (the Android report: the notification arrives in a backgrounded tab and
-// nothing is heard). Playback starts immediately — while the page is still in
-// the background — and is abandoned the moment the page becomes visible, so a
-// browser that silently deferred it can never make the alarm ring on app open.
-function playWithAudioElementWhileHidden(url, repeats = 1) {
-  const startedAt = Date.now();
-  const guard = startedAt + 4000;
-  let finished = false;
-  let audio = null;
-  const cleanup = () => {
-    if (finished) return;
-    finished = true;
-    pendingTimers.delete(guardId);
-    try { audio?.pause(); } catch { /* ignore */ }
-  };
-  const guardId = setTimeout(cleanup, guard - startedAt);
-  pendingTimers.add(guardId);
-  try {
-    audio = getAudioElement(url);
-    if (!audio) {
-      clearTimeout(guardId);
-      pendingTimers.delete(guardId);
-      return false;
-    }
-    audio.muted = false;
-    const attempt = () => {
-      if (finished) return;
-      if (!isHidden() || Date.now() > guard) return cleanup();
-      try { audio.currentTime = 0; } catch { /* ignore */ }
-      const promise = audio.play();
-      if (promise && promise.then) {
-        promise.then(() => {
-          if (Number(repeats) > 1 && !finished) {
-            const next = setTimeout(attempt, Math.max(700, (audio.duration || 1) * 1000 + 150));
-            pendingTimers.add(next);
-          }
-        }).catch(() => cleanup());
-      }
-    };
-    attempt();
-    return true;
-  } catch {
-    return false;
-  }
-}
+// NOTE: a `playWithAudioElementWhileHidden()` used to live here — it started the
+// media element on a backgrounded page and "gave up" after four seconds. The
+// browser, not us, decides when a deferred element actually starts, so on a
+// locked phone or a page restored from the back/forward cache the alarm rang on
+// the next app open: exactly the bug this module exists to prevent. A hidden
+// page now rings through the Web Audio path (whose clock either runs now or is
+// abandoned within BACKGROUND_START_DEADLINE) or not at all — with the app
+// closed, the worker's notification carries the phone's own alert sound.
 
 // One attempt, while the page is visible. Returns whether playback was started.
 function playWithAudioElement(url, repeats = 2) {
@@ -407,7 +496,16 @@ const FOREGROUND_START_DEADLINE = 5000;
 
 // Play the real My Naai buzzer (or a synthetic pulse if the file/stream is
 // unavailable) plus a device vibration, at the instant the alert arrives.
-export function playBuzzer({ type = '', repeats = 2 } = {}) {
+//
+// `alertId` + `sentAt` are the arrival envelope (see claimAlertDelivery). They
+// are required for anything the app did not ask for itself: an alert older than
+// ALERT_MAX_AGE_MS, or one that was already rung, is dropped and the function
+// returns false so the caller can skip the rest of its "new notification" work
+// too. `manual: true` is the one way past the gate — it is for the two buttons
+// whose entire purpose is "ring it now" (the signed-out buzzer test and the
+// Alerts & permissions test), which are user gestures, not deliveries.
+export function playBuzzer({ type = '', repeats = 2, alertId = '', sentAt = 0, manual = false } = {}) {
+  if (!manual && !claimAlertDelivery({ alertId: alertId || alertIdentity({}, type), sentAt })) return false;
   const isBooking = String(type || '').toUpperCase() === 'BOOKING_REQUEST';
   const vibrated = vibrate(isBooking ? [260, 120, 260, 120, 520] : [300, 140, 300, 140, 500]);
   setupBroadcastListener();
@@ -460,12 +558,6 @@ export function playBuzzer({ type = '', repeats = 2 } = {}) {
         playNow();
       })
       .catch(() => {});
-    // If the clock never starts and the page is still in the background, the
-    // alert must not go silent: try the element path, immediately and bounded.
-    // It is cancelled the instant the page comes forward.
-    setTimeout(() => {
-      if (!isRunning(ctx) && isHidden()) playWithAudioElementWhileHidden(url, count > 1 ? 2 : 1);
-    }, deadline + 100);
     return true;
   }
 

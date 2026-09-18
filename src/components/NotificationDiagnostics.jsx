@@ -137,7 +137,9 @@ export function NotificationDiagnostics({ onEnabled }) {
     setBusy('test');
     try {
       unlockBuzzer();
-      playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1 });
+      // A user-initiated ring: bypass the arrival gate deliberately (see
+      // src/lib/buzzer.js — the gate only exists to stop late *deliveries*).
+      playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1, manual: true });
       const shown = await displayNotification({
         title: 'Test alert — My Naai',
         body: 'This is how a booking request looks and sounds on this device.',
