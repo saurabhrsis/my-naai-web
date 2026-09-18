@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bell, BellRing, CheckCircle2, ChevronDown, CircleAlert, Copy, MapPin, RefreshCw, Settings } from 'lucide-react';
+import { Bell, BellRing, CheckCircle2, ChevronDown, CircleAlert, Copy, MapPin, RefreshCw, Send, Settings } from 'lucide-react';
 import { displayNotification, formatPushDiagnostics, getPushDiagnostics, getPushToken, isPushConfigured, watchNotificationPermission } from '../lib/push';
 import { playBuzzer, unlockBuzzer } from '../lib/buzzer';
-import { browserLabel, detectBrowser, isEmbeddedFrame, readPermission, rememberAskChoice, requestLocation, requestNotifications, ASK_CHOICES, siteHost } from '../lib/permissions';
+import { browserLabel, detectBrowser, isEmbeddedFrame, isIosDevice, readPermission, rememberAskChoice, requestLocation, requestNotifications, ASK_CHOICES, siteHost } from '../lib/permissions';
 import { PermissionSheet } from './PermissionUI';
-import { Button, Modal, Spinner, cx } from './Shared';
+import { api } from '../lib/api';
+import { withDeviceToken } from '../lib/apiPayload';
+import { Button, Modal, Spinner, cx, getErrorMessage } from './Shared';
 
 // Alerts & permissions — the calm home for the two permissions My Naai uses.
 //
@@ -53,6 +55,17 @@ export function NotificationDiagnostics({ onEnabled }) {
   // Follow both permissions live: a switch flipped in the browser's own settings
   // updates this card the moment the browser reports it, and again on return.
   useEffect(() => watchNotificationPermission(() => { readStates(); }), [readStates]);
+  // A device token that finishes in the background (the quiet retries in
+  // lib/push.js) flips this card to "alerts are on" without a tap: the user
+  // allowed notifications, so the rest is our job to finish.
+  useEffect(() => {
+    const onToken = () => {
+      readStates();
+      setDiagnostics(null);
+    };
+    window.addEventListener('mynaai:push-token', onToken);
+    return () => window.removeEventListener('mynaai:push-token', onToken);
+  }, [readStates]);
   useEffect(() => {
     const recheck = () => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
@@ -114,9 +127,12 @@ export function NotificationDiagnostics({ onEnabled }) {
     }
   };
 
-  // End-to-end proof on THIS device: the same notification + buzzer a booking
-  // request produces. An alert that arrives silently is worse than none for a
-  // salon, so the buzzer is testable instead of trusted.
+  // Proof on THIS device that the alert banner + buzzer work. Tapping this button
+  // is a user gesture, so the page is allowed to make a sound right here — which
+  // is exactly what is being verified. The *time-critical* path (a booking
+  // request arriving while the app is closed or in the background) is what an
+  // end-to-end test has to prove, and the copy says so on the devices where the
+  // browser, not the app, decides the sound.
   const testBuzzer = async () => {
     setBusy('test');
     try {
@@ -127,9 +143,44 @@ export function NotificationDiagnostics({ onEnabled }) {
         body: 'This is how a booking request looks and sounds on this device.',
         data: { type: 'TEST' },
       });
-      setTestMessage(shown
-        ? 'Test sent. Heard nothing? Turn the phone off silent and check the media volume.'
-        : 'The buzzer played, but this browser would not show the alert banner — check the site notification setting.');
+      setTestMessage(!shown
+        ? 'The buzzer played, but this browser would not show the alert banner — check the site notification setting.'
+        : isIosDevice()
+          // Safari locks the buzzer sound to the app being open. When the app is
+          // closed, iOS plays the notification's own sound and vibration — which
+          // is the alert a salon gets. Say it plainly instead of letting a
+          // silent phone look like a broken buzzer.
+          ? 'The buzzer played. On iPhone, this sound only plays while the app is open — with the app closed, iOS plays the alert\u2019s own sound and vibration.'
+          : 'Test sent. Heard nothing? Turn the phone off silent and check the media volume.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  // The real thing, end to end, without signing in: ask the API to push a test
+  // notification to THIS browser's own device token. It arrives through the same
+  // Firebase path a booking request uses — including while the app is in the
+  // background or closed — so it is the only test that can prove the buzzer on
+  // the device itself, and it needs no salon account.
+  const sendTestPush = async () => {
+    setBusy('push');
+    try {
+      const token = await getPushToken({ requestPermission: false });
+      if (!token) {
+        setTestMessage('This browser has no alert token yet — turn alerts on first, then tap Send test alert again.');
+        return;
+      }
+      const response = await api.testPush(withDeviceToken({}, token));
+      if (response?.status && response.status !== 'SUCCESS') {
+        setTestMessage(getErrorMessage({ data: response }, 'The test alert could not be sent.'));
+        return;
+      }
+      const alertCount = Number(response?.data?.notificationCount ?? response?.notification?.length ?? response?.data?.sent ?? 0);
+      setTestMessage(alertCount === 0
+        ? 'The server sent the test, but no device received it — check My Naai alerts in your phone settings.'
+        : 'Test alert sent to this device. Lock the phone or switch apps and check that it buzzes when it arrives.');
+    } catch (error) {
+      setTestMessage(getErrorMessage(error, 'The test alert could not be sent right now.'));
     } finally {
       setBusy('');
     }
@@ -258,6 +309,7 @@ export function NotificationDiagnostics({ onEnabled }) {
           {testMessage && <p className="diagnostics-note">{testMessage}</p>}
           <div className="diagnostics-actions">
             {alertsLive && <Button size="small" variant="secondary" onClick={testBuzzer} loading={busy === 'test'}><BellRing size={14} /> Test buzzer</Button>}
+            {alertsLive && <Button size="small" variant="secondary" onClick={sendTestPush} loading={busy === 'push'}><Send size={14} /> Send test alert</Button>}
             {pushConfigured && !alertsOn && <Button size="small" variant="secondary" onClick={run} loading={busy === 'run'}><RefreshCw size={14} /> Check again</Button>}
             <Button size="small" variant="secondary" onClick={copyReport}><Copy size={14} /> {copied ? 'Copied' : 'Support report'}</Button>
           </div>

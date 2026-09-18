@@ -122,6 +122,18 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
   // Live updates: a row fixes itself the moment the user flips a setting in the
   // browser's own UI, and again when they come back to the tab.
   useEffect(() => watchNotificationPermission(() => { readAlerts(); }), [readAlerts]);
+  // A device token that finishes later (the quiet retries in lib/push.js) is
+  // handed straight to the parent, and the row stays gone.
+  useEffect(() => {
+    const onToken = event => {
+      const token = event?.detail?.token;
+      if (!token) return;
+      onTokenRef.current?.(token);
+      setAlerts('enabled');
+    };
+    window.addEventListener('mynaai:push-token', onToken);
+    return () => window.removeEventListener('mynaai:push-token', onToken);
+  }, []);
   useEffect(() => {
     const recheck = () => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
@@ -183,21 +195,21 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
       }
 
       rememberAskChoice('notifications', ASK_CHOICES.allowed);
+      // The browser's popup said yes, so from the visitor's side alerts are ON
+      // and this row is done: it disappears right here. Minting the device token
+      // is My Naai's job and it is retried in the background (see lib/push.js),
+      // which reports back through `mynaai:push-token`. Keeping an "alerts almost
+      // ready / the last setup step did not finish" row here after somebody just
+      // tapped Allow is the exact error this branch used to show.
       if (!isPushConfigured()) {
         // Permission banked; no device token can be minted until booking alerts
         // are configured for this build. Nothing left to ask on this page.
         setAlerts('enabled');
         return;
       }
+      setAlerts('enabled');
       const token = await getPushToken({ requestPermission: false });
-      if (token) {
-        onTokenRef.current?.(token);
-        setAlerts('enabled');
-        return;
-      }
-      // Allowed, but minting the token did not finish (a slow first worker):
-      // keep the row so "Try again" can complete it.
-      setAlerts('unavailable');
+      if (token) onTokenRef.current?.(token);
     } finally {
       setBusy('');
     }
@@ -241,7 +253,7 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
       body: 'This page is open inside another app, where browsers hide the Allow prompt. Open My Naai in a tab — the login page there asks in one tap.',
     },
     unsupported: { title: 'Alerts need an install', body: needsInstall ? 'Add My Naai to your Home Screen — that is the only way iPhone allows alerts and the buzzer.' : 'This browser cannot receive web alerts, but you can still book normally.' },
-    unavailable: { title: 'Alerts almost ready', body: alertsReason || 'The last setup step did not finish. Tap Try again — it usually works on the second try.' },
+    unavailable: { title: 'Alerts allowed — finishing setup', body: alertsReason || 'Notifications are on for this device. My Naai is finishing the last step in the background — nothing to change here.' },
   }[alerts] || { title: 'Booking alerts', body: '' };
 
   return (
@@ -335,7 +347,8 @@ function openInNewTab() {
 // re-asked from JavaScript, so the steps have to be exact, but they do not have
 // to be a manual.
 export function PermissionSheet({ open, onClose, onGranted, state: initialState = 'needs-permission', kind = 'notifications', required = false }) {
-  const [state, setState] = useState(initialState);
+  const [state, setState] = useState(initialState === 'unavailable' ? 'finishing' : initialState);
+  const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [checkFailed, setCheckFailed] = useState(false);
   const [extraHelp, setExtraHelp] = useState(false);
@@ -350,7 +363,10 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
 
   useEffect(() => {
     if (open) {
-      setState(initialState);
+      // 'unavailable' means the permission IS granted and the leftover work is
+      // ours — that is the "finishing" state, never a blocked-looking one.
+      setState(initialState === 'unavailable' ? 'finishing' : initialState);
+      setReason('');
       setCheckFailed(false);
       setExtraHelp(false);
     }
@@ -365,12 +381,15 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
     }
     try {
       const status = await getPushStatus();
-      setState(status.state);
-      return status;
+      const mapped = status.state === 'unavailable' ? 'finishing' : status.state;
+      setState(mapped);
+      setReason(status.reason || '');
+      return { ...status, state: mapped };
     } catch (statusError) {
       console.debug(getErrorMessage(statusError, 'Could not read the notification status.'));
-      setState('unavailable');
-      return { state: 'unavailable', token: '' };
+      setState('finishing');
+      setReason('');
+      return { state: 'finishing', token: '' };
     }
   }, [isLocation]);
 
@@ -397,6 +416,35 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
     });
   }, [isLocation, open, readStatus, succeed]);
 
+  // Coming back to the app is the moment a permission flipped in the browser's
+  // own UI (or one the browser was slow to report) becomes visible: re-read and
+  // close on success, exactly like the cards do.
+  useEffect(() => {
+    if (!open || isLocation) return undefined;
+    const recheck = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      readStatus().then(status => { if (status.state === 'enabled' && status.token) succeed(status.token); }).catch(() => {});
+    };
+    window.addEventListener('focus', recheck);
+    document.addEventListener('visibilitychange', recheck);
+    return () => {
+      window.removeEventListener('focus', recheck);
+      document.removeEventListener('visibilitychange', recheck);
+    };
+  }, [isLocation, open, readStatus, succeed]);
+
+  // The background token retry in lib/push.js finishing: close this sheet by
+  // itself, with no tap from the user.
+  useEffect(() => {
+    if (!open || isLocation) return undefined;
+    const onToken = event => {
+      const token = event?.detail?.token;
+      if (token) succeed(token);
+    };
+    window.addEventListener('mynaai:push-token', onToken);
+    return () => window.removeEventListener('mynaai:push-token', onToken);
+  }, [isLocation, open, succeed]);
+
   const openStandalone = () => { openInNewTab(); };
 
   const allow = async () => {
@@ -411,8 +459,15 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
       }
       const permission = await requestNotifications();
       if (permission === 'granted') {
+        // The user just tapped Allow. Whatever happens next is our side of the
+        // job (minting the device token) — say "finishing", never "still off".
+        setState('finishing');
+        setCheckFailed(false);
         const token = await getPushToken({ requestPermission: false });
         if (token) { succeed(token); return; }
+        // The quiet retries in lib/push.js will close this sheet through
+        // `mynaai:push-token` the moment the token lands.
+        return;
       }
       await readStatus();
     } catch (askError) {
@@ -441,6 +496,16 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
         const token = await getPushToken({ requestPermission: true });
         if (token) { succeed(token); return; }
         await readStatus();
+      }
+      if (status.state === 'finishing') {
+        // Notifications are allowed — the token is what failed. "Still off,
+        // switch Notifications back on" would send somebody who already
+        // allowed alerts hunting through settings that are already correct.
+        const token = await getPushToken({ requestPermission: false });
+        if (token) { succeed(token); return; }
+        setState('finishing');
+        setCheckFailed(false);
+        return;
       }
       setCheckFailed(true);
     } finally {
@@ -558,6 +623,21 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
         </div>
       </>
     );
+  } else if (state === 'finishing') {
+    heading = 'Alerts are allowed — finishing setup';
+    lede = 'Your browser has allowed notifications. My Naai is finishing the last step for this device, and it keeps trying by itself — there is nothing to change in your settings.';
+    body = (
+      <>
+        {reason && <p className="permission-help-note">{reason}</p>}
+        <div className="permission-gate-actions">
+          <Button onClick={check} loading={busy}><RefreshCw size={16} /> Try again</Button>
+        </div>
+        <div className="permission-gate-secondary">
+          <button className="ghost" onClick={onClose}>Not now</button>
+          <a className="ghost" href="tel:8380017393">Need help? Call</a>
+        </div>
+      </>
+    );
   } else {
     heading = 'One more tap';
     lede = 'The last step of the alert setup did not finish on this device. Try once more — it usually works on the second try.';
@@ -643,6 +723,10 @@ export function NotificationSetupCard({ compact = false, onEnabled }) {
     try {
       const permission = await requestNotifications();
       if (permission === 'granted') {
+        // Permission granted: bank it, then finish our side (the device token)
+        // without asking the salon owner for anything else. A token that lands
+        // later arrives through `mynaai:push-token`.
+        setStatus('checking');
         const token = await getPushToken({ requestPermission: false });
         if (token) onEnabledRef.current?.(token);
         await inspect();
@@ -656,6 +740,18 @@ export function NotificationSetupCard({ compact = false, onEnabled }) {
     }
   };
 
+  // A token that finishes in the background (lib/push.js retries) completes this
+  // card by itself — the salon owner does not have to tap anything.
+  useEffect(() => {
+    const onToken = event => {
+      const token = event?.detail?.token;
+      if (token) onEnabledRef.current?.(token);
+      inspect();
+    };
+    window.addEventListener('mynaai:push-token', onToken);
+    return () => window.removeEventListener('mynaai:push-token', onToken);
+  }, [inspect]);
+
   if (!isPushConfigured() || ['checking', 'unconfigured', 'enabled'].includes(status)) return null;
   const blocked = status === 'denied';
   const unavailable = status === 'unavailable' || status === 'unsupported';
@@ -663,10 +759,10 @@ export function NotificationSetupCard({ compact = false, onEnabled }) {
     <section className={cx('push-setup-card', compact && 'push-setup-compact', unavailable && 'push-setup-retry')} aria-live="polite">
       <span className="push-setup-icon"><Bell size={compact ? 15 : 18} /></span>
       <div className="push-setup-copy">
-        <strong>{blocked ? 'Booking alerts are blocked' : unavailable ? 'Booking alerts are not ready' : 'Turn on booking alerts'}</strong>
+        <strong>{blocked ? 'Booking alerts are blocked' : unavailable ? 'Alerts allowed — finishing setup' : 'Turn on booking alerts'}</strong>
         <p>{blocked
           ? `Allow Notifications for ${siteHost()} in ${browserLabel(detectBrowser())} — three taps, then Check again.`
-          : unavailable ? (reason || 'The last setup step did not finish — tap Try again.') : 'Booking requests, confirmations and the buzzer reach you only with alerts on.'}</p>
+          : unavailable ? (reason || 'Notifications are on for this device. My Naai is finishing the last step — this usually completes by itself.') : 'Booking requests, confirmations and the buzzer reach you only with alerts on.'}</p>
       </div>
       <div className="push-setup-actions">
         <Button size="small" onClick={blocked ? () => setHelpOpen(true) : enable} loading={busy}>

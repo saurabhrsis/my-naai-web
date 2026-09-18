@@ -287,8 +287,9 @@ Open the Account screen (salon or customer) and expand **Alerts & permissions**.
 
 - Confirm every `VITE_FIREBASE_*` variable is present at build time.
 - Restart Vite after changing `.env.local`.
-- The portal names the reason instead of failing silently: an unconfigured deployment, an unsupported browser context (iPhone/iPad needs the installed PWA), a denied permission and a token failure each render their own row/sheet state.
+- The portal names the reason instead of failing silently: an unconfigured deployment, an unsupported browser context (iPhone/iPad needs the installed PWA), a denied permission and a token failure each render their own row/sheet state. A **granted** permission is never dressed up as a block: if the device token is what failed, the sheet says **Alerts are allowed — finishing setup**, retries our side and keeps working in the background.
 - Confirm the site is HTTPS (or running on `localhost`).
+- **iPhone/iPad, opened from the Home Screen**: the Allow popup lives once per installation, and Safari's Permissions API can keep reporting `prompt` after the user granted it. The portal therefore treats a `granted` from `Notification.permission` *or* the Permissions API as granted (a live `denied` still wins), so a real grant is never downgraded into "turn on booking alerts" again. If alerts were only switched off, remove the Home Screen icon and add it again — iOS keeps its own copy of the permission per install.
 - Check that the browser has not permanently blocked notifications for the origin — a blocked permission can only be fixed in the browser's own site settings, which is what the three-step sheet walks through, and **Try again** re-reads the live permission so the fix is picked up without a logout.
 - The app offers the one-tap alert action on the login page (**Booking alerts**), on the salon registration steps, and in the Account screen's **Alerts & permissions** card.
 - Sign-in is NOT blocked by a missing token: if a login still fails, look at the API response (`deviceToken`) in the copied report rather than at the permission state.
@@ -300,6 +301,20 @@ Open the Account screen (salon or customer) and expand **Alerts & permissions**.
 - Check DevTools → Application → Service Workers for `firebase-messaging-sw.js`.
 - Check that the `/firebase-cloud-messaging-push-scope` registration is active.
 - Check the browser console for IndexedDB, permission or service-worker errors.
+- The portal now recovers on its own instead of parking the failure in front of the
+  user: the third attempt drops a stale push subscription (an older worker or an
+  older VAPID key leaves one that can never be redeemed) and rebuilds the worker
+  before retrying, a failure is then retried quietly for about a minute, and every
+  alert surface is updated through the `mynaai:push-token` window event when a token
+  finally lands. The **Support report** prints the classified reason
+  (`offline` / `key` / `worker` / `blocked` / `unknown`) with the raw Firebase
+  message, so a rejected key is distinguishable from a phone that was offline.
+
+### Testing the buzzer on a device
+
+- **Without an account**: `/salon-partner` and the login page carry **Test booking buzzer**. One tap plays the real WAV and shows the same alert a booking request produces. This is the only way to verify an iPhone, whose notification permission can only be granted to an app that is running.
+- **After sign-in, end to end**: **Alerts & permissions → Send test alert** asks the API for a test push to *this* browser's own token (`POST /api/notifications/test-push` with `{ deviceToken }`). It is optional server-side — the portal reports the endpoint's answer instead of failing silently — and it is the only test that covers a notification arriving while the app is in the background or closed.
+- **What each platform does**: with the app open the portal plays the real buzzer (Android resumes a hidden tab's audio clock, so a backgrounded Android tab still buzzes at arrival; iOS parks the request until the app is opened, so it is abandoned rather than played late). With the app closed, the OS plays the notification's own sound and vibration — the alert *is* the buzzer there, and no `sound` field on the server changes that.
 
 ### Token exists but no message arrives
 

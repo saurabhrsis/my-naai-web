@@ -56,6 +56,20 @@ describe('permissions', () => {
       expect(await readPermission('notifications')).toBe('default');
     });
 
+    it('never downgrades a granted notification permission to prompt (iOS Home Screen apps)', async () => {
+      // Reported from an installed iPhone app: the Allow popup was answered and
+      // `Notification.permission` said "granted", while Safari's Permissions API
+      // kept answering "prompt" — so the portal kept insisting "turn on booking
+      // alerts" and never minted a token. A real grant from either source wins.
+      setLivePermission('prompt');
+      globalThis.Notification = { permission: 'granted' };
+      expect(await readPermission('notifications')).toBe('granted');
+      // …and a genuine block reported live is still a block.
+      setLivePermission('denied');
+      globalThis.Notification = { permission: 'granted' };
+      expect(await readPermission('notifications')).toBe('denied');
+    });
+
     it('reports the live granted state even when the static snapshot still says denied', async () => {
       // The exact case that used to strand users: they unblocked the site in
       // browser settings, the page kept the stale "denied" snapshot, and every

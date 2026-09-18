@@ -47,6 +47,12 @@ vi.mock('./lib/push', () => {
     normalizePushPayload: vi.fn(payload => ({ title: '', body: '', data: {}, type: '', hasData: false, ...payload })),
     recordForegroundMessage: noop,
     watchNotificationPermission: vi.fn(() => () => {}),
+    // The signed-out buzzer check on the login page reads the live permission
+    // through lib/push, so the mock carries those entry points too.
+    readNotificationPermission: vi.fn(() => Promise.resolve('granted')),
+    requestNotificationPermission: vi.fn(() => Promise.resolve('granted')),
+    formatPushDiagnostics: vi.fn(() => ''),
+    getPushDiagnostics: vi.fn(() => Promise.resolve({ ok: true, checks: [] })),
   };
 });
 // Device detection (iPhone, embedded frame) decides WHICH permission copy the
@@ -405,6 +411,11 @@ describe('Guest browsing flow', () => {
     expect(currentPath()).toBe('/salon-partner');
     expect(container.querySelector('.partner-screen')).not.toBeNull();
     expect(container.querySelector('.site-nav-links button.active')?.textContent).toBe('Salon partner');
+    // The signed-out buzzer check lives on this page: iOS only grants a
+    // notification permission to an app that is actually running, so a login wall
+    // made the buzzer unverifiable on an iPhone. Reachable here without an account.
+    expect(container.querySelector('.partner-buzzer .buzzer-test-card')).not.toBeNull();
+    expect(container.textContent).toContain('Hear the buzzer before you sign in');
 
     await act(async () => { Array.from(container.querySelector('.site-nav-links').querySelectorAll('button')).find(node => node.textContent === 'About').click(); });
     await flush();
@@ -1107,6 +1118,31 @@ describe('Login permission flow', () => {
     expect(container.querySelector('.allow-alerts-button')).toBeNull();
   });
 
+  it('a granted permission never leaves an error row behind — the token finishes in the background', async () => {
+    // Reported: "I allow the pop-up and it still shows the error." Once the
+    // browser's own popup has been answered with Allow, the permission is ON and
+    // the row is done — minting the device token is My Naai's half of the job, and
+    // it is retried in the background (lib/push.js) with the row left out of the
+    // way. "The last setup step did not finish" is our problem, not the
+    // visitor's, so it must never be parked in front of them as an error.
+    grantOnRequest();
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'unavailable', reason: '' });
+    vi.mocked(push.getPushToken).mockResolvedValue('');
+    await mount();
+
+    const card = container.querySelector('.login-perm-card');
+    expect(card.textContent).toContain('Alerts allowed — finishing setup');
+    expect(card.textContent).not.toContain('did not finish');
+    expect(card.textContent).not.toContain('still works on the second try');
+
+    // The tap retries our side; the browser is already allowed, so the row goes
+    // and nothing scary takes its place.
+    await act(async () => { buttonByText('Try again').click(); });
+    await flush();
+    expect(container.querySelector('.allow-alerts-button')).toBeNull();
+    expect(container.textContent).not.toContain('did not finish');
+  });
+
   it('asks in the same tap as Continue with OTP, then sends it', async () => {
     grantOnRequest();
     // Exactly like the real thing: the silent read finds nothing until the user
@@ -1197,6 +1233,45 @@ describe('Login permission flow', () => {
     await flush();
     expect(api.verifyLogin).toHaveBeenCalledTimes(2);
     expect(api.verifyLogin.mock.calls[1][0]).toEqual({ phoneNumber: '9876543210', otp: '123456', deviceToken: 'push-token-3' });
+    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+  });
+
+  it('when the API insists on a token the user already allowed, it says so instead of asking again', async () => {
+    // Reported from a phone: "I allow the pop and it still shows the error."
+    // Here the browser's popup WAS answered with Allow — the device token is what
+    // the API refused over. The form line and the sheet must both reflect that
+    // instead of repeating "turn on booking alerts … choose Allow".
+    grantOnRequest();
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'unavailable', reason: 'Notifications are allowed on this device — the last step is still finishing.' });
+    vi.mocked(push.getPushToken).mockResolvedValue('');
+    vi.mocked(api.userLogin).mockResolvedValue({ status: 'SUCCESS', data: {} });
+    vi.mocked(api.verifyLogin)
+      .mockRejectedValueOnce(Object.assign(new Error('"deviceToken" is required'), { data: { message: '"deviceToken" is required' } }))
+      .mockResolvedValue({ status: 'SUCCESS', data: { token: 'session-token', userId: 'user-1' } });
+    await mount();
+
+    await act(async () => { typeMobile('9876543210'); });
+    await act(async () => { submitPhone(); });
+    await flush();
+    await act(async () => { typeOtp('123456'); });
+    await act(async () => { submitForm(); });
+    await flush();
+
+    const formError = container.querySelector('.form-error');
+    expect(formError.textContent).toContain('Notifications are allowed on this device');
+    expect(formError.textContent).not.toContain('choose Allow');
+    const sheet = container.querySelector('.permission-gate-sheet');
+    expect(sheet.textContent).toContain('Alerts are allowed — finishing setup');
+    expect(sheet.textContent).not.toContain('Still off');
+    expect(sheet.textContent).not.toContain('Switch Notifications back on');
+
+    // The background retry lands a token: the sheet closes and the SAME
+    // verification goes through without the user doing anything.
+    vi.mocked(push.getPushToken).mockResolvedValue('push-token-late');
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('mynaai:push-token', { detail: { token: 'push-token-late' } }));
+    });
+    await flush();
     expect(container.querySelector('.permission-gate-sheet')).toBeNull();
   });
 

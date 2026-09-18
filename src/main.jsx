@@ -39,15 +39,11 @@ if ('serviceWorker' in navigator) {
     console.debug('Service Worker controller changed');
   });
 
-  // Handle messages from SW (buzzer, navigation)
+  // Handle messages from SW (navigation). The buzzer listens for
+  // MYNAAI_PLAY_BUZZER itself — src/lib/buzzer.js owns that message so one push
+  // can never play the alarm twice.
   navigator.serviceWorker.addEventListener('message', event => {
     const data = event.data || {};
-    if (data.type === 'MYNAAI_PLAY_BUZZER') {
-      // Import buzzer dynamically to avoid circular deps
-      import('./lib/buzzer.js').then(({ playBuzzer }) => {
-        playBuzzer({ type: data.notificationType || 'BOOKING_REQUEST', repeats: 3 });
-      }).catch(() => {});
-    }
     if (data.type === 'MYNAAI_NAVIGATE' && data.target) {
       try {
         window.history.pushState({}, '', data.target.startsWith('#') ? data.target.replace(/^#+/, '') : data.target);

@@ -1904,3 +1904,23 @@ img.image-fallback-tile {
 .push-setup-pwa .push-setup-icon { background: var(--green); color: #09120d; }
 .pwa-standalone .push-setup-pwa { display: none; }
 
+
+/* ── Signed-out booking buzzer check ─────────────────────────────────────────
+   The same alert a booking request produces, testable before an account exists
+   (iOS only ever grants a notification permission to an app that is running, so
+   a login wall made the buzzer unverifiable on an iPhone). Reuses the permission
+   row chrome so it reads as part of the same card, with its own note line. */
+.buzzer-test-card { max-width: 460px; }
+.login-buzzer-card { margin-top: -8px; }
+.buzzer-test-card .perm-row { align-items: flex-start; }
+.buzzer-test-card .perm-row-copy p { margin: 3px 0 0; color: var(--muted-light); font-size: 11.5px; line-height: 1.5; }
+.buzzer-test-button { margin-top: 2px; }
+.buzzer-test-note { display: flex; align-items: flex-start; gap: 6px; margin: 8px 0 0; color: var(--gold); font-size: 11.5px; line-height: 1.5; }
+.buzzer-test-note.warn { color: var(--red); }
+.buzzer-test-note svg { flex: none; margin-top: 2px; }
+
+/* Website shell: the check sits under the page it belongs to, on the same
+   measure as the site content instead of stretching the full width. */
+.guest-buzzer-test { max-width: 960px; margin: 26px auto 4px; }
+.partner-buzzer { margin: 26px 0 6px; }
+.partner-buzzer .buzzer-test-card { max-width: none; }

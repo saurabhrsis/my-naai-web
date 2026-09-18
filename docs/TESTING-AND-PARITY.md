@@ -32,8 +32,10 @@ npm test
 
 | File | Covers |
 | --- | --- |
-| `src/lib/push.test.js` (17) | `isPushConfigured`, `bookingRequestActions` (Accept/Reject/Delay), `normalizePushPayload` (notification+data merge, data-only, defaults, click_action), `isActionableNotification` (salon vs customer), `getNotificationRoute` (all types/roles, delay modal, unknown fallback), `formatPushDiagnostics`. |
-| `src/lib/buzzer.test.js` (5) | `vibrate` (available / unavailable), `isBuzzerSupported`, `playBuzzer` (returns + vibrates), `unlockBuzzer`. |
+| `src/lib/push.test.js` (30) | `isPushConfigured`, `bookingRequestActions` (Accept/Reject/Delay), `normalizePushPayload` (notification+data merge, data-only, defaults, click_action), `isActionableNotification` (salon vs customer), `getNotificationRoute` (all types/roles, delay modal, unknown fallback), `formatPushDiagnostics`, the live permission reads, and **token recovery**: a stale push subscription is dropped and the worker rebuilt before the retry, a successful retry clears the failure, and a failure records the reason (`describePushTokenFailure`) so the UI can name the cause instead of one vague sentence. |
+| `src/lib/buzzer.test.js` (10) | `vibrate` (available / unavailable), `isBuzzerSupported`, `playBuzzer` (returns + vibrates), `unlockBuzzer`, and the **timing contract**: plays while the audio clock is running, never queues anything on a suspended context (`document.hidden` = a backgrounded app), cancels a burst that has not started when the page hides, still buzzes a hidden page whose audio clock resumes immediately (a backgrounded Android tab), never replays anything when an iOS resume only completes on app open, and only ever plays a *muted* element while warming up. |
+| `src/components/BuzzerTestCard.test.jsx` (3) | The signed-out **Test booking buzzer**: it rings the real buzzer and shows the simulated booking-request alert with no account, asks for the permission inside the tap, and never pretends a blocked browser can ring — it names the setting to change instead. |
+| `src/components/PermissionFinishing.test.jsx` (3) | The alerts sheet with a **granted** permission whose device token is late: it says **Alerts are allowed — finishing setup**, never "still off" and never "switch Notifications back on", retries our side when tapped, and closes itself when the background retry reports a token. |
 | `src/lib/api.test.js` (4) | `getToken`/`setToken` JSON round-trip, raw-string tolerance, `getServerUrl`. |
 
 Test doubles: `src/test/setup.js` stubs `Notification`, `navigator.vibrate`,
@@ -86,8 +88,10 @@ boundary so the lib can be imported under jsdom.
   `#/`). ✅
 - Buzzer: real mobile WAV (`buzzer_old` for booking, `buzzer` for default) with a
   synthetic fallback, plus device vibration on foreground and background alerts.
-  The audible background sound is the OS notification sound (a closed service
-  worker cannot synthesize a custom tone). ✅
+  It fires at the instant the alert arrives and is never queued for later (a
+  suspended AudioContext would otherwise replay it on app open). The audible
+  background sound is the OS notification sound (a closed service worker cannot
+  synthesize a custom tone). ✅
 
 ---
 
@@ -110,11 +114,17 @@ boundary so the lib can be imported under jsdom.
 
 ## 4. Behavioral notes & limits
 
+- **Buzzer timing**: the buzzer is an *alert*, not a notification backlog — it
+  sounds when the push arrives and never when the app is reopened. A
+  backgrounded page cannot start audio (iOS suspends the context), so nothing is
+  scheduled while it is hidden and any burst that has not begun is cancelled on
+  the way out; the worker's notification (sound + `vibrate`) covers that window.
 - **Buzzer when the app is closed**: browsers only play the OS notification
   sound for web push and cannot synthesize a custom tone from a closed service
-  worker. The real buzzer reliably plays whenever the app is open (Web Audio),
-  and the alert carries `vibrate` + a best-effort `sound` for supporting
-  browsers. A backend `sound` field is not required for the web client.
+  worker. The real buzzer reliably plays whenever the app is open and can sound
+  at that instant (Web Audio), and the alert carries `vibrate` + a best-effort
+  `sound` for supporting browsers. A backend `sound` field is not required for
+  the web client.
 - **Notification action buttons**: Chrome caps them at two, so Accept + Reject
   are the visible buttons and Delay is reached by tapping the body or via the
   app. The in-app Booking request screen always offers all three actions, so
