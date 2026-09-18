@@ -8,20 +8,43 @@
  * Time-critical alerts (a salon booking request, a delay proposal) buzz + pulse
  * the device; informational messages stay silent by design.
  *
+ * WHEN the buzzer sounds — the rule this file exists to enforce
+ * ------------------------------------------------------------
+ * The buzzer sounds at the moment the notification arrives, or not at all. It
+ * must never sound later, when the user brings the app back to the front:
+ *
+ *   · a phone that receives a push while the app is in the background suspends
+ *     the AudioContext ('suspended' / 'interrupted' on iOS). Scheduling audio
+ *     into a suspended context queues it, and the queue is flushed the instant
+ *     the app is resumed — that is the "the buzzer rings when I open the app"
+ *     report. So we only ever play when the context is *running right now*;
+ *     nothing is scheduled for later, and any burst that has not started yet is
+ *     cancelled the moment the page goes to the background.
+ *   · the HTMLAudio fallback could not be used as a retry chain either: a
+ *     rejected play() that was retried in the background started the alarm on
+ *     the next foreground. It is now one attempt, while visible.
+ *   · `unlockBuzzer()` used to "unlock" the HTML audio elements by playing the
+ *     real buzzer file and pausing it — an audible blip on the very first tap
+ *     after opening the app. Unlocking is silent now (muted element + a silence
+ *     buffer through Web Audio).
+ *
+ * While the app cannot sound anything (backgrounded, locked phone, or the very
+ * first seconds before a gesture) the alert is still delivered by the system
+ * notification the service worker raises for buzzer types, which carries sound
+ * and the vibrate pattern.
+ *
  * Platform notes
  * --------------
  * - Sound uses the Web Audio API, which browsers only let play after a user
- *   gesture (autoplay policy). On a background/closed app the OS notification
- *   sound is controlled by the push payload the server sends; the client
- *   service worker can only pulse the device. `unlockBuzzer()` is called on the
- *   first user interaction to unlock (and preload) audio for the session.
+ *   gesture (autoplay policy). `unlockBuzzer()` is called on user interaction to
+ *   unlock (and preload) audio for the session.
  * - Vibration works on Android Chrome and a few other mobile browsers; desktop
  *   ignores `navigator.vibrate`.
- * - iOS Safari requires special handling - AudioContext must be resumed on user
- *   gesture and HTMLAudio fallback is used when Web Audio fails.
- * - Background support: service worker broadcasts MYNAAI_PLAY_BUZZER to all
- *   clients when a push arrives, so even a hidden tab can buzz if it has been
- *   unlocked before.
+ * - iOS Safari requires special handling — AudioContext must be resumed on a user
+ *   gesture, and HTMLAudio is the fallback when Web Audio cannot start.
+ * - One listener per page: the service worker broadcasts MYNAAI_PLAY_BUZZER to
+ *   every client when a push arrives, and this module is the only place that
+ *   turns that message into sound.
  */
 
 const SOUNDS = {
@@ -35,6 +58,52 @@ let audioElements = {}; // url -> HTMLAudioElement fallback
 const buffers = {};   // url -> Promise<AudioBuffer>
 const bufferFailed = {}; // url -> true (fall back to synthetic tone)
 let broadcastListenerSetup = false;
+// Bursts handed to the Web Audio clock that have not started playing yet, and
+// the timers used to chain HTMLAudio repeats — both are cancelled when the page
+// goes to the background so a stale alarm can never fire on the way back in.
+const scheduledBursts = new Set();
+const pendingTimers = new Set();
+
+function isHidden() {
+  if (typeof document === 'undefined') return false;
+  return document.visibilityState === 'hidden';
+}
+
+function addTimer(callback, delay) {
+  const id = setTimeout(() => {
+    pendingTimers.delete(id);
+    callback();
+  }, delay);
+  pendingTimers.add(id);
+  return id;
+}
+
+function clearPendingTimers() {
+  for (const id of pendingTimers) clearTimeout(id);
+  pendingTimers.clear();
+}
+
+let visibilityHooked = false;
+function hookVisibility() {
+  if (visibilityHooked || typeof document === 'undefined') return;
+  visibilityHooked = true;
+  document.addEventListener('visibilitychange', () => {
+    if (isHidden()) {
+      // Nothing rings on the way back in: cancel what has not started, and any
+      // queued HTMLAudio repeat.
+      stopScheduledBursts();
+      clearPendingTimers();
+      return;
+    }
+    // Back in the foreground: the context was suspended while we were away, so
+    // resume it for the NEXT alert (never to replay the previous one).
+    try {
+      if (audioContext && audioContext.state === 'suspended') audioContext.resume().catch(() => {});
+    } catch {
+      // ignore
+    }
+  });
+}
 
 function getAudioContext() {
   if (typeof window === 'undefined') return null;
@@ -43,14 +112,19 @@ function getAudioContext() {
   try {
     if (!audioContext) {
       audioContext = new Ctor();
-    }
-    if (audioContext.state === 'suspended') {
-      audioContext.resume().catch(() => {});
+      hookVisibility();
     }
     return audioContext;
   } catch {
     return null;
   }
+}
+
+// True only when audio can actually start in this instant. A suspended or
+// interrupted context cannot — and asking it to play would queue the sound for
+// whenever the page resumes.
+function isRunning(ctx) {
+  return Boolean(ctx) && ctx.state === 'running';
 }
 
 function getAudioElement(url) {
@@ -96,10 +170,24 @@ function playSynthetic(ctx, { frequency, start, duration, volume }) {
     gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
     oscillator.connect(gain);
     gain.connect(ctx.destination);
+    if (start > ctx.currentTime + 0.05) scheduledBursts.add(oscillator);
+    oscillator.onended = () => scheduledBursts.delete(oscillator);
     oscillator.start(start);
     oscillator.stop(start + duration + 0.03);
   } catch {
     // ignore synthetic failures
+  }
+}
+
+// Stop every burst that has been handed to the clock but has not started yet.
+function stopScheduledBursts() {
+  for (const node of Array.from(scheduledBursts)) {
+    scheduledBursts.delete(node);
+    try {
+      node.stop(0);
+    } catch {
+      // already stopped / never started
+    }
   }
 }
 
@@ -125,19 +213,25 @@ export function isBuzzerSupported() {
   return Boolean(window.AudioContext || window.webkitAudioContext || typeof Audio !== 'undefined');
 }
 
+// Which alert types buzz, in one place for the client and the worker broadcast.
+export function isBuzzerType(type = '') {
+  const value = String(type || '').toUpperCase();
+  return value === 'BOOKING_REQUEST' || value === 'DELAY_BOOKING' || value === 'DELAY_TIME_PROPOSAL';
+}
+
 function setupBroadcastListener() {
   if (broadcastListenerSetup || typeof window === 'undefined') return;
   broadcastListenerSetup = true;
+  hookVisibility();
 
-  // Listen for service worker messages to play buzzer in background
+  // The service worker broadcasts this to every client the moment a push
+  // arrives — the one place a background push turns into sound in a live page.
   try {
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.addEventListener('message', event => {
         const data = event.data || {};
-        if (data.type === 'MYNAAI_PLAY_BUZZER' || data.type === 'MYNAAI_CLOSE_NOTIFICATION') {
-          if (data.type === 'MYNAAI_PLAY_BUZZER') {
-            playBuzzer({ type: data.notificationType || data.data?.type || 'BOOKING_REQUEST', repeats: 3 });
-          }
+        if (data.type === 'MYNAAI_PLAY_BUZZER') {
+          playBuzzer({ type: data.notificationType || data.data?.type || 'BOOKING_REQUEST', repeats: 3 });
         }
       });
     }
@@ -149,6 +243,7 @@ function setupBroadcastListener() {
   try {
     if (typeof BroadcastChannel !== 'undefined') {
       const channel = new BroadcastChannel('mynaai-notifications');
+      channel.unref?.();
       channel.addEventListener('message', event => {
         const data = event.data || {};
         if (data.type === 'MYNAAI_PLAY_BUZZER') {
@@ -159,43 +254,26 @@ function setupBroadcastListener() {
   } catch {
     // BroadcastChannel not supported, ignore
   }
-
-  // Keep audio context alive on visibility change - helps with background tabs
-  try {
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && audioContext) {
-        if (audioContext.state === 'suspended') {
-          audioContext.resume().catch(() => {});
-        }
-      }
-    });
-  } catch {
-    // ignore
-  }
 }
 
-// Called from the app on the first user interaction so the AudioContext is
-// allowed to produce sound (and the buzzer file is preloaded) later without a
-// gesture.
+// Called from the app on user interaction so the AudioContext is allowed to
+// produce sound (and the buzzer file is preloaded) later without a gesture.
+// Completely silent: unlocking must never make a sound of its own.
 export function unlockBuzzer() {
-  if (unlocked) {
-    // Even if already unlocked, ensure context is resumed
-    if (audioContext && audioContext.state === 'suspended') {
-      audioContext.resume().catch(() => {});
-    }
-    return;
-  }
-  unlocked = true;
   setupBroadcastListener();
+  hookVisibility();
+  if (unlocked && !audioContext) return;
+  unlocked = true;
 
   const ctx = getAudioContext();
   if (ctx) {
-    // Preload the real buzzer files so a push can fire immediately.
+    // Preload the real buzzer files so an alert can fire immediately.
     loadBuffer(SOUNDS.booking).catch(() => {});
     loadBuffer(SOUNDS.default).catch(() => {});
 
-    // Play a silent buffer to fully unlock on iOS
+    // Playing a one-sample silent buffer is what actually unlocks iOS.
     try {
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
       const buffer = ctx.createBuffer(1, 1, 22050);
       const source = ctx.createBufferSource();
       source.buffer = buffer;
@@ -206,61 +284,108 @@ export function unlockBuzzer() {
     }
   }
 
-  // Also preload HTMLAudio elements as fallback for iOS and strict autoplay policies
+  // Warm the HTMLAudio fallback too — MUTED. Playing the real file to "unlock"
+  // it (the old behaviour) is audible on a slow phone, which is one more way the
+  // buzzer appeared to ring when the app was opened.
   try {
     Object.values(SOUNDS).forEach(url => {
       const audio = getAudioElement(url);
-      if (audio) {
-        audio.load();
-        // Try to play and immediately pause to unlock - works on some browsers
-        const playPromise = audio.play();
-        if (playPromise && playPromise.then) {
-          playPromise.then(() => {
-            audio.pause();
-            audio.currentTime = 0;
-          }).catch(() => {});
+      if (!audio) return;
+      audio.muted = true;
+      const promise = audio.play();
+      const release = () => {
+        try {
+          audio.pause();
+          audio.currentTime = 0;
+        } catch {
+          // ignore
         }
-      }
+        audio.muted = false;
+      };
+      if (promise && promise.then) promise.then(release).catch(() => { audio.muted = false; });
+      else release();
     });
   } catch {
     // ignore
   }
 }
 
-function playWithAudioElement(url, repeats = 2) {
+// Last resort for a page that is *hidden* and whose audio clock would not start
+// (the Android report: the notification arrives in a backgrounded tab and
+// nothing is heard). Playback starts immediately — while the page is still in
+// the background — and is abandoned the moment the page becomes visible, so a
+// browser that silently deferred it can never make the alarm ring on app open.
+function playWithAudioElementWhileHidden(url, repeats = 1) {
+  const startedAt = Date.now();
+  const guard = startedAt + 4000;
+  let finished = false;
+  let audio = null;
+  const cleanup = () => {
+    if (finished) return;
+    finished = true;
+    pendingTimers.delete(guardId);
+    try { audio?.pause(); } catch { /* ignore */ }
+  };
+  const guardId = setTimeout(cleanup, guard - startedAt);
+  pendingTimers.add(guardId);
   try {
-    const audio = getAudioElement(url);
-    if (!audio) return false;
-
-    let playCount = 0;
-    const maxPlays = Math.max(1, Math.min(3, repeats));
-
-    const playNext = () => {
-      if (playCount >= maxPlays) return;
-      playCount++;
-      audio.currentTime = 0;
+    audio = getAudioElement(url);
+    if (!audio) {
+      clearTimeout(guardId);
+      pendingTimers.delete(guardId);
+      return false;
+    }
+    audio.muted = false;
+    const attempt = () => {
+      if (finished) return;
+      if (!isHidden() || Date.now() > guard) return cleanup();
+      try { audio.currentTime = 0; } catch { /* ignore */ }
       const promise = audio.play();
       if (promise && promise.then) {
         promise.then(() => {
-          // Schedule next play after current finishes + small gap
-          audio.onended = () => {
-            if (playCount < maxPlays) {
-              setTimeout(playNext, 150);
-            } else {
-              audio.onended = null;
-            }
-          };
-        }).catch(() => {
-          // Autoplay blocked, try next after delay
-          if (playCount < maxPlays) {
-            setTimeout(playNext, 200);
+          if (Number(repeats) > 1 && !finished) {
+            const next = setTimeout(attempt, Math.max(700, (audio.duration || 1) * 1000 + 150));
+            pendingTimers.add(next);
           }
+        }).catch(() => cleanup());
+      }
+    };
+    attempt();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// One attempt, while the page is visible. Returns whether playback was started.
+function playWithAudioElement(url, repeats = 2) {
+  if (isHidden()) return false;
+  try {
+    const audio = getAudioElement(url);
+    if (!audio) return false;
+    audio.muted = false;
+    const maxPlays = Math.max(1, Math.min(3, repeats || 1));
+    const startedAt = Date.now();
+    let playCount = 0;
+
+    const playNext = () => {
+      // Backgrounded, or the attempt is old enough that a buzz would be noise
+      // rather than an alert: stop instead of turning into "it rings when I
+      // open the app".
+      if (playCount >= maxPlays || isHidden() || Date.now() - startedAt > 6000) return;
+      playCount += 1;
+      try {
+        audio.currentTime = 0;
+      } catch {
+        // ignore
+      }
+      const promise = audio.play();
+      if (promise && promise.then) {
+        promise.then(() => {
+          addTimer(playNext, Math.max(700, (audio.duration || 1) * 1000 + 150));
+        }).catch(() => {
+          addTimer(playNext, 200);
         });
-      } else {
-        // Old browser without promise
-        if (playCount < maxPlays) {
-          setTimeout(playNext, (audio.duration || 1) * 1000 + 150);
-        }
       }
     };
 
@@ -271,91 +396,113 @@ function playWithAudioElement(url, repeats = 2) {
   }
 }
 
-// Play the real My Naai buzzer (or a synthetic pulse if the file/stream is
-// unavailable) plus a device vibration. Returns true when a sound was started.
-export function playBuzzer({ type = '', repeats = 2 } = {}) {
-  // Always vibrate - works on Android Chrome, Samsung Internet, some iOS browsers
-  const vibratePattern = type === 'BOOKING_REQUEST' ? [260, 120, 260, 120, 520] : [300, 140, 300, 140, 500];
-  vibrate(vibratePattern);
+// How long the buzzer may wait for the audio clock to start before it gives up.
+// A page that is *hidden* gets a very short window on purpose: on iOS the resume
+// request only completes when the app is brought forward, and playing then is
+// the late alarm ("it rings when I open the app") this file must never produce.
+// Chrome on Android resumes a backgrounded page's audio clock immediately, so
+// the buzz still lands at the moment the notification arrives.
+const BACKGROUND_START_DEADLINE = 1200;
+const FOREGROUND_START_DEADLINE = 5000;
 
-  // Setup broadcast listener if not already done
-  if (!broadcastListenerSetup) {
-    setupBroadcastListener();
-  }
+// Play the real My Naai buzzer (or a synthetic pulse if the file/stream is
+// unavailable) plus a device vibration, at the instant the alert arrives.
+export function playBuzzer({ type = '', repeats = 2 } = {}) {
+  const isBooking = String(type || '').toUpperCase() === 'BOOKING_REQUEST';
+  const vibrated = vibrate(isBooking ? [260, 120, 260, 120, 520] : [300, 140, 300, 140, 500]);
+  setupBroadcastListener();
 
   const url = soundForType(type);
+  const count = Math.max(1, Math.min(3, repeats || 1));
   const ctx = getAudioContext();
 
-  // Try Web Audio first if available and running
-  if (ctx) {
-    if (ctx.state === 'suspended') {
-      try { ctx.resume().catch(() => {}); } catch { /* ignore */ }
+  const playNow = () => {
+    const current = getAudioContext();
+    if (!isRunning(current)) return;
+    stopScheduledBursts();
+    if (bufferFailed[url]) {
+      playSyntheticSequence(current, count);
+      return;
     }
+    loadBuffer(url)
+      .then(buffer => {
+        const ready = getAudioContext();
+        if (isRunning(ready)) playBufferBursts(ready, buffer, count);
+      })
+      .catch(() => {
+        const fallback = getAudioContext();
+        if (isRunning(fallback)) playSyntheticSequence(fallback, count);
+      });
+  };
 
-    if (ctx.state === 'running' || ctx.state === 'interrupted') {
-      // Prefer the real mobile buzzer file.
-      if (!bufferFailed[url]) {
-        loadBuffer(url)
-          .then(buffer => {
-            const current = getAudioContext();
-            if (!current || (current.state !== 'running' && current.state !== 'interrupted')) {
-              // Fall back to Audio element if context not running
-              playWithAudioElement(url, repeats);
-              return;
-            }
-            // Play it a couple of times so it reads as a buzzer burst.
-            let offset = 0;
-            for (let i = 0; i < Math.max(1, Math.min(3, repeats || 1)); i += 1) {
-              try {
-                const source = current.createBufferSource();
-                const gain = current.createGain();
-                source.buffer = buffer;
-                gain.gain.setValueAtTime(0.9, current.currentTime + offset);
-                source.connect(gain);
-                gain.connect(current.destination);
-                source.start(current.currentTime + offset);
-                offset += buffer.duration + 0.15;
-              } catch {
-                // If Web Audio source fails, break and try Audio element
-                break;
-              }
-            }
-          })
-          .catch(() => {
-            // File load failed - try Audio element, then synthetic
-            if (!playWithAudioElement(url, repeats)) {
-              const fallbackCtx = getAudioContext();
-              if (fallbackCtx) playSyntheticSequence(fallbackCtx, repeats);
-            }
-          });
-        return true;
-      }
-
-      // File previously failed — try Audio element first, then synthetic
-      if (playWithAudioElement(url, repeats)) {
-        return true;
-      }
-      playSyntheticSequence(ctx, repeats);
-      return true;
-    }
-  }
-
-  // No Web Audio or suspended - try HTMLAudio fallback (works better on iOS after unlock)
-  if (playWithAudioElement(url, repeats)) {
+  // 1. The audio clock is running right now — play immediately, wherever the
+  //    page is. A hidden Android tab keeps its clock running, which is exactly
+  //    the "it buzzes when the notification arrives, in the background" case.
+  if (isRunning(ctx)) {
+    playNow();
     return true;
   }
 
-  // Last resort: try synthetic if we can get a context
+  // 2. Suspended or interrupted (phone locked, app backgrounded, audio focus
+  //    lost). Ask the browser to start the clock and buzz the moment it does —
+  //    under a deadline. On iOS a background resume stays pending until the app
+  //    returns, so the deadline abandons it and NOTHING is replayed later; the
+  //    worker's own notification (sound + vibrate) is the alert in that window.
   if (ctx) {
-    playSyntheticSequence(ctx, repeats);
+    const deadline = isHidden() ? BACKGROUND_START_DEADLINE : FOREGROUND_START_DEADLINE;
+    let expired = false;
+    // Deliberately not one of the cancellable retry timers: this is a guard, not
+    // a pending buzz.
+    setTimeout(() => { expired = true; }, deadline);
+    ctx.resume()
+      .then(() => {
+        if (expired || !isRunning(ctx)) return;
+        playNow();
+      })
+      .catch(() => {});
+    // If the clock never starts and the page is still in the background, the
+    // alert must not go silent: try the element path, immediately and bounded.
+    // It is cancelled the instant the page comes forward.
+    setTimeout(() => {
+      if (!isRunning(ctx) && isHidden()) playWithAudioElementWhileHidden(url, count > 1 ? 2 : 1);
+    }, deadline + 100);
     return true;
   }
 
-  // Even if sound failed, vibration may have succeeded - return true if we vibrated
-  return true;
+  // 3. No Web Audio at all (rare): the HTMLAudio fallback, one attempt on a
+  //    visible page — never a background retry chain.
+  if (!isHidden() && playWithAudioElement(url, count)) return true;
+  return vibrated;
+}
+
+// Schedule the burst(s) on the running context and remember the ones that have
+// not started, so a page that goes to the background cancels them instead of
+// firing them on resume.
+function playBufferBursts(ctx, buffer, repeats) {
+  if (!isRunning(ctx)) return;
+  let offset = 0.02;
+  for (let i = 0; i < repeats; i += 1) {
+    try {
+      const source = ctx.createBufferSource();
+      const gain = ctx.createGain();
+      source.buffer = buffer;
+      gain.gain.setValueAtTime(0.9, ctx.currentTime + offset);
+      source.connect(gain);
+      gain.connect(ctx.destination);
+      if (offset > 0.05) {
+        scheduledBursts.add(source);
+        source.onended = () => scheduledBursts.delete(source);
+      }
+      source.start(ctx.currentTime + offset);
+      offset += buffer.duration + 0.15;
+    } catch {
+      break;
+    }
+  }
 }
 
 function playSyntheticSequence(ctx, repeats) {
+  if (!isRunning(ctx)) return;
   try {
     const count = Math.max(1, Math.min(6, repeats || 2));
     const now = ctx.currentTime;
@@ -370,14 +517,17 @@ function playSyntheticSequence(ctx, repeats) {
   }
 }
 
-// Keep buzzer alive in background - called periodically by the app
+// Called when the app comes back to the foreground: resume the context so the
+// NEXT alert can sound. Never replays anything.
 export function keepBuzzerAlive() {
-  if (!unlocked || !audioContext) return;
+  if (!unlocked || !audioContext || isHidden()) return;
   try {
-    if (audioContext.state === 'suspended') {
-      audioContext.resume().catch(() => {});
-    }
+    if (audioContext.state === 'suspended') audioContext.resume().catch(() => {});
   } catch {
     // ignore
   }
 }
+
+// Set up the single buzzer listener as soon as this module is loaded (App
+// imports it statically), so a push that arrives before any tap is still heard.
+if (typeof window !== 'undefined') setupBroadcastListener();

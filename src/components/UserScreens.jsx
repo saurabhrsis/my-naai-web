@@ -88,6 +88,7 @@ import {
 import { NotificationDiagnostics } from './NotificationDiagnostics';
 import { readPermission, requestLocation, requestNotifications } from '../lib/permissions';
 import { PermissionSheet } from './PermissionUI';
+import { BuzzerTestCard } from './BuzzerTestCard';
 
 const USER_FALLBACK_IMAGE = '/assets/brand/naai-logo-dark.svg';
 // On-brand placeholders for catalog items and specialists without an uploaded
@@ -1520,7 +1521,7 @@ const PARTNER_STEPS = [
   { step: '3', title: 'Receive bookings', body: 'Accept requests, manage the queue and keep your chairs busy.' },
 ];
 
-export function PartnerScreen({ navigate }) {
+export function PartnerScreen({ navigate, showBuzzerCheck = false }) {
   const startPartner = () => navigate('login', { role: 'SALON' });
   return (
     <div className="screen partner-screen">
@@ -1553,6 +1554,12 @@ export function PartnerScreen({ navigate }) {
           ))}
         </div>
       </section>
+      {showBuzzerCheck && (
+        <section className="partner-buzzer" aria-label="Hear the booking buzzer">
+          <div className="section-heading"><div><span className="eyebrow">TRY IT NOW</span><h2>Hear the buzzer before you sign in</h2></div></div>
+          <BuzzerTestCard />
+        </section>
+      )}
       <section className="partner-steps" aria-label="How it works">
         <div className="section-heading"><div><span className="eyebrow">GETTING STARTED</span><h2>Live in three steps</h2></div></div>
         <div className="partner-step-grid">

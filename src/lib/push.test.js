@@ -13,6 +13,9 @@ vi.mock('firebase/messaging', () => ({
 
 import {
   isPushConfigured,
+  getPushToken,
+  readPushTokenFailure,
+  describePushTokenFailure,
   bookingRequestActions,
   normalizePushPayload,
   isActionableNotification,
@@ -133,10 +136,14 @@ describe('formatPushDiagnostics', () => {
 // `Notification.permission` is a snapshot from page load, while the
 // Permissions API carries the live value the browser settings UI writes to.
 describe('readNotificationPermission', () => {
-  it('prefers the live Permissions API value and maps prompt to default', async () => {
+  it('keeps a genuine grant even while the Permissions API still says prompt', async () => {
+    // The iPhone Home Screen app report: the Allow popup was answered, and
+    // `Notification.permission` said granted, while Safari's Permissions API
+    // kept answering 'prompt'. Downgrading that to 'default' is what made the
+    // portal keep saying "turn on booking alerts" after alerts were already on.
     window.Notification.permission = 'granted';
     window.navigator.permissions = { query: vi.fn(() => Promise.resolve({ state: 'prompt' })) };
-    await expect(readNotificationPermission()).resolves.toBe('default');
+    await expect(readNotificationPermission()).resolves.toBe('granted');
   });
 
   it('reports the live granted state even when the static snapshot is still denied', async () => {
@@ -217,6 +224,87 @@ describe('getPushStatus permission reads', () => {
     } finally {
       if (original) Object.defineProperty(window, 'top', original);
       else delete window.top;
+    }
+  });
+});
+
+// ── "I allowed the pop-up and it still shows the error" ──────────────────────
+// A granted permission whose device token never arrives is the error a salon
+// owner actually sees. Two things must hold: the reason says what really
+// happened (never a vague "the last step did not finish"), and a push
+// subscription left behind by an older worker is rebuilt instead of failing
+// forever.
+describe('push token recovery', () => {
+  const makeRegistration = ({ unsubscribe = vi.fn(() => Promise.resolve(true)) } = {}) => {
+    const registration = {
+      active: { state: 'activated', scriptURL: 'https://mynaai.in/firebase-messaging-sw.js?v=1' },
+      scope: 'https://mynaai.in/',
+      pushManager: { getSubscription: vi.fn(() => Promise.resolve({ unsubscribe })) },
+      unregister: vi.fn(() => Promise.resolve(true)),
+    };
+    window.navigator.serviceWorker = {
+      ready: Promise.resolve(registration),
+      controller: null,
+      getRegistration: vi.fn(() => Promise.resolve(registration)),
+      getRegistrations: vi.fn(() => Promise.resolve([registration])),
+      register: vi.fn(() => Promise.resolve(registration)),
+      addEventListener: vi.fn(),
+    };
+    return { registration, unsubscribe };
+  };
+
+  it('describes each failure in plain words instead of one vague sentence', () => {
+    expect(describePushTokenFailure({ kind: 'offline' })).toContain('could not reach My Naai alerts');
+    expect(describePushTokenFailure({ kind: 'key' })).toContain('Firebase rejected');
+    expect(describePushTokenFailure({ kind: 'worker' })).toContain('alert worker');
+    expect(describePushTokenFailure({ kind: 'unknown' })).toContain('still finishing');
+    expect(describePushTokenFailure(null)).toBe('');
+  });
+
+  it('drops a stale push subscription and finishes the token when Firebase recovers', async () => {
+    const { getToken, isSupported } = await import('firebase/messaging');
+    vi.mocked(isSupported).mockResolvedValueOnce(true);
+    const { registration, unsubscribe } = makeRegistration();
+    vi.mocked(getToken)
+      .mockRejectedValueOnce(new Error('AbortError: push subscription is gone'))
+      .mockRejectedValueOnce(new Error('AbortError: push subscription is gone'))
+      .mockResolvedValueOnce('token-recovered');
+
+    const token = await getPushToken({ requestPermission: false });
+
+    expect(token).toBe('token-recovered');
+    // The dead subscription was cleared and the worker rebuilt before the retry.
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(registration.unregister).toHaveBeenCalledTimes(1);
+    expect(window.localStorage.getItem('FCM_TOKEN')).toBe('token-recovered');
+    // Nothing is left to warn the user about.
+    expect(readPushTokenFailure()).toBeNull();
+  });
+
+  it('records why a token could not be minted so the UI can name the cause', async () => {
+    vi.useFakeTimers();
+    try {
+      const { isSupported } = await import('firebase/messaging');
+      vi.mocked(isSupported).mockResolvedValueOnce(true);
+      // No usable worker at all: the registration cannot be read or created.
+      window.navigator.serviceWorker = {
+        ready: Promise.resolve(null),
+        controller: null,
+        getRegistration: vi.fn(() => Promise.resolve(null)),
+        getRegistrations: vi.fn(() => Promise.resolve([])),
+        register: vi.fn(() => Promise.reject(new Error('offline'))),
+        addEventListener: vi.fn(),
+      };
+
+      const pending = getPushToken({ requestPermission: false });
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(pending).resolves.toBe('');
+
+      expect(readPushTokenFailure()).toBeTruthy();
+      expect(readPushTokenFailure().kind).toBe('worker');
+      expect(describePushTokenFailure()).toContain('alert worker');
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

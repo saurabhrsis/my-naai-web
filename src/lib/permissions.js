@@ -170,22 +170,47 @@ export function siteHost() {
 
 // ── Live permission reads ────────────────────────────────────────────────────
 // 'granted' | 'denied' | 'default' | 'unsupported'
+//
+// Two sources, and they do not always agree:
+//   · the Permissions API is what browser settings write to, so it is read first
+//     (a denied snapshot from page load must not outlive the user switching the
+//     site back on);
+//   · `Notification.permission` is the Notifications API's own answer.
+//
+// The disagreement that stranded iPhone users: on an installed Home Screen app
+// (PWA) the Permissions API can keep answering `prompt` — forever — after the
+// user has answered the Allow popup, while `Notification.permission` correctly
+// says `granted`. Taking the Permissions API at its word meant the app kept
+// insisting "turn on booking alerts" *after* alerts were on, and the token was
+// never minted because the permission never looked granted. So a `granted` from
+// EITHER source now wins over `prompt`; `denied` still comes from the live API
+// first (the unblocked-in-settings case), and `Notification.permission` remains
+// the last word when the Permissions API has no answer at all.
 export async function readPermission(kind) {
   if (typeof window === 'undefined') return 'unsupported';
   const name = kind === 'location' ? 'geolocation' : 'notifications';
   if (kind === 'notifications' && !('Notification' in window)) return 'unsupported';
   if (kind === 'location' && typeof navigator !== 'undefined' && !navigator.geolocation) return 'unsupported';
+  const fromNotificationApi = kind === 'notifications' && typeof Notification !== 'undefined'
+    ? String(Notification.permission || '')
+    : '';
   try {
     if (navigator.permissions?.query) {
       const status = await navigator.permissions.query({ name });
       if (status && ['granted', 'denied', 'prompt'].includes(status.state)) {
-        return status.state === 'prompt' ? 'default' : status.state;
+        if (status.state === 'denied') return 'denied';
+        if (status.state === 'granted') return 'granted';
+        // 'prompt' from the Permissions API: trust a real grant from the
+        // Notifications API (iOS Home Screen apps report prompt indefinitely).
+        // Anything else stays 'default' — that is what keeps a stale 'denied'
+        // snapshot from outliving the browser's own answer.
+        return fromNotificationApi === 'granted' ? 'granted' : 'default';
       }
     }
   } catch (permissionError) {
     console.debug(getErrorMessage(permissionError, `Live ${kind} permission was not available.`));
   }
-  if (kind === 'notifications') return (typeof Notification !== 'undefined' && Notification.permission) || 'default';
+  if (kind === 'notifications') return fromNotificationApi || 'default';
   return 'default';
 }
 
@@ -385,6 +410,9 @@ export function permissionSteps(browser, kind) {
 export const ALERTS_REQUIRED_MESSAGE = 'Turn on booking alerts so booking requests and confirmations reach you. Your browser will ask once — choose Allow and you are in.';
 export const IOS_ALERTS_REQUIRED_MESSAGE = 'On iPhone, alerts only work once My Naai is on your Home Screen. Install it, then tap Allow — it takes 20 seconds.';
 export const ALERTS_BLOCKED_MESSAGE = 'Alerts are switched off for My Naai in your browser settings. Turn them back on there, then tap Try again.';
+// The permission IS granted — the leftover step is ours (minting the device
+// token). Never ask somebody who already tapped Allow to "turn alerts on".
+export const ALERTS_FINISHING_MESSAGE = 'Notifications are allowed on this device — My Naai is finishing the last setup step, and it keeps trying by itself. Nothing to change in your settings.';
 
 // ── Backend contract helper ──────────────────────────────────────────────────
 // Alerts are optional for the visitor but the API may still insist on a

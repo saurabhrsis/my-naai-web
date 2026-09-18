@@ -243,9 +243,13 @@ export async function getPushStatus() {
     console.debug(getErrorMessage(statusError, 'Could not check notification status.'));
   }
   // Reaching here means the permission IS granted — the browser just could not
-  // finish minting/collecting the token yet. Say so: the user just allowed
-  // notifications and must see that the app registered exactly that.
-  return { state: 'unavailable', reason: 'Notifications are allowed in this browser — the final connection step did not finish yet. Tap Try again; one retry usually completes it.' };
+  // finish minting/collecting the token yet. Say so, name the real cause when we
+  // know it, and make clear that it is not something the user did wrong: they
+  // allowed notifications and the app registered exactly that.
+  return {
+    state: 'unavailable',
+    reason: describePushTokenFailure() || 'Notifications are allowed on this device — the last step is still finishing. It retries by itself; you can also tap Try again.',
+  };
 }
 
 // The one function that turns "the browser is allowed to notify" into the FCM
@@ -260,6 +264,146 @@ export async function getPushStatus() {
 // The token is now minted from the LIVE permission with retries that survive a
 // slow service-worker start-up (the usual "first tap did nothing" report), and
 // callers are never blocked on it — signing in works without alerts.
+//
+// Two MORE failure modes are handled below, and they are the ones behind the
+// "I allowed the pop-up and it still shows the error" reports:
+//   · a push subscription left behind by an older worker (or an older VAPID
+//     key) can never be redeemed — Firebase reuses the existing subscription and
+//     fails forever. It is dropped and rebuilt, which is the standard remedy;
+//   · the browser simply could not finish at that moment (worker still
+//     starting, flaky network). The token is then retried quietly in the
+//     background, and every surface hears about it through the
+//     `mynaai:push-token` window event instead of showing an error the user
+//     cannot act on.
+
+// Fired on `window` whenever a token is finally minted (including the quiet
+// background retries). Permission UI listens for it so a card can finish itself
+// without the user pressing anything.
+export const PUSH_TOKEN_EVENT = 'mynaai:push-token';
+
+let lastTokenFailure = null;
+let recoveryScheduled = false;
+
+// The last reason a token could not be minted, classified for humans. Used by
+// getPushStatus() and the Support report — a vague "the last step did not
+// finish" tells the salon owner nothing.
+export function readPushTokenFailure() {
+  return lastTokenFailure;
+}
+
+function classifyTokenFailure(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  const code = String(error?.code || '').toLowerCase();
+  if (!message && !code) return 'unknown';
+  if (code === 'no-worker' || code === 'empty-token') return code === 'no-worker' ? 'worker' : 'unknown';
+  if (/offline|network|failed to fetch|net::|timeout|abort/.test(`${code} ${message}`)) return 'offline';
+  if (/vapid|application server key|unauthor|401|403|invalid.*key/.test(`${code} ${message}`)) return 'key';
+  if (/subscription|no active service worker|service worker|registration/.test(`${code} ${message}`)) return 'worker';
+  if (/permission|blocked|denied|not allowed/.test(`${code} ${message}`)) return 'blocked';
+  return 'unknown';
+}
+
+// One plain sentence per cause — what happened, and whether the user can do
+// anything about it. Nothing here is an error the visitor caused.
+export function describePushTokenFailure(failure = lastTokenFailure) {
+  if (!failure) return '';
+  switch (failure.kind) {
+    case 'offline':
+      return 'Notifications are allowed on this device — the browser could not reach My Naai alerts (no internet?). It retries by itself; you can also tap Try again.';
+    case 'key':
+      return 'Notifications are allowed on this device, but Firebase rejected this app\u2019s alert key. Send us the Support report and we will fix it on our side.';
+    case 'worker':
+      return 'Notifications are allowed on this device. The browser could not finish starting the alert worker — tap Try again (a reload helps on some browsers).';
+    case 'blocked':
+      return 'Notifications are allowed for this site, but this browser context will not deliver them. Open My Naai in its own browser tab and try once more.';
+    default:
+      return 'Notifications are allowed on this device — the last step is still finishing. It retries by itself; you can also tap Try again.';
+  }
+}
+
+function rememberTokenFailure(error) {
+  const kind = classifyTokenFailure(error);
+  lastTokenFailure = {
+    at: new Date().toISOString(),
+    kind,
+    code: String(error?.code || ''),
+    message: String(error?.message || error || '').slice(0, 200),
+  };
+  return kind;
+}
+
+function clearTokenFailure() {
+  lastTokenFailure = null;
+}
+
+function announceToken(token) {
+  if (!token) return;
+  try {
+    window.dispatchEvent(new CustomEvent(PUSH_TOKEN_EVENT, { detail: { token } }));
+  } catch {
+    // A window that refuses CustomEvent still has the localStorage copy.
+  }
+}
+
+// A push subscription from an older worker/scope/key is unusable and is exactly
+// what makes a granted permission mint nothing. Drop it and re-register once.
+async function resetPushSubscription() {
+  try {
+    const registration = await getPushServiceWorker();
+    const subscription = registration?.pushManager?.getSubscription
+      ? await registration.pushManager.getSubscription()
+      : null;
+    if (subscription) await subscription.unsubscribe();
+  } catch (error) {
+    console.debug(getErrorMessage(error, 'Could not clear the old push subscription.'));
+  }
+  try {
+    const registrations = navigator.serviceWorker.getRegistrations
+      ? await navigator.serviceWorker.getRegistrations()
+      : [];
+    for (const registration of registrations) {
+      try { await registration.unregister(); } catch { /* keep going */ }
+    }
+  } catch (error) {
+    console.debug(getErrorMessage(error, 'Could not reset the notification worker.'));
+  }
+  resetPushRegistration();
+  try {
+    return await registerPushServiceWorker();
+  } catch (error) {
+    console.debug(getErrorMessage(error, 'Could not register the notification worker again.'));
+    return null;
+  }
+}
+
+// Quietly finish the job later. No UI is blocked, no error is raised — the
+// surfaces that care listen for PUSH_TOKEN_EVENT.
+function scheduleTokenRecovery() {
+  if (recoveryScheduled) return;
+  recoveryScheduled = true;
+  const delays = [4000, 15000, 45000];
+  const attempt = index => {
+    if (index >= delays.length) {
+      recoveryScheduled = false;
+      return;
+    }
+    setTimeout(async () => {
+      try {
+        const token = await getPushToken({ requestPermission: false });
+        if (token) {
+          recoveryScheduled = false;
+          announceToken(token);
+          return;
+        }
+      } catch (error) {
+        console.debug(getErrorMessage(error, 'Background alert setup did not finish yet.'));
+      }
+      attempt(index + 1);
+    }, delays[index]);
+  };
+  attempt(0);
+}
+
 export async function getPushToken({ requestPermission = false } = {}) {
   if (!isPushConfigured() || typeof window === 'undefined' || !('Notification' in window)) return '';
   const messaging = await getMessagingClient();
@@ -272,6 +416,14 @@ export async function getPushToken({ requestPermission = false } = {}) {
   }
   if (permission !== 'granted') {
     try { localStorage.removeItem('FCM_TOKEN'); } catch {}
+    if (requestPermission && permission === 'default') {
+      // The popup was answered inside this same tap but the browser has not
+      // propagated the new value yet — an iPhone Home Screen app can keep
+      // reporting the old one for a moment. Keep trying quietly so the token
+      // finishes on its own instead of asking the user to tap again.
+      rememberTokenFailure({ code: 'pending', message: 'Waiting for the browser to report the new permission' });
+      scheduleTokenRecovery();
+    }
     return '';
   }
 
@@ -280,10 +432,12 @@ export async function getPushToken({ requestPermission = false } = {}) {
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     if (attempt > 0) await delay(500 * attempt);
     try {
-      const registration = await getPushServiceWorker();
+      let registration = await getPushServiceWorker();
       if (!registration) {
         registrationPromise = undefined;
         if (attempt < ATTEMPTS - 1) continue;
+        rememberTokenFailure({ code: 'no-worker', message: 'No active notification worker' });
+        scheduleTokenRecovery();
         return '';
       }
       if (attempt > 0) {
@@ -293,29 +447,35 @@ export async function getPushToken({ requestPermission = false } = {}) {
           await Promise.race([navigator.serviceWorker.ready, delay(1200)]);
         } catch {}
       }
+      // Third try: if the worker or its push subscription is what failed, rebuild
+      // it. A subscription made with an older VAPID key can never be redeemed.
+      if (attempt === 2 && lastError && ['worker', 'offline'].includes(classifyTokenFailure(lastError))) {
+        const rebuilt = await resetPushSubscription();
+        if (rebuilt) registration = rebuilt;
+      }
       const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: registration });
       if (token) {
         try { localStorage.setItem('FCM_TOKEN', token); } catch {}
+        clearTokenFailure();
         return token;
       }
+      lastError = { code: 'empty-token', message: 'Firebase returned no token' };
       if (attempt === ATTEMPTS - 1) {
         try { localStorage.removeItem('FCM_TOKEN'); } catch {}
-        return '';
       }
     } catch (error) {
       lastError = error;
-      const msg = String(error?.message || '').toLowerCase();
       console.debug(getErrorMessage(error, 'Firebase could not generate a browser notification token.'));
+      const msg = String(error?.message || '').toLowerCase();
       if (msg.includes('no active service worker') || msg.includes('push subscription') || msg.includes('abort') || msg.includes('network')) {
         registrationPromise = undefined;
-        if (attempt < ATTEMPTS - 1) continue;
-      }
-      if (attempt === ATTEMPTS - 1) {
-        return '';
       }
     }
   }
   console.debug('getPushToken failed after retries', lastError);
+  rememberTokenFailure(lastError);
+  try { localStorage.removeItem('FCM_TOKEN'); } catch {}
+  scheduleTokenRecovery();
   return '';
 }
 
@@ -360,10 +520,10 @@ export async function displayNotification({ title, body, data = {}, onClick } = 
     actions: type === 'BOOKING_REQUEST' ? bookingRequestActions() : type === 'DELAY_BOOKING' ? [{ action: 'DELAY_BOOKING', title: 'View Delay' }] : undefined,
   };
 
-  if (isBuzzerType) {
-    broadcastToClients({ type: 'MYNAAI_PLAY_BUZZER', notificationType: type, data });
-  }
-
+  // NOTE: the buzzer is deliberately NOT broadcast to clients from here. The
+  // caller that received the push already rings it (App.jsx for a foreground
+  // message, the service worker for a background one), and broadcasting again
+  // made a single booking request buzz two or three times over.
   try {
     const registration = await getPushServiceWorker();
     if (registration?.showNotification) {
@@ -511,7 +671,8 @@ export async function getPushDiagnostics() {
   add('FCM device token', token ? 'ok' : 'fail', token ? maskToken(token) : 'Empty', token
     ? 'This is the value sent to the API as deviceToken.'
     : permission === 'granted'
-      ? 'Permission is granted but no token exists yet — the worker or Firebase config is the problem, not the browser.'
+      ? `Permission is granted but no token exists yet — the worker or Firebase config is the problem, not the browser.${lastTokenFailure ? ` Last attempt (${lastTokenFailure.kind}): ${lastTokenFailure.message}` : ''}`
+        .replace(/\s+/g, ' ').trim()
       : 'Sign-in needs a token: tap Enable, allow notifications, then sign in again.');
 
   const last = readForegroundMessageRecord();

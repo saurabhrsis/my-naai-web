@@ -373,6 +373,13 @@ export const api = {
   salonNotificationList: payload => post('/api/notifications/get-salon-notification-list', payload),
   salonNotificationCount: payload => get('/api/notifications/get-notification-count', { params: payload }),
 
+  // A test alert through the real push path, used by the Alerts & permissions
+  // card while signed OUT. The body is the browser's own FCM token, so the alert
+  // reaches exactly this device and nothing else. `auth: false` keeps it usable
+  // before sign-in; a server without the endpoint simply answers 404, which the
+  // card reports in plain words instead of failing silently.
+  testPush: payload => post('/api/notifications/test-push', payload, { auth: false }),
+
   uploadImages: formData => post('/api/upload/upload-image', formData, { auth: false }),
   // Friendly aliases for browser code.
   uploadImage: file => {

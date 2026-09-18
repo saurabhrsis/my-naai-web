@@ -55,6 +55,10 @@ vi.mock('./lib/push', () => {
     normalizePushPayload: vi.fn(payload => ({ title: '', body: '', data: {}, type: '', hasData: false, ...payload })),
     recordForegroundMessage: noop,
     watchNotificationPermission: vi.fn(() => () => {}),
+    // The partner landing page carries the signed-out buzzer check, which reads
+    // the live permission through lib/push.
+    readNotificationPermission: vi.fn(() => Promise.resolve('granted')),
+    requestNotificationPermission: vi.fn(() => Promise.resolve('granted')),
   };
 });
 vi.mock('./lib/permissions', async () => {
