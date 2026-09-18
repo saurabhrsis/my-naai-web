@@ -64,12 +64,18 @@ export function BuzzerTestCard({ notify, className = '' }) {
 
   // One tap: ask (if needed) inside the gesture, unlock the audio, ring the real
   // buzzer, show the real notification. Nothing here needs an account.
+  //
+  // Gesture-safe: Safari drops a permission popup that happens after an `await`,
+  // so when the permission is not already settled ('default' or still
+  // 'checking') the browser is asked synchronously — before any async read.
+  // Asking when the answer is already granted/denied/unsupported is harmless
+  // (no popup, just the current value), which is what makes the blind ask safe.
   const test = async () => {
     setBusy(true);
     setMessage('');
     try {
-      let state = permission === 'checking' ? await readNotificationPermission() : permission;
-      if (state === 'default') {
+      let state = permission;
+      if (state === 'checking' || state === 'default') {
         state = await requestNotificationPermission();
         setPermission(state);
       }

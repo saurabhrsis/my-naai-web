@@ -501,7 +501,19 @@ function broadcastToClients(message) {
 }
 
 export async function displayNotification({ title, body, data = {}, onClick } = {}) {
-  if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return false;
+  if (typeof window === 'undefined' || !('Notification' in window)) return false;
+  // Never trust the page-load snapshot alone: a visitor who has just allowed
+  // alerts in browser settings still reads "denied" from `Notification.permission`
+  // on this page. The live Permissions API answer wins, with the snapshot as the
+  // fallback for browsers without that API.
+  let allowed = false;
+  try {
+    const live = await readPermission('notifications');
+    allowed = live === 'granted' || (live !== 'denied' && live !== 'unsupported' && Notification.permission === 'granted');
+  } catch {
+    allowed = Notification.permission === 'granted';
+  }
+  if (!allowed) return false;
   const type = String(data.type || data.notificationType || '').toUpperCase();
   const isBuzzerType = type === 'BOOKING_REQUEST' || type === 'DELAY_BOOKING' || type === 'DELAY_TIME_PROPOSAL';
   const finalTitle = title || 'My Naai update';
