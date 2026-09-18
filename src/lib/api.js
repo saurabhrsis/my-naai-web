@@ -303,26 +303,26 @@ export const api = {
   // call above (`salonDelayBooking`), and deliberately a different endpoint:
   //
   //   · `salonDelayBooking` answers a first-time booking REQUEST (accept /
-  //     reject / delay) on the booking-request endpoint.
+  //     reject / delay) on the booking-request endpoint. A delay there is a
+  //     PROPOSAL the customer accepts or declines — DELAY_TIME_PROPOSAL.
   //   · this moves the time of a booking the salon has ALREADY ACCEPTED, from
-  //     the queue screen. The booking is confirmed, nothing is being accepted
-  //     here — only its clock changes — so posting it to owner-action would be
-  //     refused ("Booking cannot be actioned") or, worse, answered as if the
-  //     customer had just asked for the slot.
+  //     the queue screen. The booking is confirmed and the salon owns the chair,
+  //     so the new time is simply the time: it is written straight away and the
+  //     customer is told (BOOKING_TIME_UPDATED). Nothing is accepted here —
+  //     only the clock changes — so posting it to owner-action would be refused
+  //     ("Booking cannot be actioned") or, worse, answered as if the customer
+  //     had just asked for the slot.
   //   · addressed by bookingId, because that is what every queue row carries.
   //
-  // The payload is the resolved slot, not just an offset:
-  //   offsetMinutes  — signed: negative means the salon can take them EARLIER.
-  //   proposedTime   — the human label ("6:50 PM") for backends that store copy.
-  //   newBookingTime — the resolved wall clock ('HH:mm:ss').
-  //   newBookingDate — only sent when the new slot crosses midnight.
-  salonUpdateBookingTime: (bookingId, { offsetMinutes, proposedTime, bookingDate, bookingTime, reason } = {}) => post(
+  // The payload is the resolved slot the salon previewed, not just an offset:
+  //   time   — the new wall clock ('HH:mm:ss'), which the server stores as-is.
+  //   date   — the slot's own day, so a change that crosses midnight is exact.
+  //   reason — the salon's optional note, quoted in the customer's message.
+  salonUpdateBookingTime: (bookingId, { time, date, reason } = {}) => post(
     `/api/booking/salon/queue/update-time/${bookingId}`,
     {
-      offsetMinutes,
-      ...(proposedTime ? { proposedTime } : {}),
-      ...(bookingTime ? { newBookingTime: bookingTime } : {}),
-      ...(bookingDate ? { newBookingDate: bookingDate } : {}),
+      time,
+      ...(date ? { date } : {}),
       ...(reason ? { reason } : {}),
     },
   ),

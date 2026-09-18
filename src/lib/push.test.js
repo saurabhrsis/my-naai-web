@@ -123,6 +123,10 @@ describe('isActionableNotification', () => {
     expect(isActionableNotification('DELAY_TIME_PROPOSAL', 'USER')).toBe(true);
     expect(isActionableNotification('BOOKING_REQUEST', 'USER')).toBe(false);
   });
+  it('a time the salon already moved is informational, not an action', () => {
+    // A confirmed booking moved from the queue: the customer is told, not asked.
+    expect(isActionableNotification('BOOKING_TIME_UPDATED', 'USER')).toBe(false);
+  });
 });
 
 describe('getNotificationRoute', () => {

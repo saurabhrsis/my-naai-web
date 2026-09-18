@@ -268,28 +268,31 @@ The modal (`UpdateTimeModal` in `src/components/SalonScreens.jsx`) works in **si
 - Hour and date rollover is handled, and a shift that crosses midnight is called out (`moves to 08 Sept 2026`) instead of silently moving the appointment to another day.
 - A new time that lands **in the past** is blocked with an explanation and the send button is disabled — notifying a customer about a slot that has already gone is worse than not notifying them.
 
-Sending calls `api.salonUpdateBookingTime()`, which posts to the **same `owner-action` endpoint with the same `DELAY` action** as the mobile app, so there is one delay pipeline rather than two, and the backend keeps dispatching the customer notification:
+Sending calls `api.salonUpdateBookingTime()`, which posts to the **queue time-update endpoint** — not to `owner-action`:
 
 ```http
-POST /api/bookingRequest/owner-action/{bookingRequestId}/
+POST /api/booking/salon/queue/update-time/{bookingId}
 
 {
-  "action": "DELAY",
-  "delayMinutes": "-15",
-  "proposedTime": "6:15 PM",
-  "newBookingDate": "2026-09-07",
-  "newBookingTime": "18:15:00",
+  "time": "18:15:00",
+  "date": "2026-09-07",
   "reason": "Chair free early"
 }
 ```
 
-`delayMinutes` stays the mobile contract's stringified number; the extra fields are additive and are ignored by a backend that only reads `action` + `delayMinutes`. The queue row updates optimistically, rolls back on failure, and reloads so the Today/Tomorrow grouping is right after a day cross. Requests are addressed by `bookingRequestId`, falling back to `bookingId` for queue payloads that only carry the latter.
+The salon sets the time and it is done. The backend writes it to the booking, moves the queue row with it, and notifies the customer — there is no accept/decline round trip, because the appointment is already confirmed and the salon owns the chair. Requests are addressed by `bookingId`, which is what every queue row carries. The row updates optimistically, rolls back on failure, and reloads so the Today/Tomorrow grouping is right after a day cross.
 
-**Backend.** A ready-to-paste Express + Mongoose implementation of this endpoint lives in [`backend/`](../backend/README.md) — schema fields, the wall-clock maths, direction-aware FCM copy and both handlers, with 20 tests (`node --test backend/tests/*.test.js`). It is not part of the web build; copy it into the API repo. Two things it fixes that matter here: the notification copy respects the **sign** of `delayMinutes` (a negative offset reads *"Sharp Cuts can see you 15 minutes earlier"*, never *"delayed by -15 minutes"*), and when `newBookingTime` is present the server **recomputes** the offset from it rather than trusting the client's arithmetic. The proposed time is stored separately and only becomes the booked time once the customer accepts, so a customer who never replies keeps the slot they originally agreed to.
+**Backend.** A ready-to-paste Express + Sequelize controller for this endpoint lives in [`backend/salonUpdateBookingTime.js`](../backend/salonUpdateBookingTime.js). It is not part of the web build; drop it in next to the other booking controllers. What it does, in order:
 
-The web `DelayRequestScreen` already matches that copy: a negative offset renders *"Your salon can see you earlier"* with an **Earlier time available** heading, because telling a customer their booking "needs a little more time" when it has actually been pulled forward would make them arrive late.
+- refuses the only two states a time change cannot follow — `completed` and `cancelled` — with *"Booking is already Completed/Cancel you can't update time"*;
+- resolves the new slot itself (`time`, or `offsetMinutes` for clients that still count minutes), handles the midnight rollover, and rejects a slot in the past or more than four hours away;
+- writes the booking **and its queue row** in one transaction, and settles a leftover `delay_requested` booking back to `confirmed`;
+- notifies the customer **in-app** (`Notification` rows) and by **FCM push** (`BOOKING_TIME_UPDATED`), with copy chosen by direction — an earlier time reads *"Glow Studio can take you earlier — please come at 6:15 PM instead of 6:30 PM"*, never *"delayed by -15 minutes"*;
+- emits `booking_status_updated` to `user_{id}` and `queue_updated` to `salon_{id}`, so the customer's My Bookings screen and the salon's queue both refresh without a pull.
 
-The customer can receive the delay notification in the background or while the portal is open:
+A push failure never fails the request: the time is already written, and a salon whose "Update" button errors out after the write would just press it again.
+
+The **booking-request** delay proposal is the one flow that still asks the customer something. It arrives as `DELAY_TIME_PROPOSAL` and is answered in the app:
 
 1. A notification click opens `#/delay?bookingRequestId=...&delayMinutes=...&proposedTime=...` (optionally `&reason=...`).
 2. The `DelayRequestScreen` lets the customer accept or reject the proposed time. It reads the **sign** of `delayMinutes`, so an earlier offer is worded as one, spells the shift out in words ("15 minutes earlier" — `+20`/`-20` is easy to misread on a phone) and shows the salon's optional message.
@@ -303,6 +306,7 @@ The notification route mapping is shared by foreground JavaScript and the Fireba
 | Mobile notification type | Web destination | Role |
 | --- | --- | --- |
 | `DELAY_TIME_PROPOSAL` | `#/delay` with booking ID, delay minutes and proposed time | Customer |
+| `BOOKING_TIME_UPDATED` | `#/bookings` — a confirmed booking the salon moved; nothing to answer | Customer |
 | `BOOKING_CONFIRMED` | `#/bookings` | Customer |
 | `BOOKING_REJECTED` | `#/bookings` | Customer |
 | `DELAY_RESPONSE` | `#/bookings` | Customer |
@@ -455,7 +459,7 @@ request runs a 60-second countdown that a second dialog would eat into.
 | `src/lib/devtoolsShield.js` | Swallows the known Chrome DevTools Performance-panel crash (also inlined in `index.html` so it runs before the bundle) |
 | `src/lib/razorpay.js` | Checkout loader, amount rules, payment outcomes, UPI hand-off tracking and pending-payment recovery |
 | `src/lib/bookingTime.js` | Signed-offset time maths for the queue time update: local wall-clock parsing, hour/date rollover, past-time and day-cross detection, exact-time→offset derivation, human offset labels, and the `Due now`/`Overdue by` countdown chips on a queue card |
-| `backend/` | Standalone Express + Mongoose API for the time change (model fields, clock maths, FCM copy, controllers, routes, tests). Copied into the API repo, not built with the web app |
+| `backend/salonUpdateBookingTime.js` | Drop-in Express + Sequelize controller for the queue time update (`POST /api/booking/salon/queue/update-time/:bookingId`). Copied into the API repo, not built with the web app |
 | `src/components/SubscriptionScreen.jsx` | Plan picker, Razorpay flow, cancellation/failure copy and payment recovery |
 | `src/components/ConfirmDialog.jsx` | Promise-based in-app confirmation sheet that replaces every native browser dialog |
 | `src/lib/push.js` | Firebase initialization, permission/token flow and notification route mapping |

@@ -763,6 +763,11 @@ export function getNotificationRoute(data = {}, role = '') {
   if (type === 'DELAY_TIME_PROPOSAL' && String(role).toUpperCase() === 'USER') {
     return { name: 'delay', params: query({ bookingRequestId, delayMinutes: data.delayMinutes, proposedTime: data.proposedTime, reason: data.reason }) };
   }
+  // A confirmed booking the salon moved on its own: there is nothing to answer,
+  // so the customer is shown the booking with its new time.
+  if (type === 'BOOKING_TIME_UPDATED' && String(role).toUpperCase() === 'USER') {
+    return { name: 'bookings', params: {} };
+  }
   if ((type === 'BOOKING_CONFIRMED' || type === 'BOOKING_REJECTED' || type === 'DELAY_RESPONSE') && String(role).toUpperCase() === 'USER') {
     return { name: 'bookings', params: {} };
   }
