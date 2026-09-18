@@ -21,6 +21,20 @@ copied into your Node/Express/Mongoose backend.
 | `routes/bookingRequest.routes.js` | Route wiring. |
 | `tests/bookingClock.test.js` | Tests for the maths (`node --test backend/tests/*.test.js`). |
 
+## Also here: the salon "send updated time" endpoint (Sequelize)
+
+| File | What it is |
+| --- | --- |
+| `controllers/booking/salonUpdateBookingTime.js` | The salon-side counterpart of `ownerActionBooking.js` / `userCancelBooking.js` for the production Sequelize backend: the salon proposes a new time for a booking it has taken, the booking goes to `delay_requested`, and the customer's push carries what the apps already route on (`DELAY_TIME_PROPOSAL`, signed `delayMinutes`, `proposedTime`, `reason`). |
+| `tests/salonUpdateBookingTime.test.js` | 17 tests for it — signed earlier/later, exact time, the day-crossing and past-time refusals, ownership, closed bookings, optional columns, rollback. Run with the same `npm test`. |
+
+Wiring (their route file, next to the other booking routes):
+
+```js
+const salonUpdateBookingTime = require('../controllers/booking/salonUpdateBookingTime');
+router.post('/salon/update-time/:bookingId', salonAuth, salonUpdateBookingTime);
+```
+
 ## Wiring it up
 
 ```js
