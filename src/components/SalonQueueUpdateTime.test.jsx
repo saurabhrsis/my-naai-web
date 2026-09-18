@@ -110,13 +110,18 @@ describe('salon queue — update appointment time', () => {
     await flush();
 
     expect(salonUpdateBookingTime).toHaveBeenCalledTimes(1);
-    const [requestId, payload] = salonUpdateBookingTime.mock.calls[0];
-    // owner-action is addressed by the request id, not the booking id.
-    expect(requestId).toBe('req-1');
+    const [bookingId, payload] = salonUpdateBookingTime.mock.calls[0];
+    // Addressed by the booking, not the request: this is the queue's own time
+    // change for a booking the salon has already accepted.
+    expect(bookingId).toBe('bk-1');
     expect(payload.offsetMinutes).toBe(20);
     expect(payload.bookingTime).toBe('18:50:00');
     expect(payload.bookingDate).toBe(bookingDate);
     expect(payload.proposedTime).toContain('50');
+    // And it must never look like a booking-request answer: `action: 'DELAY'`
+    // belongs to the owner-action endpoint, which would refuse a confirmed
+    // booking (or answer it as if the customer had just asked for the slot).
+    expect(payload.action).toBeUndefined();
 
     expect(notify).toHaveBeenCalledWith('success', expect.stringContaining('Asha'));
     await act(async () => { root.unmount(); });

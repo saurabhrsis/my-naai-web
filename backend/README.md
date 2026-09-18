@@ -21,19 +21,32 @@ copied into your Node/Express/Mongoose backend.
 | `routes/bookingRequest.routes.js` | Route wiring. |
 | `tests/bookingClock.test.js` | Tests for the maths (`node --test backend/tests/*.test.js`). |
 
-## Also here: the salon "send updated time" endpoint (Sequelize)
+## Also here: the Salon Queue "Update time" endpoint (Sequelize)
+
+Two different flows, two different endpoints — mixing them is the bug this
+separates:
+
+| Flow | Endpoint | What it does |
+| --- | --- | --- |
+| Booking **request** (first-time) | `POST /api/bookingRequest/owner-action/:bookingId` | A customer asked for a slot (`requested`). The salon ACCEPTs (→ `confirmed`, a queue row is created), REJECTs (→ `cancelled`) or DELAYs (→ `delay_requested`). |
+| Salon **queue** update time | `POST /api/booking/salon/queue/update-time/:bookingId` | The booking is already `confirmed` and in the queue. The salon moves *that* time — running late, or a chair freed up early — and the customer confirms the new time. |
 
 | File | What it is |
 | --- | --- |
-| `controllers/booking/salonUpdateBookingTime.js` | The salon-side counterpart of `ownerActionBooking.js` / `userCancelBooking.js` for the production Sequelize backend: the salon proposes a new time for a booking it has taken, the booking goes to `delay_requested`, and the customer's push carries what the apps already route on (`DELAY_TIME_PROPOSAL`, signed `delayMinutes`, `proposedTime`, `reason`). |
-| `tests/salonUpdateBookingTime.test.js` | 17 tests for it — signed earlier/later, exact time, the day-crossing and past-time refusals, ownership, closed bookings, optional columns, rollback. Run with the same `npm test`. |
+| `controllers/booking/salonUpdateBookingTime.js` | The queue-side controller. Guards on `confirmed` / `delay_requested`, refuses a `requested` booking with a message that points at the owner-action endpoint, keeps the queue row untouched until the customer agrees, and sends the push both clients already route on (`DELAY_TIME_PROPOSAL`, signed `delayMinutes`, `proposedTime`, `reason`, `source: 'QUEUE_UPDATE'`). |
+| `tests/salonUpdateBookingTime.test.js` | 18 tests for it — later/earlier, exact time, the client's resolved slot, the two-flows guard, the cross-midnight rule with and without a `proposedBookingDate` column, past-date/past-time refusals, ownership, cancelled/completed, no device token, optional columns, a missing queue row, rollback. Run with the same `npm test`. |
 
 Wiring (their route file, next to the other booking routes):
 
 ```js
 const salonUpdateBookingTime = require('../controllers/booking/salonUpdateBookingTime');
-router.post('/salon/update-time/:bookingId', salonAuth, salonUpdateBookingTime);
+router.post('/salon/queue/update-time/:bookingId', salonAuth, salonUpdateBookingTime);
 ```
+
+The controller's header carries the **ACCEPT-side contract** for
+`customerDelayAction.js`: on accept, move `bookingTime`/`bookingDate`, clear
+`proposedBookingTime`/`expiresAt`, set `customerResponse`, **update the existing
+queue row instead of creating a second one**, and move the reminder task.
 
 ## Wiring it up
 
