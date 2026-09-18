@@ -26,6 +26,8 @@ import {
   ALERTS_BLOCKED_MESSAGE,
   ALERTS_FINISHING_MESSAGE,
   ALERTS_REQUIRED_MESSAGE,
+  ALERTS_UNCONFIGURED_MESSAGE,
+  ALERTS_UNSUPPORTED_MESSAGE,
   IOS_ALERTS_REQUIRED_MESSAGE,
   isDeviceTokenError,
   isEmbeddedFrame,
@@ -544,13 +546,22 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
 
   // The browser token, obtained without ever blocking the visitor.
   //
-  //   1. A token already in hand → use it.
-  //   2. Permission already granted but the token is missing (a slow worker, a
+  // Gesture-safe by construction: Safari drops a permission popup that happens
+  // after an `await`, so everything before the ask is synchronous — a cached
+  // token from localStorage, the static `Notification.permission` snapshot, and
+  // the sync install/frame gates. No `await` runs before `requestNotifications()`
+  // is invoked, which is what keeps the submit tap's gesture alive so the Allow
+  // popup actually appears. (An earlier version awaited a token mint and a live
+  // permission read first, and the popup never showed — the "try again and not
+  // getting any" report.)
+  //
+  //   1. A token already in hand (state or localStorage) → use it.
+  //   2. Permission never asked → THIS IS THE ASK. The submit tap is the user
+  //      gesture the browser wants, so its own Allow popup opens right here.
+  //      The login page explains what alerts are for before this point, so the
+  //      popup is never a surprise.
+  //   3. Permission already granted but the token is missing (a slow worker, a
   //      reinstall) → mint it silently.
-  //   3. Permission never asked → THIS IS THE ASK, and the submit tap is the
-  //      user gesture the browser wants, so its own Allow popup opens right
-  //      here. The login page explains what alerts are for before this point,
-  //      so the popup is never a surprise.
   //   4. Blocked, unsupported or an iPhone that needs the Home Screen install →
   //      no popup can help. Return '' and let sign-in continue; if the API
   //      insists on a token, the alerts sheet answers it with the exact fix.
@@ -558,22 +569,31 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
     if (!isPushConfigured()) return '';
     if (pushToken) return pushToken;
     if (alertsDeclined.current) return '';
-    const existing = await resolveDeviceToken();
-    if (existing) {
-      setPushToken(existing);
-      return existing;
+    // Sync gates first — no await before the ask, so the gesture survives.
+    if ((isIosDevice() && !isIosPwaInstalled()) || isEmbeddedFrame()) return '';
+    const snapshot = (typeof Notification !== 'undefined' && Notification.permission) || 'default';
+    if (snapshot === 'denied') return '';
+    if (snapshot === 'default') {
+      const granted = await requestNotifications();
+      if (granted !== 'granted') return '';
+      const token = await resolveDeviceToken();
+      if (token) setPushToken(token);
+      return token || '';
     }
-    const permission = await readPermission('notifications');
-    const cannotPrompt = permission !== 'default' || (isIosDevice() && !isIosPwaInstalled()) || isEmbeddedFrame();
-    if (cannotPrompt) return '';
-    const granted = await requestNotifications();
-    if (granted !== 'granted') return '';
+    // Snapshot says granted (or the browser has no snapshot to give): try the
+    // banked token first, then mint silently. No popup is needed on this path.
+    try {
+      const cached = localStorage.getItem('FCM_TOKEN');
+      if (cached) {
+        setPushToken(cached);
+        return cached;
+      }
+    } catch {
+      // Private mode: fall through to minting.
+    }
     const token = await resolveDeviceToken();
-    if (token) {
-      setPushToken(token);
-      return token;
-    }
-    return '';
+    if (token) setPushToken(token);
+    return token || '';
   }, [pushToken]);
 
   // Sign-in could not continue without a deviceToken. Say why in one line, show
@@ -584,6 +604,14 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
     try {
       const status = await getPushStatus();
       state = status.state;
+      // Alerts are already on and a token exists: the refusal was stale (a
+      // rotated token, a retry that ran before the mint finished). Bank it and
+      // retry immediately instead of showing a sheet that says "turn alerts on".
+      if (status.state === 'enabled' && status.token) {
+        setPushToken(status.token);
+        retry();
+        return;
+      }
     } catch (statusError) {
       console.debug(getErrorMessage(statusError, 'Could not read the notification status.'));
     }
@@ -595,8 +623,10 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
         // booking alerts … choose Allow" would contradict the pop-up they just
         // answered.
         : state === 'unavailable' ? ALERTS_FINISHING_MESSAGE
-          : isIosDevice() && !isIosPwaInstalled() ? IOS_ALERTS_REQUIRED_MESSAGE
-            : message,
+          : state === 'unconfigured' ? ALERTS_UNCONFIGURED_MESSAGE
+            : state === 'unsupported' ? ALERTS_UNSUPPORTED_MESSAGE
+              : isIosDevice() && !isIosPwaInstalled() ? IOS_ALERTS_REQUIRED_MESSAGE
+                : message,
     );
   };
 

@@ -1887,6 +1887,15 @@ img.image-fallback-tile {
 .permission-gate-warn { margin: 10px 0 0; padding: 9px 11px; border-radius: 10px; background: rgba(242,123,116,.10); border: 1px solid rgba(242,123,116,.25); color: #ffb3ad; font-size: 11.5px; line-height: 1.5; }
 .permission-gate-warn p { margin: 0 0 6px; }
 .permission-gate-warn p:last-child { margin-bottom: 0; }
+.permission-gate-warn a { color: var(--gold); font-weight: 700; }
+/* In-sheet support report: the same nine-check diagnostics the Account card
+   copies, offered before sign-in so a stuck visitor can still send support
+   something pinnable to a layer. */
+.permission-gate-report { margin: 12px 0 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.03); }
+.permission-gate-report p { margin: 0 0 8px; color: var(--muted-light); font-size: 11.5px; line-height: 1.5; }
+.permission-gate-report p:last-child { margin-bottom: 0; }
+.permission-gate-report-copied { display: flex; align-items: center; gap: 6px; color: #9fe0bf !important; font-weight: 700; }
+.permission-gate-report .report-textarea { min-height: 120px; font-size: 11px; }
 
 /* Actionable notifications */
 .notification-card-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }

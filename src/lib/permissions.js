@@ -413,6 +413,13 @@ export const ALERTS_BLOCKED_MESSAGE = 'Alerts are switched off for My Naai in yo
 // The permission IS granted — the leftover step is ours (minting the device
 // token). Never ask somebody who already tapped Allow to "turn alerts on".
 export const ALERTS_FINISHING_MESSAGE = 'Notifications are allowed on this device — My Naai is finishing the last setup step, and it keeps trying by itself. Nothing to change in your settings.';
+// Booking alerts were never switched on for this deployed build (no Firebase
+// web config). No tap on this device can mint a token — the fix is on our side
+// (deploy the config) plus the backend must let sign-in through meanwhile.
+export const ALERTS_UNCONFIGURED_MESSAGE = 'Booking alerts are not switched on for this My Naai build yet, so this device cannot finish the alert setup. You can still sign in — if sign-in refuses, call 8380017393 and we will sort it with you.';
+// This browser context cannot receive web push at all (desktop Safari without
+// push, an old browser, or an iPhone browser outside the installed app).
+export const ALERTS_UNSUPPORTED_MESSAGE = 'This browser cannot receive booking alerts here. Try Chrome, Edge or Samsung Internet — on iPhone, install My Naai to the Home Screen and sign in from there.';
 
 // ── Backend contract helper ──────────────────────────────────────────────────
 // Alerts are optional for the visitor but the API may still insist on a
