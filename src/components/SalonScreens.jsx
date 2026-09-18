@@ -368,7 +368,11 @@ export function SalonQueueScreen({ session, navigate, notify }) {
   // early). It is not the booking-request flow — accept / reject / delay of a
   // new request lives on the booking request screen — so it has its own
   // endpoint and is addressed by bookingId, which every queue row carries.
-  // The row is updated optimistically and rolled back on failure.
+  //
+  // The salon sets the time and it is done: the backend updates the booking and
+  // its queue row, then notifies the customer (in-app + push) to come earlier
+  // or later. There is no accept/decline step — the customer is told, not
+  // asked. The row is updated optimistically and rolled back on failure.
   const submitTimeUpdate = async ({ preview, reason }) => {
     const booking = timeTarget;
     const bookingId = booking?.bookingId;
@@ -380,10 +384,8 @@ export function SalonQueueScreen({ session, navigate, notify }) {
     const previous = items;
     try {
       const response = await api.salonUpdateBookingTime(bookingId, {
-        offsetMinutes: preview.offsetMinutes,
-        proposedTime: preview.updatedLabel,
-        bookingDate: preview.apiDate,
-        bookingTime: preview.apiTime,
+        time: preview.apiTime,
+        date: preview.apiDate,
         reason,
       });
       if (response?.status && response.status !== 'SUCCESS') throw new Error(response.message || 'Could not update the appointment time.');

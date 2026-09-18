@@ -114,10 +114,11 @@ describe('salon queue — update appointment time', () => {
     // Addressed by the booking, not the request: this is the queue's own time
     // change for a booking the salon has already accepted.
     expect(bookingId).toBe('bk-1');
-    expect(payload.offsetMinutes).toBe(20);
-    expect(payload.bookingTime).toBe('18:50:00');
-    expect(payload.bookingDate).toBe(bookingDate);
-    expect(payload.proposedTime).toContain('50');
+    // The resolved slot, not a delta: the salon sets the time and the server
+    // writes it, so there is nothing to recompute from `offsetMinutes`.
+    expect(payload.time).toBe('18:50:00');
+    expect(payload.date).toBe(bookingDate);
+    expect(payload.offsetMinutes).toBeUndefined();
     // And it must never look like a booking-request answer: `action: 'DELAY'`
     // belongs to the owner-action endpoint, which would refuse a confirmed
     // booking (or answer it as if the customer had just asked for the slot).
@@ -141,8 +142,7 @@ describe('salon queue — update appointment time', () => {
     await flush();
 
     const [, payload] = salonUpdateBookingTime.mock.calls[0];
-    expect(payload.offsetMinutes).toBe(-15);
-    expect(payload.bookingTime).toBe('18:15:00');
+    expect(payload.time).toBe('18:15:00');
     await act(async () => { root.unmount(); });
   });
 
@@ -189,8 +189,7 @@ describe('salon queue — update appointment time', () => {
     await flush();
 
     const [, payload] = salonUpdateBookingTime.mock.calls[0];
-    expect(payload.offsetMinutes).toBe(45);
-    expect(payload.bookingTime).toBe('19:15:00');
+    expect(payload.time).toBe('19:15:00');
     await act(async () => { root.unmount(); });
   });
 
@@ -210,8 +209,7 @@ describe('salon queue — update appointment time', () => {
     await flush();
 
     const [, payload] = salonUpdateBookingTime.mock.calls[0];
-    expect(payload.offsetMinutes).toBe(-25);
-    expect(payload.bookingTime).toBe('18:05:00');
+    expect(payload.time).toBe('18:05:00');
     await act(async () => { root.unmount(); });
   });
 
