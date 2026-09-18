@@ -1071,11 +1071,18 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
         const alertId = alertIdentity(message.data, message.type);
         const arrivedAt = Date.now();
         const actionable = isActionableNotification(message.type, session.role);
-        // Ringing goes first: a duplicate delivery returns false here and the
-        // banner/toast/navigation below are skipped with it, so one alert is
-        // handled once.
-        if (actionable && !playBuzzer({ type: message.type, alertId, sentAt: arrivedAt })) return;
-        if (!actionable && !claimAlertDelivery({ alertId, sentAt: arrivedAt })) return;
+        // The arrival gate first, before anything is shown: a repeated or stale
+        // delivery of one alert is not a new alert, and handling it again would
+        // be a second banner, a second toast and a second navigation.
+        if (!claimAlertDelivery({ alertId, sentAt: arrivedAt })) return;
+        // …and then every notification makes a sound — not only the ones with
+        // buttons. The buzzer picks its own sound from the type (the piercing
+        // one for a booking request, the softer one for everything else), and
+        // when this page cannot make a sound at all — audio never unlocked, a
+        // muted tab — the device still does: the notification raised below
+        // carries the system alert sound. The ring is therefore never allowed to
+        // decide whether the alert is *shown*.
+        playBuzzer({ type: message.type, alertId, sentAt: arrivedAt, claimed: true });
         // If locked, still show the OS notification but do not auto-navigate
         // away from the renewal paywall.
         const isLocked = subscriptionGateRef.current === 'locked';

@@ -208,11 +208,36 @@ describe('one alert, one notification', () => {
     expect(harness.channelMessages).toHaveLength(0);
   });
 
-  it('leaves non-buzzer messages entirely to the Firebase SDK', async () => {
+  it('leaves the banner of a non-buzzer message to the Firebase SDK, but not its sound', async () => {
     const harness = makeHarness({ clients: [] });
     await harness.deliverPush({ notification: { title: 'Booking confirmed', body: 'See you at 6pm' }, data: { type: 'BOOKING_CONFIRMED' } });
     expect(harness.notifications).toHaveLength(0);
     expect(harness.channelMessages).toHaveLength(0);
+  });
+
+  it('rings a background tab for an informational alert the SDK never tells it about', async () => {
+    const hidden = windowClient('hidden');
+    const harness = makeHarness({ clients: [hidden] });
+    await harness.deliverPush({ notification: { title: 'Booking confirmed', body: 'See you at 6pm' }, data: { type: 'BOOKING_CONFIRMED', bookingId: 'bk-5' } });
+
+    // Firebase posts to a window only when it is visible, so a background tab
+    // would otherwise only ever get the system banner sound — and no in-app
+    // alert when the person switches back.
+    expect(hidden.postMessage).toHaveBeenCalledTimes(1);
+    expect(hidden.postMessage.mock.calls[0][0]).toEqual(expect.objectContaining({ type: 'MYNAAI_PLAY_BUZZER', notificationType: 'BOOKING_CONFIRMED' }));
+    // The banner stays the SDK's, with its own single copy.
+    expect(harness.notifications).toHaveLength(0);
+  });
+
+  it('does not ring anything for an informational alert when a window is in front', async () => {
+    const visible = windowClient('visible');
+    const hidden = windowClient('hidden');
+    const harness = makeHarness({ clients: [visible, hidden] });
+    await harness.deliverPush({ notification: { title: 'Booking confirmed', body: 'See you at 6pm' }, data: { type: 'BOOKING_CONFIRMED' } });
+
+    // That page is handed the message by Firebase and rings it itself.
+    expect(visible.postMessage).not.toHaveBeenCalled();
+    expect(hidden.postMessage).not.toHaveBeenCalled();
   });
 });
 

@@ -433,6 +433,14 @@ img { display: block; max-width: 100%; }
 .booking-tabs button.active { color: #111; background: var(--gold); border-color: var(--gold); }
 .booking-tabs button span { margin-left: 4px; opacity: .7; }
 .booking-list, .queue-groups, .history-list, .notification-list { display: flex; flex-direction: column; gap: 12px; }
+
+/* A sent booking *request* is not a booking yet. These two carry that one fact:
+   the banner above the list, and the line on each request still waiting. */
+.booking-waiting-banner { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 14px; padding: 12px 13px; border: 1px solid rgba(232, 185, 126, .34); border-radius: 14px; color: #d8dfde; background: rgba(232, 185, 126, .08); font-size: 11.5px; line-height: 1.5; }
+.booking-waiting-banner svg { flex: none; margin-top: 1px; color: var(--gold); }
+.booking-waiting-banner strong { display: block; color: var(--white); font-size: 12.5px; }
+.booking-waiting-note { display: flex; align-items: center; gap: 6px; margin: 9px 0 0; color: var(--gold); font-size: 10.5px; line-height: 1.45; }
+.booking-waiting-note svg { flex: none; }
 .booking-card { display: flex; min-height: 143px; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: var(--card); }
 /* The date rail. This rule used to read `flex: nolex` — not a value, so the
    whole declaration was dropped AND the intended `display: flex` was never
@@ -1404,6 +1412,18 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
 .toast-error .toast-mark { color: white; background: var(--red); }
 .toast-success .toast-mark { background: var(--green); }
 .toast button { display: flex; padding: 2px; color: var(--muted); background: transparent; }
+
+/* The screen a customer lands on right after a booking request: what was sent,
+   who has it, and that nothing is expected of them until the salon answers. */
+.request-sent-card { width: 100%; max-width: 560px; margin: 0 auto; padding: 20px; border: 1px solid var(--line-strong); border-radius: 20px; background: linear-gradient(155deg, rgba(232, 185, 126, .1), rgba(255, 255, 255, .02)), var(--card); text-align: center; }
+.request-sent-mark { width: 46px; height: 46px; margin: 0 auto 12px; display: flex; align-items: center; justify-content: center; border-radius: 50%; color: var(--gold); background: var(--gold-wash); border: 1px solid rgba(232, 185, 126, .3); }
+.request-sent-card h2 { margin: 0; color: var(--white); font-size: 19px; letter-spacing: -.02em; }
+.request-sent-card > p { margin: 9px 0 0; color: #a8b0af; font-size: 12.5px; line-height: 1.6; }
+.request-sent-card > p strong { color: var(--white); }
+.request-sent-points { margin: 16px 0 0; padding: 0; display: flex; flex-direction: column; gap: 9px; list-style: none; text-align: left; }
+.request-sent-points li { display: flex; align-items: flex-start; gap: 8px; color: #c9d2d1; font-size: 11.5px; line-height: 1.5; }
+.request-sent-points svg { flex: none; margin-top: 1px; color: var(--green); }
+.request-sent-actions { display: flex; flex-direction: column; gap: 9px; margin-top: 20px; }
 
 /* The actionable booking-request card — the one alert that is a decision, not an
    announcement. It rides above the toast (same dock, column-reverse) so the two

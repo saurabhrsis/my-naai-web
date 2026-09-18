@@ -1629,27 +1629,45 @@ describe('foreground notification handling', () => {
 
   it('treats a repeated delivery of one alert as one alert — no second banner, no second buzz', async () => {
     await mount();
-    const message = { notification: { title: 'Booking request', body: 'Riya wants a fade' }, data: { type: 'BOOKING_REQUEST', bookingRequestId: 'req-10' } };
+    const message = { type: 'BOOKING_REQUEST', notification: { title: 'Booking request', body: 'Riya wants a fade' }, data: { type: 'BOOKING_REQUEST', bookingRequestId: 'req-10' } };
 
     await deliver(message);
+    expect(playBuzzer).toHaveBeenCalledTimes(1);
     expect(push.displayNotification).toHaveBeenCalledTimes(1);
 
-    // The same alert again, this time already rung — the app must do nothing at
-    // all with it (no banner, no navigation, no toast).
-    vi.mocked(playBuzzer).mockReturnValueOnce(false);
+    // The same alert again: the arrival gate refuses it before anything is
+    // shown, so there is no second ring, no second banner and no second toast.
     await deliver(message);
-    expect(playBuzzer).toHaveBeenCalledTimes(2);
+    expect(playBuzzer).toHaveBeenCalledTimes(1);
     expect(push.displayNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('never rings for an informational message', async () => {
+  it('makes a sound for every notification, not only the ones with buttons', async () => {
+    // "If a notification comes, we need a sound." An informational message has
+    // no action buttons, but it still arrives — the buzzer rings for it too
+    // (with its own, softer sound) and the banner carries the device alert.
     vi.mocked(push.isActionableNotification).mockReturnValue(false);
     await mount();
-    await deliver({ notification: { title: 'Your booking is confirmed', body: 'See you at 6pm' }, data: { type: 'BOOKING_CONFIRMED', bookingId: 'b-1' } });
+    await deliver({ type: 'BOOKING_CONFIRMED', notification: { title: 'Your booking is confirmed', body: 'See you at 6pm' }, data: { type: 'BOOKING_CONFIRMED', bookingId: 'b-1' } });
 
-    expect(playBuzzer).not.toHaveBeenCalled();
+    expect(playBuzzer).toHaveBeenCalledTimes(1);
+    expect(playBuzzer.mock.calls[0][0]).toEqual(expect.objectContaining({ type: 'BOOKING_CONFIRMED', claimed: true }));
     // The alert itself is still shown and recorded.
     expect(push.displayNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('still shows the alert when this page cannot make a sound at all', async () => {
+    // A desktop whose audio clock refuses to start, or a tab that was never
+    // unlocked by a tap: the app buzzer is silent. The alert is not — the
+    // notification below carries the device's own sound, so the ring is never
+    // allowed to decide whether the notification is shown.
+    vi.mocked(playBuzzer).mockReturnValue(false);
+    await mount();
+    const message = { type: 'BOOKING_REQUEST', title: 'Booking request', body: 'Riya wants a fade', notification: { title: 'Booking request', body: 'Riya wants a fade' }, data: { type: 'BOOKING_REQUEST', bookingRequestId: 'req-11' } };
+    await deliver(message);
+
+    expect(push.displayNotification).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain('Booking request');
   });
 });
 

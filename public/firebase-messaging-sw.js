@@ -598,10 +598,18 @@ self.addEventListener('push', event => {
     }
     const data = payload.data || {};
     const type = String(data.type || data.notificationType || '').toUpperCase();
-    // Everything that is not a buzzer alert stays with the Firebase SDK: it
-    // shows the notification the payload asks for (once), and its
-    // onBackgroundMessage callback is still there for messages without one.
-    if (!isBuzzerNotificationType(type)) return;
+    // Everything that is not a buzzer alert keeps its banner with the Firebase
+    // SDK — but not the sound. The SDK hands a push to a window only when that
+    // window is VISIBLE, so with the app open in a background tab it shows the
+    // banner and nothing in the page ever hears about it: no toast, no ring,
+    // and a tab the person is not looking at. The ring is ours for every type
+    // (the page picks its own sound from the type), and it is a no-op when a
+    // window is in front, because that page is handed the message by Firebase
+    // and rings it itself.
+    if (!isBuzzerNotificationType(type)) {
+      event.waitUntil(clientList().then(list => ringOpenClients(list, type, data)));
+      return;
+    }
 
     const title = payload.notification?.title || data.title || 'My Naai update';
     const body = payload.notification?.body || data.body || 'You have a new update from My Naai.';

@@ -365,6 +365,16 @@ describe('alert arrival gate', () => {
     }
   });
 
+  it('rings for a delivery the caller already cleared, without claiming it twice', async () => {
+    // The app claims the arrival first (so a page that cannot make a sound still
+    // shows the banner and the toast) and then asks for the ring. Claiming again
+    // inside playBuzzer would refuse the very alert the caller just accepted.
+    const { playBuzzer, claimAlertDelivery } = await freshBuzzer();
+    const envelope = { alertId: 'BOOKING_REQUEST:req-claimed', sentAt: Date.now() };
+    expect(claimAlertDelivery(envelope)).toBe(true);
+    expect(playBuzzer({ type: 'BOOKING_REQUEST', ...envelope, claimed: true })).toBe(true);
+  });
+
   it('never lets the gate swallow a buzzer the user asked for', async () => {
     const { playBuzzer } = await freshBuzzer();
     expect(playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1, manual: true })).toBe(true);

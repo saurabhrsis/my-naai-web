@@ -176,7 +176,10 @@ function getBookingStatus(item) {
   const key = passed ? 'completed' : String(item?.status || 'pending').toLowerCase();
   return {
     key,
-    label: key === 'confirmed' ? 'Confirmed' : key === 'completed' ? 'Completed' : key === 'cancelled' ? 'Cancelled' : 'Pending',
+    // A pending booking is a request the salon has not answered yet. "Pending"
+    // reads like a status the customer is supposed to chase; "Waiting for salon"
+    // says what is actually happening and who the next move belongs to.
+    label: key === 'confirmed' ? 'Confirmed' : key === 'completed' ? 'Completed' : key === 'cancelled' ? 'Cancelled' : 'Waiting for salon',
   };
 }
 
@@ -671,7 +674,24 @@ export function BookingsScreen({ session, notify }) {
     setLoading(true);
     try {
       const response = await api.bookedSalonList({ userId: session.userId });
-      setBookings(getList(response, ['bookings', 'salons']));
+      const list = getList(response, ['bookings', 'salons']);
+      setBookings(list);
+      // The 30-minute reminder belongs to a booking the salon has ACCEPTED.
+      // Arming it at request time promised a heads-up for a slot nobody had
+      // agreed to yet, which is why a customer who had just sent a request was
+      // being told "reminder set — 30 min before your visit" while the salon
+      // still had to decide. A request that is still waiting arms nothing.
+      if (remindersEnabled()) {
+        list.forEach(item => {
+          if (getBookingStatus(item).key !== 'confirmed') return;
+          scheduleBookingReminder({
+            bookingId: item.bookingId || item.id || '',
+            bookingDate: item.bookingDate,
+            bookingTime: item.bookingTime,
+            salonName: item.salonName || 'Your salon',
+          }).catch(() => {});
+        });
+      }
     } catch (error) { notify?.('error', getErrorMessage(error, 'Unable to load bookings.')); } finally { setLoading(false); }
   }, [notify, session.userId]);
   useEffect(() => { load(); }, [load]);
@@ -705,7 +725,8 @@ export function BookingsScreen({ session, notify }) {
     } catch (error) { setBookings(previous); notify?.('error', getErrorMessage(error, 'Could not cancel this booking.')); } finally { setCancelling(''); }
   };
 
-  return <div className="screen bookings-screen"><PageHeader title="My bookings" subtitle="Keep every appointment in view." action={<button className="refresh-text-button" onClick={load}><Zap size={15} /> Live updates</button>} /><div className="booking-tabs"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All <span>{bookings.length}</span></button><button className={filter === 'confirmed' ? 'active' : ''} onClick={() => setFilter('confirmed')}>Confirmed</button><button className={filter === 'pending' ? 'active' : ''} onClick={() => setFilter('pending')}>Pending</button><button className={filter === 'completed' ? 'active' : ''} onClick={() => setFilter('completed')}>Completed</button></div>{loading ? <div className="list-stack">{[1, 2, 3].map(item => <SkeletonCard key={item} className="booking-skeleton" />)}</div> : filtered.length ? <div className="booking-list">{filtered.map((item, index) => { const status = getBookingStatus(item); const canCancel = !['completed', 'cancelled'].includes(status.key); return <article className="booking-card" key={item.bookingId || item.id || index}><div className="booking-calendar"><span>{new Date(item.bookingDate || Date.now()).toLocaleDateString('en-IN', { month: 'short' })}</span><strong>{new Date(item.bookingDate || Date.now()).getDate()}</strong><small>{new Date(item.bookingDate || Date.now()).toLocaleDateString('en-IN', { weekday: 'short' })}</small></div><div className="booking-main"><div className="booking-title-row"><div><span className="booking-label">APPOINTMENT</span><h3>{item.salonName || 'My Naai salon'}</h3><p>{item.salonCity || item.city || 'Nearby'}</p></div><StatusPill tone={status.key} dot>{status.label}</StatusPill></div><div className="booking-details"><span><UserRound size={14} /> {item.barberName || 'Any specialist'}</span><span><Scissors size={14} /> {item.serviceName || item.services || 'Salon service'}</span><span><Clock3 size={14} /> {formatTime(item.bookingTime)}</span></div>{canCancel && <button className="cancel-booking" onClick={() => cancel(item.bookingId)} disabled={cancelling === item.bookingId}>{cancelling === item.bookingId ? <Spinner size={14} /> : <><X size={14} /> Cancel booking</>}</button>}</div></article>; })}</div> : <EmptyState icon={CalendarCheck2} title="No bookings yet" message="Your next good hair day is only a few taps away." />}</div>;
+  const waiting = bookings.filter(item => getBookingStatus(item).key === 'pending').length;
+  return <div className="screen bookings-screen"><PageHeader title="My bookings" subtitle="Keep every appointment in view." action={<button className="refresh-text-button" onClick={load}><Zap size={15} /> Live updates</button>} />{!loading && waiting > 0 && <div className="booking-waiting-banner" role="status"><Clock3 size={16} /><span><strong>Waiting for the salon to accept.</strong> {waiting === 1 ? 'Your booking request has been sent' : `${waiting} booking requests have been sent`} — the salon will accept it or suggest another time, and you will get an alert either way.</span></div>}<div className="booking-tabs"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All <span>{bookings.length}</span></button><button className={filter === 'confirmed' ? 'active' : ''} onClick={() => setFilter('confirmed')}>Confirmed</button><button className={filter === 'pending' ? 'active' : ''} onClick={() => setFilter('pending')}>Pending</button><button className={filter === 'completed' ? 'active' : ''} onClick={() => setFilter('completed')}>Completed</button></div>{loading ? <div className="list-stack">{[1, 2, 3].map(item => <SkeletonCard key={item} className="booking-skeleton" />)}</div> : filtered.length ? <div className="booking-list">{filtered.map((item, index) => { const status = getBookingStatus(item); const canCancel = !['completed', 'cancelled'].includes(status.key); return <article className="booking-card" key={item.bookingId || item.id || index}><div className="booking-calendar"><span>{new Date(item.bookingDate || Date.now()).toLocaleDateString('en-IN', { month: 'short' })}</span><strong>{new Date(item.bookingDate || Date.now()).getDate()}</strong><small>{new Date(item.bookingDate || Date.now()).toLocaleDateString('en-IN', { weekday: 'short' })}</small></div><div className="booking-main"><div className="booking-title-row"><div><span className="booking-label">APPOINTMENT</span><h3>{item.salonName || 'My Naai salon'}</h3><p>{item.salonCity || item.city || 'Nearby'}</p></div><StatusPill tone={status.key} dot>{status.label}</StatusPill></div><div className="booking-details"><span><UserRound size={14} /> {item.barberName || 'Any specialist'}</span><span><Scissors size={14} /> {item.serviceName || item.services || 'Salon service'}</span><span><Clock3 size={14} /> {formatTime(item.bookingTime)}</span></div>{status.key === 'pending' && <p className="booking-waiting-note"><Clock3 size={13} /> Sent to the salon — waiting for their action. We will alert you when they respond.</p>}{canCancel && <button className="cancel-booking" onClick={() => cancel(item.bookingId)} disabled={cancelling === item.bookingId}>{cancelling === item.bookingId ? <Spinner size={14} /> : <><X size={14} /> Cancel booking</>}</button>}</div></article>; })}</div> : <EmptyState icon={CalendarCheck2} title="No bookings yet" message="Your next good hair day is only a few taps away." />}</div>;
 }
 
 export function ProductsScreen({ notify }) {
@@ -800,7 +821,7 @@ export function AccountScreen({ session, navigate, onLogout, notify, onSessionUp
     setRemindersEnabled(next);
     setRemindersOn(next);
     if (next) armStoredReminders();
-    notify?.('success', next ? 'Booking reminders on — 30 min before every visit.' : 'Booking reminders off.');
+    notify?.('success', next ? 'Booking reminders on — 30 min before every confirmed visit.' : 'Booking reminders off.');
   };
 
   return (
@@ -818,7 +839,7 @@ export function AccountScreen({ session, navigate, onLogout, notify, onSessionUp
       <div className="account-card">
         <div className="account-menu-row reminder-toggle-row">
           <span className="account-menu-icon"><AlarmClock size={18} /></span>
-          <span><strong>Booking reminders</strong><small>Get reminded 30 minutes before your slot</small></span>
+          <span><strong>Booking reminders</strong><small>Get reminded 30 minutes before a confirmed slot</small></span>
           <button
             type="button"
             className={cx('switch-toggle', remindersOn && 'on')}
@@ -1083,6 +1104,7 @@ export function ScheduleScreen({ params, navigate, notify }) {
   const [barber, setBarber] = useState(null);
   const [time, setTime] = useState('');
   const [loading, setLoading] = useState(false);
+  const [sent, setSent] = useState(null);
   const schedule = {
     openingTime: '09:00:00',
     closingTime: '21:00:00',
@@ -1132,18 +1154,39 @@ export function ScheduleScreen({ params, navigate, notify }) {
     try {
       const response = await api.createBookingRequest({ salonId: salon.salonId || salon.id, barberId: barber?.barberId || barber?.id || '', bookingDate, bookingTime: time, services: services.map(item => item.serviceId || item.id) });
       if (response?.status && response.status !== 'SUCCESS') throw new Error(response.message || 'Booking failed');
-      notify?.('success', 'Request sent — wait for the salon response.');
-      // Alarm/reminder through the same (single) notification permission as
-      // push: 30 minutes before the slot the visitor gets a heads-up. Rejects
-      // silently when the funnel is unavailable — the booking already went
-      // through, so nothing here may block navigation.
-      const bookingId = response?.data?.bookingRequestId || response?.data?.bookingId || '';
-      scheduleBookingReminder({ bookingId, bookingDate, bookingTime: time, salonName: salon.salonName || salon.name })
-        .then(outcome => { if (outcome) notify?.('info', 'Reminder set — 30 min before your visit.'); })
-        .catch(() => {});
-      navigate('bookings');
+      const salonName = salon.salonName || salon.name || 'the salon';
+      notify?.('success', `Booking request sent to ${salonName}.`);
+      // A booking *request* is not a booking yet: the salon has to accept it, so
+      // this is the moment to say exactly that — not to promise a 30-minute
+      // reminder for a slot nobody has agreed to yet. The reminder is armed once
+      // the salon confirms (see BookingsScreen), through the same single
+      // notification permission push already uses.
+      setSent({ salonName, date: bookingDate, time, services });
     } catch (error) { notify?.('error', getErrorMessage(error, 'Could not send booking request.')); } finally { setLoading(false); }
   };
+  if (sent) {
+    // What the customer sees the second the request leaves: who has it, what
+    // happens next, and that nothing else is expected of them. The reminder is
+    // deliberately not offered here — a reminder for an unconfirmed slot is a
+    // promise the salon has not made.
+    return <div className="screen schedule-sent-screen">
+      <PageHeader title="Request sent" subtitle={sent.salonName} onBack={() => navigate('bookings')} />
+      <section className="request-sent-card" role="status">
+        <span className="request-sent-mark"><Clock3 size={20} /></span>
+        <h2>Booking sent to the salon</h2>
+        <p><strong>{sent.salonName}</strong> has received your request for <strong>{formatTime(sent.time)}</strong> on <strong>{formatDate(sent.date)}</strong>. Waiting for the salon to accept it — you will get an alert the moment they respond.</p>
+        <ul className="request-sent-points">
+          <li><Check size={15} /> Your slot is held while the salon reviews the request.</li>
+          <li><Bell size={15} /> We will alert you when the salon accepts or suggests another time.</li>
+          <li><CalendarDays size={15} /> Nothing to do now — track it any time under My bookings.</li>
+        </ul>
+        <div className="request-sent-actions">
+          <Button onClick={() => navigate('bookings')}>View my bookings <CalendarCheck2 size={17} /></Button>
+          <Button variant="secondary" onClick={() => navigate('home')}>Book another salon</Button>
+        </div>
+      </section>
+    </div>;
+  }
   return <div className="screen schedule-screen"><PageHeader title="Schedule appointment" subtitle={salon.salonName || salon.name} onBack={() => navigate(-1)} /><section className="schedule-section"><div className="section-label"><UserRound size={17} /><span>Choose a barber <small>Optional</small></span></div><div className="barber-scroll">{(salon.barbers || []).map(item => { const active = (barber?.barberId || barber?.id) === (item.barberId || item.id); return <button key={item.barberId || item.id} className={cx('barber-card', active && 'active')} onClick={() => setBarber(active ? null : item)}><ImageWithFallback src={item.profileImageUrl || item.image} fallback={PERSON_PLACEHOLDER} alt={item.fullName || item.name} className="barber-image" /><strong>{item.fullName || item.name}</strong><span className={item.isAvailable ? 'available' : 'unavailable'}><i />{item.isAvailable ? 'Available' : 'Away'}</span><small><Star size={12} fill="currentColor" /> {item.ratingAverage || item.rating || '0.0'}</small></button>; })}{!(salon.barbers || []).length && <p className="muted-line">Any available barber will take care of you.</p>}</div></section><section className="schedule-section"><div className="section-label"><CalendarDays size={17} /><span>Choose a date</span></div><div className="date-choice-row">{[0, 1, 2].map(offset => { const optionDate = new Date(Date.now() + offset * 86400000); return <button key={offset} className={cx('date-choice', dayOffset === offset && 'active')} onClick={() => setDayOffset(offset)}><small>{offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow' : 'Day after'}</small><strong>{optionDate.getDate()}</strong><span>{optionDate.toLocaleDateString('en-IN', { month: 'short' })}</span></button>; })}</div></section><section className="schedule-section"><div className="section-label"><Clock3 size={17} /><span>Choose a time <small>{holiday ? `Closed on ${weekday}` : 'Available 10 minute slots'}</small></span></div>{holiday ? <div className="holiday-note"><CircleAlert size={18} /><span>Salon is closed on {weekday}. Choose another day.</span></div> : availableSlots.length ? <div className="time-grid">{availableSlots.map(slot => <button key={slot.value} className={cx('time-slot', time === slot.value && 'active')} onClick={() => setTime(slot.value)}>{slot.label}</button>)}</div> : <div className="holiday-note availability-empty"><CircleAlert size={18} /><span>No available time slots for {weekday}. Please choose another day.</span></div>}</section><div className="schedule-total"><div><span>Estimated total</span><strong>{formatCurrency(services.reduce((sum, item) => sum + Number(item.price || 0), 0))}</strong></div><Button loading={loading} onClick={confirm}>Confirm booking <Check size={17} /></Button></div></div>;
 }
 
@@ -1319,7 +1362,7 @@ const INFO_CONTENT = {
     { title: 'How do I pick a specialist?', text: 'On the salon page choose your services first, then the specialist. Each one shows whether they are available, so you know who can take you before you confirm.' },
     { title: 'How is the waiting time calculated?', text: 'Every salon page shows the wait the salon is managing at that moment, straight from its live queue. That is why booking ahead beats turning up and hoping.' },
     { title: 'What if I am running late?', text: 'Call the salon using the number on its page as soon as you know. A salon can also suggest a new time, which you accept or decline from the notification or My bookings.' },
-    { title: 'Will I be reminded before my appointment?', text: 'Yes, once you allow browser notifications: a reminder arrives 30 minutes before your slot. You can switch this on or off any time in Account → Booking reminders.' },
+    { title: 'Will I be reminded before my appointment?', text: 'Yes, once you allow browser notifications and the salon has confirmed your booking: a reminder arrives 30 minutes before your slot. Until the salon accepts, the request simply waits for their action — you will get an alert the moment they respond. You can switch reminders on or off any time in Account → Booking reminders.' },
     { title: 'How do I find salons near me?', text: 'Allow location access on the home page and the list sorts nearest-first with the distance on every card. You can also search by salon name or area, and browse without location if you decline.' },
     { title: 'Can I save a favourite salon?', text: 'Yes. Tap the bookmark on a salon card to keep it on top of your list — one saved salon at a time, the same as the mobile app.' },
     { title: 'Are the prices on My Naai final?', text: 'Salons set their own prices and the card on each salon page is the price you should expect. Offers or add-ons are decided by the salon at the time of service.' },

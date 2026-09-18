@@ -47,7 +47,12 @@
  *
  * The delivered notification itself is never suppressed: the alert banner, the
  * route, the toast and the booking are all still handled. Only the *sound* is
- * tied to the arrival instant.
+ * tied to the arrival instant — and every delivered notification gets one: this
+ * buzzer for the app that is running, the device's own alert sound from the
+ * notification for the app that is not. `playBuzzer` returning false therefore
+ * means "this delivery was not new" (the gate refused it), never "the alert was
+ * dropped": a desktop whose audio clock refuses to start still gets the banner,
+ * the toast and the system sound.
  *
  * While the app cannot sound anything (backgrounded, locked phone, or the very
  * first seconds before a gesture) the alert is still delivered by the system
@@ -504,8 +509,14 @@ const FOREGROUND_START_DEADLINE = 5000;
 // too. `manual: true` is the one way past the gate — it is for the two buttons
 // whose entire purpose is "ring it now" (the signed-out buzzer test and the
 // Alerts & permissions test), which are user gestures, not deliveries.
-export function playBuzzer({ type = '', repeats = 2, alertId = '', sentAt = 0, manual = false } = {}) {
-  if (!manual && !claimAlertDelivery({ alertId: alertId || alertIdentity({}, type), sentAt })) return false;
+//
+// `claimed: true` means the caller has already passed the gate for this exact
+// alert (App.jsx does, so that it can decide what to do about the delivery
+// *before* the ring — a page whose audio clock will not start still has to show
+// the banner and the toast, and the device still makes its own notification
+// sound). Without it the same alert would be refused here as a duplicate.
+export function playBuzzer({ type = '', repeats = 2, alertId = '', sentAt = 0, manual = false, claimed = false } = {}) {
+  if (!manual && !claimed && !claimAlertDelivery({ alertId: alertId || alertIdentity({}, type), sentAt })) return false;
   const isBooking = String(type || '').toUpperCase() === 'BOOKING_REQUEST';
   const vibrated = vibrate(isBooking ? [260, 120, 260, 120, 520] : [300, 140, 300, 140, 500]);
   setupBroadcastListener();
