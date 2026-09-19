@@ -201,10 +201,10 @@ describe('one alert, one notification', () => {
     const harness = makeHarness({ clients: [visible] });
     await harness.deliverPush(bookingPush());
 
-    // Firebase hands a visible window the message; that page shows the alert
-    // and rings the buzzer itself, so the worker must stay out of both.
+    // The visible page owns the alert after acknowledging this delivery. The
+    // worker sends a handshake first so it can fall back if onMessage is lost.
     expect(harness.notifications).toHaveLength(0);
-    expect(visible.postMessage).not.toHaveBeenCalled();
+    expect(visible.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'MYNAAI_PUSH_DELIVERY' }));
     expect(harness.channelMessages).toHaveLength(0);
   });
 
@@ -286,10 +286,10 @@ describe('ringing the app that is open in another tab', () => {
     const harness = makeHarness({ clients: [hidden, visible] });
     await harness.deliverPush(bookingPush());
 
-    // The visible tab is handed the push by Firebase and rings it there; the
-    // worker must not ring the other tab or show a second banner.
+    // The visible tab gets the acknowledgement opportunity; the hidden tab is
+    // not treated as the owner and no duplicate banner is shown.
     expect(hidden.postMessage).not.toHaveBeenCalled();
-    expect(visible.postMessage).not.toHaveBeenCalled();
+    expect(visible.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'MYNAAI_PUSH_DELIVERY' }));
     expect(harness.channelMessages).toHaveLength(0);
     expect(harness.notifications).toHaveLength(0);
   });

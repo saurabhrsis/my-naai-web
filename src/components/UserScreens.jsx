@@ -146,10 +146,22 @@ function bySavedThenDistance(left, right) {
   return leftDistance - rightDistance;
 }
 
+const BOOKING_ACTION_WINDOW_MS = 60 * 1000;
+
+function isFreshBookingRequest(item = {}) {
+  const created = item.createdAt || item.created_at || item.timestamp || item.sentAt || item.createdAtTimestamp;
+  let createdMs = created ? new Date(created).getTime() : 0;
+  if (createdMs > 0 && createdMs < 1e12) createdMs *= 1000;
+  // The server's notification list can contain old requests. Actions are only
+  // offered for a live NEW booking, never for delay/update history.
+  return Number.isFinite(createdMs) && createdMs > 0 && Date.now() - createdMs >= 0 && Date.now() - createdMs <= BOOKING_ACTION_WINDOW_MS;
+}
+
 function getNotificationAction(item = {}, role = '') {
   const type = String(item.type || item.notificationType || item.notification_type || '').toUpperCase();
   const bookingRequestId = item.bookingRequestId || item.bookingId || item.booking_request_id || '';
   if (!type || !bookingRequestId || !isActionableNotification(type, role)) return null;
+  if (String(role).toUpperCase() === 'SALON' && (type !== 'BOOKING_REQUEST' || !isFreshBookingRequest(item))) return null;
   const route = getNotificationRoute({ ...item, type, bookingRequestId }, role);
   if (!route?.name) return null;
   return {
@@ -1199,6 +1211,14 @@ export function NotificationsScreen({ session, notify, navigate }) {
   const [actionLoading, setActionLoading] = useState('');
   const [delayModal, setDelayModal] = useState(null);
   const [delayMinutes, setDelayMinutes] = useState('15');
+  const [, setNotificationClock] = useState(Date.now());
+
+  // Remove the one-minute booking actions while this screen remains open.
+  useEffect(() => {
+    if (!isSalon) return undefined;
+    const timer = window.setInterval(() => setNotificationClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [isSalon]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1269,7 +1289,7 @@ export function NotificationsScreen({ session, notify, navigate }) {
 
   const isBookingRequest = (item) => {
     const type = String(item.type || item.notificationType || '').toUpperCase();
-    return type === 'BOOKING_REQUEST' || type === 'DELAY_BOOKING';
+    return type === 'BOOKING_REQUEST' && isFreshBookingRequest(item);
   };
 
   return <div className="screen notifications-screen">
@@ -1278,7 +1298,7 @@ export function NotificationsScreen({ session, notify, navigate }) {
     {loading ? <div className="notification-list">{[1, 2, 3].map(item => <SkeletonCard key={item} className="notification-skeleton" />)}</div> : items.length ? <div className="notification-list">{items.map((item, index) => {
       const action = getNotificationAction(item, role);
       const bookingType = isBookingRequest(item);
-      const bookingId = item.bookingRequestId || item.bookingId || '';
+      const bookingId = item.bookingRequestId || item.bookingId || item.booking_request_id || '';
       return <article className={cx('notification-card', action && 'notification-actionable', bookingType && isSalon && 'notification-booking-request')} key={item.notificationId || item.id || index}>
         <div className="notification-icon"><Bell size={17} /></div>
         <div style={{ flex: 1 }}>
