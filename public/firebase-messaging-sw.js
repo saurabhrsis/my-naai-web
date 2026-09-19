@@ -48,6 +48,31 @@ function isBuzzerNotificationType(type) {
 }
 
 let suppressedSdkNotification = null;
+// A visible page normally receives the same FCM message through onMessage. Do
+// not permanently trust that assumption: on Safari/iPadOS and after a tab has
+// been suspended, onMessage can be late or missing. The page acknowledges the
+// delivery; if no acknowledgement arrives quickly, the worker shows the system
+// notification as a reliable fallback.
+const foregroundAcks = new Map();
+const FOREGROUND_ACK_WAIT_MS = 700;
+
+function foregroundDeliveryKey(data = {}, type = '') {
+  return alertIdentity(data, type);
+}
+
+function waitForForegroundAck(key) {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => {
+      foregroundAcks.delete(key);
+      resolve(false);
+    }, FOREGROUND_ACK_WAIT_MS);
+    foregroundAcks.set(key, () => {
+      clearTimeout(timer);
+      foregroundAcks.delete(key);
+      resolve(true);
+    });
+  });
+}
 
 function installSdkNotificationGuard() {
   try {
@@ -519,6 +544,11 @@ self.addEventListener('notificationclick', event => {
 
 self.addEventListener('message', event => {
   const data = event.data || {};
+  if (data.type === 'MYNAAI_PUSH_ACK' && data.alertId) {
+    const resolve = foregroundAcks.get(String(data.alertId));
+    if (resolve) resolve();
+    return;
+  }
   if (data.type === 'MYNAAI_CLOSE_NOTIFICATION' && data.tag) {
     // Acting from inside the app (accept, reject, expiry) closes the banner —
     // and with it any repeat the notification centre still had queued.
@@ -619,16 +649,20 @@ self.addEventListener('push', event => {
     // else: it is the only honest answer to "when did this notification arrive".
     event.waitUntil((async () => {
       const windows = await clientList();
+      const tag = alertTag(data, type);
+      const deliveryKey = foregroundDeliveryKey(data, type);
       if (hasVisibleClient(windows)) {
-        // A My Naai window is open in front of the user: Firebase hands it this
-        // message (it posts to every window, hidden ones included) and that page
-        // rings and shows the alert itself. Showing a second banner from here,
-        // or ringing a second time, is the duplicate this file exists to stop.
-        suppressedSdkNotification = null;
-        return;
+        // Give the visible page first chance to render the in-app alert. The
+        // short acknowledgement window prevents both duplicates and the old
+        // "backend sent, but no device notification" failure when onMessage is
+        // lost by a suspended tab/browser.
+        const ackPromise = waitForForegroundAck(deliveryKey);
+        windows.filter(client => client.visibilityState === 'visible').forEach(client => {
+          try { client.postMessage({ type: 'MYNAAI_PUSH_DELIVERY', alertId: deliveryKey }); } catch {}
+        });
+        if (await ackPromise) return;
       }
       let shown = false;
-      const tag = alertTag(data, type);
       const options = {
         body,
         icon: '/icons/icon-192.png',

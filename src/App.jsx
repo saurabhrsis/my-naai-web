@@ -1062,6 +1062,16 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
         if (cancelled) return;
         const message = normalizePushPayload(payload);
         recordForegroundMessage(message);
+        // A foreground FCM message is the page's acknowledgement to the
+        // service worker. Without this handshake Safari/iPadOS can suspend
+        // onMessage and the worker has no way to know whether it is safe to
+        // suppress the system notification fallback.
+        try {
+          const alertId = alertIdentity(message.data, message.type);
+          const ack = { type: 'MYNAAI_PUSH_ACK', alertId };
+          if (navigator.serviceWorker?.controller) navigator.serviceWorker.controller.postMessage(ack);
+          else navigator.serviceWorker?.ready?.then(registration => registration.active?.postMessage(ack)).catch(() => {});
+        } catch { /* notification delivery continues even without SW control */ }
         // An FCM message handed to this page is a live delivery: the arrival
         // stamp is now. The id is what makes a single alert ring once even when
         // the worker's broadcast and this handler both see it, and it is what
