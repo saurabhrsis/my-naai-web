@@ -30,6 +30,29 @@ const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
 
 let messagingPromise;
 let registrationPromise;
+let autoUpdateListenerInstalled = false;
+
+// A service worker can activate in the background while the old app bundle is
+// still running. Reload once when the new controller takes over so an installed
+// PWA cannot stay on an obsolete notification handler indefinitely.
+function installAutoUpdate(registration) {
+  if (autoUpdateListenerInstalled || typeof navigator === 'undefined' || !navigator.serviceWorker) return;
+  autoUpdateListenerInstalled = true;
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) return;
+    try {
+      const key = 'mynaai:service-worker-reloaded';
+      const last = Number(sessionStorage.getItem(key) || 0);
+      if (Date.now() - last < 30000) return;
+      sessionStorage.setItem(key, String(Date.now()));
+    } catch { /* reload is still safe when storage is unavailable */ }
+    window.location.reload();
+  });
+  // update() asks the browser to check immediately instead of waiting for its
+  // normal periodic update check, which is especially important for iOS PWAs.
+  try { registration?.update?.(); } catch { /* browser may reject during startup */ }
+}
 
 export function isPushConfigured() {
   return Boolean(firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagingSenderId && firebaseConfig.appId && vapidKey);
@@ -124,7 +147,10 @@ export function registerPushServiceWorker() {
         : null;
       if (existing && isPushWorkerScript(existing.active?.scriptURL || existing.waiting?.scriptURL || existing.installing?.scriptURL)) {
         const active = await waitForActiveWorker(existing, 3000);
-        if (active) return active;
+        if (active) {
+          installAutoUpdate(active);
+          return active;
+        }
       }
 
       const registration = await navigator.serviceWorker.register(
@@ -132,10 +158,12 @@ export function registerPushServiceWorker() {
         { scope: PUSH_SW_SCOPE },
       );
       const active = await waitForActiveWorker(registration, 8000);
+      const ready = active || registration;
+      installAutoUpdate(ready);
       try {
         await Promise.race([navigator.serviceWorker.ready, delay(1000)]);
       } catch {}
-      return active || registration;
+      return ready;
     } catch (error) {
       console.debug(getErrorMessage(error, 'Firebase push service worker registration failed.'));
       registrationPromise = undefined;
