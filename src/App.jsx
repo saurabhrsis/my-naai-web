@@ -45,7 +45,7 @@ import { BOOKING_ALERT_WINDOW_MS, BookingRequestAlert } from './components/Booki
 // The deviceToken rule is shared (lib/apiPayload) so the Alerts & permissions
 // card's end-to-end test alert follows the same mobile contract as sign-in.
 import { withDeviceToken } from './lib/apiPayload';
-import { TOKEN_CHANGED_EVENT, clearDeviceTokenSync, keepDeviceTokenSynced, rememberLoginToken } from './lib/deviceToken';
+import { TOKEN_CHANGED_EVENT, clearDeviceTokenSync, holdRelogin, keepDeviceTokenSynced, rememberLoginToken } from './lib/deviceToken';
 import { alertIdentity, claimAlertDelivery, playBuzzer, unlockBuzzer } from './lib/buzzer';
 import { resetLiveUpdatesSocket } from './lib/socket';
 import { armStoredReminders } from './lib/reminders';
@@ -977,6 +977,8 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
   const [bookingAlert, setBookingAlert] = useState(null);
   // Booking request ids this shell has already surfaced (push, relay or poll).
   const seenRequestIds = useRef(new Set());
+  const bookingAlertRef = useRef(null);
+  useEffect(() => { bookingAlertRef.current = bookingAlert; }, [bookingAlert]);
   const dismissBookingAlert = useCallback(() => setBookingAlert(null), []);
   const resolveBookingAlert = useCallback(() => {
     setBookingAlert(null);
@@ -1204,6 +1206,9 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
   // allowed or rotated AFTER sign-in — the common web case — never reached the
   // API before, which is the "permission granted, no notification" report.
   useEffect(() => keepDeviceTokenSynced(sessionRef.current), [session.role, session.userId]);
+  // Never sign the salon out in the middle of answering a booking request.
+  const answeringRequest = Boolean(bookingAlert) || route.name === 'bookingRequest';
+  useEffect(() => { holdRelogin(answeringRequest); return () => holdRelogin(false); }, [answeringRequest]);
 
   // A booking request that arrived while this app was in the background never
   // reached the handler above — Firebase hands a foreground message only to a
@@ -1251,12 +1256,16 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
     let timer = 0;
     const check = async () => {
       if (cancelled || document.visibilityState !== 'visible' || subscriptionGateRef.current === 'locked') return;
+      if (bookingAlertRef.current) return; // one card at a time; the open one is the freshest
       try {
         const response = await api.salonNotificationList({ salonId: session.userId, page: 1 });
         const items = Array.isArray(response?.data) ? response.data : (response?.data?.notifications || response?.data?.notificationList || response?.data?.list || response?.data?.items || []);
         for (const item of items) {
           const type = String(item?.type || item?.notificationType || '').toUpperCase();
           if (type !== 'BOOKING_REQUEST') continue;
+          // Already answered (from another device, or the request screen)?
+          const status = String(item.status || item.bookingStatus || item.requestStatus || '').toUpperCase();
+          if (status && !['PENDING', 'REQUESTED', 'NEW', 'OPEN'].includes(status)) continue;
           const id = String(item.bookingRequestId || item.bookingId || item.booking_request_id || '');
           if (!id || seenRequestIds.current.has(id)) continue;
           const created = item.createdAt || item.created_at || item.timestamp || item.sentAt;

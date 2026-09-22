@@ -70,17 +70,49 @@ export function serverHasToken(session, token) {
   return readSyncedStamp() === syncStamp(session, token);
 }
 
-// The one decision this module makes: a live token the server does not have.
-// Try to hand it over quietly; if that cannot be confirmed, ask for a fresh
-// login. A browser tab → installed app move is the textbook case: the PWA has
-// its own push subscription, so its token is new, while the session it
-// inherited still points the backend at the old browser token.
+// The one decision this module makes: the live token is not the one the
+// backend has. A browser tab → installed app move is the textbook case: the
+// PWA has its own push subscription, so its token is new, while the session
+// it inherited still points the backend at the old browser token.
+//
+// The backend only reliably learns a token at login, so when we KNOW the
+// token changed (a login token was banked and the live one differs), the
+// answer is a fresh login — not a profile update whose effect we cannot
+// verify. Guard rails, so this can never lock anyone out:
+//   · no banked login token (a session from before this shipped, or a login
+//     that could not read a token yet) → never sign out; just sync quietly;
+//   · at most ONE sign-out per token, remembered in storage, so a login that
+//     again cannot read the token cannot loop;
+//   · nothing here depends on the network, so being offline changes nothing.
+const RELOGIN_ASKED_KEY = 'mynaai:relogin-asked-for-token';
+
+function reloginAskedFor(token) {
+  try { return localStorage.getItem(RELOGIN_ASKED_KEY) === token; } catch { return false; }
+}
+
+function rememberReloginAsked(token) {
+  try { localStorage.setItem(RELOGIN_ASKED_KEY, token); } catch { /* storage blocked */ }
+}
+
+// While the salon is answering a booking request (the 60-second card or the
+// request screen) a sign-out would cost them the booking. The shell holds the
+// re-login until that is over; the next focus/token event re-checks.
+let reloginHeld = false;
+export function holdRelogin(held) { reloginHeld = Boolean(held); }
+
 async function reconcileToken(session, token, { notifyChange }) {
   if (serverHasToken(session, token)) return 'ok';
-  const result = await syncDeviceToken(session, token, { force: true });
-  if (result === 'synced') return 'synced';
-  notifyChange?.({ token, previous: readLoginToken(), reason: result });
-  return 'changed';
+  const previous = readLoginToken();
+  if (previous && previous !== token && !reloginAskedFor(token)) {
+    if (reloginHeld) return 'held';
+    rememberReloginAsked(token);
+    notifyChange?.({ token, previous, reason: 'token-changed' });
+    return 'changed';
+  }
+  // No baseline to compare with (or we already asked once for this token):
+  // hand the token over quietly and leave the user signed in either way.
+  await syncDeviceToken(session, token, { force: true });
+  return 'synced';
 }
 
 // Send `token` for `session` unless the server already has exactly that pair.

@@ -365,4 +365,13 @@ What the web app does about it (`src/lib/deviceToken.js`):
    sign-in screen with a notice explaining why. The next OTP login carries the
    new token, and the backend is back in sync.
 
-Logout clears the banked token, so a fresh login always sets a new baseline.
+Guard rails (so this can never become a blocker):
+
+- No banked login token (session from before this shipped, or a login that
+  could not read a token) → never signs out; only the quiet hand-over runs.
+- At most one sign-out per new token (`mynaai:relogin-asked-for-token`), so a
+  login that again cannot read the token cannot loop.
+- The sign-out is held while a booking request is being answered (the alert
+  card or the request screen) and re-checked on the next focus.
+- Nothing depends on the network; offline changes nothing.
+- Logout clears the banked token, so a fresh login always sets a new baseline.

@@ -12,7 +12,7 @@ const { registerDevice, updateSalonProfile, updateProfile, getPushToken, readNot
 vi.mock('./api', () => ({ api: { registerDevice, updateSalonProfile, updateProfile } }));
 vi.mock('./push', () => ({ getPushToken, readNotificationPermission, isPushConfigured, PUSH_TOKEN_EVENT: 'mynaai:push-token' }));
 
-import { TOKEN_CHANGED_EVENT, clearDeviceTokenSync, keepDeviceTokenSynced, rememberLoginToken, serverHasToken, syncDeviceToken } from './deviceToken';
+import { TOKEN_CHANGED_EVENT, holdRelogin, clearDeviceTokenSync, keepDeviceTokenSynced, rememberLoginToken, serverHasToken, syncDeviceToken } from './deviceToken';
 
 const session = { role: 'SALON', userId: 'salon-1' };
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -106,31 +106,62 @@ describe('token change after login (browser tab → installed app)', () => {
     expect(serverHasToken(session, 'token-pwa')).toBe(false);
   });
 
-  it('hands a new token over quietly when the server accepts it — no sign-out', async () => {
+  it('asks for a fresh login when the live token differs from the login token', async () => {
     rememberLoginToken(session, 'token-login');
     getPushToken.mockResolvedValue('token-pwa');
-    const changed = vi.fn();
-    window.addEventListener(TOKEN_CHANGED_EVENT, changed);
-    const stop = keepDeviceTokenSynced(session);
-    await flush();
-    expect(registerDevice).toHaveBeenCalledWith(expect.objectContaining({ deviceToken: 'token-pwa' }));
-    expect(changed).not.toHaveBeenCalled();
-    expect(serverHasToken(session, 'token-pwa')).toBe(true);
-    stop();
-    window.removeEventListener(TOKEN_CHANGED_EVENT, changed);
-  });
-
-  it('asks for a fresh login when the new token cannot be handed over', async () => {
-    rememberLoginToken(session, 'token-login');
-    getPushToken.mockResolvedValue('token-pwa');
-    registerDevice.mockRejectedValue(Object.assign(new Error('Not found'), { status: 404 }));
-    updateSalonProfile.mockRejectedValue(new Error('boom'));
     const changed = vi.fn();
     window.addEventListener(TOKEN_CHANGED_EVENT, changed);
     const stop = keepDeviceTokenSynced(session);
     await flush();
     expect(changed).toHaveBeenCalledTimes(1);
     expect(changed.mock.calls[0][0].detail).toMatchObject({ token: 'token-pwa', previous: 'token-login' });
+    // The backend learns tokens at login; a profile update is not a substitute.
+    expect(registerDevice).not.toHaveBeenCalled();
+    stop();
+    window.removeEventListener(TOKEN_CHANGED_EVENT, changed);
+  });
+
+  it('asks only once per token — a login that cannot read the token cannot loop', async () => {
+    rememberLoginToken(session, 'token-login');
+    getPushToken.mockResolvedValue('token-pwa');
+    const changed = vi.fn();
+    window.addEventListener(TOKEN_CHANGED_EVENT, changed);
+    let stop = keepDeviceTokenSynced(session);
+    await flush();
+    stop();
+    // Signed out, signed in again, but the login again banked the old token.
+    clearDeviceTokenSync();
+    rememberLoginToken(session, 'token-login');
+    stop = keepDeviceTokenSynced(session);
+    await flush();
+    expect(changed).toHaveBeenCalledTimes(1);
+    // Second time round it falls back to the quiet hand-over instead.
+    expect(registerDevice).toHaveBeenCalledWith(expect.objectContaining({ deviceToken: 'token-pwa' }));
+    stop();
+    window.removeEventListener(TOKEN_CHANGED_EVENT, changed);
+  });
+
+  it('never signs out a session that has no login token banked (pre-existing or token-less login)', async () => {
+    getPushToken.mockResolvedValue('token-pwa');
+    const changed = vi.fn();
+    window.addEventListener(TOKEN_CHANGED_EVENT, changed);
+    const stop = keepDeviceTokenSynced(session);
+    await flush();
+    expect(changed).not.toHaveBeenCalled();
+    expect(registerDevice).toHaveBeenCalledWith(expect.objectContaining({ deviceToken: 'token-pwa' }));
+    stop();
+    window.removeEventListener(TOKEN_CHANGED_EVENT, changed);
+  });
+
+  it('does not sign out when the quiet hand-over fails and there is no baseline', async () => {
+    getPushToken.mockResolvedValue('token-pwa');
+    registerDevice.mockRejectedValue(new Error('offline'));
+    updateSalonProfile.mockRejectedValue(new Error('offline'));
+    const changed = vi.fn();
+    window.addEventListener(TOKEN_CHANGED_EVENT, changed);
+    const stop = keepDeviceTokenSynced(session);
+    await flush();
+    expect(changed).not.toHaveBeenCalled();
     stop();
     window.removeEventListener(TOKEN_CHANGED_EVENT, changed);
   });
@@ -143,6 +174,23 @@ describe('token change after login (browser tab → installed app)', () => {
     await flush();
     expect(registerDevice).not.toHaveBeenCalled();
     expect(changed).not.toHaveBeenCalled();
+    stop();
+    window.removeEventListener(TOKEN_CHANGED_EVENT, changed);
+  });
+
+  it('holds the sign-out while a booking request is being answered, then asks on the next check', async () => {
+    rememberLoginToken(session, 'token-login');
+    getPushToken.mockResolvedValue('token-pwa');
+    const changed = vi.fn();
+    window.addEventListener(TOKEN_CHANGED_EVENT, changed);
+    holdRelogin(true);
+    const stop = keepDeviceTokenSynced(session);
+    await flush();
+    expect(changed).not.toHaveBeenCalled();
+    holdRelogin(false);
+    document.dispatchEvent(new Event('visibilitychange'));
+    await flush();
+    expect(changed).toHaveBeenCalledTimes(1);
     stop();
     window.removeEventListener(TOKEN_CHANGED_EVENT, changed);
   });
