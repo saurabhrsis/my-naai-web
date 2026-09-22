@@ -190,7 +190,15 @@ A dedicated authenticated endpoint such as `POST /api/notifications/register-dev
 }
 ```
 
-The current portal sends the token during the auth flow, but this endpoint is useful when a browser token rotates or the user changes notification permission. If the backend requires only one token field, make sure a web login does not disable the user’s mobile notifications by overwriting the mobile token.
+**Login is the primary registration — and it now always carries the live token.** The backend stores the `deviceToken` from OTP verify / onboarding / salon creation and sends every notification to it, so those three requests now re-read the browser's *current* FCM token (`getToken()` with a few patient retries while the worker starts) instead of a value banked minutes earlier or a cached `FCM_TOKEN` that may have rotated. This is what makes a fresh sign-in reliably "register" a phone, tablet or laptop.
+
+**The portal also keeps that token current after login.** `src/lib/deviceToken.js` posts `{ deviceToken, platform: 'web', userType, userId }` to `POST /api/notifications/register-device` (with the session's bearer token) whenever the signed-in account's token changes: on app start when permission is already granted, the moment a token lands after the user allows notifications from the Account card, when the token rotates, and when the app returns to the foreground. The same `(account, token)` pair is never sent twice, and a server that answers 404 is remembered for the session so the portal stops asking.
+
+This matters because the auth flow is the only place the token used to reach the server. A salon who signed in first and allowed notifications afterwards, or whose browser token rotated, or who signed in on a laptop after the phone, had a **granted permission and a server that could not reach them** — the classic "permission is given but no notification arrives".
+
+When the server answers 404 for `register-device`, the portal falls back to the profile-update endpoints the mobile app already has — `POST /api/salons/update-salon` `{ salonId, deviceToken }` for a salon and `POST /api/users/update` `{ userId, deviceToken }` for a customer — which write the same `deviceToken` column login writes. **No backend change is required** for the fallback; the dedicated endpoint is only needed if you want per-device (multi-token) storage. The **Turn on alerts** button on both Account screens sends the token the moment it is minted, and the Notification status card shows a **Server has this token** line.
+
+A drop-in Express handler is in `backend/registerDevice.js`. It writes to the existing single `deviceToken` column, or to a `DeviceToken` table when the project has one (recommended for salons that use the phone and the laptop together). If the backend keeps one token field, make sure a web login does not disable the user’s mobile notifications by overwriting the mobile token.
 ## 4.2 On-device notification diagnostics
 
 "Notifications are not working" can come from five different layers — HTTPS, the Firebase build config, the browser permission, the messaging service worker and the FCM token — spread across the browser, the deployment and the backend. Both Account screens (salon and customer) therefore render a collapsible **Notification status** card (`src/components/NotificationDiagnostics.jsx`) that names the failing layer on the device the person is holding.
@@ -336,3 +344,34 @@ Open the Account screen (salon or customer) and expand **Alerts & permissions**.
 - A stale cached worker from before this fix still lets the SDK swallow the click; unregister it and reload.
 - If the backend sets `webpush.fcm_options.link`, that link must be same-origin, otherwise the SDK refuses to open it.
 
+
+## Token change after login (browser tab → installed app)
+
+The backend learns a device token at **login** (`verify-otp` / `createSalon`)
+and sends every booking request to that token. An installed PWA has its own
+push subscription, so a salon that signed in from the browser tab and then
+opened the installed app is carrying a session whose token the backend has
+never seen.
+
+What the web app does about it (`src/lib/deviceToken.js`):
+
+1. The token sent with login is banked as `FCM_TOKEN_LOGIN` (`rememberLoginToken`).
+2. `keepDeviceTokenSynced` compares the live Firebase token against it on
+   start, on focus and whenever the token rotates.
+3. If they differ, it first tries a quiet hand-over (`register-device`, then the
+   profile-update fallback). Success just updates the banked token.
+4. If the hand-over cannot be confirmed, it dispatches
+   `mynaai:device-token-changed`; `AppShell` signs the user out and opens the
+   sign-in screen with a notice explaining why. The next OTP login carries the
+   new token, and the backend is back in sync.
+
+Guard rails (so this can never become a blocker):
+
+- No banked login token (session from before this shipped, or a login that
+  could not read a token) → never signs out; only the quiet hand-over runs.
+- At most one sign-out per new token (`mynaai:relogin-asked-for-token`), so a
+  login that again cannot read the token cannot loop.
+- The sign-out is held while a booking request is being answered (the alert
+  card or the request screen) and re-checked on the next focus.
+- Nothing depends on the network; offline changes nothing.
+- Logout clears the banked token, so a fresh login always sets a new baseline.

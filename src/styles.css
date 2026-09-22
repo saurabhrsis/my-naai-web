@@ -1429,7 +1429,7 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
    announcement. It rides above the toast (same dock, column-reverse) so the two
    can never cover each other, and it keeps its 60-second countdown on whichever
    screen the salon happens to be on. */
-.alert-dock { position: fixed; z-index: 160; right: max(12px, var(--safe-right)); bottom: max(82px, calc(var(--safe-bottom) + 78px)); left: max(12px, var(--safe-left)); display: flex; flex-direction: column-reverse; align-items: center; gap: 10px; pointer-events: none; }
+.alert-dock { position: fixed; z-index: 300; right: max(12px, var(--safe-right)); bottom: max(82px, calc(var(--safe-bottom) + 78px)); left: max(12px, var(--safe-left)); display: flex; flex-direction: column-reverse; align-items: center; gap: 10px; pointer-events: none; }
 .alert-dock > * { pointer-events: auto; }
 .booking-alert { width: 100%; max-width: 520px; padding: 13px; border: 1px solid rgba(232, 185, 126, .42); border-radius: 18px; background: linear-gradient(150deg, #212826, #161b1a 72%); box-shadow: 0 22px 60px rgba(0, 0, 0, .55); animation: confirm-rise .26s cubic-bezier(.2, .9, .25, 1) both; }
 .booking-alert-top { display: flex; align-items: center; gap: 10px; }
@@ -1978,3 +1978,30 @@ img.image-fallback-tile {
 .guest-buzzer-test { max-width: 960px; margin: 26px auto 4px; }
 .partner-buzzer { margin: 26px 0 6px; }
 .partner-buzzer .buzzer-test-card { max-width: none; }
+
+/* Notifications tab — booking request cards with the salon's 60-second answer window. */
+.notification-request-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.notification-countdown { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 20px; border: 1px solid rgba(232,185,126,.35); color: var(--gold); background: rgba(232,185,126,.08); font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.notification-countdown.timer-warning { border-color: rgba(242,123,116,.5); color: var(--red); background: rgba(242,123,116,.1); animation: notification-pulse 1s ease-in-out infinite; }
+@keyframes notification-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+.notification-card.notification-request-open { border-color: rgba(232,185,126,.55); box-shadow: 0 0 0 1px rgba(232,185,126,.18), 0 12px 30px rgba(0,0,0,.28); }
+.notification-result-pill { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 20px; font-size: 10px; font-weight: 700; border: 1px solid var(--line); color: var(--muted-light); background: rgba(255,255,255,.04); }
+.notification-result-pill.tone-ok { color: var(--green); border-color: rgba(120,220,160,.35); background: rgba(120,220,160,.1); }
+.notification-result-pill.tone-bad { color: #ffb3ad; border-color: rgba(242,123,116,.35); background: rgba(242,123,116,.1); }
+.notification-result-pill.tone-warn { color: var(--gold); border-color: rgba(232,185,126,.35); background: rgba(232,185,126,.1); }
+.notification-result-text { margin: 8px 0 0 !important; padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,.04); border: 1px dashed var(--line); color: var(--muted-light) !important; font-size: 11px !important; }
+.notification-card.notification-request-muted { opacity: .88; }
+.notification-action-btn svg { flex: none; }
+.notification-action-btn .spinner { flex: none; }
+
+/* Delay picker inside the booking alert card. */
+.booking-alert-delay { margin-top: 11px; padding: 10px; border: 1px solid rgba(232,185,126,.28); border-radius: 12px; background: rgba(232,185,126,.06); }
+.booking-alert-delay p { margin: 0 0 8px; color: var(--muted-light); font-size: 11px; line-height: 1.45; }
+.booking-alert-delay-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.booking-alert-delay .booking-alert-more { margin-top: 8px; }
+
+/* Login notice — why the app signed the user out (notification token changed). */
+.form-notice { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 12px; padding: 11px 12px; border: 1px solid rgba(232,185,126,.35); border-radius: 12px; background: rgba(232,185,126,.08); color: var(--white); font-size: 12px; line-height: 1.5; }
+.form-notice svg { flex: none; margin-top: 1px; color: var(--gold); }
+.form-notice span { flex: 1; }
+.form-notice button { flex: none; padding: 2px; color: var(--muted); background: transparent; }

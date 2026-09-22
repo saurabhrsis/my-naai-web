@@ -1281,6 +1281,9 @@ describe('Login permission flow', () => {
 
     await act(async () => { typeMobile('9876543210'); });
     await act(async () => { submitPhone(); });
+    // Allow was just tapped: the token is minted with a few patient retries
+    // (the server stores whatever login carries) before the OTP is requested.
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 2300)); });
     await flush();
     await act(async () => { typeOtp('123456'); });
     await act(async () => { submitForm(); });
@@ -1722,7 +1725,7 @@ describe('the in-app booking request alert', () => {
     vi.clearAllMocks();
   });
 
-  it('offers Accept, Reject and Update time the moment a request arrives', async () => {
+  it('offers Accept, Reject and Delay the moment a request arrives', async () => {
     await mount();
     await deliver({ type: 'BOOKING_REQUEST', notification: { title: 'New booking request', body: 'Riya wants a fade' }, data: { type: 'BOOKING_REQUEST', bookingRequestId: 'req-21' } });
 
@@ -1730,7 +1733,7 @@ describe('the in-app booking request alert', () => {
     expect(card).toBeTruthy();
     expect(byText('Accept')).toBeTruthy();
     expect(byText('Reject')).toBeTruthy();
-    expect(byText('Update time')).toBeTruthy();
+    expect(byText('Delay')).toBeTruthy();
   });
 
   it('answers from the card without leaving the screen the salon was on', async () => {
@@ -1784,6 +1787,20 @@ describe('the in-app booking request alert', () => {
       delete globalThis.BroadcastChannel;
       FakeChannel.instances.length = 0;
     }
+  });
+
+  it('signs the salon out, with a reason, when this device\u2019s token no longer matches the login token', async () => {
+    // Browser tab → installed app: the PWA mints its own push token while the
+    // session it inherited points the backend at the old one. When the quiet
+    // hand-over cannot be confirmed, the app asks for one fresh OTP login.
+    await mount();
+    expect(container.querySelector('.queue-screen, .screen')).toBeTruthy();
+    await act(async () => { window.dispatchEvent(new CustomEvent('mynaai:device-token-changed', { detail: { token: 'pwa-token', previous: 'tab-token' } })); });
+    await flush();
+    expect(localStorage.getItem('mynaai')).toBeNull();
+    expect(container.textContent).toContain('sign in again');
+    expect(container.querySelector('.form-notice')).toBeTruthy();
+    expect(container.textContent).toContain('Salon partner');
   });
 
   it('does not stack a second copy of the request the salon already has open', async () => {

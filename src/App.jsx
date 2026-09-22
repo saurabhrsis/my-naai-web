@@ -8,6 +8,7 @@ import {
   Download,
   HelpCircle,
   History,
+  BellRing,
   Info,
   LogOut,
   MapPin,
@@ -44,6 +45,7 @@ import { BOOKING_ALERT_WINDOW_MS, BookingRequestAlert } from './components/Booki
 // The deviceToken rule is shared (lib/apiPayload) so the Alerts & permissions
 // card's end-to-end test alert follows the same mobile contract as sign-in.
 import { withDeviceToken } from './lib/apiPayload';
+import { TOKEN_CHANGED_EVENT, clearDeviceTokenSync, holdRelogin, keepDeviceTokenSynced, rememberLoginToken } from './lib/deviceToken';
 import { alertIdentity, claimAlertDelivery, playBuzzer, unlockBuzzer } from './lib/buzzer';
 import { resetLiveUpdatesSocket } from './lib/socket';
 import { armStoredReminders } from './lib/reminders';
@@ -104,6 +106,11 @@ const SALON_NAV = [
 // that isolates Web Storage, which iOS does). Reading here is deliberately
 // forgiving — a session that lost one of its companion keys is repaired rather
 // than treated as "please log in again".
+// Shown once on the login form after the shell signed the user out because
+// this device's notification token changed (browser tab → installed app).
+export const RELOGIN_NOTICE_KEY = 'mynaai:relogin-notice';
+export const TOKEN_CHANGED_NOTICE = 'You opened My Naai on a new app or browser, so booking alerts need to be linked to this one. Please sign in again — it takes one OTP and your alerts will work here.';
+
 function readStoredSession() {
   const stored = readLocalSession();
   if (!stored) return null;
@@ -193,14 +200,27 @@ export function resolveResumeRoute(role, hash) {
 // retryable; they are not a toll gate on the way in. If the API still insists on
 // a deviceToken, `isDeviceTokenError` recognises the refusal and the alerts
 // sheet answers it with one tap plus an automatic retry (see AuthFlow).
-async function resolveDeviceToken() {
+// The FCM token the login request carries. The backend stores THIS value and
+// sends every notification to it, so it must be the browser's CURRENT token —
+// Firebase's getToken() returns the live one (and rotates a dead one), which is
+// why a cached FCM_TOKEN is only ever the fallback, never the first choice.
+// A slow worker start-up is retried for a few seconds: a login is the one
+// moment the server learns the token, so it is worth waiting for.
+const LOGIN_TOKEN_ATTEMPTS = 3;
+const LOGIN_TOKEN_RETRY_MS = 1000;
+async function resolveDeviceToken({ patient = false } = {}) {
   if (!isPushConfigured()) return '';
-  try {
-    return (await getPushToken({ requestPermission: false })) || '';
-  } catch (error) {
-    console.debug(getErrorMessage(error, 'Could not read the browser notification token.'));
-    return '';
+  const attempts = patient ? LOGIN_TOKEN_ATTEMPTS : 1;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const token = await getPushToken({ requestPermission: false });
+      if (token) return token;
+    } catch (error) {
+      console.debug(getErrorMessage(error, 'Could not read the browser notification token.'));
+    }
+    if (attempt < attempts - 1) await new Promise(resolve => setTimeout(resolve, LOGIN_TOKEN_RETRY_MS));
   }
+  try { return localStorage.getItem('FCM_TOKEN') || ''; } catch { return ''; }
 }
 
 // The provider sits above the auth flow *and* the signed-in shell: logout is
@@ -352,7 +372,7 @@ function AppRoot() {
     setRoute({ name: nextRoute, params: nextParams });
     window.history.replaceState({}, '', routeToPath(nextRoute, nextParams));
   }, []);
-  const logout = useCallback(() => { clearSession(); resetLiveUpdatesSocket(); setSession(null); setRoute({ name: 'home', params: {} }); window.history.replaceState({}, '', '/'); }, []);
+  const logout = useCallback(() => { clearDeviceTokenSync(); clearSession(); resetLiveUpdatesSocket(); setSession(null); setRoute({ name: 'home', params: {} }); window.history.replaceState({}, '', '/'); }, []);
   const updateSessionUser = useCallback((user, sessionPatch = {}) => setSession(current => {
     if (!current) return current;
     const nextUser = { ...current.user, ...user };
@@ -410,11 +430,31 @@ function AppRoot() {
       }
     };
     const onSessionExpired = () => { deletePushToken().catch(error => console.debug(getErrorMessage(error, 'Could not clear the browser notification token.'))); resetLiveUpdatesSocket(); setSession(null); setRoute({ name: 'home', params: {} }); };
+    // This device's notification token is no longer the one the backend has
+    // (typically: the salon opened the installed app after signing in from
+    // the browser tab — the app has its own push subscription) and the quiet
+    // re-sync could not hand it over. The backend only reliably learns a token
+    // from login, so sign out and bring the user straight back to sign in;
+    // the next OTP carries the new token. The current token stays banked so
+    // the login can send it without another permission prompt.
+    const onTokenChanged = () => {
+      const current = readStoredSession();
+      if (!current) return;
+      clearDeviceTokenSync();
+      clearSession();
+      resetLiveUpdatesSocket();
+      try { sessionStorage.setItem(RELOGIN_NOTICE_KEY, TOKEN_CHANGED_NOTICE); } catch { /* storage blocked */ }
+      setSession(null);
+      setRoute({ name: 'login', params: { role: current.role, reason: 'device-token' } });
+      window.history.replaceState({}, '', routeToPath('login', { role: current.role }));
+    };
     window.addEventListener('storage', onStorage);
     window.addEventListener('mynaai:session-expired', onSessionExpired);
+    window.addEventListener(TOKEN_CHANGED_EVENT, onTokenChanged);
     return () => {
       window.removeEventListener('storage', onStorage);
       window.removeEventListener('mynaai:session-expired', onSessionExpired);
+      window.removeEventListener(TOKEN_CHANGED_EVENT, onTokenChanged);
     };
   }, []);
   const install = async () => {
@@ -578,6 +618,15 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
   const [pushToken, setPushToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // A sign-out the app itself performed (notification token changed) explains
+  // itself here, once, so the salon knows why they are looking at the OTP form.
+  const [notice, setNotice] = useState(() => {
+    try {
+      const value = sessionStorage.getItem(RELOGIN_NOTICE_KEY) || '';
+      if (value) sessionStorage.removeItem(RELOGIN_NOTICE_KEY);
+      return value;
+    } catch { return ''; }
+  });
   const [alertSheet, setAlertSheet] = useState({ open: false, state: 'needs-permission', required: false });
   // A refused sign-in (the API asked for a deviceToken) is retried automatically
   // the moment the alerts sheet lands a token, so the visitor taps Allow once and
@@ -608,9 +657,9 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
   //   4. Blocked, unsupported or an iPhone that needs the Home Screen install →
   //      no popup can help. Return '' and let sign-in continue; if the API
   //      insists on a token, the alerts sheet answers it with the exact fix.
-  const prepareDeviceToken = useCallback(async () => {
+  const prepareDeviceToken = useCallback(async ({ fresh = false } = {}) => {
     if (!isPushConfigured()) return '';
-    if (pushToken) return pushToken;
+    if (pushToken && !fresh) return pushToken;
     if (alertsDeclined.current) return '';
     // Sync gates first — no await before the ask, so the gesture survives.
     if ((isIosDevice() && !isIosPwaInstalled()) || isEmbeddedFrame()) return '';
@@ -619,21 +668,14 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
     if (snapshot === 'default') {
       const granted = await requestNotifications();
       if (granted !== 'granted') return '';
-      const token = await resolveDeviceToken();
+      const token = await resolveDeviceToken({ patient: true });
       if (token) setPushToken(token);
       return token || '';
     }
-    // Snapshot says granted (or the browser has no snapshot to give): try the
-    // banked token first, then mint silently. No popup is needed on this path.
-    try {
-      const cached = localStorage.getItem('FCM_TOKEN');
-      if (cached) {
-        setPushToken(cached);
-        return cached;
-      }
-    } catch {
-      // Private mode: fall through to minting.
-    }
+    // Snapshot says granted (or the browser has no snapshot to give): mint the
+    // LIVE token. The banked FCM_TOKEN is only used when Firebase cannot answer
+    // right now — sending a stale token here is exactly how a salon ends up
+    // with permission granted and no notifications.
     const token = await resolveDeviceToken();
     if (token) setPushToken(token);
     return token || '';
@@ -727,7 +769,9 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
     if (!/^\d{6}$/.test(otp)) return setError('Enter the 6-digit OTP.');
     setBusy(true); setError('');
     try {
-      const deviceToken = pushToken || await prepareDeviceToken();
+      // The verify call is what the server stores the token from. Re-read the
+      // live token here rather than trusting the one banked at the OTP step.
+      const deviceToken = (await prepareDeviceToken({ fresh: true })) || pushToken;
       setPushToken(deviceToken);
       const payload = withDeviceToken({ phoneNumber: mobile, otp }, deviceToken);
       let verifyMode = salonAuthMode;
@@ -761,6 +805,9 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
       }
       const userId = user.userId || user.salon?.salonId || user.salonId;
       if (role === 'SALON' && !userId) throw new Error('Salon login completed without a salon ID. Please try again.');
+      // This is the token the backend just stored; every later "did the token
+      // change?" check compares against it.
+      rememberLoginToken({ role, userId }, deviceToken);
       const isNewSalon = role === 'SALON' && (flagIsTrue(response.isNewSalon) || flagIsTrue(user.isNewSalon) || flagIsFalse(user.profileCompleted) || flagIsFalse(user.salon?.profileCompleted));
       onComplete({ role, token: user.token, user, userId, isNewSalon });
     } catch (verifyError) {
@@ -774,11 +821,12 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
     if (!name.trim()) return setError('Tell us your name to finish setting up.');
     setBusy(true); setError('');
     try {
-      const deviceToken = pushToken || await prepareDeviceToken();
+      const deviceToken = (await prepareDeviceToken({ fresh: true })) || pushToken;
       setPushToken(deviceToken);
       const response = await api.userOnBoard(withDeviceToken({ phoneNumber: mobile, fullName: name.trim() }, deviceToken));
       if (response?.status !== 'SUCCESS') throw new Error(response?.message || 'Could not create account.');
       if (!response.data?.token) throw new Error('Your account was created, but no login session was returned. Please try again.');
+      rememberLoginToken({ role: 'USER', userId: response.data?.userId }, deviceToken);
       onComplete({ role: 'USER', token: response.data.token, user: response.data, userId: response.data?.userId });
     } catch (createError) {
       if (isDeviceTokenError(createError)) await requireAlertsFor(() => createAccount({ preventDefault() {} }));
@@ -789,7 +837,7 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
 
   if (view === 'register') return <SalonRegistration initialData={salonRegistrationData} onBack={() => { setSalonRegistrationData(null); setView('login'); }} onComplete={onComplete} notifyInstall={notifyInstall} />;
 
-  return <div className="auth-page login-page"><div className="auth-visual"><div className="auth-visual-image" /><div className="auth-image-shade" /><div className="auth-visual-content"><Brand light /><div><span className="eyebrow">SALON & GROOMING, REIMAGINED</span><h1>Less waiting.<br /><em>More you.</em></h1><p>Book a great salon nearby and make the time yours.</p></div><div className="visual-quote"><span></span><p>Your time is valuable. We’re here to give it back.</p></div></div></div><div className="auth-form-panel"><div className="mobile-auth-brand"><Brand /></div><div className="auth-form-wrap">{onBrowseBack && <button className="login-back" onClick={onBrowseBack}><ChevronRight size={15} className="rotate-180" /> Browse salons</button>}<span className="eyebrow">WELCOME TO MY NAAI</span><span className="login-hero-badge"><Sparkles size={12} /> {role === 'USER' ? 'Customer login' : 'Salon partner'}</span><h1>{step === 'phone' ? role === 'USER' ? 'Login to book your favorite salon' : 'Grow your salon with My Naai' : step === 'new-user' ? 'One last thing.' : 'Check your phone.'}</h1><p className="auth-subtitle">{step === 'phone' ? role === 'USER' ? 'Sign in and book your next visit.' : 'Sign in and never miss a booking.' : step === 'new-user' ? `Let\u2019s create your My Naai profile for +91 ${mobile}.` : `Enter the 6-digit code sent to +91 ${mobile}.`}</p>{step === 'phone' && <LoginPermissionCard className="login-perm-card" onToken={token => { if (token) { setPushToken(token); alertsDeclined.current = false; } }} onDismiss={() => { alertsDeclined.current = true; }} />}{step === 'phone' && <BuzzerTestCard className="login-buzzer-card" />}{step === 'phone' && <div className="login-actions"><InstallAppButton onInstall={notifyInstall} /></div>}{step === 'phone' && <div className="role-switch"><button className={role === 'USER' ? 'active' : ''} onClick={() => { setRole('USER'); setError(''); }}><CircleUserRound size={16} /> Customer</button><button className={role === 'SALON' ? 'active' : ''} onClick={() => { setRole('SALON'); setError(''); }}><Store size={16} /> Salon partner</button></div>}{error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}{step === 'phone' && <form onSubmit={requestOtp}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" autoComplete="tel" maxLength="10" value={mobile} onChange={event => setMobile(event.target.value.replace(/\D/g, ''))} placeholder="Enter 10-digit number" autoFocus /></div></Field><Button type="submit" loading={busy}>Continue with OTP <ChevronRight size={17} /></Button></form>}{step === 'otp' && <form onSubmit={verify}><Field label="One-time password"><input className="otp-input" inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="· · · · · ·" autoFocus /></Field><Button type="submit" loading={busy}>Verify code <ChevronRight size={17} /></Button><button className="resend-link" type="button" onClick={requestOtp}>Resend code</button><button className="back-form-link" type="button" onClick={() => { setStep('phone'); setOtp(''); setError(''); }}>Use a different number</button></form>}{step === 'new-user' && <form onSubmit={createAccount}><Field label="Your name"><input value={name} onChange={event => setName(event.target.value)} placeholder="How should we call you?" autoFocus /></Field><Button type="submit" loading={busy}>Create my account <ChevronRight size={17} /></Button></form>}</div><p className="auth-legal">By continuing, you agree to My Naai’s <button type="button" onClick={() => softNavigate('/terms')}>Terms &amp; Conditions</button> and <button type="button" onClick={() => softNavigate('/privacy-policy')}>Privacy Policy</button>.</p></div>
+  return <div className="auth-page login-page"><div className="auth-visual"><div className="auth-visual-image" /><div className="auth-image-shade" /><div className="auth-visual-content"><Brand light /><div><span className="eyebrow">SALON & GROOMING, REIMAGINED</span><h1>Less waiting.<br /><em>More you.</em></h1><p>Book a great salon nearby and make the time yours.</p></div><div className="visual-quote"><span></span><p>Your time is valuable. We’re here to give it back.</p></div></div></div><div className="auth-form-panel"><div className="mobile-auth-brand"><Brand /></div><div className="auth-form-wrap">{onBrowseBack && <button className="login-back" onClick={onBrowseBack}><ChevronRight size={15} className="rotate-180" /> Browse salons</button>}<span className="eyebrow">WELCOME TO MY NAAI</span><span className="login-hero-badge"><Sparkles size={12} /> {role === 'USER' ? 'Customer login' : 'Salon partner'}</span><h1>{step === 'phone' ? role === 'USER' ? 'Login to book your favorite salon' : 'Grow your salon with My Naai' : step === 'new-user' ? 'One last thing.' : 'Check your phone.'}</h1><p className="auth-subtitle">{step === 'phone' ? role === 'USER' ? 'Sign in and book your next visit.' : 'Sign in and never miss a booking.' : step === 'new-user' ? `Let\u2019s create your My Naai profile for +91 ${mobile}.` : `Enter the 6-digit code sent to +91 ${mobile}.`}</p>{step === 'phone' && <LoginPermissionCard className="login-perm-card" onToken={token => { if (token) { setPushToken(token); alertsDeclined.current = false; } }} onDismiss={() => { alertsDeclined.current = true; }} />}{step === 'phone' && <BuzzerTestCard className="login-buzzer-card" />}{step === 'phone' && <div className="login-actions"><InstallAppButton onInstall={notifyInstall} /></div>}{step === 'phone' && <div className="role-switch"><button className={role === 'USER' ? 'active' : ''} onClick={() => { setRole('USER'); setError(''); }}><CircleUserRound size={16} /> Customer</button><button className={role === 'SALON' ? 'active' : ''} onClick={() => { setRole('SALON'); setError(''); }}><Store size={16} /> Salon partner</button></div>}{notice && !error && <div className="form-notice" role="status"><BellRing size={16} /><span>{notice}</span><button type="button" onClick={() => setNotice('')} aria-label="Dismiss"><X size={14} /></button></div>}{error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}{step === 'phone' && <form onSubmit={requestOtp}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" autoComplete="tel" maxLength="10" value={mobile} onChange={event => setMobile(event.target.value.replace(/\D/g, ''))} placeholder="Enter 10-digit number" autoFocus /></div></Field><Button type="submit" loading={busy}>Continue with OTP <ChevronRight size={17} /></Button></form>}{step === 'otp' && <form onSubmit={verify}><Field label="One-time password"><input className="otp-input" inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="· · · · · ·" autoFocus /></Field><Button type="submit" loading={busy}>Verify code <ChevronRight size={17} /></Button><button className="resend-link" type="button" onClick={requestOtp}>Resend code</button><button className="back-form-link" type="button" onClick={() => { setStep('phone'); setOtp(''); setError(''); }}>Use a different number</button></form>}{step === 'new-user' && <form onSubmit={createAccount}><Field label="Your name"><input value={name} onChange={event => setName(event.target.value)} placeholder="How should we call you?" autoFocus /></Field><Button type="submit" loading={busy}>Create my account <ChevronRight size={17} /></Button></form>}</div><p className="auth-legal">By continuing, you agree to My Naai’s <button type="button" onClick={() => softNavigate('/terms')}>Terms &amp; Conditions</button> and <button type="button" onClick={() => softNavigate('/privacy-policy')}>Privacy Policy</button>.</p></div>
       <PermissionSheet
         open={alertSheet.open}
         state={alertSheet.state}
@@ -927,6 +975,10 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
   // the one alert drawn as a card with buttons (and a countdown) instead of a
   // toast that disappears. See src/components/BookingRequestAlert.jsx.
   const [bookingAlert, setBookingAlert] = useState(null);
+  // Booking request ids this shell has already surfaced (push, relay or poll).
+  const seenRequestIds = useRef(new Set());
+  const bookingAlertRef = useRef(null);
+  useEffect(() => { bookingAlertRef.current = bookingAlert; }, [bookingAlert]);
   const dismissBookingAlert = useCallback(() => setBookingAlert(null), []);
   const resolveBookingAlert = useCallback(() => {
     setBookingAlert(null);
@@ -1112,11 +1164,16 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
           },
         });
         notify('info', `${message.title}${message.body && message.body !== message.title ? ` — ${message.body}` : ''}`);
+        // The Notifications tab refreshes its list on this, so a request that
+        // arrives while the salon is looking at it appears with its countdown
+        // and Accept / Reject / Delay buttons without a pull-to-refresh.
+        try { window.dispatchEvent(new CustomEvent('mynaai:notification', { detail: { type: message.type, data: message.data } })); } catch { /* ignore */ }
         // A new booking request gets the actionable card: the mobile app's 60
         // seconds, the three answers, on whatever screen the salon is on. While
         // the plan is locked the card stays away — renewal is the only action
         // that screen allows, and the OS notification above still says a request
         // came in.
+        if (String(session.role).toUpperCase() === 'SALON' && message.type === 'BOOKING_REQUEST') seenRequestIds.current.add(String(message.data.bookingRequestId || message.data.bookingId || ''));
         if (!isLocked && String(session.role).toUpperCase() === 'SALON' && message.type === 'BOOKING_REQUEST' && !isOnBookingRequestScreen(message.data.bookingRequestId)) {
           setBookingAlert({ data: message.data, sentAt: arrivedAt });
         }
@@ -1127,6 +1184,11 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
         // Suppress buzzer navigation when locked — renewal is the only focus.
         if (isLocked) return;
         if (!actionable) return;
+        // On the Notifications tab the request is already in front of the salon
+        // with its own Accept / Reject / Delay buttons (and the alert card is
+        // docked below); yanking them to another screen would only lose the
+        // list they were reading.
+        if (routeName.current === 'notifications' && String(session.role).toUpperCase() === 'SALON' && message.type === 'BOOKING_REQUEST') return;
         const next = getNotificationRoute(message.data, session.role);
         if (!next.name || next.name === routeName.current) return;
         safeNavigate(next.name, next.params);
@@ -1139,6 +1201,14 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
     });
     return () => { cancelled = true; unsubscribe(); };
   }, [safeNavigate, notify, session.role, session.userId]);
+
+  // The server can only notify a token it knows. Sign-in sends one, but a token
+  // allowed or rotated AFTER sign-in — the common web case — never reached the
+  // API before, which is the "permission granted, no notification" report.
+  useEffect(() => keepDeviceTokenSynced(sessionRef.current), [session.role, session.userId]);
+  // Never sign the salon out in the middle of answering a booking request.
+  const answeringRequest = Boolean(bookingAlert) || route.name === 'bookingRequest';
+  useEffect(() => { holdRelogin(answeringRequest); return () => holdRelogin(false); }, [answeringRequest]);
 
   // A booking request that arrived while this app was in the background never
   // reached the handler above — Firebase hands a foreground message only to a
@@ -1156,6 +1226,7 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
       // Only a live alert opens the card. A relay delivered late — a queued
       // channel message, a tab that was still loading — is not news any more.
       if (!sentAt || Date.now() - sentAt > BOOKING_ALERT_WINDOW_MS) return;
+      seenRequestIds.current.add(String(data.bookingRequestId || data.bookingId || ''));
       if (isOnBookingRequestScreen(data.bookingRequestId)) return;
       setBookingAlert({ data, sentAt });
     };
@@ -1171,6 +1242,52 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
       try { channel?.close(); } catch { /* ignore */ }
     };
   }, [session.role]);
+
+  // Belt and braces: the card above is raised by a push message. When that
+  // message never reaches the page — a suspended tab, a throttled background
+  // worker, a browser that drops foreground messages — the request still sits
+  // in the salon's notification list. Poll that list while the app is visible
+  // and raise the SAME card for a request that is still inside its minute and
+  // has not already been handled here. It is a safety net, not the main path,
+  // so it runs every 15 s, only for salons, and never while the plan is locked.
+  useEffect(() => {
+    if (!isSalon || !session.userId) return undefined;
+    let cancelled = false;
+    let timer = 0;
+    const check = async () => {
+      if (cancelled || document.visibilityState !== 'visible' || subscriptionGateRef.current === 'locked') return;
+      if (bookingAlertRef.current) return; // one card at a time; the open one is the freshest
+      try {
+        const response = await api.salonNotificationList({ salonId: session.userId, page: 1 });
+        const items = Array.isArray(response?.data) ? response.data : (response?.data?.notifications || response?.data?.notificationList || response?.data?.list || response?.data?.items || []);
+        for (const item of items) {
+          const type = String(item?.type || item?.notificationType || '').toUpperCase();
+          if (type !== 'BOOKING_REQUEST') continue;
+          // Already answered (from another device, or the request screen)?
+          const status = String(item.status || item.bookingStatus || item.requestStatus || '').toUpperCase();
+          if (status && !['PENDING', 'REQUESTED', 'NEW', 'OPEN'].includes(status)) continue;
+          const id = String(item.bookingRequestId || item.bookingId || item.booking_request_id || '');
+          if (!id || seenRequestIds.current.has(id)) continue;
+          const created = item.createdAt || item.created_at || item.timestamp || item.sentAt;
+          let createdMs = created ? new Date(created).getTime() : 0;
+          if (createdMs > 0 && createdMs < 1e12) createdMs *= 1000;
+          if (!createdMs || Date.now() - createdMs > BOOKING_ALERT_WINDOW_MS) { seenRequestIds.current.add(id); continue; }
+          seenRequestIds.current.add(id);
+          if (routeName.current === 'notifications' || isOnBookingRequestScreen(id)) continue;
+          if (!claimAlertDelivery({ alertId: `BOOKING_REQUEST:${id}`, sentAt: createdMs })) continue;
+          playBuzzer({ type: 'BOOKING_REQUEST', alertId: `BOOKING_REQUEST:${id}`, sentAt: createdMs, claimed: true });
+          setBookingAlert({ data: { ...item, type: 'BOOKING_REQUEST', bookingRequestId: id }, sentAt: createdMs });
+          break;
+        }
+      } catch { /* the push path is still the main one */ }
+    };
+    const schedule = () => { timer = window.setInterval(check, 15000); };
+    check();
+    schedule();
+    const onVisible = () => { if (document.visibilityState === 'visible') check(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { cancelled = true; window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
+  }, [isSalon, session.userId]);
 
   // NOTE: deliberately not keyed on `session`. Screens list this callback in the
   // dependency array of their data loader (SalonAccountScreen, SubscriptionScreen)

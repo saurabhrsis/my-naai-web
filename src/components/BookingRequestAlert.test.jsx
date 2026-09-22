@@ -61,7 +61,7 @@ describe('the in-app booking request alert', () => {
     expect(container.textContent).toContain('18:30:00');
     expect(byText('Accept', container)).toBeTruthy();
     expect(byText('Reject', container)).toBeTruthy();
-    expect(byText('Update time', container)).toBeTruthy();
+    expect(byText('Delay', container)).toBeTruthy();
   });
 
   it('accepts the request and clears the OS notification with it', async () => {
@@ -99,17 +99,29 @@ describe('the in-app booking request alert', () => {
     expect(byText('Accept', container)).toBeTruthy();
   });
 
-  it('hands the delay to the request screen, where the minutes are chosen', async () => {
+  it('sends the delay from inside the card — no screen change needed', async () => {
+    const salonDelayBooking = vi.spyOn((await import('../lib/api')).api, 'salonDelayBooking').mockResolvedValue({ status: 'SUCCESS' });
     const navigate = vi.fn();
-    const onDismiss = vi.fn();
-    const { container } = await renderCard({ navigate, onDismiss });
+    const onDone = vi.fn();
+    const { container } = await renderCard({ navigate, onDone });
 
-    await act(async () => { byText('Update time', container).click(); });
+    await act(async () => { byText('Delay', container).click(); });
+    expect(byText('+40 min', container)).toBeTruthy();
+    await act(async () => { byText('+40 min', container).click(); });
     await flush();
 
-    expect(navigate).toHaveBeenCalledWith('bookingRequest', { bookingRequestId: 'req-1', openDelayModal: 'true' });
+    expect(salonDelayBooking).toHaveBeenCalledWith('req-1', 40);
+    expect(navigate).not.toHaveBeenCalled();
     expect(closeNotification).toHaveBeenCalledWith('req-1');
-    expect(onDismiss).toHaveBeenCalled();
+    expect(onDone).toHaveBeenCalledWith('DELAY');
+    salonDelayBooking.mockRestore();
+  });
+
+  it('lets the salon step back out of the delay picker', async () => {
+    const { container } = await renderCard();
+    await act(async () => { byText('Delay', container).click(); });
+    await act(async () => { byText('Back', container).click(); });
+    expect(byText('Accept', container)).toBeTruthy();
   });
 
   it('takes the answers away when the minute is up', async () => {

@@ -210,7 +210,32 @@ function dispatchPlanExpired(data, httpStatus) {
   }));
 }
 
-async function request(path, { method = 'GET', body, params, headers = {}, auth = true, signal } = {}) {
+// No API call may spin forever. A booking-request Accept that never answers
+// (a dropped mobile connection, a proxy that swallowed the request) used to
+// leave the button on its loader indefinitely — the salon could neither retry
+// nor tell whether the customer had been answered. Every request now gives up
+// after this long and surfaces a retryable error instead.
+export const REQUEST_TIMEOUT_MS = 25000;
+
+function withTimeout(signal, timeoutMs) {
+  if (typeof AbortController === 'undefined') return { signal, clear: () => {} };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const forward = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', forward, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    clear: () => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', forward);
+    },
+  };
+}
+
+async function request(path, { method = 'GET', body, params, headers = {}, auth = true, signal, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
   const requestHeaders = { ...headers };
   if (!isFormData && body !== undefined && !requestHeaders['Content-Type']) {
@@ -220,12 +245,27 @@ async function request(path, { method = 'GET', body, params, headers = {}, auth 
   const hasAuthorizationHeader = Object.keys(requestHeaders).some(key => key.toLowerCase() === 'authorization');
   if (auth && token && !hasAuthorizationHeader) requestHeaders.Authorization = `Bearer ${token}`;
 
-  const response = await fetch(`${API_BASE_URL}${path}${queryString(params)}`, {
-    method,
-    headers: requestHeaders,
-    body: body === undefined ? undefined : isFormData || typeof body === 'string' ? body : JSON.stringify(body),
-    signal,
-  });
+  const guard = withTimeout(signal, timeoutMs);
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}${queryString(params)}`, {
+      method,
+      headers: requestHeaders,
+      body: body === undefined ? undefined : isFormData || typeof body === 'string' ? body : JSON.stringify(body),
+      signal: guard.signal,
+    });
+  } catch (error) {
+    guard.clear();
+    const callerAborted = Boolean(signal?.aborted);
+    if (!callerAborted && (error?.name === 'AbortError' || guard.signal?.aborted)) {
+      throw new ApiError('The server took too long to respond. Check your connection and try again.', 0, null);
+    }
+    if (error?.name === 'TypeError') {
+      throw new ApiError('Could not reach My Naai. Check your internet connection and try again.', 0, null);
+    }
+    throw error;
+  }
+  guard.clear();
 
   const text = await response.text();
   let data = null;
@@ -364,6 +404,11 @@ export const api = {
   // before sign-in; a server without the endpoint simply answers 404, which the
   // card reports in plain words instead of failing silently.
   testPush: payload => post('/api/notifications/test-push', payload, { auth: false }),
+  // Keeps the server's copy of this browser's FCM token current for the
+  // signed-in account (see src/lib/deviceToken.js and docs/FIREBASE-WEB-PUSH.md
+  // §4). Without it a token minted AFTER login — the usual web case — is never
+  // known to the server, and "permission granted, no notification" follows.
+  registerDevice: payload => post('/api/notifications/register-device', payload),
 
   uploadImages: formData => post('/api/upload/upload-image', formData, { auth: false }),
   // Friendly aliases for browser code.

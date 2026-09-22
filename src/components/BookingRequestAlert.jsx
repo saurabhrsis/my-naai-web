@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Bell, Check, ChevronRight, Clock3, Info, X } from 'lucide-react';
+import { ArrowLeft, Bell, Check, ChevronRight, Clock3, Info, X } from 'lucide-react';
 import { api } from '../lib/api';
 import { closeNotification } from '../lib/push';
 import { Button, cx, formatDate, getErrorMessage, getInitials } from './Shared';
@@ -28,6 +28,11 @@ export function BookingRequestAlert({ alert = null, notify, navigate, onDone, on
   const [now, setNow] = useState(() => Date.now());
   const [expired, setExpired] = useState(() => Date.now() >= deadline);
   const [busy, setBusy] = useState('');
+  // The +20 / +40 / +60 picker, drawn INSIDE the card so a delay is one tap
+  // away on whatever screen the salon is on — same as Accept and Reject.
+  const [delayOpen, setDelayOpen] = useState(false);
+  const [busyMinutes, setBusyMinutes] = useState(0);
+  const DELAY_OPTIONS = [20, 40, 60];
 
   // The push payload carries the ids, not the story. The request screen's own
   // endpoint fills in the customer and the slot; until it answers, the card
@@ -70,12 +75,13 @@ export function BookingRequestAlert({ alert = null, notify, navigate, onDone, on
         ? await api.salonDelayBooking(bookingRequestId, delayMinutes)
         : await api.bookingRequestOwnerAction(bookingRequestId, { action });
       if (response?.status && response.status !== 'SUCCESS') throw new Error(response.message || 'Could not update request');
-      notify?.('success', action === 'ACCEPT' ? 'Booking accepted.' : action === 'REJECT' ? 'Booking rejected.' : 'Customer notified about the delay.');
+      notify?.('success', action === 'ACCEPT' ? 'Booking accepted.' : action === 'REJECT' ? 'Booking rejected.' : `Customer notified about a ${delayMinutes}-minute delay.`);
       closeNotification(bookingRequestId);
       onDone?.(action);
     } catch (error) {
       notify?.('error', getErrorMessage(error, 'Could not update booking request.'));
       setBusy('');
+      setBusyMinutes(0);
     }
   }, [bookingRequestId, busy, notify, onDone]);
 
@@ -122,12 +128,24 @@ export function BookingRequestAlert({ alert = null, notify, navigate, onDone, on
             <button onClick={() => openRequest(false)}>Open request</button>
           </div>
         ) : (
-          <div className="booking-alert-actions">
-            <Button variant="success" size="small" loading={busy === 'ACCEPT'} onClick={() => answer('ACCEPT')}>Accept <Check size={16} /></Button>
-            <Button variant="danger" size="small" loading={busy === 'REJECT'} onClick={() => answer('REJECT')}>Reject <X size={16} /></Button>
-            <Button variant="secondary" size="small" onClick={() => openRequest(true)}>Update time <Clock3 size={15} /></Button>
-            <button className="booking-alert-more" onClick={() => openRequest(false)}>Details <ChevronRight size={14} /></button>
+          delayOpen ? (
+          <div className="booking-alert-delay" role="group" aria-label="Choose a delay">
+            <p>Running late? The customer will be asked to accept the new time.</p>
+            <div className="booking-alert-delay-options">
+              {DELAY_OPTIONS.map(minutes => (
+                <Button key={minutes} variant="warning" size="small" loading={busy === 'DELAY' && busyMinutes === minutes} disabled={Boolean(busy)} onClick={() => { setBusyMinutes(minutes); answer('DELAY', minutes); }}>+{minutes} min</Button>
+              ))}
+            </div>
+            <button className="booking-alert-more" type="button" disabled={Boolean(busy)} onClick={() => setDelayOpen(false)}><ArrowLeft size={14} /> Back</button>
           </div>
+          ) : (
+          <div className="booking-alert-actions">
+            <Button variant="success" size="small" loading={busy === 'ACCEPT'} disabled={Boolean(busy)} onClick={() => answer('ACCEPT')}>Accept <Check size={16} /></Button>
+            <Button variant="danger" size="small" loading={busy === 'REJECT'} disabled={Boolean(busy)} onClick={() => answer('REJECT')}>Reject <X size={16} /></Button>
+            <Button variant="warning" size="small" disabled={Boolean(busy)} onClick={() => setDelayOpen(true)}>Delay <Clock3 size={15} /></Button>
+            <button className="booking-alert-more" type="button" onClick={() => openRequest(false)}>Details <ChevronRight size={14} /></button>
+          </div>
+          )
         )}
       </div>
     </div>

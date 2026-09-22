@@ -13,6 +13,8 @@ import {
   X,
 } from 'lucide-react';
 import { api, resetPlanExpiredAlert } from '../lib/api';
+import { getPushToken, isPushConfigured } from '../lib/push';
+import { rememberLoginToken } from '../lib/deviceToken';
 import { FREE_ONBOARDING_PLAN, PARTNER_PLANS, RENEWAL_PLANS } from '../lib/planDetails';
 import {
   clearPendingPayment,
@@ -106,8 +108,17 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
       // The OTP endpoint returns a temporary authorization token. It is only
       // sent on this request; the completed response must return the persisted
       // salon session that the portal uses afterwards.
+      // The salon record is created HERE, and this deviceToken is the one the
+      // backend will send every booking request to. The token banked earlier
+      // in the registration flow can be minutes old and, on a slow worker,
+      // even empty — so read the live one now and fall back to the banked one.
+      let deviceToken = String(registration.deviceToken || '').trim();
+      if (isPushConfigured()) {
+        try { deviceToken = (await getPushToken({ requestPermission: false })) || deviceToken; } catch { /* keep the banked token */ }
+      }
       const response = await api.createSalon({
         ...registration,
+        ...(deviceToken ? { deviceToken } : {}),
         planType: plan.id,
         paymentId: payment.paymentId,
         orderId: payment.orderId,
@@ -118,6 +129,9 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
       if (!token) throw new Error('Salon registration completed without a login session. Please try again.');
       const createdSalonId = response.salonId || response.data?.salonId || response.salon?.salonId || response.data?.salon?.salonId;
       if (!createdSalonId) throw new Error('Salon registration completed without a salon ID. Please try again.');
+      // The backend just stored this token against the new salon; bank it as
+      // the login token so the device-token watchdog has the right baseline.
+      rememberLoginToken({ role: 'SALON', userId: createdSalonId }, deviceToken);
       const user = {
         ...registration,
         salonId: createdSalonId,
