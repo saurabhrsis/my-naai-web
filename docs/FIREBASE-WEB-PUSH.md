@@ -344,3 +344,25 @@ Open the Account screen (salon or customer) and expand **Alerts & permissions**.
 - A stale cached worker from before this fix still lets the SDK swallow the click; unregister it and reload.
 - If the backend sets `webpush.fcm_options.link`, that link must be same-origin, otherwise the SDK refuses to open it.
 
+
+## Token change after login (browser tab → installed app)
+
+The backend learns a device token at **login** (`verify-otp` / `createSalon`)
+and sends every booking request to that token. An installed PWA has its own
+push subscription, so a salon that signed in from the browser tab and then
+opened the installed app is carrying a session whose token the backend has
+never seen.
+
+What the web app does about it (`src/lib/deviceToken.js`):
+
+1. The token sent with login is banked as `FCM_TOKEN_LOGIN` (`rememberLoginToken`).
+2. `keepDeviceTokenSynced` compares the live Firebase token against it on
+   start, on focus and whenever the token rotates.
+3. If they differ, it first tries a quiet hand-over (`register-device`, then the
+   profile-update fallback). Success just updates the banked token.
+4. If the hand-over cannot be confirmed, it dispatches
+   `mynaai:device-token-changed`; `AppShell` signs the user out and opens the
+   sign-in screen with a notice explaining why. The next OTP login carries the
+   new token, and the backend is back in sync.
+
+Logout clears the banked token, so a fresh login always sets a new baseline.

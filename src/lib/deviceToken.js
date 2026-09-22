@@ -1,6 +1,6 @@
 import { api } from './api';
 import * as push from './push';
-import { clearSyncedStamp, readDeviceTokenSync as readSyncRecord, readSyncedStamp, syncStamp, writeSyncedStamp } from './deviceTokenSync';
+import { clearLoginToken, clearSyncedStamp, readDeviceTokenSync as readSyncRecord, readLoginToken, readSyncedStamp, syncStamp, writeLoginToken, writeSyncedStamp } from './deviceTokenSync';
 
 // The event lib/push fires when a token lands (its PUSH_TOKEN_EVENT). Read
 // lazily, and by name, so a test that mocks lib/push partially still works.
@@ -44,7 +44,44 @@ function rememberUnsupported() {
 export { syncStamp };
 // The last sync this browser completed, for the diagnostics card.
 export const readDeviceTokenSync = readSyncRecord;
-export const clearDeviceTokenSync = clearSyncedStamp;
+export function clearDeviceTokenSync() {
+  clearSyncedStamp();
+  clearLoginToken();
+}
+
+// Called by the auth flow with the token that was actually put in the login
+// request. Nothing else may write this: it is the server's copy, as far as
+// this browser knows.
+export function rememberLoginToken(session, token) {
+  writeLoginToken(token);
+  if (session && token) writeSyncedStamp(syncStamp(session, token));
+}
+
+// Fired on `window` when this device's token no longer matches the one the
+// backend has, and the quiet re-sync could not fix it. The shell signs the
+// user out with an explanation so the next login registers the new token.
+export const TOKEN_CHANGED_EVENT = 'mynaai:device-token-changed';
+
+// Has the server been told about THIS token for THIS account? True when the
+// login carried it, or a later sync succeeded.
+export function serverHasToken(session, token) {
+  if (!token) return true; // nothing to compare — the permission path reports that
+  if (readLoginToken() === token) return true;
+  return readSyncedStamp() === syncStamp(session, token);
+}
+
+// The one decision this module makes: a live token the server does not have.
+// Try to hand it over quietly; if that cannot be confirmed, ask for a fresh
+// login. A browser tab → installed app move is the textbook case: the PWA has
+// its own push subscription, so its token is new, while the session it
+// inherited still points the backend at the old browser token.
+async function reconcileToken(session, token, { notifyChange }) {
+  if (serverHasToken(session, token)) return 'ok';
+  const result = await syncDeviceToken(session, token, { force: true });
+  if (result === 'synced') return 'synced';
+  notifyChange?.({ token, previous: readLoginToken(), reason: result });
+  return 'changed';
+}
 
 // Send `token` for `session` unless the server already has exactly that pair.
 // Resolves to 'synced' | 'skipped' | 'unsupported' | 'failed'.
@@ -88,7 +125,10 @@ export function keepDeviceTokenSynced(session) {
   try { configured = Boolean(push.isPushConfigured?.()); } catch { configured = false; }
   if (typeof window === 'undefined' || !configured || !session?.userId) return () => {};
   let cancelled = false;
-  const sync = token => { if (!cancelled && token) syncDeviceToken(session, token).catch(() => {}); };
+  const notifyChange = detail => {
+    try { window.dispatchEvent(new CustomEvent(TOKEN_CHANGED_EVENT, { detail })); } catch { /* ignore */ }
+  };
+  const sync = token => { if (!cancelled && token) reconcileToken(session, token, { notifyChange }).catch(() => {}); };
   const onToken = event => sync(event?.detail?.token);
   window.addEventListener(TOKEN_EVENT, onToken);
   const mint = async () => {

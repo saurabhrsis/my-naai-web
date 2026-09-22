@@ -26,3 +26,20 @@ export function readDeviceTokenSync() {
   const [role, userId, ...rest] = value.split(':');
   return { role, userId, token: rest.join(':') };
 }
+
+// The token the backend was handed AT LOGIN (verify / onboard / create-salon)
+// for this session. This is the one the server sends to, so it is the value
+// every later comparison is made against.
+const LOGIN_KEY = 'FCM_TOKEN_LOGIN';
+
+export function writeLoginToken(token) {
+  try { if (token) localStorage.setItem(LOGIN_KEY, String(token)); else localStorage.removeItem(LOGIN_KEY); } catch { /* storage blocked */ }
+}
+
+export function readLoginToken() {
+  try { return localStorage.getItem(LOGIN_KEY) || ''; } catch { return ''; }
+}
+
+export function clearLoginToken() {
+  try { localStorage.removeItem(LOGIN_KEY); } catch { /* storage blocked */ }
+}

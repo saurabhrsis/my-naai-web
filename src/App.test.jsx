@@ -1789,6 +1789,20 @@ describe('the in-app booking request alert', () => {
     }
   });
 
+  it('signs the salon out, with a reason, when this device\u2019s token no longer matches the login token', async () => {
+    // Browser tab → installed app: the PWA mints its own push token while the
+    // session it inherited points the backend at the old one. When the quiet
+    // hand-over cannot be confirmed, the app asks for one fresh OTP login.
+    await mount();
+    expect(container.querySelector('.queue-screen, .screen')).toBeTruthy();
+    await act(async () => { window.dispatchEvent(new CustomEvent('mynaai:device-token-changed', { detail: { token: 'pwa-token', previous: 'tab-token' } })); });
+    await flush();
+    expect(localStorage.getItem('mynaai')).toBeNull();
+    expect(container.textContent).toContain('sign in again');
+    expect(container.querySelector('.form-notice')).toBeTruthy();
+    expect(container.textContent).toContain('Salon partner');
+  });
+
   it('does not stack a second copy of the request the salon already has open', async () => {
     setPath('/bookingRequest?bookingRequestId=req-41');
     await mount();

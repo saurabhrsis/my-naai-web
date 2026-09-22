@@ -1999,3 +1999,9 @@ img.image-fallback-tile {
 .booking-alert-delay p { margin: 0 0 8px; color: var(--muted-light); font-size: 11px; line-height: 1.45; }
 .booking-alert-delay-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .booking-alert-delay .booking-alert-more { margin-top: 8px; }
+
+/* Login notice — why the app signed the user out (notification token changed). */
+.form-notice { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 12px; padding: 11px 12px; border: 1px solid rgba(232,185,126,.35); border-radius: 12px; background: rgba(232,185,126,.08); color: var(--white); font-size: 12px; line-height: 1.5; }
+.form-notice svg { flex: none; margin-top: 1px; color: var(--gold); }
+.form-notice span { flex: 1; }
+.form-notice button { flex: none; padding: 2px; color: var(--muted); background: transparent; }

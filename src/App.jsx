@@ -8,6 +8,7 @@ import {
   Download,
   HelpCircle,
   History,
+  BellRing,
   Info,
   LogOut,
   MapPin,
@@ -44,7 +45,7 @@ import { BOOKING_ALERT_WINDOW_MS, BookingRequestAlert } from './components/Booki
 // The deviceToken rule is shared (lib/apiPayload) so the Alerts & permissions
 // card's end-to-end test alert follows the same mobile contract as sign-in.
 import { withDeviceToken } from './lib/apiPayload';
-import { clearDeviceTokenSync, keepDeviceTokenSynced } from './lib/deviceToken';
+import { TOKEN_CHANGED_EVENT, clearDeviceTokenSync, keepDeviceTokenSynced, rememberLoginToken } from './lib/deviceToken';
 import { alertIdentity, claimAlertDelivery, playBuzzer, unlockBuzzer } from './lib/buzzer';
 import { resetLiveUpdatesSocket } from './lib/socket';
 import { armStoredReminders } from './lib/reminders';
@@ -105,6 +106,11 @@ const SALON_NAV = [
 // that isolates Web Storage, which iOS does). Reading here is deliberately
 // forgiving — a session that lost one of its companion keys is repaired rather
 // than treated as "please log in again".
+// Shown once on the login form after the shell signed the user out because
+// this device's notification token changed (browser tab → installed app).
+export const RELOGIN_NOTICE_KEY = 'mynaai:relogin-notice';
+export const TOKEN_CHANGED_NOTICE = 'You opened My Naai on a new app or browser, so booking alerts need to be linked to this one. Please sign in again — it takes one OTP and your alerts will work here.';
+
 function readStoredSession() {
   const stored = readLocalSession();
   if (!stored) return null;
@@ -424,11 +430,31 @@ function AppRoot() {
       }
     };
     const onSessionExpired = () => { deletePushToken().catch(error => console.debug(getErrorMessage(error, 'Could not clear the browser notification token.'))); resetLiveUpdatesSocket(); setSession(null); setRoute({ name: 'home', params: {} }); };
+    // This device's notification token is no longer the one the backend has
+    // (typically: the salon opened the installed app after signing in from
+    // the browser tab — the app has its own push subscription) and the quiet
+    // re-sync could not hand it over. The backend only reliably learns a token
+    // from login, so sign out and bring the user straight back to sign in;
+    // the next OTP carries the new token. The current token stays banked so
+    // the login can send it without another permission prompt.
+    const onTokenChanged = () => {
+      const current = readStoredSession();
+      if (!current) return;
+      clearDeviceTokenSync();
+      clearSession();
+      resetLiveUpdatesSocket();
+      try { sessionStorage.setItem(RELOGIN_NOTICE_KEY, TOKEN_CHANGED_NOTICE); } catch { /* storage blocked */ }
+      setSession(null);
+      setRoute({ name: 'login', params: { role: current.role, reason: 'device-token' } });
+      window.history.replaceState({}, '', routeToPath('login', { role: current.role }));
+    };
     window.addEventListener('storage', onStorage);
     window.addEventListener('mynaai:session-expired', onSessionExpired);
+    window.addEventListener(TOKEN_CHANGED_EVENT, onTokenChanged);
     return () => {
       window.removeEventListener('storage', onStorage);
       window.removeEventListener('mynaai:session-expired', onSessionExpired);
+      window.removeEventListener(TOKEN_CHANGED_EVENT, onTokenChanged);
     };
   }, []);
   const install = async () => {
@@ -592,6 +618,15 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
   const [pushToken, setPushToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // A sign-out the app itself performed (notification token changed) explains
+  // itself here, once, so the salon knows why they are looking at the OTP form.
+  const [notice, setNotice] = useState(() => {
+    try {
+      const value = sessionStorage.getItem(RELOGIN_NOTICE_KEY) || '';
+      if (value) sessionStorage.removeItem(RELOGIN_NOTICE_KEY);
+      return value;
+    } catch { return ''; }
+  });
   const [alertSheet, setAlertSheet] = useState({ open: false, state: 'needs-permission', required: false });
   // A refused sign-in (the API asked for a deviceToken) is retried automatically
   // the moment the alerts sheet lands a token, so the visitor taps Allow once and
@@ -770,6 +805,9 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
       }
       const userId = user.userId || user.salon?.salonId || user.salonId;
       if (role === 'SALON' && !userId) throw new Error('Salon login completed without a salon ID. Please try again.');
+      // This is the token the backend just stored; every later "did the token
+      // change?" check compares against it.
+      rememberLoginToken({ role, userId }, deviceToken);
       const isNewSalon = role === 'SALON' && (flagIsTrue(response.isNewSalon) || flagIsTrue(user.isNewSalon) || flagIsFalse(user.profileCompleted) || flagIsFalse(user.salon?.profileCompleted));
       onComplete({ role, token: user.token, user, userId, isNewSalon });
     } catch (verifyError) {
@@ -788,6 +826,7 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
       const response = await api.userOnBoard(withDeviceToken({ phoneNumber: mobile, fullName: name.trim() }, deviceToken));
       if (response?.status !== 'SUCCESS') throw new Error(response?.message || 'Could not create account.');
       if (!response.data?.token) throw new Error('Your account was created, but no login session was returned. Please try again.');
+      rememberLoginToken({ role: 'USER', userId: response.data?.userId }, deviceToken);
       onComplete({ role: 'USER', token: response.data.token, user: response.data, userId: response.data?.userId });
     } catch (createError) {
       if (isDeviceTokenError(createError)) await requireAlertsFor(() => createAccount({ preventDefault() {} }));
@@ -798,7 +837,7 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
 
   if (view === 'register') return <SalonRegistration initialData={salonRegistrationData} onBack={() => { setSalonRegistrationData(null); setView('login'); }} onComplete={onComplete} notifyInstall={notifyInstall} />;
 
-  return <div className="auth-page login-page"><div className="auth-visual"><div className="auth-visual-image" /><div className="auth-image-shade" /><div className="auth-visual-content"><Brand light /><div><span className="eyebrow">SALON & GROOMING, REIMAGINED</span><h1>Less waiting.<br /><em>More you.</em></h1><p>Book a great salon nearby and make the time yours.</p></div><div className="visual-quote"><span></span><p>Your time is valuable. We’re here to give it back.</p></div></div></div><div className="auth-form-panel"><div className="mobile-auth-brand"><Brand /></div><div className="auth-form-wrap">{onBrowseBack && <button className="login-back" onClick={onBrowseBack}><ChevronRight size={15} className="rotate-180" /> Browse salons</button>}<span className="eyebrow">WELCOME TO MY NAAI</span><span className="login-hero-badge"><Sparkles size={12} /> {role === 'USER' ? 'Customer login' : 'Salon partner'}</span><h1>{step === 'phone' ? role === 'USER' ? 'Login to book your favorite salon' : 'Grow your salon with My Naai' : step === 'new-user' ? 'One last thing.' : 'Check your phone.'}</h1><p className="auth-subtitle">{step === 'phone' ? role === 'USER' ? 'Sign in and book your next visit.' : 'Sign in and never miss a booking.' : step === 'new-user' ? `Let\u2019s create your My Naai profile for +91 ${mobile}.` : `Enter the 6-digit code sent to +91 ${mobile}.`}</p>{step === 'phone' && <LoginPermissionCard className="login-perm-card" onToken={token => { if (token) { setPushToken(token); alertsDeclined.current = false; } }} onDismiss={() => { alertsDeclined.current = true; }} />}{step === 'phone' && <BuzzerTestCard className="login-buzzer-card" />}{step === 'phone' && <div className="login-actions"><InstallAppButton onInstall={notifyInstall} /></div>}{step === 'phone' && <div className="role-switch"><button className={role === 'USER' ? 'active' : ''} onClick={() => { setRole('USER'); setError(''); }}><CircleUserRound size={16} /> Customer</button><button className={role === 'SALON' ? 'active' : ''} onClick={() => { setRole('SALON'); setError(''); }}><Store size={16} /> Salon partner</button></div>}{error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}{step === 'phone' && <form onSubmit={requestOtp}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" autoComplete="tel" maxLength="10" value={mobile} onChange={event => setMobile(event.target.value.replace(/\D/g, ''))} placeholder="Enter 10-digit number" autoFocus /></div></Field><Button type="submit" loading={busy}>Continue with OTP <ChevronRight size={17} /></Button></form>}{step === 'otp' && <form onSubmit={verify}><Field label="One-time password"><input className="otp-input" inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="· · · · · ·" autoFocus /></Field><Button type="submit" loading={busy}>Verify code <ChevronRight size={17} /></Button><button className="resend-link" type="button" onClick={requestOtp}>Resend code</button><button className="back-form-link" type="button" onClick={() => { setStep('phone'); setOtp(''); setError(''); }}>Use a different number</button></form>}{step === 'new-user' && <form onSubmit={createAccount}><Field label="Your name"><input value={name} onChange={event => setName(event.target.value)} placeholder="How should we call you?" autoFocus /></Field><Button type="submit" loading={busy}>Create my account <ChevronRight size={17} /></Button></form>}</div><p className="auth-legal">By continuing, you agree to My Naai’s <button type="button" onClick={() => softNavigate('/terms')}>Terms &amp; Conditions</button> and <button type="button" onClick={() => softNavigate('/privacy-policy')}>Privacy Policy</button>.</p></div>
+  return <div className="auth-page login-page"><div className="auth-visual"><div className="auth-visual-image" /><div className="auth-image-shade" /><div className="auth-visual-content"><Brand light /><div><span className="eyebrow">SALON & GROOMING, REIMAGINED</span><h1>Less waiting.<br /><em>More you.</em></h1><p>Book a great salon nearby and make the time yours.</p></div><div className="visual-quote"><span></span><p>Your time is valuable. We’re here to give it back.</p></div></div></div><div className="auth-form-panel"><div className="mobile-auth-brand"><Brand /></div><div className="auth-form-wrap">{onBrowseBack && <button className="login-back" onClick={onBrowseBack}><ChevronRight size={15} className="rotate-180" /> Browse salons</button>}<span className="eyebrow">WELCOME TO MY NAAI</span><span className="login-hero-badge"><Sparkles size={12} /> {role === 'USER' ? 'Customer login' : 'Salon partner'}</span><h1>{step === 'phone' ? role === 'USER' ? 'Login to book your favorite salon' : 'Grow your salon with My Naai' : step === 'new-user' ? 'One last thing.' : 'Check your phone.'}</h1><p className="auth-subtitle">{step === 'phone' ? role === 'USER' ? 'Sign in and book your next visit.' : 'Sign in and never miss a booking.' : step === 'new-user' ? `Let\u2019s create your My Naai profile for +91 ${mobile}.` : `Enter the 6-digit code sent to +91 ${mobile}.`}</p>{step === 'phone' && <LoginPermissionCard className="login-perm-card" onToken={token => { if (token) { setPushToken(token); alertsDeclined.current = false; } }} onDismiss={() => { alertsDeclined.current = true; }} />}{step === 'phone' && <BuzzerTestCard className="login-buzzer-card" />}{step === 'phone' && <div className="login-actions"><InstallAppButton onInstall={notifyInstall} /></div>}{step === 'phone' && <div className="role-switch"><button className={role === 'USER' ? 'active' : ''} onClick={() => { setRole('USER'); setError(''); }}><CircleUserRound size={16} /> Customer</button><button className={role === 'SALON' ? 'active' : ''} onClick={() => { setRole('SALON'); setError(''); }}><Store size={16} /> Salon partner</button></div>}{notice && !error && <div className="form-notice" role="status"><BellRing size={16} /><span>{notice}</span><button type="button" onClick={() => setNotice('')} aria-label="Dismiss"><X size={14} /></button></div>}{error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}{step === 'phone' && <form onSubmit={requestOtp}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" autoComplete="tel" maxLength="10" value={mobile} onChange={event => setMobile(event.target.value.replace(/\D/g, ''))} placeholder="Enter 10-digit number" autoFocus /></div></Field><Button type="submit" loading={busy}>Continue with OTP <ChevronRight size={17} /></Button></form>}{step === 'otp' && <form onSubmit={verify}><Field label="One-time password"><input className="otp-input" inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="· · · · · ·" autoFocus /></Field><Button type="submit" loading={busy}>Verify code <ChevronRight size={17} /></Button><button className="resend-link" type="button" onClick={requestOtp}>Resend code</button><button className="back-form-link" type="button" onClick={() => { setStep('phone'); setOtp(''); setError(''); }}>Use a different number</button></form>}{step === 'new-user' && <form onSubmit={createAccount}><Field label="Your name"><input value={name} onChange={event => setName(event.target.value)} placeholder="How should we call you?" autoFocus /></Field><Button type="submit" loading={busy}>Create my account <ChevronRight size={17} /></Button></form>}</div><p className="auth-legal">By continuing, you agree to My Naai’s <button type="button" onClick={() => softNavigate('/terms')}>Terms &amp; Conditions</button> and <button type="button" onClick={() => softNavigate('/privacy-policy')}>Privacy Policy</button>.</p></div>
       <PermissionSheet
         open={alertSheet.open}
         state={alertSheet.state}
