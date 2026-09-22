@@ -936,6 +936,8 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
   // the one alert drawn as a card with buttons (and a countdown) instead of a
   // toast that disappears. See src/components/BookingRequestAlert.jsx.
   const [bookingAlert, setBookingAlert] = useState(null);
+  // Booking request ids this shell has already surfaced (push, relay or poll).
+  const seenRequestIds = useRef(new Set());
   const dismissBookingAlert = useCallback(() => setBookingAlert(null), []);
   const resolveBookingAlert = useCallback(() => {
     setBookingAlert(null);
@@ -1130,6 +1132,7 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
         // the plan is locked the card stays away — renewal is the only action
         // that screen allows, and the OS notification above still says a request
         // came in.
+        if (String(session.role).toUpperCase() === 'SALON' && message.type === 'BOOKING_REQUEST') seenRequestIds.current.add(String(message.data.bookingRequestId || message.data.bookingId || ''));
         if (!isLocked && String(session.role).toUpperCase() === 'SALON' && message.type === 'BOOKING_REQUEST' && !isOnBookingRequestScreen(message.data.bookingRequestId)) {
           setBookingAlert({ data: message.data, sentAt: arrivedAt });
         }
@@ -1179,6 +1182,7 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
       // Only a live alert opens the card. A relay delivered late — a queued
       // channel message, a tab that was still loading — is not news any more.
       if (!sentAt || Date.now() - sentAt > BOOKING_ALERT_WINDOW_MS) return;
+      seenRequestIds.current.add(String(data.bookingRequestId || data.bookingId || ''));
       if (isOnBookingRequestScreen(data.bookingRequestId)) return;
       setBookingAlert({ data, sentAt });
     };
@@ -1194,6 +1198,48 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
       try { channel?.close(); } catch { /* ignore */ }
     };
   }, [session.role]);
+
+  // Belt and braces: the card above is raised by a push message. When that
+  // message never reaches the page — a suspended tab, a throttled background
+  // worker, a browser that drops foreground messages — the request still sits
+  // in the salon's notification list. Poll that list while the app is visible
+  // and raise the SAME card for a request that is still inside its minute and
+  // has not already been handled here. It is a safety net, not the main path,
+  // so it runs every 15 s, only for salons, and never while the plan is locked.
+  useEffect(() => {
+    if (!isSalon || !session.userId) return undefined;
+    let cancelled = false;
+    let timer = 0;
+    const check = async () => {
+      if (cancelled || document.visibilityState !== 'visible' || subscriptionGateRef.current === 'locked') return;
+      try {
+        const response = await api.salonNotificationList({ salonId: session.userId, page: 1 });
+        const items = Array.isArray(response?.data) ? response.data : (response?.data?.notifications || response?.data?.notificationList || response?.data?.list || response?.data?.items || []);
+        for (const item of items) {
+          const type = String(item?.type || item?.notificationType || '').toUpperCase();
+          if (type !== 'BOOKING_REQUEST') continue;
+          const id = String(item.bookingRequestId || item.bookingId || item.booking_request_id || '');
+          if (!id || seenRequestIds.current.has(id)) continue;
+          const created = item.createdAt || item.created_at || item.timestamp || item.sentAt;
+          let createdMs = created ? new Date(created).getTime() : 0;
+          if (createdMs > 0 && createdMs < 1e12) createdMs *= 1000;
+          if (!createdMs || Date.now() - createdMs > BOOKING_ALERT_WINDOW_MS) { seenRequestIds.current.add(id); continue; }
+          seenRequestIds.current.add(id);
+          if (routeName.current === 'notifications' || isOnBookingRequestScreen(id)) continue;
+          if (!claimAlertDelivery({ alertId: `BOOKING_REQUEST:${id}`, sentAt: createdMs })) continue;
+          playBuzzer({ type: 'BOOKING_REQUEST', alertId: `BOOKING_REQUEST:${id}`, sentAt: createdMs, claimed: true });
+          setBookingAlert({ data: { ...item, type: 'BOOKING_REQUEST', bookingRequestId: id }, sentAt: createdMs });
+          break;
+        }
+      } catch { /* the push path is still the main one */ }
+    };
+    const schedule = () => { timer = window.setInterval(check, 15000); };
+    check();
+    schedule();
+    const onVisible = () => { if (document.visibilityState === 'visible') check(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { cancelled = true; window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
+  }, [isSalon, session.userId]);
 
   // NOTE: deliberately not keyed on `session`. Screens list this callback in the
   // dependency array of their data loader (SalonAccountScreen, SubscriptionScreen)

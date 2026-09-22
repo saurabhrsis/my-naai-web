@@ -1429,7 +1429,7 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
    announcement. It rides above the toast (same dock, column-reverse) so the two
    can never cover each other, and it keeps its 60-second countdown on whichever
    screen the salon happens to be on. */
-.alert-dock { position: fixed; z-index: 160; right: max(12px, var(--safe-right)); bottom: max(82px, calc(var(--safe-bottom) + 78px)); left: max(12px, var(--safe-left)); display: flex; flex-direction: column-reverse; align-items: center; gap: 10px; pointer-events: none; }
+.alert-dock { position: fixed; z-index: 300; right: max(12px, var(--safe-right)); bottom: max(82px, calc(var(--safe-bottom) + 78px)); left: max(12px, var(--safe-left)); display: flex; flex-direction: column-reverse; align-items: center; gap: 10px; pointer-events: none; }
 .alert-dock > * { pointer-events: auto; }
 .booking-alert { width: 100%; max-width: 520px; padding: 13px; border: 1px solid rgba(232, 185, 126, .42); border-radius: 18px; background: linear-gradient(150deg, #212826, #161b1a 72%); box-shadow: 0 22px 60px rgba(0, 0, 0, .55); animation: confirm-rise .26s cubic-bezier(.2, .9, .25, 1) both; }
 .booking-alert-top { display: flex; align-items: center; gap: 10px; }
@@ -1993,3 +1993,9 @@ img.image-fallback-tile {
 .notification-card.notification-request-muted { opacity: .88; }
 .notification-action-btn svg { flex: none; }
 .notification-action-btn .spinner { flex: none; }
+
+/* Delay picker inside the booking alert card. */
+.booking-alert-delay { margin-top: 11px; padding: 10px; border: 1px solid rgba(232,185,126,.28); border-radius: 12px; background: rgba(232,185,126,.06); }
+.booking-alert-delay p { margin: 0 0 8px; color: var(--muted-light); font-size: 11px; line-height: 1.45; }
+.booking-alert-delay-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.booking-alert-delay .booking-alert-more { margin-top: 8px; }

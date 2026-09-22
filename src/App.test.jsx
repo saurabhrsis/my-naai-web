@@ -1725,7 +1725,7 @@ describe('the in-app booking request alert', () => {
     vi.clearAllMocks();
   });
 
-  it('offers Accept, Reject and Update time the moment a request arrives', async () => {
+  it('offers Accept, Reject and Delay the moment a request arrives', async () => {
     await mount();
     await deliver({ type: 'BOOKING_REQUEST', notification: { title: 'New booking request', body: 'Riya wants a fade' }, data: { type: 'BOOKING_REQUEST', bookingRequestId: 'req-21' } });
 
@@ -1733,7 +1733,7 @@ describe('the in-app booking request alert', () => {
     expect(card).toBeTruthy();
     expect(byText('Accept')).toBeTruthy();
     expect(byText('Reject')).toBeTruthy();
-    expect(byText('Update time')).toBeTruthy();
+    expect(byText('Delay')).toBeTruthy();
   });
 
   it('answers from the card without leaving the screen the salon was on', async () => {
