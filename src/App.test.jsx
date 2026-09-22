@@ -1281,6 +1281,9 @@ describe('Login permission flow', () => {
 
     await act(async () => { typeMobile('9876543210'); });
     await act(async () => { submitPhone(); });
+    // Allow was just tapped: the token is minted with a few patient retries
+    // (the server stores whatever login carries) before the OTP is requested.
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 2300)); });
     await flush();
     await act(async () => { typeOtp('123456'); });
     await act(async () => { submitForm(); });

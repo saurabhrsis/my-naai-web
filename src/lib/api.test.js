@@ -138,3 +138,47 @@ describe('isUnknownSalonResponse', () => {
     expect(isUnknownSalonResponse(new Error('Failed to fetch'))).toBe(false);
   });
 });
+
+describe('request timeout and network failures', () => {
+  it('turns a request that never answers into a retryable error instead of an endless loader', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal('fetch', vi.fn((url, { signal }) => new Promise((resolve, reject) => {
+        signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+      })));
+      const pending = api.bookingRequestOwnerAction('req-1', { action: 'ACCEPT' });
+      const settled = pending.then(() => 'resolved', error => error);
+      await vi.advanceTimersByTimeAsync(26000);
+      const error = await settled;
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error.message).toMatch(/took too long/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('names a dropped connection in plain words', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))));
+    await expect(api.bookingRequestOwnerAction('req-1', { action: 'REJECT' })).rejects.toThrow(/Could not reach My Naai/);
+  });
+
+  it('sends the owner action as an object, like the mobile app', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response(JSON.stringify({ status: 'SUCCESS' }), { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+    await api.bookingRequestOwnerAction('req-9', { action: 'ACCEPT' });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/api/bookingRequest/owner-action/req-9/');
+    expect(JSON.parse(init.body)).toEqual({ action: 'ACCEPT' });
+  });
+
+  it('registers the browser device token on the authenticated endpoint', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response(JSON.stringify({ status: 'SUCCESS' }), { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+    setToken('salon-jwt');
+    await api.registerDevice({ deviceToken: 'fcm-web-token', platform: 'web' });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/api/notifications/register-device');
+    expect(init.headers.Authorization).toBe('Bearer salon-jwt');
+    expect(JSON.parse(init.body)).toMatchObject({ deviceToken: 'fcm-web-token', platform: 'web' });
+  });
+});

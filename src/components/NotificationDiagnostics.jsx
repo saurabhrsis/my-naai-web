@@ -6,6 +6,8 @@ import { browserLabel, detectBrowser, isEmbeddedFrame, isIosDevice, readPermissi
 import { PermissionSheet } from './PermissionUI';
 import { api } from '../lib/api';
 import { withDeviceToken } from '../lib/apiPayload';
+import { readDeviceTokenSync, syncDeviceToken } from '../lib/deviceToken';
+import { readLocalSession } from '../lib/session';
 import { Button, Modal, Spinner, cx, getErrorMessage } from './Shared';
 
 // Alerts & permissions — the calm home for the two permissions My Naai uses.
@@ -98,6 +100,10 @@ export function NotificationDiagnostics({ onEnabled }) {
         const token = await getPushToken({ requestPermission: false });
         if (token) {
           rememberAskChoice('notifications', ASK_CHOICES.allowed);
+          // The server sends to the token it has on file — which, for an
+          // account that allowed alerts AFTER signing in, is nothing. Hand it
+          // the fresh token now, from this very tap.
+          try { await syncDeviceToken(readLocalSession(), token, { force: true }); } catch { /* reported in the diagnostics card */ }
           onEnabledRef.current?.();
         } else {
           setSheet({ open: true, state: 'unavailable', kind: 'notifications' });

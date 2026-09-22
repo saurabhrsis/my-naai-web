@@ -44,6 +44,7 @@ import { BOOKING_ALERT_WINDOW_MS, BookingRequestAlert } from './components/Booki
 // The deviceToken rule is shared (lib/apiPayload) so the Alerts & permissions
 // card's end-to-end test alert follows the same mobile contract as sign-in.
 import { withDeviceToken } from './lib/apiPayload';
+import { clearDeviceTokenSync, keepDeviceTokenSynced } from './lib/deviceToken';
 import { alertIdentity, claimAlertDelivery, playBuzzer, unlockBuzzer } from './lib/buzzer';
 import { resetLiveUpdatesSocket } from './lib/socket';
 import { armStoredReminders } from './lib/reminders';
@@ -193,14 +194,27 @@ export function resolveResumeRoute(role, hash) {
 // retryable; they are not a toll gate on the way in. If the API still insists on
 // a deviceToken, `isDeviceTokenError` recognises the refusal and the alerts
 // sheet answers it with one tap plus an automatic retry (see AuthFlow).
-async function resolveDeviceToken() {
+// The FCM token the login request carries. The backend stores THIS value and
+// sends every notification to it, so it must be the browser's CURRENT token —
+// Firebase's getToken() returns the live one (and rotates a dead one), which is
+// why a cached FCM_TOKEN is only ever the fallback, never the first choice.
+// A slow worker start-up is retried for a few seconds: a login is the one
+// moment the server learns the token, so it is worth waiting for.
+const LOGIN_TOKEN_ATTEMPTS = 3;
+const LOGIN_TOKEN_RETRY_MS = 1000;
+async function resolveDeviceToken({ patient = false } = {}) {
   if (!isPushConfigured()) return '';
-  try {
-    return (await getPushToken({ requestPermission: false })) || '';
-  } catch (error) {
-    console.debug(getErrorMessage(error, 'Could not read the browser notification token.'));
-    return '';
+  const attempts = patient ? LOGIN_TOKEN_ATTEMPTS : 1;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const token = await getPushToken({ requestPermission: false });
+      if (token) return token;
+    } catch (error) {
+      console.debug(getErrorMessage(error, 'Could not read the browser notification token.'));
+    }
+    if (attempt < attempts - 1) await new Promise(resolve => setTimeout(resolve, LOGIN_TOKEN_RETRY_MS));
   }
+  try { return localStorage.getItem('FCM_TOKEN') || ''; } catch { return ''; }
 }
 
 // The provider sits above the auth flow *and* the signed-in shell: logout is
@@ -352,7 +366,7 @@ function AppRoot() {
     setRoute({ name: nextRoute, params: nextParams });
     window.history.replaceState({}, '', routeToPath(nextRoute, nextParams));
   }, []);
-  const logout = useCallback(() => { clearSession(); resetLiveUpdatesSocket(); setSession(null); setRoute({ name: 'home', params: {} }); window.history.replaceState({}, '', '/'); }, []);
+  const logout = useCallback(() => { clearDeviceTokenSync(); clearSession(); resetLiveUpdatesSocket(); setSession(null); setRoute({ name: 'home', params: {} }); window.history.replaceState({}, '', '/'); }, []);
   const updateSessionUser = useCallback((user, sessionPatch = {}) => setSession(current => {
     if (!current) return current;
     const nextUser = { ...current.user, ...user };
@@ -608,9 +622,9 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
   //   4. Blocked, unsupported or an iPhone that needs the Home Screen install →
   //      no popup can help. Return '' and let sign-in continue; if the API
   //      insists on a token, the alerts sheet answers it with the exact fix.
-  const prepareDeviceToken = useCallback(async () => {
+  const prepareDeviceToken = useCallback(async ({ fresh = false } = {}) => {
     if (!isPushConfigured()) return '';
-    if (pushToken) return pushToken;
+    if (pushToken && !fresh) return pushToken;
     if (alertsDeclined.current) return '';
     // Sync gates first — no await before the ask, so the gesture survives.
     if ((isIosDevice() && !isIosPwaInstalled()) || isEmbeddedFrame()) return '';
@@ -619,21 +633,14 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
     if (snapshot === 'default') {
       const granted = await requestNotifications();
       if (granted !== 'granted') return '';
-      const token = await resolveDeviceToken();
+      const token = await resolveDeviceToken({ patient: true });
       if (token) setPushToken(token);
       return token || '';
     }
-    // Snapshot says granted (or the browser has no snapshot to give): try the
-    // banked token first, then mint silently. No popup is needed on this path.
-    try {
-      const cached = localStorage.getItem('FCM_TOKEN');
-      if (cached) {
-        setPushToken(cached);
-        return cached;
-      }
-    } catch {
-      // Private mode: fall through to minting.
-    }
+    // Snapshot says granted (or the browser has no snapshot to give): mint the
+    // LIVE token. The banked FCM_TOKEN is only used when Firebase cannot answer
+    // right now — sending a stale token here is exactly how a salon ends up
+    // with permission granted and no notifications.
     const token = await resolveDeviceToken();
     if (token) setPushToken(token);
     return token || '';
@@ -727,7 +734,9 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
     if (!/^\d{6}$/.test(otp)) return setError('Enter the 6-digit OTP.');
     setBusy(true); setError('');
     try {
-      const deviceToken = pushToken || await prepareDeviceToken();
+      // The verify call is what the server stores the token from. Re-read the
+      // live token here rather than trusting the one banked at the OTP step.
+      const deviceToken = (await prepareDeviceToken({ fresh: true })) || pushToken;
       setPushToken(deviceToken);
       const payload = withDeviceToken({ phoneNumber: mobile, otp }, deviceToken);
       let verifyMode = salonAuthMode;
@@ -774,7 +783,7 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
     if (!name.trim()) return setError('Tell us your name to finish setting up.');
     setBusy(true); setError('');
     try {
-      const deviceToken = pushToken || await prepareDeviceToken();
+      const deviceToken = (await prepareDeviceToken({ fresh: true })) || pushToken;
       setPushToken(deviceToken);
       const response = await api.userOnBoard(withDeviceToken({ phoneNumber: mobile, fullName: name.trim() }, deviceToken));
       if (response?.status !== 'SUCCESS') throw new Error(response?.message || 'Could not create account.');
@@ -1112,6 +1121,10 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
           },
         });
         notify('info', `${message.title}${message.body && message.body !== message.title ? ` — ${message.body}` : ''}`);
+        // The Notifications tab refreshes its list on this, so a request that
+        // arrives while the salon is looking at it appears with its countdown
+        // and Accept / Reject / Delay buttons without a pull-to-refresh.
+        try { window.dispatchEvent(new CustomEvent('mynaai:notification', { detail: { type: message.type, data: message.data } })); } catch { /* ignore */ }
         // A new booking request gets the actionable card: the mobile app's 60
         // seconds, the three answers, on whatever screen the salon is on. While
         // the plan is locked the card stays away — renewal is the only action
@@ -1127,6 +1140,11 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
         // Suppress buzzer navigation when locked — renewal is the only focus.
         if (isLocked) return;
         if (!actionable) return;
+        // On the Notifications tab the request is already in front of the salon
+        // with its own Accept / Reject / Delay buttons (and the alert card is
+        // docked below); yanking them to another screen would only lose the
+        // list they were reading.
+        if (routeName.current === 'notifications' && String(session.role).toUpperCase() === 'SALON' && message.type === 'BOOKING_REQUEST') return;
         const next = getNotificationRoute(message.data, session.role);
         if (!next.name || next.name === routeName.current) return;
         safeNavigate(next.name, next.params);
@@ -1139,6 +1157,11 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
     });
     return () => { cancelled = true; unsubscribe(); };
   }, [safeNavigate, notify, session.role, session.userId]);
+
+  // The server can only notify a token it knows. Sign-in sends one, but a token
+  // allowed or rotated AFTER sign-in — the common web case — never reached the
+  // API before, which is the "permission granted, no notification" report.
+  useEffect(() => keepDeviceTokenSynced(sessionRef.current), [session.role, session.userId]);
 
   // A booking request that arrived while this app was in the background never
   // reached the handler above — Firebase hands a foreground message only to a

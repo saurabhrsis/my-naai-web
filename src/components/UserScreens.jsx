@@ -49,7 +49,7 @@ import { api } from '../lib/api';
 import { getErrorMessage as getApiError } from './Shared';
 import { normalizeAdImages } from '../lib/ads';
 import { describeOffset } from '../lib/bookingTime';
-import { getNotificationRoute, isActionableNotification } from '../lib/push';
+import { closeNotification, getNotificationRoute, isActionableNotification } from '../lib/push';
 import { armStoredReminders, cancelBookingReminder, remindersEnabled, scheduleBookingReminder, setRemindersEnabled } from '../lib/reminders';
 import { stashPendingRoute } from '../lib/pendingRoute';
 import { softNavigate } from '../lib/routes';
@@ -148,13 +148,55 @@ function bySavedThenDistance(left, right) {
 
 const BOOKING_ACTION_WINDOW_MS = 60 * 1000;
 
-function isFreshBookingRequest(item = {}) {
-  const created = item.createdAt || item.created_at || item.timestamp || item.sentAt || item.createdAtTimestamp;
+// When a notification was created, in ms. The list API is not consistent about
+// the field name or the unit (ISO string vs. seconds vs. ms), so every shape it
+// has ever sent is accepted here.
+function notificationCreatedMs(item = {}) {
+  const created = item.createdAt || item.created_at || item.timestamp || item.sentAt || item.createdAtTimestamp || item.updatedAt;
   let createdMs = created ? new Date(created).getTime() : 0;
+  if (!Number.isFinite(createdMs) && /^\d+$/.test(String(created))) createdMs = Number(created);
   if (createdMs > 0 && createdMs < 1e12) createdMs *= 1000;
+  return Number.isFinite(createdMs) && createdMs > 0 ? createdMs : 0;
+}
+
+function notificationBookingId(item = {}) {
+  return item.bookingRequestId || item.bookingId || item.booking_request_id || item.data?.bookingRequestId || item.data?.bookingId || '';
+}
+
+function notificationType(item = {}) {
+  return String(item.type || item.notificationType || item.notification_type || item.data?.type || '').toUpperCase();
+}
+
+// The salon's answer window for a booking request, as the list sees it:
+// { state: 'open' | 'expired' | 'unknown', remainingMs }. 'unknown' is a
+// notification with no usable timestamp — it is offered the actions, and the
+// server has the final word.
+export function bookingRequestWindow(item = {}, now = Date.now()) {
+  const createdMs = notificationCreatedMs(item);
+  if (!createdMs) return { state: 'unknown', remainingMs: 0, createdMs: 0 };
+  const remainingMs = createdMs + BOOKING_ACTION_WINDOW_MS - now;
+  return { state: remainingMs > 0 ? 'open' : 'expired', remainingMs: Math.max(0, remainingMs), createdMs };
+}
+
+function isFreshBookingRequest(item = {}) {
   // The server's notification list can contain old requests. Actions are only
   // offered for a live NEW booking, never for delay/update history.
-  return Number.isFinite(createdMs) && createdMs > 0 && Date.now() - createdMs >= 0 && Date.now() - createdMs <= BOOKING_ACTION_WINDOW_MS;
+  const window = bookingRequestWindow(item);
+  return window.state === 'open' || window.state === 'unknown';
+}
+
+// What a booking request became once it has been answered. The server does not
+// always echo the outcome on the notification row, so the words the API sends
+// are read loosely; 'pending' means the request is still waiting.
+function requestOutcome(details = {}) {
+  const raw = String(details?.status || details?.bookingStatus || details?.requestStatus || details?.state || '').toLowerCase();
+  if (!raw) return 'pending';
+  if (/accept|confirm|approve|booked/.test(raw)) return 'accepted';
+  if (/reject|declin|cancel/.test(raw)) return 'rejected';
+  if (/expire|timeout|timed/.test(raw)) return 'expired';
+  if (/delay/.test(raw)) return 'delayed';
+  if (/complete|done/.test(raw)) return 'completed';
+  return 'pending';
 }
 
 function getNotificationAction(item = {}, role = '') {
@@ -1210,18 +1252,24 @@ export function NotificationsScreen({ session, notify, navigate }) {
   const [loadError, setLoadError] = useState('');
   const [actionLoading, setActionLoading] = useState('');
   const [delayModal, setDelayModal] = useState(null);
-  const [delayMinutes, setDelayMinutes] = useState('15');
-  const [, setNotificationClock] = useState(Date.now());
+  // Outcomes the salon produced from this screen, keyed by booking request id.
+  // The list API is not always quick to reflect an answer, so the card shows
+  // the result it just got straight away instead of a loader or stale buttons.
+  const [outcomes, setOutcomes] = useState({});
+  // Server-side status for booking requests whose 60 seconds have passed, keyed
+  // by id — "time has gone" should still say what happened to the request.
+  const [statuses, setStatuses] = useState({});
+  const [now, setNow] = useState(Date.now());
 
-  // Remove the one-minute booking actions while this screen remains open.
+  // The one-minute countdown on booking-request cards ticks while this screen is open.
   useEffect(() => {
     if (!isSalon) return undefined;
-    const timer = window.setInterval(() => setNotificationClock(Date.now()), 1000);
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [isSalon]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async ({ quiet = false } = {}) => {
+    if (!quiet) setLoading(true);
     setLoadError('');
     try {
       const response = isSalon
@@ -1232,54 +1280,106 @@ export function NotificationsScreen({ session, notify, navigate }) {
     } catch (error) {
       const message = getErrorMessage(error, 'Unable to load notifications.');
       setLoadError(message);
-      notify?.('error', message);
+      if (!quiet) notify?.('error', message);
     } finally { setLoading(false); }
   }, [isSalon, notify, session.userId]);
 
   useEffect(() => { load(); }, [load]);
 
+  // A new request while this screen is open: the push (foreground or relayed by
+  // the worker) is the cue to refresh, so the card with its countdown appears
+  // without the salon pulling to refresh.
+  useEffect(() => {
+    if (!isSalon) return undefined;
+    const onMessage = event => {
+      const type = String(event?.data?.type || '');
+      if (type === 'MYNAAI_PLAY_BUZZER' || type === 'MYNAAI_PUSH_DELIVERY' || type === 'MYNAAI_NOTIFICATIONS_CHANGED') load({ quiet: true });
+    };
+    // The page's own foreground handler (App.jsx) announces every delivered
+    // push on the window; that is always a reason to refresh.
+    const onPageDelivery = () => load({ quiet: true });
+    try { navigator.serviceWorker?.addEventListener('message', onMessage); } catch { /* no service worker */ }
+    let channel = null;
+    try { channel = new BroadcastChannel('mynaai-notifications'); channel.addEventListener('message', onMessage); } catch { /* unsupported */ }
+    window.addEventListener('mynaai:notification', onPageDelivery);
+    return () => {
+      try { navigator.serviceWorker?.removeEventListener('message', onMessage); } catch { /* ignore */ }
+      try { channel?.close(); } catch { /* ignore */ }
+      window.removeEventListener('mynaai:notification', onPageDelivery);
+    };
+  }, [isSalon, load]);
+
+  // For the salon, the request window is the truth on every card: a request
+  // whose minute has passed loses its buttons and says what happened to it.
+  // The server answer is fetched once per expired request.
+  const statusRequests = useRef(new Set());
+  useEffect(() => {
+    if (!isSalon || loading) return undefined;
+    const pending = items
+      .filter(item => notificationType(item) === 'BOOKING_REQUEST' && notificationBookingId(item) && bookingRequestWindow(item, now).state === 'expired')
+      .map(notificationBookingId)
+      .filter((id, index, list) => list.indexOf(id) === index && !statusRequests.current.has(id) && !outcomes[id]);
+    if (!pending.length) return undefined;
+    pending.forEach(id => {
+      statusRequests.current.add(id);
+      api.getBookingRequestById(id)
+        .then(response => setStatuses(current => ({ ...current, [id]: requestOutcome(response?.data) })))
+        .catch(() => setStatuses(current => ({ ...current, [id]: 'unknown' })));
+    });
+    return undefined;
+    // `now` is deliberately part of this: cards cross the deadline while the
+    // screen is open, and the tick is what notices.
+  }, [isSalon, items, loading, now, outcomes]);
+
+  const finishAction = useCallback((bookingRequestId, outcome) => {
+    setOutcomes(current => ({ ...current, [bookingRequestId]: outcome }));
+    closeNotification(bookingRequestId);
+    load({ quiet: true });
+  }, [load]);
+
   const handleSalonAction = async (item, action) => {
-    const bookingRequestId = item.bookingRequestId || item.bookingId || item.booking_request_id || item.id;
+    const bookingRequestId = notificationBookingId(item);
     if (!bookingRequestId) {
       notify?.('error', 'Booking request ID not found.');
       return;
     }
+    if (actionLoading) return;
     if (action === 'DELAY') {
       setDelayModal({ item, bookingRequestId });
       return;
     }
-    setActionLoading(`${bookingRequestId}-${action}`);
+    const key = `${bookingRequestId}-${action}`;
+    setActionLoading(key);
     try {
-      const response = await api.bookingRequestOwnerAction(bookingRequestId, action);
+      // The owner-action contract takes an object, `{ action }`, exactly as the
+      // request screen and the alert card send it. Sending the bare string was
+      // what left this screen's buttons on their loader: the server never got a
+      // valid action, and the promise settled only when the connection did.
+      const response = await api.bookingRequestOwnerAction(bookingRequestId, { action });
       if (response?.status && response.status !== 'SUCCESS') throw new Error(response.message || `${action} failed`);
-      notify?.('success', action === 'ACCEPT' ? 'Booking accepted!' : 'Booking rejected.');
-      // Refresh list
-      load();
-      // Navigate to queue if accepted
-      if (action === 'ACCEPT') {
-        setTimeout(() => navigate('queue'), 800);
-      }
+      notify?.('success', action === 'ACCEPT' ? 'Booking accepted — it is now in your queue.' : 'Booking rejected.');
+      finishAction(bookingRequestId, action === 'ACCEPT' ? 'accepted' : 'rejected');
     } catch (error) {
-      notify?.('error', getErrorMessage(error, `Could not ${action.toLowerCase()} booking.`));
+      const message = getErrorMessage(error, `Could not ${action.toLowerCase()} booking.`);
+      notify?.('error', message);
+      // The server refusing the action ("already actioned", "expired") is an
+      // answer too: mark the card so the salon is not offered the same button.
+      if (/already|expired|not found|cannot be action/i.test(message)) setOutcomes(current => ({ ...current, [bookingRequestId]: 'closed' }));
     } finally {
       setActionLoading('');
     }
   };
 
-  const handleDelayConfirm = async () => {
-    if (!delayModal) return;
-    const minutes = parseInt(delayMinutes, 10);
-    if (!minutes || minutes < 1) {
-      notify?.('error', 'Enter valid delay minutes.');
-      return;
-    }
-    setActionLoading(`${delayModal.bookingRequestId}-DELAY`);
+  const handleDelay = async minutes => {
+    if (!delayModal || actionLoading) return;
+    const { bookingRequestId } = delayModal;
+    setActionLoading(`${bookingRequestId}-DELAY`);
     try {
-      const response = await api.salonDelayBooking(delayModal.bookingRequestId, String(minutes));
+      const response = await api.salonDelayBooking(bookingRequestId, String(minutes));
       if (response?.status && response.status !== 'SUCCESS') throw new Error(response.message || 'Delay failed');
       notify?.('success', `Customer notified — ${minutes} min delay proposed.`);
       setDelayModal(null);
-      load();
+      finishAction(bookingRequestId, 'delayed');
     } catch (error) {
       notify?.('error', getErrorMessage(error, 'Could not send delay request.'));
     } finally {
@@ -1287,60 +1387,75 @@ export function NotificationsScreen({ session, notify, navigate }) {
     }
   };
 
-  const isBookingRequest = (item) => {
-    const type = String(item.type || item.notificationType || '').toUpperCase();
-    return type === 'BOOKING_REQUEST' && isFreshBookingRequest(item);
+  const outcomeCopy = {
+    accepted: { label: 'Accepted', text: 'You accepted this booking. It is in your queue.', tone: 'ok' },
+    rejected: { label: 'Rejected', text: 'You rejected this booking request.', tone: 'bad' },
+    delayed: { label: 'Delay sent', text: 'The customer has been asked to accept the new time.', tone: 'warn' },
+    completed: { label: 'Completed', text: 'This booking has been completed.', tone: 'ok' },
+    expired: { label: 'Time has gone', text: 'The 60-second response window closed before an action was taken. The customer has been told the salon did not respond.', tone: 'muted' },
+    closed: { label: 'Already handled', text: 'This request was already answered — from another device, or by the time limit.', tone: 'muted' },
+    pending: { label: 'Time has gone', text: 'The 60-second window to respond has closed. Open the request to check whether it is still waiting.', tone: 'muted' },
+    unknown: { label: 'Time has gone', text: 'The 60-second window to respond has closed and the request could not be checked. Open it to see its status.', tone: 'muted' },
+    loading: { label: 'Time has gone', text: 'The 60-second window to respond has closed. Checking what happened…', tone: 'muted' },
+  };
+
+  const formatCountdown = ms => {
+    const seconds = Math.ceil(ms / 1000);
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
   };
 
   return <div className="screen notifications-screen">
-    <PageHeader title="Notifications" subtitle={isSalon ? 'Booking requests and salon updates — tap to act.' : 'Updates about your appointments.'} onBack={() => navigate(isSalon ? 'queue' : 'home')} action={<button className="icon-btn ghost" onClick={load} aria-label="Refresh notifications"><Zap size={18} /></button>} />
-    {loadError && !loading && <div className="inline-notice notification-error"><CircleAlert size={16} /><span>{loadError}</span><button onClick={load}>Try again</button></div>}
+    <PageHeader title="Notifications" subtitle={isSalon ? 'New booking requests can be accepted, rejected or delayed right here within 60 seconds.' : 'Updates about your appointments.'} onBack={() => navigate(isSalon ? 'queue' : 'home')} action={<button className="icon-btn ghost" onClick={() => load()} aria-label="Refresh notifications"><Zap size={18} /></button>} />
+    {loadError && !loading && <div className="inline-notice notification-error"><CircleAlert size={16} /><span>{loadError}</span><button onClick={() => load()}>Try again</button></div>}
     {loading ? <div className="notification-list">{[1, 2, 3].map(item => <SkeletonCard key={item} className="notification-skeleton" />)}</div> : items.length ? <div className="notification-list">{items.map((item, index) => {
-      const action = getNotificationAction(item, role);
-      const bookingType = isBookingRequest(item);
-      const bookingId = item.bookingRequestId || item.bookingId || item.booking_request_id || '';
-      return <article className={cx('notification-card', action && 'notification-actionable', bookingType && isSalon && 'notification-booking-request')} key={item.notificationId || item.id || index}>
+      const type = notificationType(item);
+      const bookingId = notificationBookingId(item);
+      const isRequest = isSalon && type === 'BOOKING_REQUEST' && Boolean(bookingId);
+      const window = isRequest ? bookingRequestWindow(item, now) : null;
+      const outcome = isRequest ? (outcomes[bookingId] || (window.state === 'expired' ? (statuses[bookingId] || 'loading') : '')) : '';
+      const open = isRequest && !outcome && window.state !== 'expired';
+      const busyKey = actionLoading.startsWith(`${bookingId}-`) ? actionLoading.slice(bookingId.length + 1) : '';
+      const action = !isRequest ? getNotificationAction(item, role) : null;
+      const warning = open && window.state === 'open' && window.remainingMs <= 15000;
+      const result = outcome ? outcomeCopy[outcome] || outcomeCopy.closed : null;
+      return <article className={cx('notification-card', (action || open) && 'notification-actionable', isRequest && 'notification-booking-request', open && 'notification-request-open', result && `notification-request-${result.tone}`)} key={item.notificationId || item.id || `${bookingId}-${index}`}>
         <div className="notification-icon"><Bell size={17} /></div>
         <div style={{ flex: 1 }}>
-          <div className="notification-heading"><h3>{item.title || 'My Naai update'}</h3><span>{formatDateTime(item.createdAt)}</span></div>
+          <div className="notification-heading"><h3>{item.title || (isRequest ? 'New booking request' : 'My Naai update')}</h3><span>{formatDateTime(item.createdAt || item.created_at || item.timestamp)}</span></div>
           <p>{item.body || item.message || 'You have a new update from My Naai.'}</p>
-          {bookingType && bookingId && <span className="notification-type-pill">{String(item.type || '').replace(/_/g, ' ')}</span>}
+          {isRequest && <div className="notification-request-meta">
+            <span className="notification-type-pill">BOOKING REQUEST</span>
+            {open && <span className={cx('notification-countdown', warning && 'timer-warning')} role="timer" aria-live="off"><Timer size={12} /> {window.state === 'open' ? `Respond in ${formatCountdown(window.remainingMs)}` : 'Respond now'}</span>}
+            {result && <span className={cx('notification-result-pill', `tone-${result.tone}`)}>{outcome === 'loading' ? <Spinner size={11} /> : result.tone === 'ok' ? <CheckCircle2 size={12} /> : result.tone === 'bad' ? <X size={12} /> : <AlarmClock size={12} />} {result.label}</span>}
+          </div>}
+          {result && <p className="notification-result-text" role="status">{result.text}</p>}
           <div className="notification-card-actions">
             {action && <button className="notification-open-button" type="button" onClick={() => navigate(action.route.name, action.route.params)}>{action.label}<ArrowRight size={14} /></button>}
-            {isSalon && bookingType && bookingId && (
+            {open && (
               <>
-                <button className="notification-action-btn accept" disabled={!!actionLoading} onClick={() => handleSalonAction(item, 'ACCEPT')}>
-                  {actionLoading === `${bookingId}-ACCEPT` ? '...' : <><Check size={14} /> Accept</>}
+                <button className="notification-action-btn accept" type="button" disabled={Boolean(actionLoading)} aria-busy={busyKey === 'ACCEPT'} onClick={() => handleSalonAction(item, 'ACCEPT')}>
+                  {busyKey === 'ACCEPT' ? <Spinner size={14} /> : <Check size={14} />} Accept
                 </button>
-                <button className="notification-action-btn reject" disabled={!!actionLoading} onClick={() => handleSalonAction(item, 'REJECT')}>
-                  {actionLoading === `${bookingId}-REJECT` ? '...' : <><X size={14} /> Reject</>}
+                <button className="notification-action-btn reject" type="button" disabled={Boolean(actionLoading)} aria-busy={busyKey === 'REJECT'} onClick={() => handleSalonAction(item, 'REJECT')}>
+                  {busyKey === 'REJECT' ? <Spinner size={14} /> : <X size={14} />} Reject
                 </button>
-                <button className="notification-action-btn delay" disabled={!!actionLoading} onClick={() => handleSalonAction(item, 'DELAY')}>
-                  <Clock size={14} /> Delay
+                <button className="notification-action-btn delay" type="button" disabled={Boolean(actionLoading)} aria-busy={busyKey === 'DELAY'} onClick={() => handleSalonAction(item, 'DELAY')}>
+                  {busyKey === 'DELAY' ? <Spinner size={14} /> : <Clock size={14} />} Delay
                 </button>
+                <button className="notification-open-button" type="button" onClick={() => navigate('bookingRequest', { bookingRequestId: bookingId })}>Details<ArrowRight size={14} /></button>
               </>
             )}
+            {isRequest && !open && <button className="notification-open-button" type="button" onClick={() => outcome === 'accepted' ? navigate('queue') : navigate('bookingRequest', { bookingRequestId: bookingId })}>{outcome === 'accepted' ? 'Open queue' : 'Open request'}<ArrowRight size={14} /></button>}
           </div>
         </div>
       </article>;
-    })}</div> : !loadError && <EmptyState icon={Bell} title="No notifications yet" message="We will keep important booking updates here. Booking requests will show Accept / Reject / Delay actions." />}
+    })}</div> : !loadError && <EmptyState icon={Bell} title="No notifications yet" message={isSalon ? 'New booking requests will appear here with Accept / Reject / Delay actions for 60 seconds.' : 'We will keep important booking updates here.'} />}
 
-    <Modal open={!!delayModal} onClose={() => setDelayModal(null)} title="Propose delay">
-      <p className="modal-lede">How many minutes delay do you need? The customer will be asked to accept the new time.</p>
-      <Field label="Delay minutes">
-        <select value={delayMinutes} onChange={e => setDelayMinutes(e.target.value)} className="select-field">
-          <option value="5">5 minutes earlier/later</option>
-          <option value="10">10 minutes</option>
-          <option value="15">15 minutes</option>
-          <option value="20">20 minutes</option>
-          <option value="30">30 minutes</option>
-          <option value="45">45 minutes</option>
-          <option value="60">60 minutes</option>
-        </select>
-      </Field>
+    <Modal open={Boolean(delayModal)} onClose={() => { if (!actionLoading) setDelayModal(null); }} title="Update time & notify customer">
+      <p className="modal-lede">Running a little late? Choose a delay. My Naai will send the customer a delay request so they can accept or decline the updated time.</p>
+      <div className="delay-options">{[20, 40, 60].map(minutes => <button key={minutes} type="button" onClick={() => handleDelay(minutes)} disabled={Boolean(actionLoading)}><Clock3 size={17} /><span><strong>+{minutes} minutes</strong><small>Send delay request to customer</small></span>{actionLoading === `${delayModal?.bookingRequestId}-DELAY` ? <Spinner size={14} /> : <ChevronRight size={16} />}</button>)}</div>
       <div className="form-actions">
-        <Button variant="secondary" onClick={() => setDelayModal(null)}>Cancel</Button>
-        <Button loading={!!actionLoading} onClick={handleDelayConfirm}>Send delay request</Button>
+        <Button variant="secondary" onClick={() => setDelayModal(null)} disabled={Boolean(actionLoading)}>Cancel</Button>
       </div>
     </Modal>
   </div>;

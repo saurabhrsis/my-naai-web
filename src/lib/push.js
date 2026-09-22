@@ -2,6 +2,7 @@ import { getApps, initializeApp } from 'firebase/app';
 import { deleteToken, getMessaging, getToken, isSupported, onMessage } from 'firebase/messaging';
 import { getErrorMessage } from '../components/Shared';
 import { softNavigate } from './routes';
+import { readDeviceTokenSync } from './deviceTokenSync';
 import {
   detectBrowser,
   isEmbeddedFrame,
@@ -734,6 +735,21 @@ export async function getPushDiagnostics() {
       ? `Permission is granted but no token exists yet — the worker or Firebase config is the problem, not the browser.${lastTokenFailure ? ` Last attempt (${lastTokenFailure.kind}): ${lastTokenFailure.message}` : ''}`
         .replace(/\s+/g, ' ').trim()
       : 'Sign-in needs a token: tap Enable, allow notifications, then sign in again.');
+
+  // Whether the server has been told about THIS token for the signed-in
+  // account. Permission and token can both be fine while the server still
+  // sends to an older token — the most common "granted but silent" cause.
+  if (token) {
+    const synced = readDeviceTokenSync();
+    let sessionUserId = '';
+    try {
+      const user = JSON.parse(localStorage.getItem('mynaaiUser') || '{}') || {};
+      sessionUserId = String(user.userId || user.salonId || user.salon?.salonId || '');
+    } catch { sessionUserId = ''; }
+    const upToDate = Boolean(synced && synced.token === token && (!sessionUserId || String(synced.userId) === sessionUserId));
+    add('Server has this token', upToDate ? 'ok' : 'warn', upToDate ? 'Yes' : synced ? 'Sent an older token' : 'Not sent yet',
+      upToDate ? '' : 'The API sends alerts to the token it stored at login. It is re-sent automatically on sign-in, on app start and when it changes; tap Turn on / Try again to send it now.');
+  }
 
   const last = readForegroundMessageRecord();
   add('Last foreground message', last ? 'ok' : 'warn', last ? `${last.type || 'notification'} · ${new Date(last.at).toLocaleString('en-IN')}` : 'None received yet', last ? '' : 'Send a test notification while this tab is open to verify delivery.');
