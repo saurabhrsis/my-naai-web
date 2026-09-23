@@ -61,7 +61,7 @@ The web session uses these keys:
 | `userType` | `USER` or `SALON` |
 | `isLoggedIn` | Boolean-like string used to restore the session |
 | `isNewSalon` | Salon registration state |
-| `FCM_TOKEN` | Browser-only Firebase registration token, when push is configured |
+| `FCM_TOKEN` | Trimmed diagnostic copy of the last confirmed browser token; never an auth fallback |
 | `mynaaiPendingRoute` | Session-scoped stash of the path a guest must resume after login (§3) |
 | `mynaaiReminderList`, `mynaaiBookingRemindersEnabled` | Stored 30-minute reminder schedule + the Account-screen switch state (§3) |
 
@@ -75,7 +75,7 @@ There is exactly **one** notification permission funnel, and both push and booki
 
 The login screen keeps reading to a minimum — phone users tap buttons, not paragraphs: a one-line subtitle, then two compact pills. `AllowAlertsButton` owns the notification permission sign-in depends on: one tap opens the browser's own Allow popup when it has never been asked, or the permission gate with the exact fix for that device (per-browser unblock steps, Add-to-Home-Screen on iPhone, open-in-new-tab when the page is embedded); the pill follows the live Permissions API and disappears once alerts are on, turning red as **Fix alerts** while blocked. `InstallAppButton` keeps install one tap away — the pill fires the captured native prompt or opens a 2–3 step guide for the detected browser (`INSTALL_STEPS`, iPhone gets the Share → Add to Home Screen sheet). Once the app runs standalone, install UI disappears by itself. The guest shell's top bar carries the same install pill.
 
-Customer and salon authentication is never blocked on web push. The login page asks for booking alerts with one labelled tap (and the Continue tap counts as one when the permission is still unanswered), the token is sent as `deviceToken` in the OTP verification/onboarding contract and cached as `FCM_TOKEN`, and a visitor whose browser has blocked notifications still signs in — if the API insists on a token, a short sheet gives the exact fix and retries the request automatically.
+Customer and salon authentication is never blocked on web push. The login page asks for booking alerts with one labelled tap (and the Continue tap counts as one when the permission is still unanswered), the live Firebase token is sent as `deviceToken` in the OTP verification/onboarding contract, and a trimmed `FCM_TOKEN` copy is diagnostic only — it is never used when Firebase cannot confirm the current subscription. A visitor whose browser has blocked notifications still signs in; if the API insists on a token, a short sheet gives the exact fix and retries the request automatically.
 
 ### Booking reminders (the 30-minute alarm)
 

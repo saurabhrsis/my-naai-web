@@ -7,7 +7,7 @@
  * - Works on Android, iOS (PWA), Chrome, Edge, Firefox, Samsung Internet, Safari
  */
 
-const CACHE_NAME = 'mynaai-shell-v8';
+const CACHE_NAME = 'mynaai-shell-v9';
 const APP_SHELL = [
   '/',
   '/index.html',

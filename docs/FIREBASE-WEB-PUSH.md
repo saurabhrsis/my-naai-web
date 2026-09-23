@@ -53,18 +53,19 @@ The implementation is in `src/lib/push.js`:
 2. The Firebase Messaging SDK checks whether this browser supports messaging and service workers.
 3. The login page offers **Booking alerts** as one labelled row. That tap (or the Continue-with-OTP tap while permission is still unanswered) calls `Notification.requestPermission()` synchronously inside the gesture, so Safari keeps the gesture and the popup actually appears — the live permission is then re-read from the Permissions API rather than the stale `Notification.permission` snapshot. Salon registration offers the same one-tap card on its steps.
 4. After permission is granted, the app registers `public/firebase-messaging-sw.js` — the ONE root-scope worker — at scope `/`. `src/lib/push.js` is the only place that registers it; the app shell is cached by that same worker. (A second script registered at `/` used to replace this registration on every load, which is what produced stale subscriptions and "no active service worker" token errors.)
-5. Firebase `getToken()` uses the VAPID public key and that registration to create or retrieve the browser's FCM registration token, retrying up to four times (a slow first worker start-up is the usual "the first tap did nothing" report).
-6. The token is cached locally as `FCM_TOKEN` and sent to the existing MyNaai API as `deviceToken`:
+5. Firebase `getToken()` uses the VAPID public key and that registration to create or retrieve the browser's FCM registration token, retrying up to four times (a slow first worker start-up is the usual "the first tap did nothing" report). With the same browser push subscription, Firebase returns the same token after a normal page refresh; the portal does not call `deleteToken()` or replace the backend record on refresh.
+6. The live token is sent to the existing MyNaai API as `deviceToken`; a
+trimmed copy may be cached locally as `FCM_TOKEN` for diagnostics only:
 
 ```js
 {
   phoneNumber: '...',
   otp: '...',
-  deviceToken: '<browser FCM registration token>'
+  deviceToken: '<current browser FCM registration token>'
 }
 ```
 
-The API payload differs slightly between login and onboarding, but `deviceToken` follows the mobile app’s existing contract. The portal obtains a token before verification/onboarding whenever the browser allows one, and the key is simply omitted (never sent as `''`) when it cannot — so a backend that validates `deviceToken` only when present keeps working, and alerts attach as soon as the visitor allows them.
+The API payload differs slightly between login and onboarding, but `deviceToken` follows the mobile app’s existing contract. The portal obtains a token before verification/onboarding whenever Firebase confirms one, and the key is simply omitted (never sent as `''`) when it cannot — so a backend that validates `deviceToken` only when present keeps working. Login, OTP verification and salon creation never use `FCM_TOKEN`, React state or an earlier registration value as a replacement for a failed live Firebase read.
 
 **Sign-in is never blocked on alerts.** Blocking it cost real users: a visitor whose browser had already blocked the permission could not sign in at all, and there is no way for a page to re-ask once a permission is denied. The portal therefore tries the API with whatever token it has. If the API answers with a `deviceToken` refusal, `isDeviceTokenError()` recognises it, the Alerts sheet opens with the exact fix for the detected browser, and the same request is retried automatically the moment a token arrives — one tap from the user, no re-typing.
 
@@ -72,7 +73,7 @@ Both Account screens keep a collapsible **Alerts & permissions** card (rows for 
 
 Permission is read live, not from the `Notification.permission` snapshot: `readNotificationPermission()` (src/lib/push.js) queries `navigator.permissions.query({ name: 'notifications' })` first and falls back to the static value. This matters because several browsers (Chrome and Samsung Internet on Android especially) keep the stale `denied` value on an already-loaded page after the user re-allows notifications in site settings, which used to make the login card’s “I allowed — Check” keep reporting Blocked. `watchNotificationPermission()` additionally subscribes to the Permissions API `change` event so the login card, the sign-in gate and the Account card refresh themselves the moment the browser reports a change, and every blocked state also offers a one-tap page **Reload** for browsers that only hand over the fresh value on a new load. The login page also opens the browser’s own permission popups on the user’s first tap — notifications first, then location — exactly like the splash screen, so a returning visitor coming from Google gets the same one-tap ask instead of a card that only describes it. Blocked hints also cover the two silent blockers: pages embedded inside another page’s `<iframe>` (browsers hide the permission popup there; `isEmbeddedFrame()` makes the new-tab escape hatch the primary action — preview panes only, never a normal mynaai.in visit) and the Android OS-level block (site notifications stay off when the browser app’s own notifications are disabled in Android Settings → Apps). When permission is granted but the token mint has not completed, the card says the browser **allowed** notifications and one automatic retry (capped at two) runs quietly before the user ever sees a “Try again”.
 
-For a previously authenticated session, app startup installs the foreground listener only when push is configured, supported and permission is already granted. The Account retry action re-runs token generation and stores the result as `FCM_TOKEN`; the next OTP login/onboarding submits it again as the required `deviceToken` because the mobile API does not expose a separate device-registration method.
+For a previously authenticated session, app startup installs the foreground listener only when push is configured, supported and permission is already granted. The Account retry action re-runs Firebase token generation and stores the confirmed result as the diagnostic `FCM_TOKEN`; the next OTP login/onboarding re-reads Firebase and submits that live result as `deviceToken` because a cache is never authoritative.
 
 ## 4. How notifications are delivered
 
@@ -186,19 +187,35 @@ A dedicated authenticated endpoint such as `POST /api/notifications/register-dev
 ```json
 {
   "deviceToken": "<current-browser-token>",
-  "platform": "web"
+  "platform": "web",
+  "userType": "SALON",
+  "userId": "<authenticated-account-id>"
 }
 ```
 
+Treat `deviceToken` as an opaque, trimmed string from the authenticated request —
+never as a cache key supplied by the browser. If you use a `DeviceToken` table,
+put a **unique index on `token`** (one FCM registration token belongs to one
+browser/app installation), and upsert under that constraint. Keep multiple
+active rows for one account so a salon can receive alerts on both its phone and
+laptop. When a token is re-registered for a different authenticated account,
+move the row rather than creating a second owner. When a send returns FCM's
+`registration-token-not-registered` or `invalid-registration-token`, mark that
+row inactive. Network errors must not deactivate it.
+
+The drop-in registration handler in `backend/registerDevice.js` performs those
+checks, removes duplicate token rows, and clears duplicate legacy
+`deviceToken` ownership when only the old single-column schema is available.
+
 **Login is the primary registration — and it now always carries the live token.** The backend stores the `deviceToken` from OTP verify / onboarding / salon creation and sends every notification to it, so those three requests now re-read the browser's *current* FCM token (`getToken()` with a few patient retries while the worker starts) instead of a value banked minutes earlier or a cached `FCM_TOKEN` that may have rotated. This is what makes a fresh sign-in reliably "register" a phone, tablet or laptop.
 
-**The portal also keeps that token current after login.** `src/lib/deviceToken.js` posts `{ deviceToken, platform: 'web', userType, userId }` to `POST /api/notifications/register-device` (with the session's bearer token) whenever the signed-in account's token changes: on app start when permission is already granted, the moment a token lands after the user allows notifications from the Account card, when the token rotates, and when the app returns to the foreground. The same `(account, token)` pair is never sent twice, and a server that answers 404 is remembered for the session so the portal stops asking.
+**The portal also keeps that token current after login.** `src/lib/deviceToken.js` posts `{ deviceToken, platform: 'web', userType, userId }` to `POST /api/notifications/register-device` (with the session's bearer token) when a signed-in account has no banked login token, when a token lands after the user allows notifications from the Account card, and when the app returns to the foreground. If Firebase rotates a token that was already banked at login, the portal raises its token-change recovery UI and asks for a fresh OTP login; that makes the next authoritative auth request carry the new live token instead of silently assuming a profile update succeeded. The same `(account, token)` pair is never sent twice, and a server that answers 404 is remembered for the session so the portal stops asking.
 
 This matters because the auth flow is the only place the token used to reach the server. A salon who signed in first and allowed notifications afterwards, or whose browser token rotated, or who signed in on a laptop after the phone, had a **granted permission and a server that could not reach them** — the classic "permission is given but no notification arrives".
 
 When the server answers 404 for `register-device`, the portal falls back to the profile-update endpoints the mobile app already has — `POST /api/salons/update-salon` `{ salonId, deviceToken }` for a salon and `POST /api/users/update` `{ userId, deviceToken }` for a customer — which write the same `deviceToken` column login writes. **No backend change is required** for the fallback; the dedicated endpoint is only needed if you want per-device (multi-token) storage. The **Turn on alerts** button on both Account screens sends the token the moment it is minted, and the Notification status card shows a **Server has this token** line.
 
-A drop-in Express handler is in `backend/registerDevice.js`. It writes to the existing single `deviceToken` column, or to a `DeviceToken` table when the project has one (recommended for salons that use the phone and the laptop together). If the backend keeps one token field, make sure a web login does not disable the user’s mobile notifications by overwriting the mobile token.
+A drop-in Express handler is in `backend/registerDevice.js`. It writes to the existing single `deviceToken` column, or to a `DeviceToken` table when the project has one (recommended for salons that use the phone and the laptop together). In the table path, the token is globally unique, duplicate rows are removed/deactivated, and an account can retain multiple active devices. In the single-column fallback, registering the token clears that same token from any other account before writing it to the authenticated account; this prevents duplicate ownership but cannot provide multi-device fan-out. For the table path, notification senders must query all active rows for the recipient and deactivate only tokens FCM reports as permanently unregistered.
 ## 4.2 On-device notification diagnostics
 
 "Notifications are not working" can come from five different layers — HTTPS, the Firebase build config, the browser permission, the messaging service worker and the FCM token — spread across the browser, the deployment and the backend. Both Account screens (salon and customer) therefore render a collapsible **Notification status** card (`src/components/NotificationDiagnostics.jsx`) that names the failing layer on the device the person is holding.
@@ -272,7 +289,7 @@ The same mapping is implemented in `getNotificationRoute()` for foreground messa
 - A new login can generate a fresh FCM token and send it to the backend.
 - The backend should handle an invalid/expired FCM token response from Firebase by removing that token from its records.
 
-There is no token-refresh callback API exposed as a separate UI feature in this portal. Re-running `getToken()` during the next authenticated login/onboarding refreshes the registration and resubmits the current token.
+There is no separate token-refresh button. `keepDeviceTokenSynced` re-reads the live token on an authenticated app start, foreground return and push-token event. A normal refresh returns the same Firebase token, so the stored login baseline remains valid and no sign-out or duplicate registration occurs. A confirmed token with no login baseline is handed to `register-device`; when a banked login token genuinely changes, the recovery UI asks for a fresh OTP login so the next authoritative request stores the new token.
 
 ## 7. Service-worker scope warning
 
@@ -301,6 +318,15 @@ Open the Account screen (salon or customer) and expand **Alerts & permissions**.
 - Check that the browser has not permanently blocked notifications for the origin — a blocked permission can only be fixed in the browser's own site settings, which is what the three-step sheet walks through, and **Try again** re-reads the live permission so the fix is picked up without a logout.
 - The app offers the one-tap alert action on the login page (**Booking alerts**), on the salon registration steps, and in the Account screen's **Alerts & permissions** card.
 - Sign-in is NOT blocked by a missing token: if a login still fails, look at the API response (`deviceToken`) in the copied report rather than at the permission state.
+
+### OPPO, Vivo and newer Android devices
+
+These phones have two separate controls: the My Naai/site permission and the Android app permission. A site can report `granted` while Android still suppresses the notification channel or while the OEM has stopped Chrome/the installed PWA in the background.
+
+- **Notifications:** in the page/site settings, set Notifications to Allow. Then open Android **Settings → Apps → Chrome (or My Naai if it is installed) → Notifications → On**. On OPPO/realme/OnePlus also allow Auto-launch/background activity; on Vivo allow background activity/Auto-start. If My Naai is installed, check the **My Naai** app entry rather than only Chrome.
+- **Location:** set the site Location permission to Allow, make sure Android **Location** is on, and allow Location for Chrome/My Naai under **Settings → Location → App permissions**. OPPO/realme/OnePlus use **Settings → Apps → App management → the app → Permissions → Location → Allow while using**; Vivo uses **Settings → More settings → Permission management → Location**.
+- Return to My Naai and use **Try again**. The portal reads the live permission, rebuilds a stale push subscription, and waits for an updated worker before minting the FCM token. It no longer treats an old page-load `denied` value or a temporarily unavailable Firebase probe as final.
+- If the device browser does not support Firebase Web Messaging/service workers, use current Chrome/Edge/Samsung Internet or install My Naai as a PWA. The Account **Support report** identifies whether the failing layer is the Android permission, worker, subscription or token.
 
 ### Token is empty
 
@@ -358,12 +384,13 @@ What the web app does about it (`src/lib/deviceToken.js`):
 1. The token sent with login is banked as `FCM_TOKEN_LOGIN` (`rememberLoginToken`).
 2. `keepDeviceTokenSynced` compares the live Firebase token against it on
    start, on focus and whenever the token rotates.
-3. If they differ, it first tries a quiet hand-over (`register-device`, then the
-   profile-update fallback). Success just updates the banked token.
-4. If the hand-over cannot be confirmed, it dispatches
-   `mynaai:device-token-changed`; `AppShell` signs the user out and opens the
-   sign-in screen with a notice explaining why. The next OTP login carries the
-   new token, and the backend is back in sync.
+3. If they differ and this token has not already triggered recovery, the portal
+   dispatches `mynaai:device-token-changed`; `AppShell` signs the user out and
+   opens the sign-in screen with a notice explaining why. The next OTP login
+   carries the new live token, and the backend replaces the old login token.
+4. If there is no banked login token, the portal can quietly register the live
+   token through `register-device` (then the profile-update fallback). A failed
+   quiet hand-over never signs the user out.
 
 Guard rails (so this can never become a blocker):
 

@@ -268,6 +268,26 @@ describe('getPushStatus permission reads', () => {
 // subscription left behind by an older worker is rebuilt instead of failing
 // forever.
 describe('push token recovery', () => {
+  it('never treats a cached token as valid after live permission is blocked', async () => {
+    window.localStorage.setItem('FCM_TOKEN', 'stale-token-from-an-old-browser');
+    window.Notification.permission = 'denied';
+    window.navigator.permissions = { query: vi.fn(() => Promise.resolve({ state: 'denied' })) };
+
+    await expect(getPushToken({ requestPermission: false })).resolves.toBe('');
+    expect(window.localStorage.getItem('FCM_TOKEN')).toBeNull();
+  });
+
+  it('clears the persisted token when Firebase cannot confirm the current subscription', async () => {
+    const { isSupported } = await import('firebase/messaging');
+    vi.mocked(isSupported).mockReset().mockResolvedValue(false);
+    window.localStorage.setItem('FCM_TOKEN', 'stale-token-from-an-old-pwa');
+    window.navigator.serviceWorker = { register: vi.fn() };
+    window.Notification.permission = 'granted';
+
+    await expect(getPushToken({ requestPermission: false })).resolves.toBe('');
+    expect(window.localStorage.getItem('FCM_TOKEN')).toBeNull();
+  });
+
   const makeRegistration = ({ unsubscribe = vi.fn(() => Promise.resolve(true)) } = {}) => {
     const registration = {
       active: { state: 'activated', scriptURL: 'https://mynaai.in/firebase-messaging-sw.js?v=1' },
@@ -285,6 +305,25 @@ describe('push token recovery', () => {
     };
     return { registration, unsubscribe };
   };
+
+  it('keeps the same Firebase token across a page refresh', async () => {
+    const { getToken, isSupported } = await import('firebase/messaging');
+    const { registration } = makeRegistration();
+    vi.mocked(isSupported).mockResolvedValueOnce(true).mockResolvedValueOnce(true);
+    vi.mocked(getToken).mockResolvedValueOnce('stable-token-after-refresh').mockResolvedValueOnce('stable-token-after-refresh');
+
+    const first = await getPushToken({ requestPermission: false });
+    // A refresh creates new SDK/worker promises, but it does not delete the
+    // browser's push subscription. The next live Firebase read must therefore
+    // remain the same token and must not trigger a replacement record.
+    resetPushRegistration();
+    const second = await getPushToken({ requestPermission: false });
+
+    expect(first).toBe('stable-token-after-refresh');
+    expect(second).toBe(first);
+    expect(window.localStorage.getItem('FCM_TOKEN')).toBe(first);
+    expect(registration.unregister).not.toHaveBeenCalled();
+  });
 
   it('describes each failure in plain words instead of one vague sentence', () => {
     expect(describePushTokenFailure({ kind: 'offline' })).toContain('could not reach My Naai alerts');

@@ -351,14 +351,22 @@ export function Toggle({ checked, onChange, label, disabled = false }) {
 }
 
 export function getBrowserLocation(options = {}) {
-  return new Promise(resolve => {
-    if (!navigator.geolocation) return resolve(null);
+  const locate = requestOptions => new Promise(resolve => {
+    if (!navigator.geolocation) return resolve({ value: null, code: 0 });
     navigator.geolocation.getCurrentPosition(
-      position => resolve({ latitude: position.coords.latitude, longitude: position.coords.longitude }),
-      () => resolve(null),
-      { enableHighAccuracy: false, timeout: 7000, maximumAge: 300000, ...options },
+      position => resolve({ value: { latitude: position.coords.latitude, longitude: position.coords.longitude }, code: 0 }),
+      error => resolve({ value: null, code: error?.code || 0 }),
+      requestOptions,
     );
   });
+  return locate({ enableHighAccuracy: false, timeout: 12000, maximumAge: 300000, ...options })
+    .then(first => {
+      if (first.value || first.code !== 3 || options.timeout) return first.value;
+      // A cold Android/OEM fix often needs longer to wake the network provider.
+      // Retry only a timeout, never a permission denial, so a blocked location
+      // permission cannot trigger a second prompt or look like a new ask.
+      return locate({ enableHighAccuracy: false, timeout: 25000, maximumAge: 600000, ...options }).then(next => next.value);
+    });
 }
 
 export { Check, ChevronRight, Clock3, MapPin, RefreshCw, Star };

@@ -86,7 +86,7 @@ import {
   useIsAppSurface,
 } from './Shared';
 import { NotificationDiagnostics } from './NotificationDiagnostics';
-import { readPermission, requestLocation, requestNotifications } from '../lib/permissions';
+import { promptsAvailable, readPermission, requestLocation, requestNotifications } from '../lib/permissions';
 import { PermissionSheet } from './PermissionUI';
 import { BuzzerTestCard } from './BuzzerTestCard';
 
@@ -410,6 +410,7 @@ export function HomeScreen({ session, navigate, notify }) {
   // opens the short settings sheet instead (this is the fix for the report
   // "Enable location does not enable it and never asks").
   const [locationSheetOpen, setLocationSheetOpen] = useState(false);
+  const [locationSheetState, setLocationSheetState] = useState('denied');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [userName, setUserName] = useState(session?.user?.fullName || '');
@@ -599,8 +600,17 @@ export function HomeScreen({ session, navigate, notify }) {
   const enableLocation = useCallback(async () => {
     setLocationBusy(true);
     try {
+      // Permissions Policy blocks geolocation in preview/in-app frames before
+      // Android ever gets a chance to show its prompt. Do not call the API in
+      // that case; the sheet gives the visitor the new-tab escape hatch.
+      if (!promptsAvailable('location')) {
+        setLocationSheetState('denied');
+        setLocationSheetOpen(true);
+        return;
+      }
       const permission = await readPermission('location');
       if (permission === 'denied' || permission === 'unsupported') {
+        setLocationSheetState('denied');
         setLocationSheetOpen(true);
         return;
       }
@@ -611,7 +621,8 @@ export function HomeScreen({ session, navigate, notify }) {
         await loadData(fix);
         return;
       }
-      if (result.state === 'denied') {
+      if (result.state === 'denied' || result.state === 'device-settings') {
+        setLocationSheetState(result.state);
         setLocationSheetOpen(true);
         return;
       }
@@ -702,7 +713,7 @@ export function HomeScreen({ session, navigate, notify }) {
       <PermissionSheet
         open={locationSheetOpen}
         kind="location"
-        state="denied"
+        state={locationSheetState}
         onClose={() => { setLocationSheetOpen(false); }}
         onGranted={async () => {
           setLocationSheetOpen(false);
