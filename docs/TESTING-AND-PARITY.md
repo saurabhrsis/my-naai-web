@@ -6,7 +6,7 @@ This document records how the web portal was verified against the MyNaai mobile 
 > **What was actually exercised in this environment**
 > - `npm run build` (production) — passes
 > - `npm run lint` (ESLint) — passes
-> - `npm test` (Vitest + jsdom) — 32 test files / 407 assertions pass
+> - `npm test` (Vitest + jsdom) — 32 test files / 408 assertions pass
 > - Live `vite` preview: served the app, all source modules, and the buzzer
 >   WAV assets with HTTP 200.
 >
@@ -32,7 +32,7 @@ npm test
 
 | File | Covers |
 | --- | --- |
-| `src/lib/push.test.js` (36) | `isPushConfigured`, `bookingRequestActions` (Accept/Reject/Delay), `normalizePushPayload` (notification+data merge, data-only, defaults, click_action), `isActionableNotification` (salon vs customer), `getNotificationRoute` (all types/roles, delay modal, unknown fallback), `formatPushDiagnostics`, the live permission reads, and **token recovery**: stale cached tokens are cleared when permission/Firebase cannot confirm a subscription, a stale push subscription is dropped and the worker rebuilt before the retry, a successful retry clears the failure, and a failure records the reason (`describePushTokenFailure`) so the UI can name the cause instead of one vague sentence. |
+| `src/lib/push.test.js` (37) | `isPushConfigured`, `bookingRequestActions` (Accept/Reject/Delay), `normalizePushPayload` (notification+data merge, data-only, defaults, click_action), `isActionableNotification` (salon vs customer), `getNotificationRoute` (all types/roles, delay modal, unknown fallback), `formatPushDiagnostics`, the live permission reads, and **token recovery**: stale cached tokens are cleared when permission/Firebase cannot confirm a subscription, a stale push subscription is dropped and the worker rebuilt before the retry, a successful retry clears the failure, and a failure records the reason (`describePushTokenFailure`) so the UI can name the cause instead of one vague sentence. |
 | `src/lib/apiPayload.test.js` (2) | Trims live FCM tokens and omits empty/non-string device-token values instead of sending placeholders. |
 | `src/lib/deviceToken.test.js` (16) | Authenticated device registration, token rotation, per-session deduplication, fallback profile updates, and recovery when the live token differs from the login baseline. |
 | `src/App.test.jsx` (74) | Login permission guidance, optional-token sign-in, strict live-token OTP verification, cached/in-memory-token rejection, and recovery when the backend requires a token. |

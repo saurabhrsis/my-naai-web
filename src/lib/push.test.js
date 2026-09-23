@@ -306,6 +306,25 @@ describe('push token recovery', () => {
     return { registration, unsubscribe };
   };
 
+  it('keeps the same Firebase token across a page refresh', async () => {
+    const { getToken, isSupported } = await import('firebase/messaging');
+    const { registration } = makeRegistration();
+    vi.mocked(isSupported).mockResolvedValueOnce(true).mockResolvedValueOnce(true);
+    vi.mocked(getToken).mockResolvedValueOnce('stable-token-after-refresh').mockResolvedValueOnce('stable-token-after-refresh');
+
+    const first = await getPushToken({ requestPermission: false });
+    // A refresh creates new SDK/worker promises, but it does not delete the
+    // browser's push subscription. The next live Firebase read must therefore
+    // remain the same token and must not trigger a replacement record.
+    resetPushRegistration();
+    const second = await getPushToken({ requestPermission: false });
+
+    expect(first).toBe('stable-token-after-refresh');
+    expect(second).toBe(first);
+    expect(window.localStorage.getItem('FCM_TOKEN')).toBe(first);
+    expect(registration.unregister).not.toHaveBeenCalled();
+  });
+
   it('describes each failure in plain words instead of one vague sentence', () => {
     expect(describePushTokenFailure({ kind: 'offline' })).toContain('could not reach My Naai alerts');
     expect(describePushTokenFailure({ kind: 'key' })).toContain('Firebase rejected');

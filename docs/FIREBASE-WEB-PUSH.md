@@ -53,7 +53,7 @@ The implementation is in `src/lib/push.js`:
 2. The Firebase Messaging SDK checks whether this browser supports messaging and service workers.
 3. The login page offers **Booking alerts** as one labelled row. That tap (or the Continue-with-OTP tap while permission is still unanswered) calls `Notification.requestPermission()` synchronously inside the gesture, so Safari keeps the gesture and the popup actually appears — the live permission is then re-read from the Permissions API rather than the stale `Notification.permission` snapshot. Salon registration offers the same one-tap card on its steps.
 4. After permission is granted, the app registers `public/firebase-messaging-sw.js` — the ONE root-scope worker — at scope `/`. `src/lib/push.js` is the only place that registers it; the app shell is cached by that same worker. (A second script registered at `/` used to replace this registration on every load, which is what produced stale subscriptions and "no active service worker" token errors.)
-5. Firebase `getToken()` uses the VAPID public key and that registration to create or retrieve the browser's FCM registration token, retrying up to four times (a slow first worker start-up is the usual "the first tap did nothing" report).
+5. Firebase `getToken()` uses the VAPID public key and that registration to create or retrieve the browser's FCM registration token, retrying up to four times (a slow first worker start-up is the usual "the first tap did nothing" report). With the same browser push subscription, Firebase returns the same token after a normal page refresh; the portal does not call `deleteToken()` or replace the backend record on refresh.
 6. The live token is sent to the existing MyNaai API as `deviceToken`; a
 trimmed copy may be cached locally as `FCM_TOKEN` for diagnostics only:
 
@@ -289,7 +289,7 @@ The same mapping is implemented in `getNotificationRoute()` for foreground messa
 - A new login can generate a fresh FCM token and send it to the backend.
 - The backend should handle an invalid/expired FCM token response from Firebase by removing that token from its records.
 
-There is no separate token-refresh button. `keepDeviceTokenSynced` re-reads the live token on an authenticated app start, foreground return and push-token event. A confirmed token with no login baseline is handed to `register-device`; when a banked login token changes, the recovery UI asks for a fresh OTP login so the next authoritative request stores the new token.
+There is no separate token-refresh button. `keepDeviceTokenSynced` re-reads the live token on an authenticated app start, foreground return and push-token event. A normal refresh returns the same Firebase token, so the stored login baseline remains valid and no sign-out or duplicate registration occurs. A confirmed token with no login baseline is handed to `register-device`; when a banked login token genuinely changes, the recovery UI asks for a fresh OTP login so the next authoritative request stores the new token.
 
 ## 7. Service-worker scope warning
 
