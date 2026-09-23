@@ -67,6 +67,10 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function clearCachedPushToken() {
+  try { localStorage.removeItem('FCM_TOKEN'); } catch {}
+}
+
 async function getMessagingClient() {
   if (!isPushConfigured() || typeof window === 'undefined' || !('serviceWorker' in navigator)) return null;
   if (!messagingPromise) {
@@ -443,7 +447,10 @@ function scheduleTokenRecovery() {
 }
 
 export async function getPushToken({ requestPermission = false } = {}) {
-  if (!isPushConfigured() || typeof window === 'undefined' || !('Notification' in window)) return '';
+  if (!isPushConfigured() || typeof window === 'undefined' || !('Notification' in window)) {
+    clearCachedPushToken();
+    return '';
+  }
 
   // Permission is the cheap, user-facing gate. Read it before Firebase's
   // feature probe so a blocked/default site does not wait on an OEM WebView's
@@ -468,7 +475,13 @@ export async function getPushToken({ requestPermission = false } = {}) {
   }
 
   const messaging = await getMessagingClient();
-  if (!messaging) return '';
+  if (!messaging) {
+    // FCM_TOKEN is a diagnostic cache, not an authorization source. Remove it
+    // when Firebase cannot confirm the current subscription so no later flow can
+    // mistake an old browser/PWA token for a live one.
+    clearCachedPushToken();
+    return '';
+  }
 
   const ATTEMPTS = 4;
   let lastError = null;
@@ -480,6 +493,7 @@ export async function getPushToken({ requestPermission = false } = {}) {
         registrationPromise = undefined;
         if (attempt < ATTEMPTS - 1) continue;
         rememberTokenFailure({ code: 'no-worker', message: 'No active notification worker' });
+        clearCachedPushToken();
         scheduleTokenRecovery();
         return '';
       }
@@ -497,10 +511,11 @@ export async function getPushToken({ requestPermission = false } = {}) {
         if (rebuilt) registration = rebuilt;
       }
       const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: registration });
-      if (token) {
-        try { localStorage.setItem('FCM_TOKEN', token); } catch {}
+      const liveToken = typeof token === 'string' ? token.trim() : '';
+      if (liveToken) {
+        try { localStorage.setItem('FCM_TOKEN', liveToken); } catch {}
         clearTokenFailure();
-        return token;
+        return liveToken;
       }
       lastError = { code: 'empty-token', message: 'Firebase returned no token' };
       if (attempt === ATTEMPTS - 1) {

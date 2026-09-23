@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { api, resetPlanExpiredAlert } from '../lib/api';
 import { getPushToken, isPushConfigured } from '../lib/push';
+import { normalizeDeviceToken } from '../lib/apiPayload';
 import { rememberLoginToken } from '../lib/deviceToken';
 import { FREE_ONBOARDING_PLAN, PARTNER_PLANS, RENEWAL_PLANS } from '../lib/planDetails';
 import {
@@ -109,15 +110,22 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
       // sent on this request; the completed response must return the persisted
       // salon session that the portal uses afterwards.
       // The salon record is created HERE, and this deviceToken is the one the
-      // backend will send every booking request to. The token banked earlier
-      // in the registration flow can be minutes old and, on a slow worker,
-      // even empty — so read the live one now and fall back to the banked one.
-      let deviceToken = String(registration.deviceToken || '').trim();
+      // backend will send every booking request to. Never fall back to the
+      // token carried into this screen: that value may belong to an older
+      // browser/PWA subscription. Firebase must return the current live token
+      // immediately before the backend stores it.
+      let deviceToken = '';
       if (isPushConfigured()) {
-        try { deviceToken = (await getPushToken({ requestPermission: false })) || deviceToken; } catch { /* keep the banked token */ }
+        try { deviceToken = normalizeDeviceToken(await getPushToken({ requestPermission: false })); } catch { deviceToken = ''; }
+        if (!deviceToken) throw new Error('Could not verify this device notification token. Please try again before completing salon setup.');
       }
+      // Strip the token carried through the earlier registration screens before
+      // building the request. If the current Firebase read is unavailable, no
+      // stale registration-flow value can leak back in through the spread.
+      const registrationPayload = { ...registration };
+      delete registrationPayload.deviceToken;
       const response = await api.createSalon({
-        ...registration,
+        ...registrationPayload,
         ...(deviceToken ? { deviceToken } : {}),
         planType: plan.id,
         paymentId: payment.paymentId,
@@ -389,21 +397,29 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
     if (!plan) return notify?.('error', 'Please choose a plan to continue.');
     setNotice(null);
     if (showFreeOnboarding && plan.id === FREE_ONBOARDING_PLAN.id) return completeFreeOnboarding();
-    if (isRegistration && !String(registrationData?.deviceToken || '').trim()) {
-      return notify?.('error', 'Enable notifications, then continue. A device token is required to register the salon.');
+    let liveRegistration = registrationData;
+    if (isRegistration) {
+      // Validate the token before opening payment. A token carried from the OTP
+      // screen or local state is not proof that this browser still owns the
+      // Firebase subscription; never take payment and discover that afterward.
+      if (!isPushConfigured()) return notify?.('error', 'Notifications are not configured for this build. A current device token is required to register the salon.');
+      let liveToken = '';
+      try { liveToken = normalizeDeviceToken(await getPushToken({ requestPermission: false })); } catch { liveToken = ''; }
+      if (!liveToken) return notify?.('error', 'Enable notifications, then try again. We could not verify a current device token for this browser.');
+      liveRegistration = { ...registrationData, deviceToken: liveToken };
     }
     inFlight.current = true;
     setLoading(true);
     try {
       const flow = isRegistration ? 'register' : 'renew';
-      const payment = await runPayment(plan, flow, isRegistration ? registrationData : null);
+      const payment = await runPayment(plan, flow, liveRegistration);
       if (!payment) return;
       if (!payment.paymentId) {
         reportActivationFailure(new Error('Razorpay did not return a payment ID.'), payment);
         return;
       }
       try {
-        await finalizePlan({ plan, payment, registration: isRegistration ? registrationData : null });
+        await finalizePlan({ plan, payment, registration: isRegistration ? liveRegistration : null });
       } catch (activationError) {
         // The money moved but the plan did not: never suggest paying again.
         reportActivationFailure(activationError, payment);

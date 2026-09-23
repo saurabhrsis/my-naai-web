@@ -113,6 +113,111 @@ function pickColumns(model, values) {
   );
 }
 
+function normalizeDeviceToken(value) {
+  if (typeof value !== 'string') return '';
+  const token = value.trim();
+  if (!token || /[\u0000-\u0020\u007f]/.test(token) || token.length < 20 || token.length > 4096) return '';
+  return token;
+}
+
+function permanentTokenError(error) {
+  const text = `${error?.code || ''} ${error?.errorInfo?.code || ''} ${error?.message || error || ''}`.toLowerCase();
+  return /registration-token-not-registered|invalid-registration-token|unregistered|not-registered|requested entity was not found/.test(text);
+}
+
+function deviceTokenFromRow(row) {
+  return normalizeDeviceToken(row?.token || row?.deviceToken);
+}
+
+async function activeCustomerDeviceRows(userId) {
+  const Model = db.DeviceToken;
+  if (!Model || userId === undefined || userId === null || userId === '') return [];
+  try {
+    const where = { ownerType: 'USER', ownerId: userId, active: true };
+    if (typeof Model.findAll === 'function') {
+      const rows = await Model.findAll({ where });
+      return Array.isArray(rows) ? rows : [];
+    }
+    if (typeof Model.findOne === 'function') {
+      const row = await Model.findOne({ where });
+      return row ? [row] : [];
+    }
+  } catch (error) {
+    // The appointment is still valid if the optional device table is being
+    // migrated. The legacy account column below remains a safe fallback.
+    console.error('Could not read active customer device tokens:', error?.message || error);
+  }
+  return [];
+}
+
+async function deactivateDeviceRow(row, token, userId) {
+  try {
+    if (typeof row?.update === 'function') {
+      await row.update({ active: false, lastSeenAt: new Date() });
+    } else if (db.DeviceToken?.update) {
+      await db.DeviceToken.update({ active: false, lastSeenAt: new Date() }, { where: { token } });
+    }
+    // Also clear a matching legacy account column. This is conditional on the
+    // old token, so a concurrent rotation to a new token is never overwritten.
+    if (db.User?.update) {
+      await db.User.update({ deviceToken: null }, { where: { userId, deviceToken: token } });
+    }
+  } catch (error) {
+    console.error('Could not deactivate stale device token:', error?.message || error);
+  }
+}
+
+async function notifyCustomerDevices({ userId, legacyToken, title, message, payload }) {
+  const rows = await activeCustomerDeviceRows(userId);
+  const records = rows
+    .map(row => ({ row, token: deviceTokenFromRow(row) }))
+    .filter(record => record.token);
+  const legacy = normalizeDeviceToken(legacyToken);
+  if (legacy) records.push({ row: null, token: legacy });
+
+  // A duplicate row or a legacy column containing the same token must not make
+  // the customer hear the same alert twice. Keep the row associated with the
+  // first occurrence so a permanently invalid registration can be deactivated.
+  const unique = new Map();
+  for (const record of records) if (!unique.has(record.token)) unique.set(record.token, record);
+  const devices = [...unique.values()];
+  if (!devices.length) return { attempted: 0, sent: 0 };
+
+  const results = await Promise.all(devices.map(async ({ row, token }) => {
+    try {
+      const result = await sendNotificationToDevice(token, title, message, payload);
+      if (result === false) return { sent: false };
+      return { sent: true };
+    } catch (error) {
+      if (permanentTokenError(error)) await deactivateDeviceRow(row, token, userId);
+      else console.error('Salon Queue Update Time push failed:', error?.message || error);
+      return { sent: false };
+    }
+  }));
+  return {
+    attempted: devices.length,
+    sent: results.filter(result => result.sent).length,
+  };
+}
+
+async function createUniqueNotification(values) {
+  const Model = db.Notification;
+  if (!Model?.create) return;
+  const eventKey = `BOOKING_TIME_UPDATED:${values.bookingId}:${values.bookingDate || ''}:${values.bookingTime || ''}`;
+  const attributes = Model.rawAttributes || {};
+  const dedupeField = ['eventKey', 'notificationKey', 'dedupeKey'].find(field => Object.prototype.hasOwnProperty.call(attributes, field));
+  const data = pickColumns(Model, dedupeField ? { ...values, [dedupeField]: eventKey } : values);
+  if (dedupeField && typeof Model.findOrCreate === 'function') {
+    await Model.findOrCreate({ where: { [dedupeField]: eventKey }, defaults: data });
+    return;
+  }
+  if (dedupeField && typeof Model.findOne === 'function') {
+    const existing = await Model.findOne({ where: { [dedupeField]: eventKey } });
+    if (existing) return;
+  }
+  await Model.create(data);
+}
+
 const salonUpdateBookingTime = async (req, res) => {
   try {
     const body = req.body || {};
@@ -285,32 +390,33 @@ const salonUpdateBookingTime = async (req, res) => {
       queueNumber: queue?.queueNumber ?? null,
     };
 
-    let notified = false;
-    const deviceToken = booking.user?.deviceToken;
-    if (deviceToken) {
-      try {
-        await sendNotificationToDevice(deviceToken, title, message, payload);
-        notified = true;
-      } catch (pushError) {
-        // The time is already moved; a failed push must not fail the request,
-        // or the salon presses Update again and confuses everyone.
-        console.error('Salon Queue Update Time push failed:', pushError?.message || pushError);
-      }
-    }
+    // Fan out to every active browser/phone token. The legacy account column is
+    // included for deployments that have not migrated the DeviceToken table;
+    // Map de-duplicates it when it is also present in the table. A dead FCM
+    // token is deactivated only for the permanent "not registered" response —
+    // a network outage must not erase a device that may recover.
+    const notificationResult = await notifyCustomerDevices({
+      userId: booking.userId,
+      legacyToken: booking.user?.deviceToken,
+      title,
+      message,
+      payload,
+    });
+    const notified = notificationResult.sent > 0;
 
     // In-app, for the customer's notification list — which is where a missed
     // push is still read. The salon is not notified of its own change; it has
     // the queue, and an alert for something it just did is only noise.
-    if (db.Notification?.create) {
-      await db.Notification.create(pickColumns(db.Notification, {
-        receiverType: 'USER',
-        receiverId: booking.userId,
-        title,
-        message,
-        type: 'BOOKING_TIME_UPDATED',
-        bookingId: booking.bookingId,
-      }));
-    }
+    await createUniqueNotification({
+      receiverType: 'USER',
+      receiverId: booking.userId,
+      title,
+      message,
+      type: 'BOOKING_TIME_UPDATED',
+      bookingId: booking.bookingId,
+      bookingDate: newDay,
+      bookingTime: newClock,
+    });
 
     // Live refresh: the customer's My Bookings and the salon's queue reload on
     // these, so both sides show the new time without a manual pull.

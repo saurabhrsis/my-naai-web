@@ -1115,6 +1115,31 @@ describe('Login permission flow', () => {
     }
   });
 
+  it('never sends a cached or earlier in-memory token when Firebase cannot return a live one', async () => {
+    grantOnRequest();
+    // Simulate the permission card having held a token from an earlier
+    // subscription, while the authoritative Firebase read used by verify now
+    // fails. Neither value is valid input for the OTP request.
+    vi.mocked(push.getPushToken)
+      .mockResolvedValueOnce('old-in-memory-token')
+      .mockResolvedValue('');
+    localStorage.setItem('FCM_TOKEN', 'old-cached-token');
+    await mount();
+
+    await act(async () => { buttonByText('Allow notifications').click(); });
+    await flush();
+    await act(async () => { typeMobile('9876543210'); });
+    await act(async () => { submitPhone(); });
+    await flush();
+    await act(async () => { typeOtp('123456'); });
+    await act(async () => { submitForm(); });
+    await flush();
+
+    expect(api.verifyLogin).toHaveBeenCalledTimes(1);
+    expect(api.verifyLogin.mock.calls[0][0]).toEqual({ phoneNumber: '9876543210', otp: '123456' });
+    localStorage.removeItem('FCM_TOKEN');
+  });
+
   it('asks once — from the Allow button, inside the tap, and never as a surprise', async () => {
     grantOnRequest();
     vi.mocked(push.getPushToken).mockResolvedValue('push-token-1');

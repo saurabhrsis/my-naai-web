@@ -10,7 +10,11 @@
 //     empty string, so a backend that only validates it when present keeps
 //     working while one that requires it answers with a message the app turns
 //     into the one-tap alerts sheet.
+export function normalizeDeviceToken(token) {
+  return typeof token === 'string' ? token.trim() : '';
+}
+
 export function withDeviceToken(payload, token) {
-  const value = typeof token === 'string' ? token.trim() : '';
+  const value = normalizeDeviceToken(token);
   return value ? { ...payload, deviceToken: value } : { ...payload };
 }
