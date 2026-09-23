@@ -302,6 +302,15 @@ Open the Account screen (salon or customer) and expand **Alerts & permissions**.
 - The app offers the one-tap alert action on the login page (**Booking alerts**), on the salon registration steps, and in the Account screen's **Alerts & permissions** card.
 - Sign-in is NOT blocked by a missing token: if a login still fails, look at the API response (`deviceToken`) in the copied report rather than at the permission state.
 
+### OPPO, Vivo and newer Android devices
+
+These phones have two separate controls: the My Naai/site permission and the Android app permission. A site can report `granted` while Android still suppresses the notification channel or while the OEM has stopped Chrome/the installed PWA in the background.
+
+- **Notifications:** in the page/site settings, set Notifications to Allow. Then open Android **Settings → Apps → Chrome (or My Naai if it is installed) → Notifications → On**. On OPPO/realme/OnePlus also allow Auto-launch/background activity; on Vivo allow background activity/Auto-start. If My Naai is installed, check the **My Naai** app entry rather than only Chrome.
+- **Location:** set the site Location permission to Allow, make sure Android **Location** is on, and allow Location for Chrome/My Naai under **Settings → Location → App permissions**. OPPO/realme/OnePlus use **Settings → Apps → App management → the app → Permissions → Location → Allow while using**; Vivo uses **Settings → More settings → Permission management → Location**.
+- Return to My Naai and use **Try again**. The portal reads the live permission, rebuilds a stale push subscription, and waits for an updated worker before minting the FCM token. It no longer treats an old page-load `denied` value or a temporarily unavailable Firebase probe as final.
+- If the device browser does not support Firebase Web Messaging/service workers, use current Chrome/Edge/Samsung Internet or install My Naai as a PWA. The Account **Support report** identifies whether the failing layer is the Android permission, worker, subscription or token.
+
 ### Token is empty
 
 - Confirm the VAPID public key is from the same Firebase project as the web app config.

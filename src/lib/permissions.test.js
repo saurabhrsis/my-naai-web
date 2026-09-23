@@ -2,8 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   ASK_CHOICES,
   androidAppNotificationHint,
+  androidLocationHint,
   browserLabel,
   buzzerHint,
+  detectAndroidVendor,
   detectBrowser,
   frameAllowsFeature,
   isDeviceTokenError,
@@ -13,6 +15,7 @@ import {
   readAskChoice,
   readPermission,
   rememberAskChoice,
+  requestLocation,
   requestNotifications,
   watchPermission,
 } from './permissions';
@@ -132,6 +135,20 @@ describe('permissions', () => {
     });
   });
 
+  describe('requestLocation', () => {
+    it('keeps an Android device-level location failure distinct from a site block', async () => {
+      const originalGeolocation = navigator.geolocation;
+      navigator.geolocation = {
+        getCurrentPosition: vi.fn((_success, fail) => fail({ code: 2, message: 'Location service disabled' })),
+      };
+      try {
+        await expect(requestLocation()).resolves.toMatchObject({ ok: false, state: 'device-settings', code: 2 });
+      } finally {
+        navigator.geolocation = originalGeolocation;
+      }
+    });
+  });
+
   describe('watchPermission', () => {
     it('calls back on a live change and detaches on unsubscribe', async () => {
       const status = { state: 'denied', onchange: null };
@@ -235,6 +252,19 @@ describe('permissions', () => {
       });
       withUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 EdgiOS/120.0 Mobile/15E148 Safari/605.1.15', () => {
         expect(detectBrowser()).toBe('ios-edge');
+      });
+    });
+
+    it('recognises OPPO and Vivo model/browser hints and gives OEM recovery steps', () => {
+      withUserAgent('Mozilla/5.0 (Linux; Android 14; CPH2581) AppleWebKit/537.36 Chrome/124.0 Mobile Safari/537.36', () => {
+        expect(detectAndroidVendor()).toBe('oppo');
+        expect(androidLocationHint('chrome-android')).toContain('OPPO');
+        expect(androidAppNotificationHint('chrome-android')).toContain('Auto-launch');
+      });
+      withUserAgent('Mozilla/5.0 (Linux; Android 14; V2312) AppleWebKit/537.36 Chrome/124.0 Mobile Safari/537.36', () => {
+        expect(detectAndroidVendor()).toBe('vivo');
+        expect(androidLocationHint('chrome-android')).toContain('Vivo');
+        expect(androidAppNotificationHint('chrome-android')).toContain('Auto-start');
       });
     });
 

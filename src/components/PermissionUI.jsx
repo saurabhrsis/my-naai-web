@@ -219,13 +219,19 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
   const allowLocation = async () => {
     setBusy('location');
     try {
+      if (!locationPromptable) {
+        setSheet({ open: true, state: 'denied', kind: 'location' });
+        return;
+      }
       const result = await requestLocation();
       rememberAskChoice('location', result.ok ? ASK_CHOICES.allowed : result.state === 'denied' ? ASK_CHOICES.blocked : ASK_CHOICES.later);
-      setLocation(result.ok ? 'granted' : result.state === 'denied' ? 'denied' : 'default');
+      setLocation(result.ok ? 'granted' : result.state === 'denied' ? 'denied' : result.state === 'device-settings' ? 'device-settings' : 'default');
       if (result.ok) {
         onNotify?.('success', 'Location on — salons are now sorted by distance for you.');
       } else if (result.state === 'denied') {
         setSheet({ open: true, state: 'denied', kind: 'location' });
+      } else if (result.state === 'device-settings') {
+        setSheet({ open: true, state: 'device-settings', kind: 'location' });
       }
     } finally {
       setBusy('');
@@ -499,8 +505,19 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
     setBusy(true);
     try {
       if (isLocation) {
+        if (embedded) {
+          setState('denied');
+          setCheckFailed(true);
+          return;
+        }
         const result = await requestLocation();
         if (result.ok) { succeed('location'); return; }
+        if (result.state === 'device-settings') {
+          setState('device-settings');
+          setCheckFailed(false);
+          setLastChecked(new Date());
+          return;
+        }
         setState(result.state === 'denied' ? 'denied' : 'needs-permission');
         await readStatus();
         return;
@@ -561,6 +578,11 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
         if (status.state === 'needs-permission') {
           const result = await requestLocation();
           if (result.ok) { succeed('location'); return; }
+          if (result.state === 'device-settings') {
+            setState('device-settings');
+            setCheckFailed(true);
+            return;
+          }
           await readStatus();
         }
         setCheckFailed(true);
@@ -644,6 +666,24 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
         <div className="permission-gate-actions">
           <Button onClick={check} loading={busy}><Check size={16} /> I installed it — Check</Button>
         </div>
+        <div className="permission-gate-secondary">
+          <button className="ghost" onClick={() => window.location.reload()}><RotateCw size={14} /> Reload page</button>
+          <button className="ghost" onClick={onClose}>Not now</button>
+          <a className="ghost" href="tel:8380017393">Need help? Call</a>
+        </div>
+      </>
+    );
+  } else if (state === 'device-settings' && isLocation) {
+    heading = 'Location services are off';
+    lede = 'This phone returned no location fix. On OPPO, Vivo and newer Android devices, the browser can have site access while Android still blocks the device-level location service:';
+    body = (
+      <>
+        <ol className="ios-install-steps permission-gate-steps">
+          {permissionSteps(browser, 'location').map(step => <li key={step}>{step}</li>)}
+        </ol>
+        {checkFailed && <div className="permission-gate-warn"><p>Location is still unavailable. Turn on Location for the app and come back, then tap <strong>Try again</strong>.</p></div>}
+        {lastCheckedLine && <p className="permission-help-note">{lastCheckedLine}</p>}
+        <div className="permission-gate-actions"><Button onClick={check} loading={busy}><Check size={16} /> I turned it on — Try again</Button></div>
         <div className="permission-gate-secondary">
           <button className="ghost" onClick={() => window.location.reload()}><RotateCw size={14} /> Reload page</button>
           <button className="ghost" onClick={onClose}>Not now</button>

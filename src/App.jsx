@@ -36,7 +36,9 @@ import {
   isIosDevice,
   isIosPwaInstalled,
   isStandalone,
+  promptsAvailable,
   readPermission,
+  requestLocation,
   requestNotifications,
 } from './lib/permissions';
 import { InstallAppButton, LoginPermissionCard, NotificationSetupCard, PermissionSheet } from './components/PermissionUI';
@@ -80,7 +82,7 @@ import {
 import { SubscriptionScreen } from './components/SubscriptionScreen';
 import { ConfirmProvider, LOGOUT_CONFIRM, useConfirm } from './components/ConfirmDialog';
 import { SALON_ABOUT_CONTENT, SALON_FAQ_CONTENT, SALON_TERMS_CONTENT } from './lib/salonContent';
-import { Button, Field, Modal, SelectField, Spinner, SurfaceProvider, getBrowserLocation, getErrorMessage, cx } from './components/Shared';
+import { Button, Field, Modal, SelectField, Spinner, SurfaceProvider, getErrorMessage, cx } from './components/Shared';
 
 // `label` is the full sidebar/menu wording; `short` is what the bottom bar
 // shows when the full one will not fit. Both are written out properly — the bar
@@ -662,9 +664,12 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
     if (pushToken && !fresh) return pushToken;
     if (alertsDeclined.current) return '';
     // Sync gates first — no await before the ask, so the gesture survives.
-    if ((isIosDevice() && !isIosPwaInstalled()) || isEmbeddedFrame()) return '';
+    if ((isIosDevice() && !isIosPwaInstalled()) || isEmbeddedFrame() || !promptsAvailable('notifications')) return '';
     const snapshot = (typeof Notification !== 'undefined' && Notification.permission) || 'default';
-    if (snapshot === 'denied') return '';
+    // Do not treat a page-load `denied` snapshot as final. Chrome and several
+    // Android/OEM browsers keep that value stale after the user re-allows the
+    // site in Settings. `getPushToken()` reads the live Permissions API below;
+    // only the `default` snapshot needs the gesture-bound popup here.
     if (snapshot === 'default') {
       const granted = await requestNotifications();
       if (granted !== 'granted') return '';
@@ -863,6 +868,7 @@ function SalonRegistration({ initialData, onBack, onComplete, notifyInstall }) {
   const [locationError, setLocationError] = useState('');
   const [locationAllowed, setLocationAllowed] = useState(false);
   const [locationSheetOpen, setLocationSheetOpen] = useState(false);
+  const [locationSheetState, setLocationSheetState] = useState('denied');
   const [busy, setBusy] = useState(false);
   const [registrationPushToken, setRegistrationPushToken] = useState(pushToken);
   const latestTokenRef = React.useRef(pushToken || '');
@@ -875,20 +881,36 @@ function SalonRegistration({ initialData, onBack, onComplete, notifyInstall }) {
     setLocationBusy(true);
     setLocationError('');
     try {
-      const permission = await readPermission('location');
-      if (permission === 'denied' || permission === 'unsupported') {
-        setLocationError('Location is blocked for this site — open the steps and switch Location to Allow.');
+      if (!promptsAvailable('location')) {
+        setLocationError('Open My Naai in its own browser tab to allow location.');
+        setLocationSheetState('denied');
         setLocationSheetOpen(true);
         return null;
       }
-      const current = await getBrowserLocation();
-      if (current) setLocationAllowed(true);
-      if (!current) {
-        setLocationError('Allow location for this site so customers can find your salon nearby.');
+      const permission = await readPermission('location');
+      if (permission === 'denied' || permission === 'unsupported') {
+        setLocationError('Location is blocked for this site — open the steps and switch Location to Allow.');
+        setLocationSheetState('denied');
+        setLocationSheetOpen(true);
         return null;
       }
-      setLatitude(Number(current.latitude));
-      setLongitude(Number(current.longitude));
+      const result = await requestLocation();
+      if (!result.ok) {
+        if (result.state === 'denied' || result.state === 'device-settings') {
+          setLocationError(result.state === 'device-settings'
+            ? 'Turn on Location for this app in Android Settings, then try again.'
+            : 'Location is blocked for this site — open the steps and switch Location to Allow.');
+          setLocationSheetState(result.state);
+          setLocationSheetOpen(true);
+          return null;
+        }
+        setLocationError('We could not read your location this time. Stand near a window or try again.');
+        return null;
+      }
+      const current = { latitude: Number(result.latitude), longitude: Number(result.longitude) };
+      setLocationAllowed(true);
+      setLatitude(current.latitude);
+      setLongitude(current.longitude);
       return current;
     } catch (locationRequestError) {
       setLocationError(getErrorMessage(locationRequestError, 'Unable to detect your salon location.'));
@@ -936,7 +958,7 @@ function SalonRegistration({ initialData, onBack, onComplete, notifyInstall }) {
   return <div className="auth-page registration-page"><div className="registration-back"><button className="icon-btn ghost" onClick={step === 'profile' ? onBack : () => setStep('profile')} aria-label="Go back"><ChevronRight size={19} className="rotate-180" /></button><Brand />{notifyInstall && <button className="install-auth-button registration-install-button" onClick={notifyInstall}><Download size={14} /> Install app</button>}</div><div className="registration-card"><div className="registration-progress"><span className="active" /><span className={step === 'business' ? 'active' : ''} /><span /><span /></div><span className="eyebrow">SALON PARTNER · STEP {step === 'profile' ? '2' : '3'} OF 3</span><h1>{title}</h1><p className="auth-subtitle">{step === 'profile' ? 'A few details help customers find you.' : 'Tell us when you are ready for your next customer.'}</p><NotificationSetupCard compact />{error && <div className="form-error"><Info size={16} />{error}</div>}{step === 'profile' && <form onSubmit={continueProfile}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" value={mobile} readOnly aria-label="Registered mobile number" /></div></Field><Field label="Owner name"><input value={profile.ownerName} onChange={event => setProfile(current => ({ ...current, ownerName: event.target.value }))} placeholder="Your full name" autoFocus /></Field><Field label="Salon name"><input value={profile.salonName} onChange={event => setProfile(current => ({ ...current, salonName: event.target.value }))} placeholder="What is your salon called?" /></Field><Field label="Address line 1"><textarea rows="3" value={profile.addressLine1} onChange={event => setProfile(current => ({ ...current, addressLine1: event.target.value }))} placeholder="Area, street, building" /></Field><Field label="Address line 2" hint="Optional"><input value={profile.addressLine2} onChange={event => setProfile(current => ({ ...current, addressLine2: event.target.value }))} placeholder="Landmark" /></Field><div className="form-two-col"><Field label="City"><input value={profile.city} onChange={event => setProfile(current => ({ ...current, city: event.target.value }))} placeholder="City" /></Field><SelectField label="State" value={profile.state} onChange={event => setProfile(current => ({ ...current, state: event.target.value }))} options={STATE_OPTIONS} placeholder="Select state" /></div><div className="form-two-col"><Field label="Pincode" hint="Optional"><input inputMode="numeric" maxLength="6" value={profile.pincode} onChange={event => setProfile(current => ({ ...current, pincode: event.target.value.replace(/\D/g, '').slice(0, 6) }))} placeholder="Pincode" /></Field><Field label="Email" hint="Optional"><input type="email" value={profile.email} onChange={event => setProfile(current => ({ ...current, email: event.target.value }))} placeholder="owner@example.com" /></Field></div><div className={cx('registration-location', latitude !== null && longitude !== null && 'ready')}><MapPin size={15} /><span>{latitude !== null && longitude !== null ? `Location ready · ${Number(latitude).toFixed(4)}, ${Number(longitude).toFixed(4)}` : locationError || (locationAllowed ? 'Detecting salon location…' : 'Allow location so customers can find your salon nearby.')}</span><button type="button" onClick={detectLocation} disabled={locationBusy}>{locationBusy ? 'Detecting…' : locationAllowed ? 'Retry' : 'Allow location'}</button></div><PermissionSheet
           open={locationSheetOpen}
           kind="location"
-          state="denied"
+          state={locationSheetState}
           onClose={() => setLocationSheetOpen(false)}
           onGranted={() => { setLocationSheetOpen(false); detectLocation(); }}
         /><Button type="submit">Next <ChevronRight size={17} /></Button></form>}{step === 'business' && <form onSubmit={continueBusiness}><label className="field"><span className="field-label">Salon type</span><div className="type-option-grid">{['MALE', 'FEMALE', 'UNISEX'].map(type => <button type="button" key={type} className={business.genderType === type ? 'active' : ''} onClick={() => setBusiness(current => ({ ...current, genderType: type }))}>{type === 'UNISEX' ? 'Unisex' : `${type.charAt(0)}${type.slice(1).toLowerCase()}`}</button>)}</div></label><div className="form-two-col"><Field label="Opens"><input type="time" value={business.openingTime} onChange={event => setBusiness(current => ({ ...current, openingTime: event.target.value }))} /></Field><Field label="Closes"><input type="time" value={business.closingTime} onChange={event => setBusiness(current => ({ ...current, closingTime: event.target.value }))} /></Field></div><Field label="Agent code" hint="Optional · exactly 10 digits"><input inputMode="numeric" maxLength="10" value={business.agentCode} onChange={event => setBusiness(current => ({ ...current, agentCode: event.target.value.replace(/\D/g, '').slice(0, 10) }))} placeholder="Optional agent code" /></Field><Button type="submit" loading={busy}>Choose a plan <ChevronRight size={17} /></Button></form>}</div></div>;

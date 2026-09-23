@@ -71,7 +71,20 @@ async function getMessagingClient() {
   if (!isPushConfigured() || typeof window === 'undefined' || !('serviceWorker' in navigator)) return null;
   if (!messagingPromise) {
     messagingPromise = (async () => {
-      if (!(await isSupported())) return null;
+      // Some OEM WebViews leave Firebase's feature probe pending while their
+      // storage/service-worker bridge wakes up. Do not let that hang the login
+      // card forever; token recovery can try again after the browser settles.
+      const supported = await Promise.race([
+        Promise.resolve().then(() => isSupported()),
+        delay(5000).then(() => false),
+      ]);
+      if (!supported) {
+        // A feature probe can be false while an OEM browser is still starting
+        // its ServiceWorker/IndexedDB bridge. Do not cache that transient answer
+        // forever; the next Allow/Try again must be able to probe again.
+        messagingPromise = undefined;
+        return null;
+      }
       const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
       return getMessaging(app);
     })().catch(error => {
@@ -108,6 +121,37 @@ function waitForActiveWorker(registration, timeout = 8000) {
   });
 }
 
+// `register()` may return a registration whose old worker is still active while
+// the new query-string/configured worker is installing. Waiting only for
+// `registration.active` returns the old worker immediately, which is especially
+// visible after a PWA update on Android. Wait for the pending replacement once;
+// if the browser does not expose worker state changes, the timeout still lets
+// the normal token retry/recovery path continue.
+function waitForWorkerReplacement(registration, timeout = 8000) {
+  return new Promise(resolve => {
+    const pending = [registration?.installing, registration?.waiting].filter(Boolean);
+    if (!pending.length) return resolve(registration);
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(registration);
+    };
+    const timer = setTimeout(finish, timeout);
+    if (registration.active && !registration.installing && !registration.waiting) {
+      finish();
+      return;
+    }
+    pending.forEach(worker => {
+      if (typeof worker.addEventListener !== 'function') return;
+      worker.addEventListener('statechange', () => {
+        if (worker.state === 'activated' || (registration.active && !registration.installing && !registration.waiting)) finish();
+      });
+    });
+  });
+}
+
 // ONE service worker, ONE scope.
 //
 // /firebase-messaging-sw.js is the unified worker: it caches the app shell (so
@@ -118,19 +162,6 @@ function waitForActiveWorker(registration, timeout = 8000) {
 // stopped after a while" and "no active service worker" token errors.
 export const PUSH_SW_URL = '/firebase-messaging-sw.js';
 export const PUSH_SW_SCOPE = '/';
-
-// Only the unified FCM worker is reusable. A root registration left by an older
-// release (plain /sw.js, registered without the Firebase config in its query
-// string) cannot receive background pushes, so it is replaced by the unified
-// worker instead of being trusted.
-function isPushWorkerScript(url) {
-  return String(url || '').includes('firebase-messaging-sw');
-}
-
-function isOurWorkerScript(url) {
-  const value = String(url || '');
-  return value.includes('firebase-messaging-sw') || value.includes('sw.js');
-}
 
 // Called once from main.jsx and reused by every token request. The Firebase web
 // config travels in the query string (the worker cannot read Vite env).
@@ -143,21 +174,15 @@ export function registerPushServiceWorker() {
         await Promise.race([navigator.serviceWorker.ready, delay(1500)]);
       } catch { /* no worker yet — register below */ }
 
-      const existing = navigator.serviceWorker.getRegistration
-        ? await navigator.serviceWorker.getRegistration(PUSH_SW_SCOPE)
-        : null;
-      if (existing && isPushWorkerScript(existing.active?.scriptURL || existing.waiting?.scriptURL || existing.installing?.scriptURL)) {
-        const active = await waitForActiveWorker(existing, 3000);
-        if (active) {
-          installAutoUpdate(active);
-          return active;
-        }
-      }
-
+      // Always register the desired URL, even when a root worker already
+      // exists. The Firebase config is carried in the query string; returning
+      // an old registration here leaves an installed OPPO/Vivo PWA running the
+      // previous project's sender id or worker code indefinitely.
       const registration = await navigator.serviceWorker.register(
         `${PUSH_SW_URL}?${queryConfig()}`,
         { scope: PUSH_SW_SCOPE },
       );
+      await waitForWorkerReplacement(registration, 8000);
       const active = await waitForActiveWorker(registration, 8000);
       const ready = active || registration;
       installAutoUpdate(ready);
@@ -174,32 +199,11 @@ export function registerPushServiceWorker() {
   return registrationPromise;
 }
 
-// The registration every push call uses. It never registers a competing script:
-// either the existing root worker is ours and active, or the unified worker is
-// registered — once.
+// The registration every push call uses. Always go through the single desired
+// root registration so a stale worker/config left on an installed OPPO/Vivo or
+// Android 13 device is updated before Firebase mints a token.
 async function getPushServiceWorker() {
   if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return null;
-
-  try {
-    if (navigator.serviceWorker.getRegistration) {
-      const rootReg = await navigator.serviceWorker.getRegistration(PUSH_SW_SCOPE);
-      const script = rootReg?.active?.scriptURL || rootReg?.waiting?.scriptURL || rootReg?.installing?.scriptURL || '';
-      if (rootReg && isPushWorkerScript(script)) {
-        const active = await waitForActiveWorker(rootReg, 3000);
-        if (active) return active;
-      }
-      // An old sub-scope registration from a previous release: use it if it is
-      // still the only worker, so those users keep their push subscription.
-      const oldScope = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope');
-      if (oldScope && !rootReg) {
-        const active = await waitForActiveWorker(oldScope, 2000);
-        if (active) return active;
-      }
-    }
-  } catch (error) {
-    console.debug(getErrorMessage(error, 'Could not read existing service worker registration.'));
-  }
-
   return registerPushServiceWorker();
 }
 
@@ -244,12 +248,11 @@ export async function getPushStatus() {
   if (typeof window === 'undefined' || !('Notification' in window)) return { state: 'unsupported', reason: 'This browser cannot show notifications.' };
   if (!('serviceWorker' in navigator)) return { state: 'unsupported', reason: 'This browser cannot run web notifications. Try Chrome, Edge or Samsung Internet.' };
   if (!isPushConfigured()) return { state: 'unconfigured', reason: 'Notifications have not been enabled for this build yet — please contact My Naai support.' };
-  const messaging = await getMessagingClient();
-  if (!messaging) {
-    const installed = isIosPwaInstalled();
-    const installedHint = installed ? '' : ' On iPhone/iPad, install the My Naai app to your home screen first.';
-    return { state: 'unsupported', reason: `This browser context cannot receive web notifications.${installedHint}` };
-  }
+  // Read permission BEFORE asking Firebase whether it supports messaging. On
+  // OPPO/Vivo and newer Android builds, the messaging feature probe can reject
+  // or take a while while the browser is restoring its worker. A real site
+  // permission must still be reported as granted/blocked immediately, not as a
+  // generic "unsupported" state.
   // Live read (Permissions API first): a user who has just unblocked the site in
   // the browser's settings expects "Check" to see it immediately, not after a
   // page reload. See readNotificationPermission for why the static value lies.
@@ -265,6 +268,12 @@ export async function getPushStatus() {
     return { state: 'denied', reason };
   }
   if (permission === 'default') return { state: 'needs-permission', reason: 'Notification permission has not been granted yet.' };
+  const messaging = await getMessagingClient();
+  if (!messaging) {
+    const installed = isIosPwaInstalled();
+    const installedHint = installed ? '' : ' On iPhone/iPad, install the My Naai app to your home screen first.';
+    return { state: 'unsupported', reason: `This browser context cannot receive web notifications.${installedHint}` };
+  }
   try {
     const token = await getPushToken({ requestPermission: false });
     if (token) return { state: 'enabled', token };
@@ -435,9 +444,11 @@ function scheduleTokenRecovery() {
 
 export async function getPushToken({ requestPermission = false } = {}) {
   if (!isPushConfigured() || typeof window === 'undefined' || !('Notification' in window)) return '';
-  const messaging = await getMessagingClient();
-  if (!messaging) return '';
 
+  // Permission is the cheap, user-facing gate. Read it before Firebase's
+  // feature probe so a blocked/default site does not wait on an OEM WebView's
+  // IndexedDB/service-worker bridge, and so a live re-allow can proceed even
+  // when the page-load Notification.permission snapshot is stale.
   let permission = await readNotificationPermission();
   if (permission === 'default' && requestPermission) {
     // Gesture-safe ask (see ./permissions): resolves with what the user chose.
@@ -455,6 +466,9 @@ export async function getPushToken({ requestPermission = false } = {}) {
     }
     return '';
   }
+
+  const messaging = await getMessagingClient();
+  if (!messaging) return '';
 
   const ATTEMPTS = 4;
   let lastError = null;

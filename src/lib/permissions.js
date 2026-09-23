@@ -61,6 +61,43 @@ export function isStandalone() {
   return Boolean(window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone);
 }
 
+// Android vendors often ship a browser that looks like Chrome to the web page,
+// but applies a second, device-level permission and battery policy. Keep the
+// vendor separate from the browser name so the UI can give the right Settings
+// path without pretending every Android phone is a Pixel.
+export function isAndroidDevice() {
+  if (typeof navigator === 'undefined') return false;
+  return /android/i.test(navigator.userAgent || '') || String(navigator.userAgentData?.platform || '').toLowerCase() === 'android';
+}
+
+export function detectAndroidVendor() {
+  if (!isAndroidDevice()) return 'other';
+  const agent = String(navigator.userAgent || '');
+  // OPPO/OnePlus/realme model codes are present in many Chromium UAs even when
+  // the vendor name is not. Keep the patterns deliberately conservative: a
+  // wrong OEM instruction is worse than the generic Android one.
+  if (/oppo|heytap|realme|oneplus|cph\d|pclm|pcht|rmx/i.test(agent)) {
+    if (/realme|rmx/i.test(agent)) return 'realme';
+    if (/oneplus/i.test(agent)) return 'oneplus';
+    return 'oppo';
+  }
+  if (/vivo|iqoo|vivobrowser|(?:^|[; ])(?:v\d{4}|pd\d{4})(?:[; )]|$)/i.test(agent)) return 'vivo';
+  if (/xiaomi|redmi|mi\s|mix\s|m\d{4}|220\d|230\d/i.test(agent)) return 'xiaomi';
+  if (/samsung|sm-[a-z0-9]+/i.test(agent)) return 'samsung';
+  return 'other';
+}
+
+const ANDROID_BROWSERS = new Set(['chrome-android', 'samsung', 'oppo', 'vivo']);
+
+export function androidPermissionAppName(browser = detectBrowser()) {
+  // An installed Android PWA has its own notification switch from Android 13
+  // onwards. Pointing its owner at Chrome in that case leaves the app blocked.
+  if (isAndroidDevice() && isStandalone()) return 'My Naai';
+  if (browser === 'chrome-android') return 'Chrome';
+  if (browser === 'samsung') return 'Samsung Internet';
+  return browserLabel(browser);
+}
+
 // True when My Naai is rendered inside another page's <iframe> (an embedded
 // preview, a web view, a portal). Browsers force notification permission to
 // "denied" for embedded frames, so the only honest advice there is to open My
@@ -110,6 +147,8 @@ export function detectBrowser() {
     if (/edgios/i.test(agent)) return 'ios-edge';
     return 'ios-safari';
   }
+  if (/heytapbrowser|oppobrowser|oppo\s+browser/i.test(agent)) return 'oppo';
+  if (/vivobrowser|vivo\s+browser/i.test(agent)) return 'vivo';
   if (/samsungbrowser/i.test(agent)) return 'samsung';
   if (/firefox|fxios/i.test(agent)) return 'firefox';
   if (/edg\//i.test(agent)) return 'edge';
@@ -127,6 +166,8 @@ export const BROWSER_LABELS = {
   'ios-firefox': 'Firefox on iPhone/iPad',
   'ios-edge': 'Edge on iPhone/iPad',
   samsung: 'Samsung Internet',
+  oppo: 'OPPO Browser',
+  vivo: 'Vivo Browser',
   firefox: 'Firefox',
   edge: 'Microsoft Edge',
   opera: 'Opera',
@@ -145,7 +186,7 @@ export function browserLabel(browser) {
 // OS-level sound switches sit outside the browser permission. One line, only
 // where it is true for the device actually in use.
 export function buzzerHint(browser) {
-  if (browser === 'chrome-android' || browser === 'samsung') {
+  if (isAndroidDevice() || ANDROID_BROWSERS.has(browser)) {
     return 'Keep the phone off silent and media volume up — the buzzer plays as a sound plus vibration.';
   }
   if (isIosDevice()) {
@@ -154,10 +195,28 @@ export function buzzerHint(browser) {
   return 'Check that this device is not muted — the buzzer plays a sound and vibrates where supported.';
 }
 
-export function androidAppNotificationHint(browser) {
-  return browser === 'chrome-android' || browser === 'samsung'
-    ? ` Also check the browser app itself: Android Settings → Apps → ${browserLabel(browser)} → Notifications must be On.`
-    : '';
+export function androidAppNotificationHint(browser = detectBrowser()) {
+  if (!isAndroidDevice() && !ANDROID_BROWSERS.has(browser)) return '';
+  const app = androidPermissionAppName(browser);
+  const vendor = detectAndroidVendor();
+  const oem = vendor === 'oppo' || vendor === 'realme' || vendor === 'oneplus'
+    ? ' On OPPO/realme/OnePlus, also allow Auto-launch/background activity for this app.'
+    : vendor === 'vivo'
+      ? ' On Vivo, also allow background activity/Auto-start for this app.'
+      : '';
+  return ` Also check Android Settings → Apps → ${app} → Notifications → On.${oem}`;
+}
+
+export function androidLocationHint(browser = detectBrowser()) {
+  if (!isAndroidDevice() && !ANDROID_BROWSERS.has(browser)) return '';
+  const app = androidPermissionAppName(browser);
+  const vendor = detectAndroidVendor();
+  const oem = vendor === 'oppo' || vendor === 'realme' || vendor === 'oneplus'
+    ? ' OPPO/realme/OnePlus: Settings → Apps → App management → the app → Permissions → Location → Allow while using.'
+    : vendor === 'vivo'
+      ? ' Vivo: Settings → More settings → Permission management → Location → allow it for the app.'
+      : ` Android: Settings → Location → App permissions → ${app} → Allow while using.`;
+  return oem;
 }
 
 export function siteHost() {
@@ -282,9 +341,14 @@ function locateOnce(options) {
       }),
       error => resolve({
         ok: false,
-        // 1 = PERMISSION_DENIED, 2 = POSITION_UNAVAILABLE, 3 = TIMEOUT
+        // 1 = PERMISSION_DENIED, 2 = POSITION_UNAVAILABLE, 3 = TIMEOUT.
+        // Android OEMs use code 2 when device Location is off or the browser
+        // has been denied a system-level fix; retain that distinction so the UI
+        // can show device Settings instead of asking the user to tap a site
+        // permission that is already allowed.
         code: error?.code || 0,
-        state: error?.code === 1 ? 'denied' : 'unavailable',
+        state: error?.code === 1 ? 'denied' : error?.code === 2 ? 'device-settings' : 'unavailable',
+        message: String(error?.message || ''),
       }),
       options,
     );
@@ -298,6 +362,12 @@ function locateOnce(options) {
 // it never pops a second prompt.
 export async function requestLocation(options = {}) {
   if (typeof navigator === 'undefined' || !navigator.geolocation) return { ok: false, state: 'unsupported', code: 0 };
+  if (typeof window !== 'undefined' && window.isSecureContext === false) {
+    return { ok: false, state: 'unsupported', code: 0, message: 'Location requires a secure HTTPS page.' };
+  }
+  if (!promptsAvailable('location')) {
+    return { ok: false, state: 'denied', code: 1, message: 'This page is not allowed to request geolocation.' };
+  }
   const first = await locateOnce({ enableHighAccuracy: false, timeout: 12000, maximumAge: 300000, ...options });
   if (first.ok || first.state === 'denied' || first.code !== 3) return first;
   return locateOnce({ enableHighAccuracy: false, timeout: 25000, maximumAge: 600000, ...options });
@@ -313,11 +383,11 @@ export function permissionSteps(browser, kind) {
   const steps = {
     'chrome-android': kind === 'location' ? [
       'Tap the lock (or settings) icon next to the address bar.',
-      `Choose Permissions → ${name} → Allow.`,
+      `Choose Permissions → ${name} → Allow. ${androidLocationHint(browser)}`,
       back,
     ] : [
       `In this page: tap the lock icon → Permissions → ${name} → Allow.`,
-      'In Android: Settings → Apps → Chrome → Notifications → On.',
+      `In Android: Settings → Apps → ${androidPermissionAppName(browser)} → Notifications → On.${androidAppNotificationHint(browser)}`,
       back,
     ],
     'chrome-desktop': [
@@ -327,11 +397,29 @@ export function permissionSteps(browser, kind) {
     ],
     samsung: kind === 'location' ? [
       'Tap the lock icon next to the address bar.',
-      `Open Permissions → ${name} → Allow.`,
+      `Open Permissions → ${name} → Allow. ${androidLocationHint(browser)}`,
       back,
     ] : [
       `In this page: tap the lock icon → ${name} → Allow.`,
-      'In Android: Settings → Apps → Samsung Internet → Notifications → On.',
+      `In Android: Settings → Apps → ${androidPermissionAppName(browser)} → Notifications → On.${androidAppNotificationHint(browser)}`,
+      back,
+    ],
+    oppo: kind === 'location' ? [
+      'Tap the site settings icon next to the address bar.',
+      `Set ${name} to Allow, then ${androidLocationHint(browser).trim()}`,
+      back,
+    ] : [
+      'Tap the site settings icon → Notifications → Allow.',
+      `Android Settings → Apps → App management → ${androidPermissionAppName(browser)} → Notifications → On.`,
+      back,
+    ],
+    vivo: kind === 'location' ? [
+      'Tap the site settings icon next to the address bar.',
+      `Set ${name} to Allow, then ${androidLocationHint(browser).trim()}`,
+      back,
+    ] : [
+      'Tap the site settings icon → Notifications → Allow.',
+      `Android Settings → More settings → Permission management → Notifications → allow ${androidPermissionAppName(browser)}.`,
       back,
     ],
     firefox: [

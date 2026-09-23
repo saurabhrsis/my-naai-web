@@ -19,7 +19,7 @@ const SW_SOURCE = readFileSync(join(process.cwd(), 'public/firebase-messaging-sw
 
 const CONFIG_QUERY = 'apiKey=a&authDomain=d&projectId=p&storageBucket=b&messagingSenderId=s&appId=c';
 
-function makeHarness({ clients = [], maxActions = 2 } = {}) {
+function makeHarness({ clients = [], maxActions = 2, sdkImportFails = false } = {}) {
   const listeners = new Map();
   const notifications = [];
   const channelMessages = [];
@@ -86,7 +86,9 @@ function makeHarness({ clients = [], maxActions = 2 } = {}) {
       delete: vi.fn(() => Promise.resolve()),
       match: vi.fn(() => Promise.resolve(undefined)),
     },
-    importScripts: vi.fn(),
+    importScripts: vi.fn(() => {
+      if (sdkImportFails) throw new Error('gstatic unavailable');
+    }),
     URL,
     // Share the host clock so `Date.now()` inside the worker and the test agree
     // (vitest's fake timers live in the host realm).
@@ -213,6 +215,14 @@ describe('one alert, one notification', () => {
     await harness.deliverPush({ notification: { title: 'Booking confirmed', body: 'See you at 6pm' }, data: { type: 'BOOKING_CONFIRMED' } });
     expect(harness.notifications).toHaveLength(0);
     expect(harness.channelMessages).toHaveLength(0);
+  });
+
+  it('shows an informational fallback when the Firebase scripts cannot load', async () => {
+    const harness = makeHarness({ clients: [], sdkImportFails: true });
+    await harness.deliverPush({ notification: { title: 'Booking confirmed', body: 'See you at 6pm' }, data: { type: 'BOOKING_CONFIRMED' } });
+    expect(harness.notifications).toHaveLength(1);
+    expect(harness.notifications[0].title).toBe('Booking confirmed');
+    expect(harness.notifications[0].options.body).toBe('See you at 6pm');
   });
 
   it('rings a background tab for an informational alert the SDK never tells it about', async () => {

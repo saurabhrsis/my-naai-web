@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell, BellRing, CheckCircle2, ChevronDown, CircleAlert, Copy, MapPin, RefreshCw, Send, Settings } from 'lucide-react';
 import { displayNotification, formatPushDiagnostics, getPushDiagnostics, getPushToken, isPushConfigured, notificationActionLimit, watchNotificationPermission } from '../lib/push';
 import { playBuzzer, unlockBuzzer } from '../lib/buzzer';
-import { browserLabel, detectBrowser, isEmbeddedFrame, isIosDevice, readPermission, rememberAskChoice, requestLocation, requestNotifications, ASK_CHOICES, siteHost } from '../lib/permissions';
+import { androidAppNotificationHint, browserLabel, detectBrowser, isEmbeddedFrame, isIosDevice, promptsAvailable, readPermission, rememberAskChoice, requestLocation, requestNotifications, ASK_CHOICES, siteHost } from '../lib/permissions';
 import { PermissionSheet } from './PermissionUI';
 import { api } from '../lib/api';
 import { withDeviceToken } from '../lib/apiPayload';
@@ -121,11 +121,17 @@ export function NotificationDiagnostics({ onEnabled }) {
   const turnOnLocation = async () => {
     setBusy('location');
     try {
+      if (isEmbeddedFrame() || !promptsAvailable('location')) {
+        setSheet({ open: true, state: 'denied', kind: 'location' });
+        return;
+      }
       const result = await requestLocation();
       if (result.ok) {
         rememberAskChoice('location', ASK_CHOICES.allowed);
       } else if (result.state === 'denied') {
         setSheet({ open: true, state: 'denied', kind: 'location' });
+      } else if (result.state === 'device-settings') {
+        setSheet({ open: true, state: 'device-settings', kind: 'location' });
       }
       await readStates();
     } finally {
@@ -261,7 +267,7 @@ export function NotificationDiagnostics({ onEnabled }) {
     const sound = isIosDevice()
       ? 'Sound comes from the alert itself (iPhone plays it with the app open or closed unless the phone is on silent).'
       : 'Sound comes from the alert itself, so the device volume and the browser\u2019s notification setting decide how loud it is.';
-    return `${buttons} ${sound} With the app closed the alert repeats twice within the 60-second answer window.`;
+    return `${buttons} ${sound} With the app closed the alert repeats twice within the 60-second answer window.${androidAppNotificationHint(detectBrowser())}`;
   };
 
   const alertsSummary = alertsLive
@@ -323,10 +329,7 @@ export function NotificationDiagnostics({ onEnabled }) {
             <span className="perm-row-icon perm-row-icon-location"><MapPin size={15} /></span>
             <div className="perm-row-copy">
               <strong>Location</strong>
-              <p>{locationOn
-                ? 'On. Salons are sorted by distance for you.'
-                : locationState === 'denied' ? 'Off for this site. Optional — it only shows how far each salon is.'
-                  : 'Optional. Shows how far each salon is and puts the nearest first.'}</p>
+              <p>{locationSummary}</p>
             </div>
             {locationOn
               ? <span className="perm-state-on"><CheckCircle2 size={14} /> On</span>

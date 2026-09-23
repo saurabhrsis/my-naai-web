@@ -9,7 +9,7 @@
  * - Works on Android Chrome, Edge, Samsung Internet, Firefox, iOS Safari (PWA), Chrome on iOS (PWA)
  */
 
-const CACHE_NAME = 'mynaai-shell-v6';
+const CACHE_NAME = 'mynaai-shell-v7';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -106,8 +106,19 @@ function restoreSuppressedSdkNotification() {
   return self.registration.showNotification(pending.title, pending.options).catch(() => {});
 }
 
-importScripts('https://www.gstatic.com/firebasejs/11.10.0/firebase-app-compat.js');
-importScripts('https://www.gstatic.com/firebasejs/11.10.0/firebase-messaging-compat.js');
+// A few OEM browsers (and some managed networks) intermittently block the
+// gstatic import. Keep the worker alive in that case: data-only FCM pushes can
+// still be rendered by the fallback push handler below, and the next page load
+// can retry the SDK instead of leaving a failed registration with no worker.
+let firebaseSdkAvailable = false;
+try {
+  importScripts('https://www.gstatic.com/firebasejs/11.10.0/firebase-app-compat.js');
+  importScripts('https://www.gstatic.com/firebasejs/11.10.0/firebase-messaging-compat.js');
+  firebaseSdkAvailable = typeof firebase !== 'undefined' && Boolean(firebase.messaging);
+} catch (error) {
+  firebaseSdkAvailable = false;
+}
+let firebaseMessagingAvailable = false;
 
 const params = new URL(self.location.href).searchParams;
 const firebaseConfig = {
@@ -403,6 +414,26 @@ function notificationRoute(data) {
   return '/';
 }
 
+// If Firebase's compatibility scripts cannot load on an OEM browser, the
+// browser still gives this worker the raw push event. Show the same calm
+// notification rather than dropping it and make the next foreground token
+// attempt responsible for restoring the SDK path.
+function showFallbackNotification(title, body, data, type) {
+  const target = notificationRoute(data);
+  return self.registration.showNotification(title, {
+    body,
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    tag: alertTag(data, type),
+    data: { ...data, target },
+    requireInteraction: false,
+    vibrate: [200, 100, 200],
+    silent: false,
+    renotify: true,
+    actions: alertActions(type).length ? alertActions(type) : undefined,
+  });
+}
+
 // App Shell - Install (also for FCM SW to make PWA work)
 self.addEventListener('install', event => {
   event.waitUntil(
@@ -575,11 +606,13 @@ self.addEventListener('message', event => {
 
 self.addEventListener('notificationclose', event => {});
 
-if (firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagingSenderId && firebaseConfig.appId) {
-  firebase.initializeApp(firebaseConfig);
-  const messaging = firebase.messaging();
+if (firebaseSdkAvailable && firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagingSenderId && firebaseConfig.appId) {
+  try {
+    firebase.initializeApp(firebaseConfig);
+    const messaging = firebase.messaging();
+    firebaseMessagingAvailable = Boolean(messaging);
 
-  messaging.onBackgroundMessage(payload => {
+    messaging.onBackgroundMessage(payload => {
     const data = payload.data || {};
     const type = String(data.type || data.notificationType || '').toUpperCase();
     // Buzzer alerts are owned by the `push` listener below — the SDK's callback
@@ -613,6 +646,9 @@ if (firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagin
       actions: alertActions(type).length ? alertActions(type) : undefined,
     });
   });
+  } catch (error) {
+    firebaseMessagingAvailable = false;
+  }
 }
 
 self.addEventListener('push', event => {
@@ -637,7 +673,17 @@ self.addEventListener('push', event => {
     // window is in front, because that page is handed the message by Firebase
     // and rings it itself.
     if (!isBuzzerNotificationType(type)) {
-      event.waitUntil(clientList().then(list => ringOpenClients(list, type, data)));
+      event.waitUntil(clientList().then(list => {
+        const relay = ringOpenClients(list, type, data);
+        // With the SDK available its own push listener owns the banner. If the
+        // import failed, nobody else can show it, so the fallback must do so.
+        if (!firebaseMessagingAvailable) {
+          const title = payload.notification?.title || data.title || 'My Naai update';
+          const body = payload.notification?.body || data.body || 'You have a new update from My Naai.';
+          return Promise.all([relay, showFallbackNotification(title, body, data, type)]);
+        }
+        return relay;
+      }));
       return;
     }
 

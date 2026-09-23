@@ -52,7 +52,7 @@ import {
 import { STATE_OPTIONS } from '../lib/stateOptions';
 import { SALON_ABOUT_CONTENT, SALON_FAQ_CONTENT, SALON_TERMS_CONTENT } from '../lib/salonContent';
 import { NotificationDiagnostics } from './NotificationDiagnostics';
-import { readPermission, requestLocation } from '../lib/permissions';
+import { promptsAvailable, readPermission, requestLocation } from '../lib/permissions';
 import { PermissionSheet } from './PermissionUI';
 import { LOGOUT_CONFIRM, useConfirm } from './ConfirmDialog';
 import { subscribeToLiveUpdates } from '../lib/socket';
@@ -74,7 +74,6 @@ import {
   formatDate,
   formatDateTime,
   formatTime,
-  getBrowserLocation,
   getErrorMessage,
   getInitials,
   getSalonStatus,
@@ -671,6 +670,7 @@ export function EditSalonProfileScreen({ params, session, navigate, notify, onSe
   const [loading, setLoading] = useState(!routeProfile);
   const [locationLoading, setLocationLoading] = useState(false);
   const [locationSheetOpen, setLocationSheetOpen] = useState(false);
+  const [locationSheetState, setLocationSheetState] = useState('denied');
   // A salon that already has saved coordinates does not need a fresh GPS fix
   // before it can be edited again; only a missing pin forces re-detection.
   const [locationVerified, setLocationVerified] = useState(() => hasCoordinate(initial.latitude) && hasCoordinate(initial.longitude));
@@ -766,17 +766,28 @@ export function EditSalonProfileScreen({ params, session, navigate, notify, onSe
     try {
       // A blocked permission can never be re-prompted from JavaScript, so the
       // partner gets the short settings sheet instead of a button that silently
-      // does nothing.
+      // does nothing. A Permissions Policy block (common in in-app previews)
+      // is handled the same way, without firing a doomed browser request.
+      if (!promptsAvailable('location')) {
+        setLocationError('Open My Naai in its own browser tab to allow location.');
+        setLocationSheetState('denied');
+        setLocationSheetOpen(true);
+        return;
+      }
       const permission = await readPermission('location');
       if (permission === 'denied' || permission === 'unsupported') {
         setLocationError('Location is blocked for this site — open the steps and switch Location to Allow.');
+        setLocationSheetState('denied');
         setLocationSheetOpen(true);
         return;
       }
       const result = await requestLocation();
       if (!result.ok || !hasCoordinate(result.latitude) || !hasCoordinate(result.longitude)) {
-        if (result.state === 'denied') {
-          setLocationError('Location is blocked for this site — open the steps and switch Location to Allow.');
+        if (result.state === 'denied' || result.state === 'device-settings') {
+          setLocationError(result.state === 'device-settings'
+            ? 'Turn on Location for this app in Android Settings, then try again.'
+            : 'Location is blocked for this site — open the steps and switch Location to Allow.');
+          setLocationSheetState(result.state);
           setLocationSheetOpen(true);
           return;
         }
@@ -1198,7 +1209,7 @@ export function EditSalonProfileScreen({ params, session, navigate, notify, onSe
       <Button type="button" size="small" variant="secondary" onClick={detectLocation} loading={locationLoading}><MapPin size={15} /> {hasLocation ? 'Update to current location' : 'Allow location'}</Button><PermissionSheet
         open={locationSheetOpen}
         kind="location"
-        state="denied"
+        state={locationSheetState}
         onClose={() => setLocationSheetOpen(false)}
         onGranted={() => { setLocationSheetOpen(false); detectLocation(); }}
       />
