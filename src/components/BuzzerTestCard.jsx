@@ -1,19 +1,18 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { BellRing, CheckCircle2, CircleAlert, ExternalLink, RefreshCw, Settings } from 'lucide-react';
+import { BellRing, CheckCircle2, CircleAlert, RefreshCw } from 'lucide-react';
 import { displayNotification, isPushConfigured, readNotificationPermission, requestNotificationPermission } from '../lib/push';
 import { browserLabel, detectBrowser, promptsAvailable } from '../lib/permissions';
 import { playBuzzer, unlockBuzzer } from '../lib/buzzer';
-import { Button, cx } from './Shared';
+import { cx } from './Shared';
 
 // The signed-out buzzer check.
 //
 // Why this exists: iOS (and iPadOS) only ever grants a notification permission
 // to an app that is *running*, and the login wall meant the buzzer could not be
-// tried on an iPhone until after signing in — "unable to check on iOS without
-// login". This card sits on the same pre-login card as the permission rows and
-// fires the exact alert a booking request produces, so the device can be proven
-// before an account exists. It is the same test the salon's Alerts & permissions
-// card offers after sign-in, mirrored where the tester can reach it.
+// tried on an iPhone until after signing in. This card lives on the public salon-
+// partner page—not the login form—and fires a simulated booking alert so a salon
+// can test the sound before creating an account. The account card offers the same
+// checks after sign-in.
 //
 // What it can and cannot prove stays honest in the copy: tapping a button is a
 // user gesture, so the buzzer is allowed to sound right there. The
@@ -41,6 +40,7 @@ export function BuzzerTestCard({ notify, className = '' }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [done, setDone] = useState(false);
+  const embedded = !promptsAvailable('notifications');
 
   const read = useCallback(async () => {
     const next = await readNotificationPermission();
@@ -62,81 +62,85 @@ export function BuzzerTestCard({ notify, className = '' }) {
     };
   }, [read]);
 
-  // One tap: ask (if needed) inside the gesture, unlock the audio, ring the real
-  // buzzer, show the real notification. Nothing here needs an account.
-  //
-  // Gesture-safe: Safari drops a permission popup that happens after an `await`,
-  // so when the permission is not already settled ('default' or still
-  // 'checking') the browser is asked synchronously — before any async read.
-  // Asking when the answer is already granted/denied/unsupported is harmless
-  // (no popup, just the current value), which is what makes the blind ask safe.
+  // One tap starts audio and requests browser permission before any await. That
+  // preserves the gesture for both Web Audio and the native notification prompt.
+  // In an embedded preview the browser may suppress the prompt, but the sound can
+  // still be checked here and the card reports that the alert was not shown.
   const test = async () => {
     setBusy(true);
     setMessage('');
     try {
+      unlockBuzzer();
+      const buzzerStarted = playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1, manual: true }) !== false;
+
       let state = permission;
-      if (state === 'checking' || state === 'default') {
-        state = await requestNotificationPermission();
+      const permissionRequest = state === 'checking' || state === 'default'
+        ? requestNotificationPermission()
+        : null;
+      if (permissionRequest) {
+        state = await permissionRequest;
         setPermission(state);
       }
+
+      const buzzerResult = buzzerStarted ? 'The buzzer test played.' : 'This browser could not start the buzzer.';
       if (state === 'denied' || state === 'unsupported') {
-        setMessage(state === 'denied'
-          ? 'This browser is blocking notifications for My Naai. Turn them back on in its settings, then tap Test again.'
-          : 'This browser cannot show web alerts, so the alert banner is skipped — the buzzer sound still plays.');
+        setMessage(embedded
+          ? `${buzzerResult} This preview cannot show the native notification prompt or alert banner; verify alerts on the live site.`
+          : state === 'denied'
+            ? `${buzzerResult} Notifications are off for this site, so no alert banner was shown. Change the site permission in browser settings to test alerts.`
+            : `${buzzerResult} This browser cannot show web alerts.`);
       }
-      // The tap itself is the gesture browsers need before audio may play.
-      // `manual` says so explicitly: this ring is the user asking for it, so the
-      // arrival gate (which exists to stop a *delivered* alert ringing late)
-      // never swallows a test the user just asked for.
-      unlockBuzzer();
-      playBuzzer({ type: 'BOOKING_REQUEST', repeats: 1, manual: true });
-      const alert = simulatedBooking();
+
       const shown = state === 'granted'
-        ? await displayNotification(alert)
+        ? await displayNotification(simulatedBooking())
         : false;
       setDone(true);
       if (shown) {
-        setMessage('Buzzer played and the simulated alert was shown. Heard nothing? Turn the phone off silent and raise the media volume.');
+        setMessage(`${buzzerResult} The simulated alert was shown. Heard nothing? Turn the phone off silent and raise the media volume.`);
       } else if (state === 'granted') {
-        setMessage('The buzzer played, but this browser would not show the alert banner — check My Naai notifications in the site settings.');
+        setMessage(`${buzzerResult} This browser would not show the alert banner — check My Naai notifications in the site settings.`);
+      } else if (state === 'default') {
+        setMessage(embedded
+          ? `${buzzerResult} The sandbox did not show a notification prompt; verify alerts on the live site.`
+          : `${buzzerResult} The notification prompt was dismissed, so no alert banner was shown.`);
       }
-      notify?.('info', 'Simulated booking request — buzzer + alert sent.');
+      notify?.(shown && buzzerStarted ? 'success' : 'info', shown
+        ? 'Simulated booking alert shown.'
+        : buzzerStarted ? 'Buzzer tested; no notification banner was shown.' : 'The buzzer and notification could not be tested in this browser.');
     } finally {
       setBusy(false);
     }
   };
 
-  const blocked = permission === 'denied';
+  const blocked = permission === 'denied' && !embedded;
   const unsupported = permission === 'unsupported';
   const configured = isPushConfigured();
-  // A page inside another page's frame can never show a permission popup, and
-  // browsers answer 'denied' to every question there — so the fix is a real tab,
-  // never browser settings that were never the problem.
-  const embedded = !promptsAvailable('notifications');
-  const openInTab = () => { try { return Boolean(window.open(window.location.href, '_blank', 'noopener')); } catch { return false; } };
-  const buttonLabel = embedded ? 'Open in a new tab' : blocked || unsupported ? 'How to allow' : done ? 'Test again' : 'Test booking buzzer';
+  const buttonLabel = done ? 'Test again' : 'Test booking buzzer';
 
   return (
     <section className={cx('perm-card', 'buzzer-test-card', className)} aria-live="polite">
       <div className="perm-row">
         <span className="perm-row-icon"><BellRing size={15} /></span>
         <div className="perm-row-copy">
-          <strong>{embedded ? 'Test the buzzer in its own tab' : blocked ? 'Buzzer is blocked' : 'Hear the booking buzzer'}</strong>
+          <strong>{embedded ? 'Test the buzzer here' : blocked ? 'Notifications are off' : unsupported ? 'Test the buzzer' : 'Hear the booking buzzer'}</strong>
           <p>
             {embedded
-              ? 'This page is open inside another app, where browsers hide the Allow prompt — and a silenced test would prove nothing. Open My Naai in its own tab, then tap Test booking buzzer there.'
+              ? 'This preview may suppress notification prompts and banners, but you can still test the buzzer sound here.'
               : blocked
-              ? `Notifications are off for My Naai in ${browserLabel(detectBrowser())}, so neither the alert nor the buzzer can reach this phone. Flip that switch, then test again.`
-              : 'Tap once to play the real My Naai buzzer — the sound a new booking request makes — plus the alert itself. No account needed. It rings while the app is open; with the app closed your phone plays the alert’s own sound and vibration.'}
+                ? `Notifications are off for My Naai in ${browserLabel(detectBrowser())}. You can still test the in-page buzzer; alert banners need site notifications enabled.`
+                : unsupported
+                  ? 'This browser cannot show web alerts, but you can test the buzzer sound while this page is open.'
+                  : 'Tap once to play the real My Naai buzzer — the sound a new booking request makes — plus the alert itself. No account needed. It rings while the app is open; with the app closed your phone plays the alert’s own sound and vibration.'}
           </p>
         </div>
         <button
           type="button"
-          className={cx('install-auth-button', 'buzzer-test-button', blocked && 'allow-alerts-attention')}
-          onClick={embedded ? openInTab : blocked || unsupported ? () => setMessage(blocked ? `Open this site’s settings in ${browserLabel(detectBrowser())} (the lock or ⚙ icon next to the address bar), set Notifications to Allow, then tap Test again.` : 'Add My Naai to the Home Screen on iPhone — that is the only way iOS allows alerts and the buzzer.') : test}
+          className="install-auth-button buzzer-test-button"
+          onClick={test}
           disabled={busy}
+          aria-busy={busy}
         >
-          {busy ? <RefreshCw size={14} className="spin" /> : embedded ? <ExternalLink size={14} /> : blocked ? <Settings size={14} /> : done ? <CheckCircle2 size={14} /> : <BellRing size={14} />}
+          {busy ? <RefreshCw size={14} className="spin" /> : done ? <CheckCircle2 size={14} /> : <BellRing size={14} />}
           {buttonLabel}
         </button>
       </div>
@@ -151,7 +155,7 @@ export function BuzzerTestCard({ notify, className = '' }) {
           Booking alerts are not configured for this build yet, so nothing can be delivered to this device — the buzzer test above still proves the sound.
         </p>
       )}
-      {permission !== 'checking' && permission !== 'denied' && permission !== 'unsupported' && (
+      {!embedded && permission !== 'checking' && permission !== 'denied' && permission !== 'unsupported' && (
         <p className="permission-help-note">
           {permission === 'granted'
             ? 'Notifications are allowed on this device. Sign in as a salon and open Account → Alerts & permissions to send a real test alert through the push path.'

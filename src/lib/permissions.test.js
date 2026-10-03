@@ -147,6 +147,23 @@ describe('permissions', () => {
         navigator.geolocation = originalGeolocation;
       }
     });
+
+    it('calls the native geolocation API from a tap even when the frame policy will deny it', async () => {
+      const originalGeolocation = navigator.geolocation;
+      const getCurrentPosition = vi.fn((_success, fail) => fail({ code: 1, message: 'Blocked by frame policy' }));
+      navigator.geolocation = { getCurrentPosition };
+      Object.defineProperty(document, 'permissionsPolicy', {
+        value: { allowsFeature: () => false },
+        configurable: true,
+      });
+      try {
+        await expect(requestLocation()).resolves.toMatchObject({ ok: false, state: 'denied', code: 1 });
+        expect(getCurrentPosition).toHaveBeenCalledTimes(1);
+      } finally {
+        navigator.geolocation = originalGeolocation;
+        delete document.permissionsPolicy;
+      }
+    });
   });
 
   describe('watchPermission', () => {

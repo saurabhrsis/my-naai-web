@@ -836,14 +836,13 @@ describe('Home ad carousel', () => {
   });
 });
 
-// The home-screen location row. Twice reported as "Enable location does nothing":
-// once because a blocked permission can never be re-prompted from JavaScript
-// (the tap did nothing at all), and once because the button only reloaded the
-// list instead of asking. Both states are now explicit — and the GPS retry for a
-// cold desktop fix lives in requestLocation itself.
+// The home-screen location row asks the native geolocation API from the tap,
+// preserves the settings recovery route after a real denial, and gives embedded
+// previews a small inline status instead of a silent return or replacement popup.
 describe('Home location permission', () => {
   let container;
   let root;
+  let originalGeolocation;
 
   const buttonByText = text => Array.from(container.querySelectorAll('button')).find(node => node.textContent.trim().includes(text));
   const notice = () => container.querySelector('.location-fallback-notice');
@@ -874,6 +873,7 @@ describe('Home location permission', () => {
   };
 
   beforeEach(() => {
+    originalGeolocation = navigator.geolocation;
     setPath('/');
     localStorage.clear();
     userSalonListPublic.mockResolvedValue(salonPayload());
@@ -889,6 +889,8 @@ describe('Home location permission', () => {
     root = null;
     container = null;
     delete navigator.permissions;
+    if (originalGeolocation) navigator.geolocation = originalGeolocation;
+    else delete navigator.geolocation;
     vi.clearAllMocks();
   });
 
@@ -915,6 +917,22 @@ describe('Home location permission', () => {
     expect(container.querySelector('.location-fallback-notice')).toBeNull();
   });
 
+  it('calls geolocation from the home-page tap before waiting on permission status', async () => {
+    const getCurrentPosition = vi.fn(success => success({ coords: { latitude: 21.1458, longitude: 79.0882 } }));
+    navigator.geolocation = { getCurrentPosition };
+    await mount();
+
+    // If the handler regresses to an async permission pre-check, it will stall
+    // here and the native API will never receive the original user gesture.
+    Object.defineProperty(navigator, 'permissions', {
+      configurable: true,
+      value: { query: vi.fn(() => new Promise(() => {})) },
+    });
+    act(() => { buttonByText('Use my location').click(); });
+    expect(getCurrentPosition).toHaveBeenCalledTimes(1);
+    await flush();
+  });
+
   it('never lets a click event leak into the salon-list request', async () => {
     // The same loader is wired to onClick handlers ("Try again"), and a
     // PointerEvent is not a coordinate. A failed load must not turn into a
@@ -928,24 +946,46 @@ describe('Home location permission', () => {
     expect(lastCall).toEqual({ page: 1, searchString: '', genderType: 'male' });
   });
 
-  it('gives the settings steps when the browser has already blocked location', async () => {
-    // The reported bug: a blocked permission never prompts again, so the button
-    // looked dead. It now opens the short sheet with the real fix.
+  it('keeps the settings recovery route after a location denial', async () => {
     setLivePermission('denied');
-    const getCurrentPosition = vi.fn();
+    const getCurrentPosition = vi.fn((_success, fail) => fail({ code: 1, message: 'Permission denied' }));
     navigator.geolocation = { getCurrentPosition };
     await mount();
 
     await act(async () => { buttonByText('Use my location').click(); });
     await flush();
 
-    // No point calling the browser: it cannot prompt. The steps are shown.
-    expect(getCurrentPosition).not.toHaveBeenCalled();
+    // The native API is still called from the tap; once the browser reports a
+    // real denial, the settings recovery route is shown.
+    expect(getCurrentPosition).toHaveBeenCalledTimes(1);
     const sheet = container.querySelector('.permission-gate-sheet');
     expect(sheet).not.toBeNull();
     expect(sheet.textContent).toContain('Location is blocked');
     expect(sheet.querySelectorAll('.ios-install-steps li')).toHaveLength(3);
     expect(buttonByText('I allowed it — Try again')).not.toBeNull();
+  });
+
+  it('gives a non-modal inline note when the preview policy suppresses the native prompt', async () => {
+    const getCurrentPosition = vi.fn((_success, fail) => fail({ code: 1, message: 'Blocked by frame policy' }));
+    navigator.geolocation = { getCurrentPosition };
+    Object.defineProperty(document, 'permissionsPolicy', {
+      value: { allowsFeature: () => false },
+      configurable: true,
+    });
+    const openSpy = vi.spyOn(window, 'open');
+    try {
+      await mount();
+      await act(async () => { buttonByText('Use my location').click(); });
+      await flush();
+
+      expect(getCurrentPosition).toHaveBeenCalledTimes(1);
+      expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+      expect(container.querySelector('.location-request-note').textContent).toContain('cannot show the native location prompt');
+      expect(openSpy).not.toHaveBeenCalled();
+    } finally {
+      openSpy.mockRestore();
+      delete document.permissionsPolicy;
+    }
   });
 });
 
@@ -963,6 +1003,8 @@ describe('Home location permission', () => {
 describe('Login permission flow', () => {
   let container;
   let root;
+  let originalGeolocation;
+  let originalPermissions;
 
   const setNotificationPermission = permission => {
     globalThis.Notification = { permission, requestPermission: vi.fn().mockResolvedValue(permission) };
@@ -994,6 +1036,8 @@ describe('Login permission flow', () => {
   };
 
   const buttonByText = text => Array.from(container.querySelectorAll('button')).find(node => node.textContent.trim().includes(text));
+  const notificationAllowButton = () => container.querySelector('.login-perm-card .allow-alerts-button');
+  const locationAllowButton = () => container.querySelector('.login-perm-card .perm-location-button');
 
   const headings = () => Array.from(container.querySelectorAll('h1')).map(node => node.textContent);
 
@@ -1006,6 +1050,8 @@ describe('Login permission flow', () => {
   };
 
   beforeEach(() => {
+    originalGeolocation = navigator.geolocation;
+    originalPermissions = Object.getOwnPropertyDescriptor(navigator, 'permissions');
     // Browsing is public now, so a bare path opens the guest home — these tests
     // target the login flow, which lives at its own route.
     setPath('/login');
@@ -1026,6 +1072,10 @@ describe('Login permission flow', () => {
     root = null;
     container = null;
     delete globalThis.Notification;
+    if (originalGeolocation) navigator.geolocation = originalGeolocation;
+    else delete navigator.geolocation;
+    if (originalPermissions) Object.defineProperty(navigator, 'permissions', originalPermissions);
+    else delete navigator.permissions;
     vi.clearAllMocks();
   });
 
@@ -1041,9 +1091,11 @@ describe('Login permission flow', () => {
     expect(container.querySelector('.setup-splash')).toBeNull();
     expect(container.textContent).not.toContain('not set up for web alerts');
     const row = container.querySelector('.login-perm-card .perm-row-copy strong');
-    expect(row.textContent).toBe('Notification permission');
-    const allowButton = buttonByText('Allow notifications');
+    expect(row.textContent).toBe('Notifications');
+    const allowButton = notificationAllowButton();
     expect(allowButton).not.toBeNull();
+    expect(allowButton.textContent.trim()).toBe('Allow');
+    expect(allowButton.getAttribute('aria-label')).toBe('Allow notifications');
 
     await act(async () => { allowButton.click(); });
     await flush();
@@ -1060,56 +1112,72 @@ describe('Login permission flow', () => {
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
   });
 
-  it('blames the embedder, not the visitor, when a frame blocks the prompt', async () => {
-    // Reported from the preview pane: "Notifications are blocked — turn them back
-    // on for <host> in Chrome". That instruction was wrong. Chrome (and Safari)
-    // never show a permission prompt inside a page that is embedded in another
-    // app unless the embedder delegates the feature, and they answer 'denied' to
-    // every question — so the visitor was being sent through browser settings that
-    // were never the problem, on a site where nothing was ever blocked.
+  it('calls the native notification API directly without opening app dialogs or tabs in a restricted frame', async () => {
     setNotificationPermission('denied');
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
-    const policy = { allowsFeature: vi.fn(feature => feature !== 'notifications') };
-    Object.defineProperty(document, 'permissionsPolicy', { value: policy, configurable: true });
+    Object.defineProperty(document, 'permissionsPolicy', {
+      value: { allowsFeature: feature => feature !== 'notifications' },
+      configurable: true,
+    });
+    const openSpy = vi.spyOn(window, 'open');
     try {
       await mount();
-
       const card = container.querySelector('.login-perm-card');
-      const copy = card.textContent;
-      expect(copy).toContain('Notifications need their own tab');
-      expect(copy).toContain('browsers hide the Allow prompt');
-      expect(copy).not.toContain('Turn Notifications back on');
-      expect(copy).not.toContain('in Chrome');
-      const escape = buttonByText('Open in a new tab');
-      expect(escape).not.toBeNull();
+      expect(card.textContent).not.toMatch(/blocked|open in browser|how to allow/i);
 
-      // The tap opens the page as its own tab, where the real Allow button works.
-      const openSpy = vi.spyOn(window, 'open').mockReturnValue({});
-      await act(async () => { escape.click(); });
+      await act(async () => { notificationAllowButton().click(); });
       await flush();
-      expect(openSpy).toHaveBeenCalledTimes(1);
-      expect(String(openSpy.mock.calls[0][0])).toContain(window.location.href.split('?')[0]);
-      // A frame cannot mint a token either, so nothing pretends otherwise.
+
+      // The browser API is invoked; the restricted frame itself cannot show a
+      // permission prompt, so My Naai does not substitute a popup or new tab.
+      expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+      expect(openSpy).not.toHaveBeenCalled();
       expect(container.querySelector('.permission-gate-sheet')).toBeNull();
-      expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
-      openSpy.mockRestore();
+      expect(container.querySelector('.perm-card-note').textContent).toContain('cannot show the notifications prompt');
     } finally {
+      openSpy.mockRestore();
       delete document.permissionsPolicy;
     }
   });
 
-  it('still reports a genuine block when the frame DOES allow prompts', async () => {
-    // A same-origin frame (or one embedded with allow="notifications") behaves
-    // like a normal page: 'denied' there means the visitor blocked us, and the
-    // browser-settings instructions are the right ones.
+  it('calls the native notification API from Allow when a frame has not asked yet', async () => {
+    setNotificationPermission('default');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'needs-permission', reason: '' });
+    Object.defineProperty(document, 'permissionsPolicy', {
+      value: { allowsFeature: feature => feature !== 'notifications' },
+      configurable: true,
+    });
+    const openSpy = vi.spyOn(window, 'open');
+    try {
+      await mount();
+
+      expect(notificationAllowButton().textContent.trim()).toBe('Allow');
+      await act(async () => { notificationAllowButton().click(); });
+      await flush();
+
+      expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+      expect(openSpy).not.toHaveBeenCalled();
+      expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+    } finally {
+      openSpy.mockRestore();
+      delete document.permissionsPolicy;
+    }
+  });
+
+  it('retries the native notification request directly after a previous denial', async () => {
     setNotificationPermission('denied');
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
     Object.defineProperty(document, 'permissionsPolicy', { value: { allowsFeature: () => true }, configurable: true });
     try {
       await mount();
-      expect(container.textContent).toContain('Notifications are blocked');
-      expect(container.textContent).toContain('Turn Notifications back on');
-      expect(buttonByText('Fix alerts')).not.toBeNull();
+      expect(notificationAllowButton().textContent.trim()).toBe('Allow');
+
+      await act(async () => { notificationAllowButton().click(); });
+      await flush();
+
+      expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+      expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+      expect(notificationAllowButton()).not.toBeNull();
     } finally {
       delete document.permissionsPolicy;
     }
@@ -1126,7 +1194,7 @@ describe('Login permission flow', () => {
     localStorage.setItem('FCM_TOKEN', 'old-cached-token');
     await mount();
 
-    await act(async () => { buttonByText('Allow notifications').click(); });
+    await act(async () => { notificationAllowButton().click(); });
     await flush();
     await act(async () => { typeMobile('9876543210'); });
     await act(async () => { submitPhone(); });
@@ -1145,14 +1213,13 @@ describe('Login permission flow', () => {
     vi.mocked(push.getPushToken).mockResolvedValue('push-token-1');
     await mount();
 
-    // The ask is on the page from the first paint: two labelled rows (alerts,
-    // optional location) and nothing else to read. Alerts say what they bring —
-    // sound and vibration, the buzzer a salon cannot do without.
+    // The ask is on the page from the first paint: compact, labelled rows for
+    // notifications and location, with no explanatory copy taking phone space.
     const card = container.querySelector('.login-perm-card');
     expect(card).not.toBeNull();
     expect(card.querySelectorAll('.perm-row')).toHaveLength(2);
-    expect(card.querySelector('.perm-row-copy strong').textContent).toBe('Notification permission');
-    expect(buttonByText('Allow notifications')).not.toBeNull();
+    expect(card.querySelector('.perm-row-copy strong').textContent).toBe('Notifications');
+    expect(notificationAllowButton()).not.toBeNull();
     expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
 
     // An unrelated tap (switching role, tapping the page) must NOT open the
@@ -1163,7 +1230,7 @@ describe('Login permission flow', () => {
     expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
 
     // The labelled button does it: one tap, popup, token, row gone.
-    await act(async () => { buttonByText('Allow notifications').click(); });
+    await act(async () => { notificationAllowButton().click(); });
     await flush();
     expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
     expect(push.getPushToken).toHaveBeenCalledWith({ requestPermission: false });
@@ -1185,7 +1252,8 @@ describe('Login permission flow', () => {
     await mount();
 
     const card = container.querySelector('.login-perm-card');
-    expect(card.textContent).toContain('Alerts allowed — finishing setup');
+    expect(card.textContent).toContain('Alerts allowed');
+    expect(buttonByText('Try again')).not.toBeNull();
     expect(card.textContent).not.toContain('did not finish');
     expect(card.textContent).not.toContain('still works on the second try');
 
@@ -1233,7 +1301,7 @@ describe('Login permission flow', () => {
     await mount();
 
     // The blocked state is one honest row (no wall of instructions, no sheet).
-    expect(buttonByText('Fix alerts')).not.toBeNull();
+    expect(notificationAllowButton()).not.toBeNull();
     expect(container.querySelector('.permission-gate-sheet')).toBeNull();
 
     await act(async () => { typeMobile('9876543210'); });
@@ -1247,6 +1315,94 @@ describe('Login permission flow', () => {
     expect(api.userLogin.mock.calls[0][0]).toEqual({ phoneNumber: '9876543210' });
     expect(container.querySelector('.permission-gate-sheet')).toBeNull();
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
+  });
+
+  it('keeps the Allow button native after notification permission is denied', async () => {
+    globalThis.Notification = {
+      permission: 'default',
+      requestPermission: vi.fn(() => {
+        globalThis.Notification.permission = 'denied';
+        return Promise.resolve('denied');
+      }),
+    };
+    vi.mocked(push.getPushStatus).mockImplementation(async () => ({
+      state: globalThis.Notification.permission === 'denied' ? 'denied' : 'needs-permission',
+      reason: '',
+    }));
+    await mount();
+
+    await act(async () => { notificationAllowButton().click(); });
+    await flush();
+    expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+    expect(notificationAllowButton()?.textContent.trim()).toBe('Allow');
+
+    // Browsers do not re-prompt after a denial. A later tap still calls the
+    // native API, but never substitutes a My Naai dialog or new browser tab.
+    await act(async () => { notificationAllowButton().click(); });
+    await flush();
+    expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+  });
+
+  it('keeps the login location Allow action native after a browser denial', async () => {
+    setNotificationPermission('granted');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'enabled', token: 'push-token-location' });
+    const getCurrentPosition = vi.fn((_success, fail) => fail({ code: 1, message: 'Permission denied' }));
+    navigator.geolocation = { getCurrentPosition };
+    // Safari does not expose location permission through navigator.permissions.
+    delete navigator.permissions;
+    await mount();
+
+    expect(locationAllowButton().textContent.trim()).toBe('Allow');
+    await act(async () => { locationAllowButton().click(); });
+    await flush();
+    expect(getCurrentPosition).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+    expect(container.querySelector('.login-perm-card .perm-row-copy strong').textContent).toBe('Location');
+
+    // Another tap calls the browser API again but never opens a My Naai popup.
+    await act(async () => { locationAllowButton().click(); });
+    await flush();
+    expect(getCurrentPosition).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+  });
+
+  it('calls the native geolocation API from Allow without opening a page or app dialog', async () => {
+    setNotificationPermission('granted');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'enabled', token: 'push-token-location' });
+    const getCurrentPosition = vi.fn((_success, fail) => fail({ code: 1, message: 'Permission denied by policy' }));
+    navigator.geolocation = { getCurrentPosition };
+    Object.defineProperty(navigator, 'permissions', {
+      value: { query: vi.fn(async ({ name }) => ({ state: name === 'geolocation' ? 'denied' : 'granted' })) },
+      configurable: true,
+    });
+    Object.defineProperty(document, 'permissionsPolicy', {
+      value: { allowsFeature: feature => feature !== 'geolocation' },
+      configurable: true,
+    });
+    const openSpy = vi.spyOn(window, 'open');
+    try {
+      await mount();
+
+      const card = container.querySelector('.login-perm-card');
+      const allowButton = locationAllowButton();
+      expect(card.querySelector('.perm-row-copy strong').textContent).toBe('Location');
+      expect(card.textContent).not.toMatch(/blocked|open in browser|how to allow/i);
+      expect(allowButton.textContent.trim()).toBe('Allow');
+      await act(async () => { allowButton.click(); });
+      await flush();
+
+      // The native geolocation API receives the tap. The browser's frame policy
+      // can still deny it, but My Naai opens no modal or extra tab.
+      expect(getCurrentPosition).toHaveBeenCalledTimes(1);
+      expect(openSpy).not.toHaveBeenCalled();
+      expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+      expect(container.querySelector('.perm-card-note').textContent).toContain('cannot show the location prompt');
+    } finally {
+      openSpy.mockRestore();
+      delete document.permissionsPolicy;
+    }
   });
 
   it('if the API insists on a deviceToken, the sheet explains it and retries by itself', async () => {
@@ -1332,129 +1488,75 @@ describe('Login permission flow', () => {
     expect(container.querySelector('.permission-gate-sheet')).toBeNull();
   });
 
-  it('opens the sheet with three short steps from the Fix alerts row', async () => {
+  it('does not open a My Naai dialog when an already-denied notification is tapped', async () => {
     setNotificationPermission('denied');
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
-    await mount();
-    await act(async () => { typeMobile('9876543210'); });
-
-    await act(async () => { buttonByText('Fix alerts').click(); });
-    await flush();
-    const gate = container.querySelector('.permission-gate-sheet');
-    expect(gate).not.toBeNull();
-    expect(gate.textContent).toContain('Alerts are blocked');
-    // Short by contract: three steps, one primary action, one escape hatch.
-    expect(gate.querySelectorAll('.ios-install-steps li')).toHaveLength(3);
-    expect(buttonByText('I allowed it — Try again')).not.toBeNull();
-    expect(buttonByText('Reload page')).not.toBeNull();
-
-    // The "still blocked" help is behind a link, not in the user's face.
-    expect(gate.querySelector('.permission-gate-warn')).toBeNull();
-    await act(async () => { buttonByText('Still blocked? Extra help').click(); });
-    await flush();
-    expect(container.querySelector('.permission-gate-sheet .permission-gate-warn').textContent).toContain(window.location.host);
-    expect(container.querySelector('.permission-gate-sheet').textContent).toContain('Notifications');
-
-    // The user unblocks in the browser and taps Try again — the sheet closes and
-    // the token is wired into the flow for the next Continue tap.
-    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'enabled', token: 'push-token-4' });
-    vi.mocked(push.getPushToken).mockResolvedValue('push-token-4');
-    await act(async () => { buttonByText('I allowed it — Try again').click(); });
-    await flush();
-    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
-
-    await act(async () => { submitPhone(); });
-    await flush();
-    expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
-  });
-
-  it('puts the open-in-new-tab escape hatch first when an embedded page is blocked', async () => {
-    setNotificationPermission('denied');
-    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
-    // An embedder that did NOT delegate notifications: the popup is impossible in
-    // here, whatever the permission says.
-    Object.defineProperty(document, 'permissionsPolicy', { value: { allowsFeature: () => false }, configurable: true });
+    const openSpy = vi.spyOn(window, 'open');
     try {
       await mount();
-
-      // Embedded + blocked: the sheet's primary action is the escape hatch — no
-      // failed Check needed to discover it.
-      await act(async () => { buttonByText('Open in a new tab').click(); });
+      await act(async () => { notificationAllowButton().click(); });
       await flush();
-      const gate = container.querySelector('.permission-gate-sheet');
-      expect(gate).not.toBeNull();
-      expect(gate.textContent).toContain('inside another app or page');
-      const openButton = buttonByText('Open My Naai in a new tab');
-      expect(openButton).not.toBeNull();
 
-      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
-      await act(async () => { openButton.click(); });
-      expect(openSpy).toHaveBeenCalledWith(window.location.href, '_blank', 'noopener');
-      openSpy.mockRestore();
+      expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+      expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+      expect(openSpy).not.toHaveBeenCalled();
+      expect(notificationAllowButton()?.textContent.trim()).toBe('Allow');
     } finally {
-      delete document.permissionsPolicy;
+      openSpy.mockRestore();
     }
   });
 
-  it('honours "Not now": the row goes and Continue never pops a prompt at them', async () => {
+  it('calls the native notification API on iOS without opening an install dialog', async () => {
     vi.mocked(permissions.isIosDevice).mockReturnValue(true);
     vi.mocked(permissions.isIosPwaInstalled).mockReturnValue(false);
-    grantOnRequest();
-    await mount();
+    setNotificationPermission('default');
+    const openSpy = vi.spyOn(window, 'open');
+    try {
+      await mount();
 
-    // iPhone before "Add to Home Screen": the row opens the short install sheet
-    // instead of a popup that iOS would never show.
-    await act(async () => { buttonByText('Allow notifications').click(); });
-    await flush();
-    const sheet = container.querySelector('.permission-gate-sheet');
-    expect(sheet).not.toBeNull();
-    expect(sheet.textContent).toContain('Home Screen');
-    expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
+      await act(async () => { notificationAllowButton().click(); });
+      await flush();
+      expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+      expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+      expect(openSpy).not.toHaveBeenCalled();
 
-    await act(async () => { buttonByText('Not now').click(); });
-    await flush();
-    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
-    expect(container.querySelector('.allow-alerts-button')).toBeNull();
-
-    // …and the form does not fire the browser prompt at somebody who just
-    // declined — that surprise is what turns into a permanent Block.
-    await act(async () => { typeMobile('9876543210'); });
-    await act(async () => { submitPhone(); });
-    await flush();
-    expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
-    expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
+      // Dismissing the native browser prompt must not cause Continue to ask a
+      // second time as a surprise.
+      await act(async () => { typeMobile('9876543210'); });
+      await act(async () => { submitPhone(); });
+      await flush();
+      expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+      expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 
-  it('tells every device how the buzzer will actually be heard', async () => {
-    // Blocked is the state where the sheet carries the explanation. The copy has
-    // to be device-specific: Android keeps the browser app's own notification
-    // switch, iOS mutes the buzzer with the silent switch, desktop is volume.
+  it('keeps detailed buzzer recovery behind an API-required alert flow, not the Allow tap', async () => {
     setNotificationPermission('denied');
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
-    await mount();
+    vi.mocked(api.verifyLogin).mockRejectedValue(Object.assign(
+      new Error('"deviceToken" is required'),
+      { data: { message: '"deviceToken" is required' } },
+    ));
+    const agent = vi.spyOn(navigator, 'userAgent', 'get')
+      .mockReturnValue('Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36');
+    try {
+      await mount();
+      await act(async () => { typeMobile('9876543210'); });
+      await act(async () => { submitPhone(); });
+      await flush();
+      await act(async () => { typeOtp('123456'); });
+      await act(async () => { submitForm(); });
+      await flush();
 
-    await act(async () => { buttonByText('Fix alerts').click(); });
-    await flush();
-    const sheet = container.querySelector('.permission-gate-sheet');
-    expect(sheet).not.toBeNull();
-    expect(sheet.textContent).toMatch(/buzzer/i);
-
-    // Android gets the whole path, including the OS-level app switch that keeps
-    // the site setting stuck on Blocked when it is off.
-    const agent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36');
-    await act(async () => { buttonByText('Fix alerts').click(); });
-    await flush();
-    const androidSheet = container.querySelector('.permission-gate-sheet');
-    expect(androidSheet.textContent).toContain('Android: Settings → Apps → Chrome → Notifications → On');
-    expect(androidSheet.textContent).toContain('Keep the phone off silent');
-    agent.mockRestore();
-
-    // iPhone before "Add to Home Screen" never sees a popup it cannot have.
-    vi.mocked(permissions.isIosDevice).mockReturnValue(true);
-    vi.mocked(permissions.isIosPwaInstalled).mockReturnValue(false);
-    await act(async () => { buttonByText('Fix alerts').click(); });
-    await flush();
-    expect(container.querySelector('.permission-gate-sheet').textContent).toContain('Home Screen');
+      const sheet = container.querySelector('.permission-gate-sheet');
+      expect(sheet).not.toBeNull();
+      expect(sheet.textContent).toContain('Android: Settings → Apps → Chrome → Notifications → On');
+      expect(sheet.textContent).toContain('Keep the phone off silent');
+    } finally {
+      agent.mockRestore();
+    }
   });
 
   it('keeps the login screen light: one-line subtitle, two one-tap rows, install pill', async () => {
@@ -1470,7 +1572,13 @@ describe('Login permission flow', () => {
     const card = container.querySelector('.login-perm-card');
     expect(card).not.toBeNull();
     expect(card.querySelectorAll('.perm-row')).toHaveLength(2);
-    expect(buttonByText('Allow notifications')).not.toBeNull();
+    expect(card.querySelectorAll('.perm-row p')).toHaveLength(0);
+    expect(container.querySelector('.login-buzzer-card')).toBeNull();
+    expect(notificationAllowButton().textContent.trim()).toBe('Allow');
+    expect(notificationAllowButton().getAttribute('aria-label')).toBe('Allow notifications');
+    expect(locationAllowButton().textContent.trim()).toBe('Allow');
+    expect(locationAllowButton().getAttribute('aria-label')).toBe('Allow location');
+    expect(card.textContent).not.toMatch(/blocked|open in browser|how to allow/i);
     const installButton = buttonByText('Install app');
     expect(installButton).not.toBeNull();
 
@@ -1486,20 +1594,18 @@ describe('Login permission flow', () => {
     expect(container.querySelector('.modal-card')).toBeNull();
   });
 
-  it('lets a visitor skip the optional location row for good', async () => {
+  it('keeps the location action available until the user grants it', async () => {
     setNotificationPermission('granted');
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'enabled', token: 'push-token-5' });
     await mount();
 
-    // Location is the only row left (alerts are on) and it is dismissible.
+    // Location is the only row left (alerts are on). It stays compact and can
+    // always be opened again, even if permission was skipped or blocked earlier.
     const card = container.querySelector('.login-perm-card');
     expect(card).not.toBeNull();
-    expect(card.querySelector('.perm-row-copy strong').textContent).toBe('Salons near me');
-
-    await act(async () => { card.querySelector('.perm-dismiss').click(); });
-    await flush();
-    expect(container.querySelector('.login-perm-card')).toBeNull();
-    expect(localStorage.getItem('mynaaiPermissionAsk:location')).toBe('never');
+    expect(card.querySelector('.perm-row-copy strong').textContent).toBe('Location');
+    expect(locationAllowButton()).not.toBeNull();
+    expect(card.querySelectorAll('.perm-row p')).toHaveLength(0);
   });
 
   it('swaps the login subtitle for the partner pitch when the Salon partner role is picked', async () => {

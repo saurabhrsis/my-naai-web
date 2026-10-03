@@ -373,6 +373,11 @@ img { display: block; max-width: 100%; }
 .result-count { color: var(--muted); font-size: 11px; }
 .inline-notice { display: flex; align-items: center; gap: 7px; margin: -3px 0 15px; padding: 10px 12px; border-radius: 10px; color: #e4c3bf; background: rgba(242,123,116,.08); font-size: 11px; line-height: 1.3; }
 .inline-notice button { margin-left: auto; color: var(--gold); background: transparent; font-size: 11px; font-weight: 700; }
+.location-fallback-notice { align-items: flex-start; }
+.location-fallback-notice > svg { flex: none; margin-top: 1px; }
+.location-fallback-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.location-request-note { color: var(--muted-light); font-size: 10px; line-height: 1.4; }
+.location-fallback-notice button { flex: none; align-self: center; }
 .salon-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
 /* Full width at every size — a card that hugs one side of the phone (the
    left-aligned look reported on mobile) usually means the grid item never
@@ -1867,15 +1872,13 @@ img.image-fallback-tile {
    is itself a tiny 10px gold line, so without air the two read as one crammed
    block. The top margin gives the greeting and the chip clear separation. */
 .login-hero-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 20px; background: rgba(232,185,126,.12); border: 1px solid rgba(232,185,126,.22); color: var(--gold); font-size: 10px; font-weight: 700; letter-spacing: .04em; margin: 14px 0 10px; }
-/* The login setup — Allow alerts + Install app — as compact pills on one row.
-   Phone users tap buttons; they do not read cards, so this row replaced both
-   the old three-card stack and the later text panel. */
-.login-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: -10px 0 20px; }
-/* The permission card — one row per permission, one tap per row.
-   It replaced the old walls of instruction: a visitor reads two short lines and
-   taps; a "Not now" is remembered and the rows leave without nagging. */
+/* Keep the login permissions to two small, one-tap rows on phones. Details only
+   appear in the settings sheet after a browser has blocked a permission. */
+.auth-form-wrap > .auth-subtitle { margin-bottom: 12px; }
+.login-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 14px; }
+.login-actions .install-login-button { margin: 0; }
 .perm-card { display: flex; flex-direction: column; gap: 8px; margin: 2px 0 16px; }
-.login-perm-card { max-width: 460px; }
+.login-perm-card { max-width: 460px; gap: 6px; margin: 0 0 10px; }
 .perm-row { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 11px; border: 1px solid rgba(232,185,126,.22); border-radius: 13px; background: rgba(232,185,126,.06); }
 .perm-row-icon { width: 30px; height: 30px; display: flex; flex: none; align-items: center; justify-content: center; border-radius: 9px; color: #111; background: var(--gold); }
 .perm-row-icon-location { background: rgba(110,209,158,.9); }
@@ -1886,26 +1889,52 @@ img.image-fallback-tile {
 .perm-row .install-auth-button { flex: none; }
 .perm-location-button { border-color: rgba(110,209,158,.4); background: rgba(110,209,158,.14); color: #cfeede; }
 .perm-location-button:hover { background: rgba(110,209,158,.2); }
-.perm-dismiss { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 9px; background: transparent; color: var(--muted); cursor: pointer; }
-.perm-dismiss:hover { background: rgba(255,255,255,.06); color: var(--white); }
 .perm-state-on { display: inline-flex; flex: none; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 20px; background: rgba(110,209,158,.12); border: 1px solid rgba(110,209,158,.28); color: #9fe0bf; font-size: 10.5px; font-weight: 700; }
 .perm-row-account { margin: 0 0 8px; background: rgba(255,255,255,.03); border-color: var(--line); }
 .permission-gate-required { display: flex; align-items: flex-start; gap: 7px; margin: 0 0 12px; padding: 9px 11px; border-radius: 10px; background: rgba(242,123,116,.10); border: 1px solid rgba(242,123,116,.25); color: #ffb3ad; font-size: 11.5px; line-height: 1.5; }
 .permission-gate-required svg { flex: none; margin-top: 1px; }
+.login-perm-card .perm-row { flex-wrap: nowrap; min-height: 44px; gap: 8px; padding: 6px 9px; }
+.login-perm-card .perm-row-icon { width: 27px; height: 27px; border-radius: 8px; }
+.login-perm-card .perm-row-copy strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11.5px; }
+.login-perm-card .perm-row-actions { width: auto; justify-content: flex-end; }
+.login-perm-card .perm-row .install-auth-button {
+  min-width: 74px;
+  min-height: 44px;
+  padding: 0 10px;
+  gap: 6px;
+  border-radius: 11px;
+  font-size: 11.5px;
+  font-weight: 800;
+  box-shadow: 0 4px 12px rgba(0,0,0,.16);
+  transition: transform .16s ease, background .16s ease, box-shadow .16s ease;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.login-perm-card .perm-row .install-auth-button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 15px rgba(0,0,0,.22); }
+.login-perm-card .perm-row .install-auth-button:active:not(:disabled) { transform: scale(.97); }
+.login-perm-card .perm-row .install-auth-button:focus-visible { outline: 3px solid var(--white); outline-offset: 2px; }
+.login-perm-card .perm-row .install-auth-button:disabled { cursor: wait; opacity: .7; }
+.perm-card-note { margin: 0 2px; color: var(--muted-light); font-size: 10px; line-height: 1.4; }
 @media (max-width: 420px) {
   .perm-row { flex-wrap: wrap; }
   .perm-row-actions { width: 100%; justify-content: flex-end; }
+  .login-perm-card .perm-row { flex-wrap: nowrap; }
+  .login-perm-card .perm-row-actions { width: auto; }
+  .login-perm-card .perm-row .install-auth-button { min-width: 72px; padding: 0 8px; }
 }
-/* The permission ask is the step sign-in depends on, so its pill carries the
-   gold fill; the install pill keeps the outline style of .install-auth-button. */
-.allow-alerts-button { border-color: transparent; background: var(--gold); color: #0d0e0e; }
-.allow-alerts-button:hover { background: #f0cd96; }
+/* The permission ask is the step sign-in depends on, so its button carries the
+   gold fill; the location action uses a matching, higher-contrast green. */
+.allow-alerts-button { border-color: transparent; background: var(--gold); color: #0d0e0e; box-shadow: 0 4px 13px rgba(232,185,126,.22); }
+.allow-alerts-button:hover:not(:disabled) { background: #f0cd96; box-shadow: 0 6px 16px rgba(232,185,126,.3); }
 .allow-alerts-button:disabled { opacity: .75; }
+.perm-location-button { border-color: rgba(110,209,158,.8); background: var(--green); color: #09120d; box-shadow: 0 4px 13px rgba(110,209,158,.19); }
+.perm-location-button:hover:not(:disabled) { background: #86dfaf; box-shadow: 0 6px 16px rgba(110,209,158,.28); }
+.perm-location-button:disabled { opacity: .75; }
 .allow-alerts-attention { background: var(--red); color: #fff; }
 .allow-alerts-attention:hover { background: #ed8881; }
 .login-action-loading { color: var(--muted); pointer-events: none; }
 @media (max-width: 380px) {
-  .login-actions { gap: 7px; margin-bottom: 18px; }
+  .login-actions { gap: 7px; margin: 0 0 14px; }
 }
 /* The short install guide opened from the login Install button. */
 .install-steps strong { color: var(--white); }
@@ -1965,7 +1994,6 @@ img.image-fallback-tile {
    a login wall made the buzzer unverifiable on an iPhone). Reuses the permission
    row chrome so it reads as part of the same card, with its own note line. */
 .buzzer-test-card { max-width: 460px; }
-.login-buzzer-card { margin-top: -8px; }
 .buzzer-test-card .perm-row { align-items: flex-start; }
 .buzzer-test-card .perm-row-copy p { margin: 3px 0 0; color: var(--muted-light); font-size: 11.5px; line-height: 1.5; }
 .buzzer-test-button { margin-top: 2px; }

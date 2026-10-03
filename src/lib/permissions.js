@@ -365,9 +365,9 @@ export async function requestLocation(options = {}) {
   if (typeof window !== 'undefined' && window.isSecureContext === false) {
     return { ok: false, state: 'unsupported', code: 0, message: 'Location requires a secure HTTPS page.' };
   }
-  if (!promptsAvailable('location')) {
-    return { ok: false, state: 'denied', code: 1, message: 'This page is not allowed to request geolocation.' };
-  }
+  // Invoke the native API from the caller's user gesture and let the browser
+  // decide whether its policy permits a prompt. A restricted frame will return
+  // PERMISSION_DENIED; never replace that with an app-owned popup here.
   const first = await locateOnce({ enableHighAccuracy: false, timeout: 12000, maximumAge: 300000, ...options });
   if (first.ok || first.state === 'denied' || first.code !== 3) return first;
   return locateOnce({ enableHighAccuracy: false, timeout: 25000, maximumAge: 600000, ...options });

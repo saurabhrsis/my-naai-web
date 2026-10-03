@@ -19,7 +19,6 @@ import {
   CircleAlert,
   Copy,
   Download,
-  ExternalLink,
   MapPin,
   RefreshCw,
   RotateCw,
@@ -27,7 +26,6 @@ import {
   ShieldCheck,
   Smartphone,
   Volume2,
-  X,
 } from 'lucide-react';
 import { Button, Modal, Spinner, cx, getErrorMessage } from './Shared';
 import {
@@ -36,13 +34,11 @@ import {
   browserLabel,
   buzzerHint,
   detectBrowser,
-  isEmbeddedFrame,
   promptsAvailable,
   isIosDevice,
   isIosPwaInstalled,
   isStandalone,
   permissionSteps,
-  readAskChoice,
   readPermission,
   rememberAskChoice,
   requestLocation,
@@ -51,28 +47,18 @@ import {
 } from '../lib/permissions';
 import { formatPushDiagnostics, getPushDiagnostics, getPushStatus, getPushToken, isPushConfigured, watchNotificationPermission } from '../lib/push';
 
-// The two permissions, side by side, each with ONE action. This is the whole
-// login-page ask: the visitor reads one line, taps once, done. Nothing here can
-// block sign-in — a "Not now" (or a browser block) simply leaves the row in a
-// recoverable state and the form keeps working.
+// Compact login rows call the browser's permission API directly from each Allow
+// tap. The login surface never opens an app dialog; a permission already blocked
+// by the browser must be recovered through browser/account settings instead.
 export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = '' }) {
   const [alerts, setAlerts] = useState('checking');
-  const [alertsReason, setAlertsReason] = useState('');
   const [location, setLocation] = useState('checking');
   const [busy, setBusy] = useState('');
-  const [sheet, setSheet] = useState({ open: false, state: 'needs-permission', kind: 'notifications' });
-  const [locationDismissed, setLocationDismissed] = useState(() => readAskChoice('location') === ASK_CHOICES.never);
-  // "Not now" on the alerts sheet hides that row for the rest of this visit —
-  // the login form keeps working and the visitor is not nagged. A new visit
-  // offers it again, because a customer who books really does want the alerts.
-  const [alertsSuppressed, setAlertsSuppressed] = useState(false);
+  const [permissionNotice, setPermissionNotice] = useState('');
   const onTokenRef = useRef(onToken);
   onTokenRef.current = onToken;
   const onDismissRef = useRef(onDismiss);
   onDismissRef.current = onDismiss;
-  const pushConfigured = isPushConfigured();
-  const needsInstall = isIosDevice() && !isIosPwaInstalled();
-  const embedded = isEmbeddedFrame();
   // Whether the browser can even show its own prompt on this page. Inside another
   // page's frame without an `allow` delegation it cannot — the browser reports
   // 'denied' instead, which must never be dressed up as "you blocked us".
@@ -95,14 +81,12 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
             // not a block by the visitor.
             : alertsPromptable ? 'denied' : 'embedded';
       setAlerts(state);
-      setAlertsReason('');
       return state;
     }
     try {
       const status = await getPushStatus();
       const state = status.state === 'denied' && !alertsPromptable ? 'embedded' : status.state;
       setAlerts(state);
-      setAlertsReason(state === 'embedded' ? '' : status.reason || '');
       if (state === 'enabled' && status.token) onTokenRef.current?.(status.token);
       return state;
     } catch (error) {
@@ -114,7 +98,10 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
 
   const readLocation = useCallback(async () => {
     const next = await readPermission('location');
-    setLocation(next);
+    // Safari and several mobile browsers do not expose a live location setting
+    // through the Permissions API. Preserve a denial we observed from
+    // getCurrentPosition instead of turning it back into "Allow" on focus.
+    setLocation(current => ['denied', 'device-settings'].includes(current) && next === 'default' ? current : next);
     return next;
   }, []);
 
@@ -149,62 +136,37 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
     };
   }, [readAlerts, readLocation]);
 
-  // Alerts — the normal path: this tap IS the gesture the browser needs, so its
-  // own Allow popup opens right here. Whatever the user answers, sign-in keeps
-  // working; the row just reflects the answer.
+  // Each Allow tap calls the browser API directly. The browser shows its own
+  // permission prompt when the state is still askable; an app guide never
+  // replaces that prompt on the login page.
   const allowAlerts = async () => {
     setBusy('alerts');
+    setPermissionNotice('');
     try {
-      // Embedded: no popup can ever appear in here, so the only useful action is
-      // to get the visitor into a real tab (and the sheet if the browser blocks
-      // that new tab).
-      if (alerts === 'embedded') {
-        if (!openInNewTab()) setSheet({ open: true, state: 'denied', kind: 'notifications' });
-        return;
-      }
-
-      // The few states where a popup cannot possibly appear: the permission is
-      // blocked, iOS needs the app on the Home Screen first, the page is inside
-      // another page's frame, or the browser has no support at all. Those get the
-      // sheet with the exact fix instead of a button that silently does nothing.
-      if (alerts === 'denied' || embedded) {
-        setSheet({ open: true, state: 'denied', kind: 'notifications' });
-        return;
-      }
-      if (needsInstall) {
-        setSheet({ open: true, state: 'needs-permission', kind: 'notifications' });
-        return;
-      }
-      if (alerts === 'unsupported') {
-        setSheet({ open: true, state: 'unsupported', kind: 'notifications' });
-        return;
-      }
-
-      // Everything else — never asked yet, or a token that needs one more try —
-      // asks the browser RIGHT HERE. This tap is the user gesture, and
-      // requestNotifications() calls the browser API synchronously, so Safari
-      // keeps the gesture and the Allow popup actually appears.
       const permission = await requestNotifications();
       if (permission === 'denied') {
-        setAlerts('denied');
-        setSheet({ open: true, state: 'denied', kind: 'notifications' });
+        // A denied setting cannot produce another native prompt. Keep the row
+        // simple and leave browser/account settings as the recovery route.
+        setAlerts(alertsPromptable ? 'denied' : 'embedded');
+        setPermissionNotice(alertsPromptable
+          ? 'Change Notifications in browser site settings to try again.'
+          : 'This preview cannot show the notifications prompt. Try the live site.');
+        if (alertsPromptable) rememberAskChoice('notifications', ASK_CHOICES.blocked);
+        onDismissRef.current?.();
         return;
       }
       if (permission !== 'granted') {
-        setAlerts('needs-permission');
+        setAlerts(permission === 'unsupported' ? 'unsupported' : 'needs-permission');
+        if (!alertsPromptable) setPermissionNotice('This preview cannot show the notifications prompt. Try the live site.');
+        // If the visitor dismissed the native prompt, Continue must not surprise
+        // them by asking again during sign-in.
+        onDismissRef.current?.();
         return;
       }
+      setPermissionNotice('');
 
       rememberAskChoice('notifications', ASK_CHOICES.allowed);
-      // The browser's popup said yes, so from the visitor's side alerts are ON
-      // and this row is done: it disappears right here. Minting the device token
-      // is My Naai's job and it is retried in the background (see lib/push.js),
-      // which reports back through `mynaai:push-token`. Keeping an "alerts almost
-      // ready / the last setup step did not finish" row here after somebody just
-      // tapped Allow is the exact error this branch used to show.
       if (!isPushConfigured()) {
-        // Permission banked; no device token can be minted until booking alerts
-        // are configured for this build. Nothing left to ask on this page.
         setAlerts('enabled');
         return;
       }
@@ -218,50 +180,33 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
 
   const allowLocation = async () => {
     setBusy('location');
+    setPermissionNotice('');
     try {
-      if (!locationPromptable) {
-        setSheet({ open: true, state: 'denied', kind: 'location' });
-        return;
-      }
+      // requestLocation calls getCurrentPosition synchronously from this tap;
+      // the browser—not an app sheet—owns the permission prompt.
       const result = await requestLocation();
-      rememberAskChoice('location', result.ok ? ASK_CHOICES.allowed : result.state === 'denied' ? ASK_CHOICES.blocked : ASK_CHOICES.later);
-      setLocation(result.ok ? 'granted' : result.state === 'denied' ? 'denied' : result.state === 'device-settings' ? 'device-settings' : 'default');
+      setLocation(result.ok ? 'granted' : result.state === 'denied' ? 'denied' : result.state === 'device-settings' ? 'device-settings' : result.state === 'unsupported' ? 'unsupported' : 'default');
       if (result.ok) {
         onNotify?.('success', 'Location on — salons are now sorted by distance for you.');
       } else if (result.state === 'denied') {
-        setSheet({ open: true, state: 'denied', kind: 'location' });
-      } else if (result.state === 'device-settings') {
-        setSheet({ open: true, state: 'device-settings', kind: 'location' });
+        setPermissionNotice(locationPromptable
+          ? 'Change Location in browser site settings to try again.'
+          : 'This preview cannot show the location prompt. Try the live site.');
       }
     } finally {
       setBusy('');
     }
   };
 
-  const dismissLocation = () => {
-    rememberAskChoice('location', ASK_CHOICES.never);
-    setLocationDismissed(true);
-  };
-
-  const alertsRowVisible = !alertsSuppressed && !['checking', 'enabled'].includes(alerts);
-  const locationRowVisible = !locationDismissed && !['granted', 'checking', 'unsupported'].includes(location);
+  const alertsRowVisible = !['checking', 'enabled', 'unsupported'].includes(alerts);
+  const locationRowVisible = !['granted', 'checking', 'unsupported'].includes(location);
   if (!alertsRowVisible && !locationRowVisible) return null;
 
-  const alertsCopy = {
-    'needs-permission': {
-      title: 'Notification permission',
-      body: pushConfigured
-        ? 'Tap Allow notifications — your browser asks once, and booking alerts arrive with the buzzer (sound + vibration).'
-        : 'Tap Allow notifications — your browser asks once. My Naai uses it for booking alerts and the buzzer.',
-    },
-    denied: { title: 'Notifications are blocked', body: `Turn Notifications back on for ${siteHost()} in ${browserLabel(detectBrowser())}.` },
-    embedded: {
-      title: 'Notifications need their own tab',
-      body: 'This page is open inside another app, where browsers hide the Allow prompt. Open My Naai in a tab — the login page there asks in one tap.',
-    },
-    unsupported: { title: 'Alerts need an install', body: needsInstall ? 'Add My Naai to your Home Screen — that is the only way iPhone allows alerts and the buzzer.' : 'This browser cannot receive web alerts, but you can still book normally.' },
-    unavailable: { title: 'Alerts allowed — finishing setup', body: alertsReason || 'Notifications are on for this device. My Naai is finishing the last step in the background — nothing to change here.' },
-  }[alerts] || { title: 'Booking alerts', body: '' };
+  // Keep the login surface neutral and compact in every permission state.
+  const alertsUnavailable = alerts === 'unavailable';
+  const alertsTitle = alertsUnavailable ? 'Alerts allowed' : 'Notifications';
+  const alertsAction = alertsUnavailable ? 'Try again' : 'Allow';
+  const locationTitle = 'Location';
 
   return (
     <section className={cx('perm-card', className)} aria-live="polite">
@@ -269,25 +214,17 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
         <div className="perm-row">
           <span className="perm-row-icon"><BellRing size={15} /></span>
           <div className="perm-row-copy">
-            <strong>{alertsCopy.title}</strong>
-            <p>{alertsCopy.body}</p>
+            <strong>{alertsTitle}</strong>
           </div>
           <button
             type="button"
-            className={cx('install-auth-button', 'allow-alerts-button', alerts === 'denied' && 'allow-alerts-attention')}
+            className={cx('install-auth-button', 'allow-alerts-button')}
             onClick={allowAlerts}
             disabled={busy === 'alerts'}
+            aria-busy={busy === 'alerts'}
+            aria-label={alertsUnavailable ? 'Try notification setup again' : 'Allow notifications'}
           >
-            {busy === 'alerts'
-              ? <Spinner size={14} />
-              : alerts === 'denied' ? <CircleAlert size={14} />
-                : alerts === 'embedded' ? <ExternalLink size={14} />
-                  : alerts === 'unsupported' ? <Smartphone size={14} />
-                    : alerts === 'unavailable' ? <RefreshCw size={14} /> : <Bell size={14} />}
-            {alerts === 'denied' ? 'Fix alerts'
-              : alerts === 'embedded' ? 'Open in a new tab'
-                : alerts === 'unsupported' ? 'How to turn on'
-                  : alerts === 'unavailable' ? 'Try again' : 'Allow notifications'}
+            {busy === 'alerts' ? <Spinner size={14} /> : alertsAction}
           </button>
         </div>
       )}
@@ -295,58 +232,25 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
         <div className="perm-row">
           <span className="perm-row-icon perm-row-icon-location"><MapPin size={15} /></span>
           <div className="perm-row-copy">
-            <strong>{location === 'denied' ? 'Location is off' : 'Salons near me'}</strong>
-            <p>{location === 'denied'
-              ? locationPromptable
-                ? 'Optional — turn Location on for this site to see how far each salon is.'
-                : 'Optional — this page is open inside another app, where browsers hide the location prompt. Open My Naai in a tab to sort by distance.'
-              : 'Optional — puts the nearest salons first. Skip it and browsing still works.'}</p>
+            <strong>{locationTitle}</strong>
           </div>
           <div className="perm-row-actions">
-            <button type="button" className="install-auth-button perm-location-button" onClick={allowLocation} disabled={busy === 'location'}>
-              {busy === 'location' ? <Spinner size={14} /> : <MapPin size={14} />}
-              {location === 'denied' ? 'How to allow' : 'Allow location'}
-            </button>
-            <button type="button" className="perm-dismiss" onClick={dismissLocation} aria-label="Not now — do not ask again">
-              <X size={14} />
+            <button
+              type="button"
+              className="install-auth-button perm-location-button"
+              onClick={allowLocation}
+              disabled={busy === 'location'}
+              aria-busy={busy === 'location'}
+              aria-label="Allow location"
+            >
+              {busy === 'location' ? <Spinner size={14} /> : 'Allow'}
             </button>
           </div>
         </div>
       )}
-      <PermissionSheet
-        open={sheet.open}
-        state={sheet.state}
-        kind={sheet.kind}
-        onClose={() => {
-          if (sheet.kind === 'notifications') {
-            setAlertsSuppressed(true);
-            // Tell the auth flow, so pressing Continue afterwards cannot pop the
-            // browser prompt at somebody who just said "not now" — the exact
-            // surprise that turns into a permanent Block.
-            onDismissRef.current?.();
-          }
-          setSheet(current => ({ ...current, open: false }));
-          readAlerts();
-          readLocation();
-        }}
-        onGranted={token => {
-          if (sheet.kind === 'location') setLocation('granted');
-          else if (token) { onTokenRef.current?.(token); setAlerts('enabled'); }
-        }}
-      />
+      {permissionNotice && <p className="perm-card-note" role="status">{permissionNotice}</p>}
     </section>
   );
-}
-
-// Some states cannot be fixed in the page the visitor is looking at: inside
-// another page's frame (a preview pane, an in-app browser) the browser will not
-// show a permission popup at all. A real tab can, so this is the escape hatch both
-// the card and the sheet use.
-function openInNewTab() {
-  try { return Boolean(window.open(window.location.href, '_blank', 'noopener')); } catch (error) {
-    console.debug(getErrorMessage(error, 'Could not open My Naai in a new tab.'));
-    return false;
-  }
 }
 
 // The sheet that owns every "it did not work" state. One job per state, one
@@ -358,6 +262,7 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [checkFailed, setCheckFailed] = useState(false);
+  const [embeddedRequestTried, setEmbeddedRequestTried] = useState(false);
   const [extraHelp, setExtraHelp] = useState(false);
   // Every "Try again" tap stamps the time and refreshes the reason, so a retry
   // that still fails never looks like a dead button that "did nothing".
@@ -373,6 +278,7 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
   // that was not can never show the popup, and saying "switch it back on in
   // Chrome" there would be wrong.
   const embedded = !promptsAvailable(isLocation ? 'location' : 'notifications');
+  const embeddedGate = embedded && !needsInstall && ['denied', 'needs-permission'].includes(state);
 
   useEffect(() => {
     if (open) {
@@ -381,6 +287,7 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
       setState(initialState === 'unavailable' ? 'finishing' : initialState);
       setReason('');
       setCheckFailed(false);
+      setEmbeddedRequestTried(false);
       setExtraHelp(false);
       setLastChecked(null);
       setReportCopied(false);
@@ -461,8 +368,6 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
     return () => window.removeEventListener('mynaai:push-token', onToken);
   }, [isLocation, open, succeed]);
 
-  const openStandalone = () => { openInNewTab(); };
-
   // Copy the same nine-check report the Account card offers, so a visitor who
   // is stuck *before* sign-in can still send support something pinnable to a
   // layer. Falls back to an on-screen selectable report when the clipboard
@@ -505,13 +410,9 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
     setBusy(true);
     try {
       if (isLocation) {
-        if (embedded) {
-          setState('denied');
-          setCheckFailed(true);
-          return;
-        }
         const result = await requestLocation();
         if (result.ok) { succeed('location'); return; }
+        if (embedded) setEmbeddedRequestTried(true);
         if (result.state === 'device-settings') {
           setState('device-settings');
           setCheckFailed(false);
@@ -547,6 +448,7 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
         setLastChecked(new Date());
         return;
       }
+      if (embedded) setEmbeddedRequestTried(true);
       await readStatus();
       setLastChecked(new Date());
     } catch (askError) {
@@ -647,7 +549,21 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
     </div>
   );
 
-  if (needsInstall) {
+  if (embeddedGate) {
+    heading = isLocation ? 'Allow location' : 'Allow notifications';
+    lede = '';
+    body = (
+      <>
+        {embeddedRequestTried && <p className="permission-help-note permission-gate-inline-note" role="status">This preview cannot show the native {isLocation ? 'location' : 'notifications'} prompt. Try the live site.</p>}
+        <div className="permission-gate-actions">
+          <Button onClick={allow} loading={busy}>Allow</Button>
+        </div>
+        <div className="permission-gate-secondary">
+          <button className="ghost" onClick={onClose}>Close</button>
+        </div>
+      </>
+    );
+  } else if (needsInstall) {
     heading = 'Install My Naai to get alerts';
     lede = 'On iPhone, web notifications only work once My Naai is on your Home Screen. It takes about 20 seconds:';
     body = (
@@ -693,38 +609,24 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
     );
   } else if (state === 'denied') {
     heading = isLocation ? 'Location is blocked' : 'Alerts are blocked';
-    lede = embedded
-      ? isLocation
-        ? 'This page is open inside another app or page, so the browser will not show its location popup here. Open My Naai in its own tab to allow location:'
-        : 'This page is open inside another app or page, so the browser will not show its Allow popup here. Open My Naai in its own tab to allow notifications:'
-      : `Your browser only asks once, so this has to be switched back on in ${label}. It takes about 15 seconds:`;
+    lede = `Your browser only asks once, so this has to be switched back on in ${label}. It takes about 15 seconds:`;
     body = (
       <>
-        {embedded ? (
-          <ol className="ios-install-steps permission-gate-steps">
-            <li>Tap <strong>Open My Naai in a new tab</strong> below.</li>
-            <li>Tap <strong>{isLocation ? 'Allow location' : 'Allow notifications'}</strong> there and choose <strong>Allow</strong>.</li>
-            <li>{isLocation ? 'Nearest-first sorting works from that tab.' : 'Sign in from that tab — alerts reach you there.'}</li>
-          </ol>
-        ) : (
+        <ol className="ios-install-steps permission-gate-steps">
+          {permissionSteps(browser, isLocation ? 'location' : 'notifications').map(step => <li key={step}>{step}</li>)}
+        </ol>
+        {!isLocation && (
           <>
-            <ol className="ios-install-steps permission-gate-steps">
-              {permissionSteps(browser, isLocation ? 'location' : 'notifications').map(step => <li key={step}>{step}</li>)}
-            </ol>
-            {!isLocation && (
-              <>
-                <p className="permission-help-note">{buzzerHint(browser)}</p>
-                <button type="button" className="permission-help-link" onClick={() => setExtraHelp(help => !help)}>
-                  {extraHelp ? 'Hide extra help' : 'Still blocked? Extra help'}
-                </button>
-                {extraHelp && (
-                  <div className="permission-gate-warn">
-                    <p>
-                      The site must be exactly <strong>{siteHost()}</strong> and the setting must be <strong>Notifications</strong> — not Location.{androidAppNotificationHint(browser)} A reload also helps some browsers.
-                    </p>
-                  </div>
-                )}
-              </>
+            <p className="permission-help-note">{buzzerHint(browser)}</p>
+            <button type="button" className="permission-help-link" onClick={() => setExtraHelp(help => !help)}>
+              {extraHelp ? 'Hide extra help' : 'Still blocked? Extra help'}
+            </button>
+            {extraHelp && (
+              <div className="permission-gate-warn">
+                <p>
+                  The site must be exactly <strong>{siteHost()}</strong> and the setting must be <strong>Notifications</strong> — not Location.{androidAppNotificationHint(browser)} A reload also helps some browsers.
+                </p>
+              </div>
             )}
           </>
         )}
@@ -735,12 +637,9 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
         )}
         {lastCheckedLine && <p className="permission-help-note">{lastCheckedLine}</p>}
         <div className="permission-gate-actions">
-          {embedded
-            ? <Button onClick={openStandalone}><ExternalLink size={16} /> Open My Naai in a new tab</Button>
-            : <Button onClick={check} loading={busy}><Check size={16} /> I allowed it — Try again</Button>}
+          <Button onClick={check} loading={busy}><Check size={16} /> I allowed it — Try again</Button>
         </div>
         <div className="permission-gate-secondary">
-          {embedded && <button className="ghost" onClick={check}>I allowed it — Check</button>}
           <button className="ghost" onClick={() => window.location.reload()}><RotateCw size={14} /> Reload page</button>
           <button className="ghost" onClick={onClose}>Not now</button>
           <a className="ghost" href="tel:8380017393">Need help? Call</a>
@@ -908,14 +807,14 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
         <div className="permission-gate-icon">
           {needsInstall ? <Smartphone size={26} /> : isLocation ? <MapPin size={26} /> : state === 'denied' ? <Settings size={26} /> : <BellRing size={26} />}
         </div>
-        <span className="permission-gate-browser">{isLocation ? <MapPin size={12} /> : <Bell size={12} />} {label}</span>
+        {!embeddedGate && <span className="permission-gate-browser">{isLocation ? <MapPin size={12} /> : <Bell size={12} />} {label}</span>}
         <h2>{heading}</h2>
         {lede && <p className="permission-gate-lede">{lede}</p>}
-        {required && !needsInstall && (
+        {required && !needsInstall && !embeddedGate && (
           <p className="permission-gate-required"><CircleAlert size={14} /> Sign-in on this device has to finish with alerts on — it is how bookings reach you.</p>
         )}
         {body}
-        {!isLocation && (
+        {!isLocation && !embeddedGate && (
           <p className="permission-gate-note">
             Trouble turning alerts on? Call <a href="tel:8380017393">8380017393</a> and we will do it with you.
           </p>
