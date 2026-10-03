@@ -1376,6 +1376,29 @@ describe('Login permission flow', () => {
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
   });
 
+  it('names the Android app-level switch when a denied site setting cannot prompt', async () => {
+    // On Android 13+ (and OEM builds) the site setting stays stuck at Blocked
+    // while the browser app's own notifications are off, so the tap can never
+    // produce a prompt. Saying only "browser site settings" leaves an Android
+    // tester tapping a button that looks dead.
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36');
+    setNotificationPermission('denied');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
+    try {
+      await mount();
+
+      await act(async () => { notificationAllowButton().click(); });
+      await flush();
+
+      const note = container.querySelector('.perm-card-note').textContent;
+      expect(note).toContain('browser site settings');
+      expect(note).toContain('Android Settings → Apps');
+      expect(note).toContain('Notifications → On');
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('keeps the Allow button native after notification permission is denied', async () => {
     globalThis.Notification = {
       permission: 'default',

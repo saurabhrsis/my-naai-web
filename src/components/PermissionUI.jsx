@@ -162,11 +162,15 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
       const permission = await requestNotifications();
       if (permission === 'denied') {
         // A denied setting cannot produce another native prompt. Keep the row
-        // simple and leave browser/account settings as the recovery route.
+        // simple and leave browser/account settings as the recovery route — plus,
+        // on Android, the browser APP's own notification switch, which keeps the
+        // site setting stuck at Blocked until it is on (Android 13+ and OEM
+        // builds). Android users hit exactly this: they tap Allow, no popup can
+        // appear, and nothing says why.
         setAlerts(alertsPromptable ? 'denied' : 'embedded');
         setPermissionNotice(!alertsPromptable
           ? 'This preview cannot show the notifications prompt. Try the live site.'
-          : 'Change Notifications in browser site settings to try again.');
+          : `Change Notifications in browser site settings to try again.${androidAppNotificationHint()}`);
         if (alertsPromptable) rememberAskChoice('notifications', ASK_CHOICES.blocked);
         onDismissRef.current?.();
         return;
