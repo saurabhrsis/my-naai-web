@@ -18,6 +18,7 @@ vi.mock('../lib/push', () => ({
 
 import { PermissionSheet } from './PermissionUI';
 import { getPushStatus, getPushToken } from '../lib/push';
+import { withCrossOriginFrame } from '../test/frame';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const flush = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
@@ -61,25 +62,26 @@ describe('alerts sheet states that used to go quiet on Try again', () => {
   });
 
   it('the embedded sheet calls the native permission API instead of opening another tab', async () => {
+    // A cross-origin frame cannot request the notification permission — there is
+    // no `notifications` Permissions Policy directive to delegate, so the frame
+    // itself is the signal (see src/test/frame.js).
     globalThis.Notification = {
       permission: 'default',
       requestPermission: vi.fn(() => Promise.resolve('default')),
     };
-    Object.defineProperty(document, 'permissionsPolicy', {
-      value: { allowsFeature: () => false },
-      configurable: true,
-    });
     const openSpy = vi.spyOn(window, 'open');
     try {
-      await mount('needs-permission');
-      expect(buttonByText('Allow')).not.toBeNull();
+      await withCrossOriginFrame(async () => {
+        await mount('needs-permission');
+        expect(buttonByText('Allow')).not.toBeNull();
 
-      await act(async () => { buttonByText('Allow').click(); });
-      await flush();
+        await act(async () => { buttonByText('Allow').click(); });
+        await flush();
 
-      expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
-      expect(openSpy).not.toHaveBeenCalled();
-      expect(container.textContent).toContain('cannot show the native notifications prompt');
+        expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+        expect(openSpy).not.toHaveBeenCalled();
+        expect(container.textContent).toContain('cannot show the native notifications prompt');
+      });
     } finally {
       openSpy.mockRestore();
     }
@@ -89,8 +91,10 @@ describe('alerts sheet states that used to go quiet on Try again', () => {
     const originalGeolocation = navigator.geolocation;
     const getCurrentPosition = vi.fn((_success, fail) => fail({ code: 1, message: 'Blocked by frame policy' }));
     navigator.geolocation = { getCurrentPosition };
+    // geolocation IS a real Permissions Policy directive: a frame whose allowlist
+    // does not include it blocks the prompt, and the policy says so.
     Object.defineProperty(document, 'permissionsPolicy', {
-      value: { allowsFeature: () => false },
+      value: { features: () => ['geolocation'], allowedFeatures: () => [], allowsFeature: () => false },
       configurable: true,
     });
     const openSpy = vi.spyOn(window, 'open');

@@ -7,7 +7,13 @@ import {
   buzzerHint,
   detectAndroidVendor,
   detectBrowser,
+  alertsPromptFallback,
+  canAskForAlerts,
+  detectInAppBrowser,
   frameAllowsFeature,
+  hiddenPromptHint,
+  inAppBrowserHint,
+  isCrossOriginEmbeddedFrame,
   isDeviceTokenError,
   isIosPwaInstalled,
   promptsAvailable,
@@ -19,6 +25,7 @@ import {
   requestNotifications,
   watchPermission,
 } from './permissions';
+import { withCrossOriginFrame, withSameOriginFrame } from '../test/frame';
 
 // The permission plumbing behind every "I allowed it but the app still says
 // blocked" report. These tests pin the three guarantees the UI relies on:
@@ -239,6 +246,65 @@ describe('permissions', () => {
     });
   });
 
+  // The WebView case: WhatsApp, Instagram, Facebook and friends open links in
+  // their own browser, where LOCATION still prompts but NOTIFICATIONS can never
+  // prompt. Telling those visitors about browser settings would be useless.
+  describe('in-app browsers', () => {
+    const withUserAgent = (agent, run) => {
+      const spy = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(agent);
+      try {
+        run();
+      } finally {
+        spy.mockRestore();
+      }
+    };
+
+    it('names the app whose browser the visitor is stuck in', () => {
+      withUserAgent('Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124.0 Mobile Safari/537.36 WhatsApp/2.24.9', () => {
+        expect(detectInAppBrowser()).toBe('WhatsApp');
+      });
+      withUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Instagram 320.0.0.0', () => {
+        expect(detectInAppBrowser()).toBe('Instagram');
+      });
+      withUserAgent('Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 [FB_IAB/FB4A;FBAV/430.0.0.0] Chrome/116 Mobile Safari/537.36', () => {
+        expect(detectInAppBrowser()).toBe('Facebook');
+      });
+      withUserAgent('Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 Chrome/124.0 Mobile Safari/537.36; wv)', () => {
+        expect(detectInAppBrowser()).toBe('an app');
+      });
+      withUserAgent('Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124.0 Mobile Safari/537.36', () => {
+        expect(detectInAppBrowser()).toBe('');
+      });
+      withUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15', () => {
+        expect(detectInAppBrowser()).toBe('');
+      });
+    });
+
+    it('sends the visitor to a real browser instead of browser settings', () => {
+      withUserAgent('Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124.0 Mobile Safari/537.36 WhatsApp/2.24.9', () => {
+        expect(inAppBrowserHint()).toContain('WhatsApp');
+        expect(alertsPromptFallback()).toContain('Open mynaai.in in Chrome or Safari');
+      });
+    });
+
+    it('picks the most specific fallback for each context, in order', () => {
+      // 1. an app's WebView wins over everything else it could blame.
+      withUserAgent('Mozilla/5.0 (Linux; Android 13) WhatsApp/2.24.9 Chrome/124.0 Mobile Safari/537.36', () => {
+        expect(alertsPromptFallback()).toContain('built-in browser');
+      });
+      // 2. an iPhone tab cannot ask at all — the Home Screen step is the answer.
+      withUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile Safari/604.1', () => {
+        expect(alertsPromptFallback()).toContain('Home Screen');
+        expect(canAskForAlerts()).toBe(false);
+      });
+      // 3. an ordinary desktop Chrome can ask.
+      withUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', () => {
+        expect(canAskForAlerts()).toBe(true);
+        expect(alertsPromptFallback()).toContain('bell');
+      });
+    });
+  });
+
   describe('detectBrowser', () => {
     const withUserAgent = (agent, run) => {
       const spy = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(agent);
@@ -248,6 +314,19 @@ describe('permissions', () => {
         spy.mockRestore();
       }
     };
+
+    it('points a silent Chromium prompt at the address-bar bell, and says nothing on iPhone', () => {
+      withUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', () => {
+        expect(hiddenPromptHint()).toContain('bell');
+      });
+      withUserAgent('Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36', () => {
+        expect(hiddenPromptHint()).toContain('Permissions');
+      });
+      withUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile Safari/604.1', () => {
+        // iPhone has the Home Screen rule instead — never a "look for a bell" line.
+        expect(hiddenPromptHint()).toBe('');
+      });
+    });
 
     it('names the browser a blocked user has to open settings in', () => {
       withUserAgent('Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36', () => {
@@ -301,35 +380,72 @@ describe('permissions', () => {
   describe('frameAllowsFeature / promptsAvailable', () => {
     afterEach(() => { delete document.permissionsPolicy; delete document.featurePolicy; });
 
-    it('trusts the effective permissions policy', () => {
-      const allowsFeature = vi.fn(feature => feature !== 'notifications');
+    it('trusts the effective permissions policy for a directive the browser knows', () => {
+      const allowsFeature = vi.fn(feature => feature !== 'geolocation');
       Object.defineProperty(document, 'permissionsPolicy', { value: { allowsFeature }, configurable: true });
 
-      expect(frameAllowsFeature('notifications')).toBe(false);
-      expect(frameAllowsFeature('geolocation')).toBe(true);
-      expect(promptsAvailable('notifications')).toBe(false);
-      expect(promptsAvailable('location')).toBe(true);
-      // The location flow must ask about geolocation, not notifications.
-      expect(allowsFeature.mock.calls.map(call => call[0])).toEqual(['notifications', 'geolocation', 'notifications', 'geolocation']);
+      expect(frameAllowsFeature('geolocation')).toBe(false);
+      expect(promptsAvailable('location')).toBe(false);
+      // jsdom is not a frame, so the notification ask stays available.
+      expect(promptsAvailable('notifications')).toBe(true);
+      // The location flow must ask about geolocation, never about notifications.
+      expect(allowsFeature.mock.calls.every(call => call[0] === 'geolocation')).toBe(true);
+    });
+
+    it('never reads an unknown feature name as a block on a normal page', () => {
+      // Exactly what Chrome does to `allowsFeature('notifications')`: the
+      // Notifications API has no Permissions Policy directive (whatwg/notifications#177),
+      // so the name is missing from the browser's `features()` list and the call
+      // answers false — on the live site too. Reading that as "blocked here" is
+      // what made an ordinary tab announce "This preview cannot show the
+      // notifications prompt. Try the live site."
+      Object.defineProperty(document, 'permissionsPolicy', {
+        value: {
+          features: () => ['geolocation', 'camera', 'microphone'],
+          allowedFeatures: () => ['geolocation', 'camera', 'microphone'],
+          allowsFeature: () => false,
+        },
+        configurable: true,
+      });
+
+      expect(frameAllowsFeature('notifications')).toBe(true);
+      expect(promptsAvailable('notifications')).toBe(true);
+      // A name the browser DOES support and refuses is still a real block.
+      expect(frameAllowsFeature('camera')).toBe(false);
+      expect(promptsAvailable('location')).toBe(false);
+    });
+
+    it('uses the frame for the notification ask: cross-origin blocks it, same-origin does not', async () => {
+      // No browser implements a `notifications` policy directive, so the frame
+      // itself is the only rule left for that API.
+      await withSameOriginFrame(async () => {
+        expect(isCrossOriginEmbeddedFrame()).toBe(false);
+        expect(promptsAvailable('notifications')).toBe(true);
+      });
+      await withCrossOriginFrame(async () => {
+        expect(isCrossOriginEmbeddedFrame()).toBe(true);
+        expect(promptsAvailable('notifications')).toBe(false);
+      });
     });
 
     it('falls back to the older featurePolicy name', () => {
       Object.defineProperty(document, 'featurePolicy', { value: { allowsFeature: () => false }, configurable: true });
-      expect(frameAllowsFeature('notifications')).toBe(false);
+      expect(frameAllowsFeature('geolocation')).toBe(false);
     });
 
     it('assumes a normal page when the browser exposes no policy API', () => {
       // jsdom exposes neither object: not embedded, so prompts are available.
-      expect(frameAllowsFeature('notifications')).toBe(true);
+      expect(frameAllowsFeature('geolocation')).toBe(true);
       expect(promptsAvailable('location')).toBe(true);
+      expect(promptsAvailable('notifications')).toBe(true);
     });
 
     it('treats a policy object that throws as unavailable, not as allowed', () => {
       Object.defineProperty(document, 'permissionsPolicy', { value: { allowsFeature: () => { throw new Error('nope'); } }, configurable: true });
       // Not embedded in jsdom, so the frame fallback still allows it here — the
       // point is that a throw never becomes an unhandled error.
-      expect(() => frameAllowsFeature('notifications')).not.toThrow();
-      expect(frameAllowsFeature('notifications')).toBe(true);
+      expect(() => frameAllowsFeature('geolocation')).not.toThrow();
+      expect(frameAllowsFeature('geolocation')).toBe(true);
     });
   });
 

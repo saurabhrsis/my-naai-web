@@ -20,6 +20,12 @@
 //      `await` — the reason "I tapped Allow and no popup appeared".
 //   4. Remember an explicit "Not now". The app never nags; the user can still
 //      turn either permission on later from the Alerts & permissions card.
+//   5. Never read "the browser does not know that permission name" as "blocked
+//      here". `notifications` is not a Permissions Policy directive at all
+//      (whatwg/notifications#177), and Chromium answers
+//      `allowsFeature('notifications') === false` on EVERY page — which is how
+//      the live site came to believe it was an embedded preview and tell the
+//      visitor to "try the live site" while they were already on it.
 import { getErrorMessage } from '../components/Shared';
 
 const ASK_KEY_PREFIX = 'mynaaiPermissionAsk:';
@@ -110,6 +116,50 @@ export function isEmbeddedFrame() {
   }
 }
 
+// The embedded case browsers actually punish is the CROSS-ORIGIN one: Chrome and
+// Firefox refuse `Notification.requestPermission()` there, and the parent's
+// document is unreadable from inside. A same-origin frame (our own page embedding
+// our own page) prompts exactly like a normal tab. Reading the parent's document
+// and watching that read throw is the only signal the browser offers — the plain
+// `window.top !== window.self` test above would call both cases "embedded".
+export function isCrossOriginEmbeddedFrame() {
+  if (!isEmbeddedFrame()) return false;
+  try {
+    void window.top.document;
+    return false; // readable parent → same origin
+  } catch {
+    return true;
+  }
+}
+
+function permissionPolicyObject() {
+  if (typeof document === 'undefined') return null;
+  try {
+    return document.permissionsPolicy || document.featurePolicy || null;
+  } catch {
+    return null;
+  }
+}
+
+// `features()` is the browser's own list of the policy names it supports — no
+// matter what the current allowlist says — so it answers "do you even know this
+// word?", the question that has to come before trusting a `false`. Some policy
+// objects expose only `allowedFeatures()`; that is the fallback. `null` means the
+// browser will not say either way.
+function policyKnowsFeature(policy, feature) {
+  if (!policy) return null;
+  for (const method of ['features', 'allowedFeatures']) {
+    try {
+      if (typeof policy[method] !== 'function') continue;
+      const names = policy[method]();
+      if (names && typeof names.includes === 'function') return names.includes(feature);
+    } catch {
+      /* try the next accessor */
+    }
+  }
+  return null;
+}
+
 // Browsers refuse to show a permission prompt inside an embedded page unless the
 // page that embedded us delegates the feature with allow="...". Without that
 // delegation the browser answers 'denied' the instant we ask — which looks exactly
@@ -117,20 +167,41 @@ export function isEmbeddedFrame() {
 // settings that are not the problem. The Permissions Policy API is the only way to
 // tell the two cases apart, and it reports the *effective* policy, so a frame that
 // has been delegated the feature behaves like a normal page.
+//
+// The trap guarded here: Chromium's `allowsFeature()` logs "unrecognized feature"
+// and returns `false` for a name it has never heard of (see
+// DOMFeaturePolicy::allowsFeature + FeatureAvailable in Blink). A `false` therefore
+// only counts as a block when the browser's own feature list knows the name; for an
+// unknown name the frame remains the only honest answer.
 export function frameAllowsFeature(feature) {
-  if (typeof document === 'undefined') return true;
-  try {
-    const policy = document.permissionsPolicy || document.featurePolicy;
-    if (policy && typeof policy.allowsFeature === 'function') return policy.allowsFeature(feature) === true;
-  } catch {
-    // A policy object that refuses to answer: fall through to the frame check.
+  const policy = permissionPolicyObject();
+  if (policy && typeof policy.allowsFeature === 'function') {
+    let allowed = null;
+    try {
+      allowed = policy.allowsFeature(feature) === true;
+    } catch {
+      allowed = null; // a policy object that refuses to answer: use the frame check
+    }
+    if (allowed === true) return true;
+    if (allowed === false && policyKnowsFeature(policy, feature) !== false) return false;
   }
   return !isEmbeddedFrame();
 }
 
 // Convenience for the two permissions this app asks for.
+//
+// Location is a real Permissions Policy directive (`geolocation`, delegated with
+// allow="geolocation"), so the policy object is asked about it — and a frame that
+// was delegated it behaves like a normal page.
+//
+// Notifications are not: no browser implements a `notifications` directive, so
+// `allowsFeature('notifications')` is `false` everywhere, live site included, and
+// asking it made My Naai call every ordinary tab a preview. The only real rule for
+// this API is the frame: a cross-origin frame cannot request the permission, a
+// same-origin frame (or a normal tab) prompts like any page.
 export function promptsAvailable(kind) {
-  return frameAllowsFeature(kind === 'location' ? 'geolocation' : 'notifications');
+  if (kind === 'location') return frameAllowsFeature('geolocation');
+  return !isCrossOriginEmbeddedFrame();
 }
 
 export function detectBrowser() {
@@ -195,6 +266,25 @@ export function buzzerHint(browser) {
   return 'Check that this device is not muted — the buzzer plays a sound and vibrates where supported.';
 }
 
+// A tapped "Allow" can end with no popup and no denial, and the visitor is left
+// thinking the button is dead. Two real causes, one line each: Chromium's
+// quieter-messaging UI (plus the auto-block it applies to sites people rarely
+// accept) answers the request silently and parks the decision behind the bell
+// icon in the address bar; an iPhone tab cannot ask at all — iOS gives web
+// notifications only to an app on the Home Screen. One iPhone tab CAN show a
+// location popup at the same moment, which is why "location asked, notifications
+// did not" is a report we get from iPhones specifically.
+export function hiddenPromptHint(browser = detectBrowser()) {
+  if (isIosDevice()) return '';
+  if (browser === 'chrome-android' || browser === 'samsung' || browser === 'oppo' || browser === 'vivo') {
+    return 'No prompt appeared? Tap the lock (or bell) icon next to the address bar → Permissions → Notifications → Allow.';
+  }
+  if (browser === 'chrome-desktop' || browser === 'edge' || browser === 'opera' || browser === 'firefox') {
+    return 'No prompt appeared? This browser can hide it — click the bell (or lock) icon next to the address bar → Notifications → Allow.';
+  }
+  return 'No prompt appeared? Open this site’s permissions from the lock icon next to the address bar and set Notifications to Allow.';
+}
+
 export function androidAppNotificationHint(browser = detectBrowser()) {
   if (!isAndroidDevice() && !ANDROID_BROWSERS.has(browser)) return '';
   const app = androidPermissionAppName(browser);
@@ -205,6 +295,66 @@ export function androidAppNotificationHint(browser = detectBrowser()) {
       ? ' On Vivo, also allow background activity/Auto-start for this app.'
       : '';
   return ` Also check Android Settings → Apps → ${app} → Notifications → On.${oem}`;
+}
+
+// ── Browsers that live inside other apps (the WebView case) ──────────────────
+// WhatsApp, Instagram, Facebook, LinkedIn, the Google app … open links in their
+// own WebView. That surface prompts for LOCATION (the host app already holds the
+// OS location permission) but can never prompt for NOTIFICATIONS — the API is
+// missing or answers 'denied' instantly. "Location asked, notifications did not,
+// on every device" is this case, and no site setting can fix it: the visitor has
+// to open mynaai.in in a real browser.
+export function detectInAppBrowser() {
+  if (typeof navigator === 'undefined') return '';
+  const agent = String(navigator.userAgent || '');
+  if (!agent) return '';
+  const named = [
+    [/whatsapp/i, 'WhatsApp'],
+    [/instagram/i, 'Instagram'],
+    [/fb_iab|fban|fbav|fbios|facebook/i, 'Facebook'],
+    [/messenger/i, 'Messenger'],
+    [/linkedinapp/i, 'LinkedIn'],
+    [/snapchat/i, 'Snapchat'],
+    [/gsa\//i, 'the Google app'],
+    [/bytedance|musical_ly|tiktok|barcelona/i, 'TikTok'],
+    [/line\//i, 'LINE'],
+    [/pinterest/i, 'Pinterest'],
+  ];
+  for (const [pattern, name] of named) if (pattern.test(agent)) return name;
+  // A plain Android WebView (no vendor tag) behaves exactly the same way.
+  if (/\bwv\b/i.test(agent) && isAndroidDevice()) return 'an app';
+  return '';
+}
+
+export function inAppBrowserHint(name = detectInAppBrowser()) {
+  if (!name) return '';
+  const label = name === 'an app' ? 'another app' : name;
+  return `This page is open inside ${label}’s built-in browser, which cannot show notification prompts. Open mynaai.in in Chrome or Safari (the ⋮ or ⋯ menu → Open in browser), then tap Turn on there.`;
+}
+
+// ── Can a notification popup appear here at all? ─────────────────────────────
+// The single answer every alerts surface asks before spending a tap: the API has
+// to exist, an iPhone must be running the Home Screen app (iOS gives web
+// notifications to nothing else), and the page must not be a cross-origin frame.
+export function canAskForAlerts() {
+  if (typeof window === 'undefined') return false;
+  if (!('Notification' in window)) return false;
+  if (isIosDevice() && !isIosPwaInstalled()) return false;
+  return promptsAvailable('notifications');
+}
+
+// The one line to show when a labelled "Turn on" tap produced no prompt — or
+// could not ask at all. Each branch is a real, different cause, so they are
+// checked in the order that names the most specific one first.
+export function alertsPromptFallback(browser = detectBrowser()) {
+  const inApp = detectInAppBrowser();
+  if (inApp) return inAppBrowserHint(inApp);
+  if (!promptsAvailable('notifications')) return 'This preview cannot show the notifications prompt. Try the live site.';
+  if (typeof window !== 'undefined' && !('Notification' in window)) {
+    return 'This browser cannot receive booking alerts here. Try Chrome, Edge or Samsung Internet — on iPhone, install My Naai to the Home Screen and sign in from there.';
+  }
+  if (isIosDevice() && !isIosPwaInstalled()) return IOS_ALERTS_REQUIRED_MESSAGE;
+  return hiddenPromptHint(browser) || 'Change Notifications in browser site settings to try again.';
 }
 
 export function androidLocationHint(browser = detectBrowser()) {

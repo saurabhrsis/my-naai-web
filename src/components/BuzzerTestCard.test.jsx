@@ -29,6 +29,7 @@ vi.mock('../lib/buzzer', () => ({ playBuzzer: vi.fn(() => true), unlockBuzzer: v
 import { BuzzerTestCard } from './BuzzerTestCard';
 import { displayNotification } from '../lib/push';
 import { playBuzzer, unlockBuzzer } from '../lib/buzzer';
+import { withCrossOriginFrame } from '../test/frame';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const flush = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
@@ -119,11 +120,13 @@ describe('signed-out buzzer check', () => {
   });
 
   it('tests the buzzer in an embedded preview without substituting a popup or opening a tab', async () => {
-    // An embedded preview may suppress the native prompt. It must say so rather
-    // than faking an Allow dialog, while still letting the user hear the buzzer.
-    Object.defineProperty(document, 'permissionsPolicy', { value: { allowsFeature: () => false }, configurable: true });
+    // A cross-origin frame (a preview, a portal) cannot show the native prompt:
+    // browsers refuse Notification.requestPermission() there. The card must say
+    // so rather than faking an Allow dialog, while still letting the user hear
+    // the buzzer. (A `notifications` Permissions Policy directive does not exist,
+    // so the frame — not the policy object — is what makes this case.)
     globalThis.Notification = { permission: 'default', requestPermission: vi.fn(() => Promise.resolve('default')) };
-    try {
+    await withCrossOriginFrame(async () => {
       await mount();
       const openSpy = vi.spyOn(window, 'open').mockReturnValue({});
       const button = buttonByText('Test booking buzzer');
@@ -138,8 +141,28 @@ describe('signed-out buzzer check', () => {
       expect(container.textContent).toContain('sandbox did not show a notification prompt');
       expect(displayNotification).not.toHaveBeenCalled();
       openSpy.mockRestore();
+    });
+  });
+
+  it('tells an owner stuck in an app WebView to open a real browser', async () => {
+    // WhatsApp/Instagram open links in their own browser, where no notification
+    // prompt can ever appear. "Change the site permission" would send the owner
+    // hunting for a switch that does not exist on that surface.
+    delete globalThis.Notification;
+    const agent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36 Instagram 320.0.0.0');
+    try {
+      await mount();
+      const button = buttonByText('Test booking buzzer');
+      await act(async () => { button.click(); });
+      await flush();
+
+      // The sound still plays — only the banner is impossible — and the card says
+      // exactly how to get one.
+      expect(playBuzzer).toHaveBeenCalled();
+      expect(container.textContent).toContain('Instagram');
+      expect(container.textContent).toContain('Open mynaai.in in Chrome or Safari');
     } finally {
-      delete document.permissionsPolicy;
+      agent.mockRestore();
     }
   });
 

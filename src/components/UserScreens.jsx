@@ -4,6 +4,7 @@ import {
   ArrowRight,
   AlarmClock,
   Bell,
+  BellRing,
   Bookmark,
   BookmarkCheck,
   CalendarCheck2,
@@ -86,7 +87,7 @@ import {
   useIsAppSurface,
 } from './Shared';
 import { NotificationDiagnostics } from './NotificationDiagnostics';
-import { promptsAvailable, readPermission, requestLocation, requestNotifications } from '../lib/permissions';
+import { ASK_CHOICES, alertsPromptFallback, canAskForAlerts, promptsAvailable, readAskChoice, readPermission, rememberAskChoice, requestLocation, requestNotifications, watchPermission } from '../lib/permissions';
 import { PermissionSheet } from './PermissionUI';
 import { BuzzerTestCard } from './BuzzerTestCard';
 
@@ -406,6 +407,15 @@ export function HomeScreen({ session, navigate, notify }) {
   const [location, setLocation] = useState(null);
   const [locationBusy, setLocationBusy] = useState(false);
   const [locationRequestNote, setLocationRequestNote] = useState('');
+  // Booking alerts, asked from the page people actually land on. The home page
+  // used to offer only the location ask, so a visitor who saw the location popup
+  // had no way at all to trigger the notification one — "location shows,
+  // notifications never does". This is a labelled row like every other ask in
+  // the app: never a surprise popup, and "Not now" is remembered.
+  const [alertsState, setAlertsState] = useState('checking');
+  const [alertsBusy, setAlertsBusy] = useState(false);
+  const [alertsNote, setAlertsNote] = useState('');
+  const [alertsInviteDismissed, setAlertsInviteDismissed] = useState(() => ['later', 'blocked', 'never'].includes(readAskChoice('notifications')));
   // A browser that has already denied location cannot show the native prompt
   // again. Keep the settings recovery sheet for that case; an embedded preview
   // that cannot prompt gets a small inline note instead of another popup.
@@ -570,6 +580,59 @@ export function HomeScreen({ session, navigate, notify }) {
     return () => window.clearTimeout(timer);
   }, [loadData, search]);
 
+  // Keep the alerts row honest: read the LIVE permission on arrival, the moment
+  // the browser reports a change (the user flipping it in site settings), and
+  // again when they come back to the tab.
+  const refreshAlertsState = useCallback(async () => {
+    const state = await readPermission('notifications');
+    setAlertsState(state);
+    return state;
+  }, []);
+  useEffect(() => { refreshAlertsState(); }, [refreshAlertsState]);
+  useEffect(() => watchPermission('notifications', () => { refreshAlertsState(); }), [refreshAlertsState]);
+  useEffect(() => {
+    const recheck = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      refreshAlertsState();
+    };
+    window.addEventListener('focus', recheck);
+    document.addEventListener('visibilitychange', recheck);
+    return () => {
+      window.removeEventListener('focus', recheck);
+      document.removeEventListener('visibilitychange', recheck);
+    };
+  }, [refreshAlertsState]);
+
+  // One labelled tap, and the browser's own prompt opens inside it (gesture-safe
+  // — requestNotifications calls the API synchronously). When no popup can exist
+  // here, the tap explains why instead of doing nothing.
+  const enableAlerts = async () => {
+    setAlertsBusy(true);
+    setAlertsNote('');
+    try {
+      if (!canAskForAlerts()) {
+        setAlertsNote(alertsPromptFallback());
+        return;
+      }
+      const permission = await requestNotifications();
+      if (permission === 'granted') {
+        rememberAskChoice('notifications', ASK_CHOICES.allowed);
+        setAlertsState('granted');
+        notify?.('success', 'Booking alerts on — we will buzz you about bookings, delays and reminders.');
+        return;
+      }
+      setAlertsState(permission === 'denied' ? 'denied' : permission === 'unsupported' ? 'unsupported' : 'default');
+      setAlertsNote(alertsPromptFallback());
+    } finally {
+      setAlertsBusy(false);
+    }
+  };
+
+  const dismissAlertsInvite = () => {
+    rememberAskChoice('notifications', ASK_CHOICES.later);
+    setAlertsInviteDismissed(true);
+  };
+
   // Mobile-first infinite scroll: the sentinel sits just under the grid, so the
   // next page is already arriving by the time a thumb reaches the bottom. The
   // "Load more salons" button below stays for browsers without
@@ -583,6 +646,13 @@ export function HomeScreen({ session, navigate, notify }) {
     observer.observe(node);
     return () => observer.disconnect();
   }, [hasMore, loadMore]);
+
+  // Shown while alerts are off, and only when there is something honest to say:
+  // never asked (the ask itself), or a state this row can explain. 'granted'
+  // hides it for good, and "Not now" keeps it away.
+  const alertsInviteVisible = !alertsInviteDismissed
+    && ['default', 'denied', 'unsupported'].includes(alertsState)
+    && (alertsState === 'default' || !canAskForAlerts());
 
   const visibleSalons = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -691,6 +761,19 @@ export function HomeScreen({ session, navigate, notify }) {
       <section className="home-band home-salons-band" aria-label="Salons near you">
         <div className="section-heading"><div><span className="eyebrow">CURATED FOR YOU</span><h2>Salons near you</h2></div><span className="result-count">{loading ? 'Updating…' : `${visibleSalons.length}${totalSalons && totalSalons > visibleSalons.length ? ` of ${totalSalons}` : ''} places`}</span></div>
         {loadError && <div className="inline-notice"><CircleAlert size={16} /> {loadError} <button onClick={() => loadData()}>Try again</button></div>}
+        {!loading && alertsInviteVisible && (
+          <div className="inline-notice alerts-invite-notice">
+            <BellRing size={16} />
+            <span className="location-fallback-copy">
+              <span>{alertsState === 'default'
+                ? 'Turn on booking alerts to hear about confirmations, delays and reminders — your browser will ask once.'
+                : 'Booking alerts are off. Turn them on so bookings, delays and reminders reach this phone.'}</span>
+              {alertsNote && <small className="location-request-note" role="status">{alertsNote}</small>}
+            </span>
+            <button onClick={enableAlerts} disabled={alertsBusy}>{alertsBusy ? 'Asking…' : alertsState === 'default' ? 'Turn on' : 'How to allow'}</button>
+            <button className="notice-dismiss" onClick={dismissAlertsInvite} aria-label="Not now">Not now</button>
+          </div>
+        )}
         {!loading && !location && <div className="inline-notice location-fallback-notice"><MapPin size={16} /> <span className="location-fallback-copy"><span>Location is off, so this list is not sorted by distance — optional, and browsing works without it.</span>{locationRequestNote && <small className="location-request-note" role="status">{locationRequestNote}</small>}</span><button onClick={enableLocation} disabled={locationBusy}>{locationBusy ? 'Checking…' : 'Use my location'}</button></div>}
         {loading ? <div className="salon-grid">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} />)}</div> : visibleSalons.length ? <>
           <div className="salon-grid">{visibleSalons.map(salon => <SalonCard key={salon.id} salon={salon} saved={savedId === salon.id || salon.isSaved} onSelect={openSalon} onBook={bookSalon} onShare={item => shareSalon(item, notify)} onBookmark={bookmark} userLocation={location} />)}</div>

@@ -30,10 +30,15 @@ import {
 import { Button, Modal, Spinner, cx, getErrorMessage } from './Shared';
 import {
   ASK_CHOICES,
+  alertsPromptFallback,
   androidAppNotificationHint,
   browserLabel,
   buzzerHint,
+  canAskForAlerts,
   detectBrowser,
+  detectInAppBrowser,
+  hiddenPromptHint,
+  inAppBrowserHint,
   promptsAvailable,
   isIosDevice,
   isIosPwaInstalled,
@@ -64,6 +69,18 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
   // 'denied' instead, which must never be dressed up as "you blocked us".
   const alertsPromptable = promptsAvailable('notifications');
   const locationPromptable = promptsAvailable('location');
+  // Inside another app's WebView (WhatsApp, Instagram, Facebook …) the location
+  // ask still works but no notification prompt can ever appear: the API is
+  // missing or answers 'denied' instantly. The row stays on the page so the
+  // visitor gets that explained instead of a button that silently does nothing.
+  const inAppBrowser = detectInAppBrowser();
+  // An iPhone/iPad tab cannot ask for web notifications at all: iOS gives them
+  // only to an app on the Home Screen. Tapping Allow there would spend the tap on
+  // a call the OS answers 'denied' without showing anything, and the reply can
+  // even stick — so this visitor gets the Home Screen step, not a dead button.
+  // (Location is unaffected, which is why "location asked but notifications did
+  // not" is an iPhone report.)
+  const alertsNeedHomeScreen = isIosDevice() && !isIosPwaInstalled();
 
   const readAlerts = useCallback(async () => {
     // Alerts may not be wired into this build yet (no Firebase web config). The
@@ -138,26 +155,48 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
 
   // Each Allow tap calls the browser API directly. The browser shows its own
   // permission prompt when the state is still askable; an app guide never
-  // replaces that prompt on the login page.
+  // replaces that prompt on the login page — except on an iPhone tab, where no
+  // prompt can exist and the Home Screen step is the whole answer.
   const allowAlerts = async () => {
     setBusy('alerts');
     setPermissionNotice('');
     try {
+      if (!canAskForAlerts()) {
+        // No popup exists in this context (iPhone tab, an app's WebView, another
+        // page's frame, no Notification API): say what to do instead of spending
+        // the tap on a call that silently fails. Never a fake "you blocked us".
+        if (alertsNeedHomeScreen) setAlerts('needs-permission');
+        setPermissionNotice(alertsPromptFallback());
+        onDismissRef.current?.();
+        return;
+      }
       const permission = await requestNotifications();
       if (permission === 'denied') {
         // A denied setting cannot produce another native prompt. Keep the row
-        // simple and leave browser/account settings as the recovery route.
+        // simple and leave browser/account settings as the recovery route — plus,
+        // on Android, the browser APP's own notification switch, which keeps the
+        // site setting stuck at Blocked until it is on (Android 13+ and OEM
+        // builds). Android users hit exactly this: they tap Allow, no popup can
+        // appear, and nothing says why.
         setAlerts(alertsPromptable ? 'denied' : 'embedded');
-        setPermissionNotice(alertsPromptable
-          ? 'Change Notifications in browser site settings to try again.'
-          : 'This preview cannot show the notifications prompt. Try the live site.');
+        setPermissionNotice(inAppBrowser
+          ? inAppBrowserHint(inAppBrowser)
+          : !alertsPromptable
+            ? 'This preview cannot show the notifications prompt. Try the live site.'
+            : `Change Notifications in browser site settings to try again.${androidAppNotificationHint()}`);
         if (alertsPromptable) rememberAskChoice('notifications', ASK_CHOICES.blocked);
         onDismissRef.current?.();
         return;
       }
       if (permission !== 'granted') {
         setAlerts(permission === 'unsupported' ? 'unsupported' : 'needs-permission');
-        if (!alertsPromptable) setPermissionNotice('This preview cannot show the notifications prompt. Try the live site.');
+        if (inAppBrowser) setPermissionNotice(inAppBrowserHint(inAppBrowser));
+        else if (!alertsPromptable) setPermissionNotice('This preview cannot show the notifications prompt. Try the live site.');
+        // A tapped Allow that ends with no popup and no denial is the quieter-UI
+        // case (Chromium answers silently and parks the decision behind the bell
+        // icon), so name where the switch actually is instead of leaving a tap
+        // that looks like it did nothing.
+        else if (permission !== 'unsupported') setPermissionNotice(hiddenPromptHint());
         // If the visitor dismissed the native prompt, Continue must not surprise
         // them by asking again during sign-in.
         onDismissRef.current?.();
@@ -198,14 +237,18 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
     }
   };
 
-  const alertsRowVisible = !['checking', 'enabled', 'unsupported'].includes(alerts);
+  // A WebView has no Notification API at all, so the state reads 'unsupported' —
+  // keep the row for exactly that case, because the visitor's fix (open a real
+  // browser) is a sentence this row can carry.
+  const alertsRowVisible = !['checking', 'enabled'].includes(alerts)
+    && (alerts !== 'unsupported' || Boolean(inAppBrowser));
   const locationRowVisible = !['granted', 'checking', 'unsupported'].includes(location);
   if (!alertsRowVisible && !locationRowVisible) return null;
 
   // Keep the login surface neutral and compact in every permission state.
   const alertsUnavailable = alerts === 'unavailable';
   const alertsTitle = alertsUnavailable ? 'Alerts allowed' : 'Notifications';
-  const alertsAction = alertsUnavailable ? 'Try again' : 'Allow';
+  const alertsAction = alertsUnavailable ? 'Try again' : alerts === 'unsupported' ? 'How' : 'Allow';
   const locationTitle = 'Location';
 
   return (
@@ -222,7 +265,7 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
             onClick={allowAlerts}
             disabled={busy === 'alerts'}
             aria-busy={busy === 'alerts'}
-            aria-label={alertsUnavailable ? 'Try notification setup again' : 'Allow notifications'}
+            aria-label={alertsUnavailable ? 'Try notification setup again' : alerts === 'unsupported' ? 'How to turn on notifications' : 'Allow notifications'}
           >
             {busy === 'alerts' ? <Spinner size={14} /> : alertsAction}
           </button>
@@ -733,14 +776,18 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
       </>
     );
   } else if (state === 'unsupported') {
+    const inApp = detectInAppBrowser();
     heading = isLocation ? 'Location is not available' : 'This browser cannot receive alerts';
     lede = isLocation
       ? 'This browser or device has no location service My Naai can use. You can still browse and book — distances just stay hidden.'
-      : `${label} on this device cannot receive web booking alerts. Your bookings still work — you just will not hear the buzzer here.`;
+      : inApp
+        ? `This page is open inside ${inApp === 'an app' ? 'another app' : inApp}’s built-in browser, which cannot receive web booking alerts. Your bookings still work — open My Naai in Chrome or Safari to hear the buzzer.`
+        : `${label} on this device cannot receive web booking alerts. Your bookings still work — you just will not hear the buzzer here.`;
     body = (
       <>
         {!isLocation && (
           <ol className="ios-install-steps permission-gate-steps">
+            {inApp ? <li>Tap the <strong>⋮</strong> (or <strong>⋯</strong>) menu and choose <strong>Open in browser</strong>.</li> : null}
             <li>On Android or desktop, open My Naai in <strong>Chrome, Edge or Samsung Internet</strong>.</li>
             <li>On iPhone, open My Naai in <strong>Safari → Share → Add to Home Screen</strong>, then sign in from the Home Screen app.</li>
             <li>Tap <strong>Turn on alerts</strong> there and choose <strong>Allow</strong>.</li>
