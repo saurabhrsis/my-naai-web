@@ -55,8 +55,58 @@ describe('alerts sheet states that used to go quiet on Try again', () => {
     root = null;
     container = null;
     delete globalThis.Notification;
+    delete document.permissionsPolicy;
     vi.clearAllMocks();
     vi.restoreAllMocks();
+  });
+
+  it('the embedded sheet calls the native permission API instead of opening another tab', async () => {
+    globalThis.Notification = {
+      permission: 'default',
+      requestPermission: vi.fn(() => Promise.resolve('default')),
+    };
+    Object.defineProperty(document, 'permissionsPolicy', {
+      value: { allowsFeature: () => false },
+      configurable: true,
+    });
+    const openSpy = vi.spyOn(window, 'open');
+    try {
+      await mount('needs-permission');
+      expect(buttonByText('Allow')).not.toBeNull();
+
+      await act(async () => { buttonByText('Allow').click(); });
+      await flush();
+
+      expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+      expect(openSpy).not.toHaveBeenCalled();
+      expect(container.textContent).toContain('cannot show the native notifications prompt');
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it('an embedded location sheet reports when its native prompt is unavailable', async () => {
+    const originalGeolocation = navigator.geolocation;
+    const getCurrentPosition = vi.fn((_success, fail) => fail({ code: 1, message: 'Blocked by frame policy' }));
+    navigator.geolocation = { getCurrentPosition };
+    Object.defineProperty(document, 'permissionsPolicy', {
+      value: { allowsFeature: () => false },
+      configurable: true,
+    });
+    const openSpy = vi.spyOn(window, 'open');
+    try {
+      await mount('needs-permission', { kind: 'location' });
+      await act(async () => { buttonByText('Allow').click(); });
+      await flush();
+
+      expect(getCurrentPosition).toHaveBeenCalledTimes(1);
+      expect(container.textContent).toContain('cannot show the native location prompt');
+      expect(openSpy).not.toHaveBeenCalled();
+    } finally {
+      openSpy.mockRestore();
+      if (originalGeolocation) navigator.geolocation = originalGeolocation;
+      else delete navigator.geolocation;
+    }
   });
 
   it('a re-check that is still waiting for permission shows the Allow view with a hint — it never fires a gesture-less popup', async () => {

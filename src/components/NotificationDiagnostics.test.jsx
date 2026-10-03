@@ -17,6 +17,7 @@ vi.mock('../lib/push', async () => {
   const actual = await vi.importActual('../lib/push');
   return {
     ...actual,
+    displayNotification: vi.fn(() => Promise.resolve(true)),
     isPushConfigured: vi.fn(() => true),
     notificationActionLimit: vi.fn(() => 2),
     getPushToken: vi.fn(() => Promise.resolve('')),
@@ -24,10 +25,11 @@ vi.mock('../lib/push', async () => {
     watchNotificationPermission: vi.fn(() => () => {}),
   };
 });
-vi.mock('../lib/buzzer', () => ({ playBuzzer: vi.fn(), unlockBuzzer: vi.fn() }));
+vi.mock('../lib/buzzer', () => ({ playBuzzer: vi.fn(() => true), unlockBuzzer: vi.fn() }));
 
 import { NotificationDiagnostics } from './NotificationDiagnostics';
-import { isPushConfigured } from '../lib/push';
+import { displayNotification, isPushConfigured } from '../lib/push';
+import { playBuzzer, unlockBuzzer } from '../lib/buzzer';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const flush = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
@@ -56,6 +58,9 @@ describe('Alerts & permissions card', () => {
   beforeEach(() => {
     globalThis.Notification = { permission: 'granted', requestPermission: vi.fn(() => Promise.resolve('granted')) };
     vi.mocked(isPushConfigured).mockReturnValue(true);
+    vi.mocked(displayNotification).mockReset().mockResolvedValue(true);
+    vi.mocked(playBuzzer).mockReset().mockReturnValue(true);
+    vi.mocked(unlockBuzzer).mockReset();
   });
 
   afterEach(() => {
@@ -74,6 +79,28 @@ describe('Alerts & permissions card', () => {
     expect(container.textContent).toContain('Booking requests, confirmations, delay updates and the buzzer');
     const testButton = Array.from(container.querySelectorAll('button')).find(node => node.textContent.includes('Test buzzer'));
     expect(testButton).toBeTruthy();
+  });
+
+  it('starts the buzzer on the tap and displays a real notification test', async () => {
+    const order = [];
+    vi.mocked(unlockBuzzer).mockImplementation(() => { order.push('unlock'); });
+    vi.mocked(playBuzzer).mockImplementation(() => { order.push('buzzer'); return true; });
+    vi.mocked(displayNotification).mockImplementation(() => {
+      order.push('notification');
+      return Promise.resolve(true);
+    });
+    await mount();
+
+    const testButton = Array.from(container.querySelectorAll('button')).find(node => node.textContent.includes('Test buzzer'));
+    await act(async () => { testButton.click(); });
+    await flush();
+
+    expect(order).toEqual(['unlock', 'buzzer', 'notification']);
+    expect(displayNotification).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Test alert — My Naai',
+      data: { type: 'TEST' },
+    }));
+    expect(container.textContent).toContain('Test sent. Heard nothing?');
   });
 
   it('says the permission is allowed but alerts are not live yet when the build has no config', async () => {

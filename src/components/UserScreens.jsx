@@ -405,10 +405,10 @@ export function HomeScreen({ session, navigate, notify }) {
   const [savedId, setSavedId] = useState(() => localStorage.getItem('mynaaiSavedSalonId') || null);
   const [location, setLocation] = useState(null);
   const [locationBusy, setLocationBusy] = useState(false);
-  // A browser that has ALREADY blocked location will never show its prompt
-  // again — tapping "Use my location" then looks completely dead. That state
-  // opens the short settings sheet instead (this is the fix for the report
-  // "Enable location does not enable it and never asks").
+  const [locationRequestNote, setLocationRequestNote] = useState('');
+  // A browser that has already denied location cannot show the native prompt
+  // again. Keep the settings recovery sheet for that case; an embedded preview
+  // that cannot prompt gets a small inline note instead of another popup.
   const [locationSheetOpen, setLocationSheetOpen] = useState(false);
   const [locationSheetState, setLocationSheetState] = useState('denied');
   const [loading, setLoading] = useState(true);
@@ -589,41 +589,40 @@ export function HomeScreen({ session, navigate, notify }) {
     return salons.filter(salon => !query || `${salon.name} ${salon.address} ${salon.location}`.toLowerCase().includes(query));
   }, [salons, search]);
 
-  // The in-context location ask: one labelled tap, its own popup, and a "no"
-  // that only costs the distance sorting — the list stays exactly as it is.
-  //
-  // The permission is read FIRST, because the two states need opposite actions:
-  //   · never asked ('default') → this tap opens the browser's own prompt;
-  //   · blocked ('denied')      → the browser will not prompt again, so the
-  //     sheet with the settings steps opens instead of a dead button;
-  //   · granted                 → just take a fresh fix and re-sort the list.
+  // The in-context location ask is made by one labelled tap. Call the native
+  // API immediately from that tap; reading permission or frame policy first
+  // spends the browser's user gesture and can suppress the prompt in Safari.
   const enableLocation = useCallback(async () => {
     setLocationBusy(true);
+    setLocationRequestNote('');
     try {
-      // Permissions Policy blocks geolocation in preview/in-app frames before
-      // Android ever gets a chance to show its prompt. Do not call the API in
-      // that case; the sheet gives the visitor the new-tab escape hatch.
-      if (!promptsAvailable('location')) {
-        setLocationSheetState('denied');
-        setLocationSheetOpen(true);
-        return;
-      }
-      const permission = await readPermission('location');
-      if (permission === 'denied' || permission === 'unsupported') {
-        setLocationSheetState('denied');
-        setLocationSheetOpen(true);
-        return;
-      }
       const result = await requestLocation();
       if (result.ok) {
         const fix = { latitude: result.latitude, longitude: result.longitude };
+        setLocationRequestNote('');
         setLocation(fix);
         await loadData(fix);
         return;
       }
-      if (result.state === 'denied' || result.state === 'device-settings') {
-        setLocationSheetState(result.state);
+      if (result.state === 'denied') {
+        // Keep the recovery route for a genuine site denial. An embedded
+        // sandbox can refuse the API before a prompt exists; do not replace
+        // that failed native prompt with an app sheet.
+        if (!promptsAvailable('location')) {
+          setLocationRequestNote('This preview cannot show the native location prompt. Try the live site.');
+          return;
+        }
+        setLocationSheetState('denied');
         setLocationSheetOpen(true);
+        return;
+      }
+      if (result.state === 'device-settings') {
+        setLocationSheetState('device-settings');
+        setLocationSheetOpen(true);
+        return;
+      }
+      if (result.state === 'unsupported') {
+        setLocationRequestNote('Location is not available in this browser.');
         return;
       }
       notify?.('info', 'We could not read your location this time. Salons are still listed — try again in a moment.');
@@ -692,7 +691,7 @@ export function HomeScreen({ session, navigate, notify }) {
       <section className="home-band home-salons-band" aria-label="Salons near you">
         <div className="section-heading"><div><span className="eyebrow">CURATED FOR YOU</span><h2>Salons near you</h2></div><span className="result-count">{loading ? 'Updating…' : `${visibleSalons.length}${totalSalons && totalSalons > visibleSalons.length ? ` of ${totalSalons}` : ''} places`}</span></div>
         {loadError && <div className="inline-notice"><CircleAlert size={16} /> {loadError} <button onClick={() => loadData()}>Try again</button></div>}
-        {!loading && !location && <div className="inline-notice location-fallback-notice"><MapPin size={16} /> <span>Location is off, so this list is not sorted by distance — optional, and browsing works without it.</span><button onClick={enableLocation} disabled={locationBusy}>{locationBusy ? 'Checking…' : 'Use my location'}</button></div>}
+        {!loading && !location && <div className="inline-notice location-fallback-notice"><MapPin size={16} /> <span className="location-fallback-copy"><span>Location is off, so this list is not sorted by distance — optional, and browsing works without it.</span>{locationRequestNote && <small className="location-request-note" role="status">{locationRequestNote}</small>}</span><button onClick={enableLocation} disabled={locationBusy}>{locationBusy ? 'Checking…' : 'Use my location'}</button></div>}
         {loading ? <div className="salon-grid">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} />)}</div> : visibleSalons.length ? <>
           <div className="salon-grid">{visibleSalons.map(salon => <SalonCard key={salon.id} salon={salon} saved={savedId === salon.id || salon.isSaved} onSelect={openSalon} onBook={bookSalon} onShare={item => shareSalon(item, notify)} onBookmark={bookmark} userLocation={location} />)}</div>
           {/* Paging footer: a full-width tap target on phones, an automatic

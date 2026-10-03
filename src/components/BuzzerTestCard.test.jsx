@@ -24,7 +24,7 @@ vi.mock('../lib/push', async () => {
     getPushToken: vi.fn(() => Promise.resolve('')),
   };
 });
-vi.mock('../lib/buzzer', () => ({ playBuzzer: vi.fn(), unlockBuzzer: vi.fn() }));
+vi.mock('../lib/buzzer', () => ({ playBuzzer: vi.fn(() => true), unlockBuzzer: vi.fn() }));
 
 import { BuzzerTestCard } from './BuzzerTestCard';
 import { displayNotification } from '../lib/push';
@@ -53,6 +53,8 @@ describe('signed-out buzzer check', () => {
   beforeEach(() => {
     globalThis.Notification = { permission: 'granted', requestPermission: vi.fn(() => Promise.resolve('granted')) };
     window.AudioContext = function AudioContext() {};
+    vi.mocked(playBuzzer).mockReset().mockReturnValue(true);
+    vi.mocked(unlockBuzzer).mockReset();
   });
 
   afterEach(() => {
@@ -91,50 +93,70 @@ describe('signed-out buzzer check', () => {
     expect(buttonByText('Test again')).not.toBeNull();
   });
 
-  it('asks for the notification permission inside the tap when alerts are not allowed yet', async () => {
-    globalThis.Notification = { permission: 'default', requestPermission: vi.fn(() => Promise.resolve('granted')) };
+  it('starts the buzzer in the tap before awaiting the notification permission', async () => {
+    const order = [];
+    let resolvePermission;
+    globalThis.Notification = {
+      permission: 'default',
+      requestPermission: vi.fn(() => {
+        order.push('permission');
+        return new Promise(resolve => { resolvePermission = resolve; });
+      }),
+    };
+    vi.mocked(unlockBuzzer).mockImplementation(() => { order.push('unlock'); });
+    vi.mocked(playBuzzer).mockImplementation(() => { order.push('buzzer'); return true; });
     await mount();
 
-    await act(async () => { buttonByText('Test booking buzzer').click(); });
+    act(() => { buttonByText('Test booking buzzer').click(); });
+
+    expect(order).toEqual(['unlock', 'buzzer', 'permission']);
+    expect(displayNotification).not.toHaveBeenCalled();
+    await act(async () => { resolvePermission('granted'); });
     await flush();
 
     expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
-    expect(playBuzzer).toHaveBeenCalled();
+    expect(displayNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('sends an embedded page to its own tab instead of browser settings', async () => {
-    // The Arena preview pane and every in-app browser hide the permission popup
-    // and answer 'denied' to everything, so a test started there would prove
-    // nothing — the card routes to a real tab instead.
+  it('tests the buzzer in an embedded preview without substituting a popup or opening a tab', async () => {
+    // An embedded preview may suppress the native prompt. It must say so rather
+    // than faking an Allow dialog, while still letting the user hear the buzzer.
     Object.defineProperty(document, 'permissionsPolicy', { value: { allowsFeature: () => false }, configurable: true });
+    globalThis.Notification = { permission: 'default', requestPermission: vi.fn(() => Promise.resolve('default')) };
     try {
       await mount();
       const openSpy = vi.spyOn(window, 'open').mockReturnValue({});
-      const button = buttonByText('Open in a new tab');
+      const button = buttonByText('Test booking buzzer');
       expect(button).not.toBeNull();
+      expect(container.textContent).toContain('This preview may suppress notification prompts');
       await act(async () => { button.click(); });
-      expect(openSpy).toHaveBeenCalledWith(window.location.href, '_blank', 'noopener');
+      await flush();
+
+      expect(openSpy).not.toHaveBeenCalled();
+      expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+      expect(playBuzzer).toHaveBeenCalled();
+      expect(container.textContent).toContain('sandbox did not show a notification prompt');
+      expect(displayNotification).not.toHaveBeenCalled();
       openSpy.mockRestore();
-      expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
-      expect(playBuzzer).not.toHaveBeenCalled();
     } finally {
       delete document.permissionsPolicy;
     }
   });
 
-  it('never pretends a blocked browser can ring — it says where to unblock', async () => {
+  it('still lets the sound be tested when notifications are blocked and explains how to unblock alerts', async () => {
     globalThis.Notification = { permission: 'denied', requestPermission: vi.fn(() => Promise.resolve('denied')) };
     await mount();
 
-    const button = buttonByText('How to allow');
+    const button = buttonByText('Test booking buzzer');
     expect(button).not.toBeNull();
     await act(async () => { button.click(); });
     await flush();
 
     expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
-    expect(playBuzzer).not.toHaveBeenCalled();
-    expect(container.textContent).toContain('blocked');
-    // The instruction has to name the setting the user must change.
-    expect(container.textContent).toContain('Notifications to Allow');
+    expect(unlockBuzzer).toHaveBeenCalled();
+    expect(playBuzzer).toHaveBeenCalled();
+    expect(displayNotification).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Notifications are off for this site');
+    expect(container.textContent).toContain('Change the site permission in browser settings');
   });
 });
