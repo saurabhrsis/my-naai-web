@@ -7,8 +7,12 @@ import {
   buzzerHint,
   detectAndroidVendor,
   detectBrowser,
+  alertsPromptFallback,
+  canAskForAlerts,
+  detectInAppBrowser,
   frameAllowsFeature,
   hiddenPromptHint,
+  inAppBrowserHint,
   isCrossOriginEmbeddedFrame,
   isDeviceTokenError,
   isIosPwaInstalled,
@@ -239,6 +243,65 @@ describe('permissions', () => {
       expect(androidAppNotificationHint('chrome-android')).toContain('Android Settings');
       expect(androidAppNotificationHint('samsung')).toContain('Android Settings');
       expect(androidAppNotificationHint('chrome-desktop')).toBe('');
+    });
+  });
+
+  // The WebView case: WhatsApp, Instagram, Facebook and friends open links in
+  // their own browser, where LOCATION still prompts but NOTIFICATIONS can never
+  // prompt. Telling those visitors about browser settings would be useless.
+  describe('in-app browsers', () => {
+    const withUserAgent = (agent, run) => {
+      const spy = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(agent);
+      try {
+        run();
+      } finally {
+        spy.mockRestore();
+      }
+    };
+
+    it('names the app whose browser the visitor is stuck in', () => {
+      withUserAgent('Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124.0 Mobile Safari/537.36 WhatsApp/2.24.9', () => {
+        expect(detectInAppBrowser()).toBe('WhatsApp');
+      });
+      withUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Instagram 320.0.0.0', () => {
+        expect(detectInAppBrowser()).toBe('Instagram');
+      });
+      withUserAgent('Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 [FB_IAB/FB4A;FBAV/430.0.0.0] Chrome/116 Mobile Safari/537.36', () => {
+        expect(detectInAppBrowser()).toBe('Facebook');
+      });
+      withUserAgent('Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 Chrome/124.0 Mobile Safari/537.36; wv)', () => {
+        expect(detectInAppBrowser()).toBe('an app');
+      });
+      withUserAgent('Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124.0 Mobile Safari/537.36', () => {
+        expect(detectInAppBrowser()).toBe('');
+      });
+      withUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15', () => {
+        expect(detectInAppBrowser()).toBe('');
+      });
+    });
+
+    it('sends the visitor to a real browser instead of browser settings', () => {
+      withUserAgent('Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124.0 Mobile Safari/537.36 WhatsApp/2.24.9', () => {
+        expect(inAppBrowserHint()).toContain('WhatsApp');
+        expect(alertsPromptFallback()).toContain('Open mynaai.in in Chrome or Safari');
+      });
+    });
+
+    it('picks the most specific fallback for each context, in order', () => {
+      // 1. an app's WebView wins over everything else it could blame.
+      withUserAgent('Mozilla/5.0 (Linux; Android 13) WhatsApp/2.24.9 Chrome/124.0 Mobile Safari/537.36', () => {
+        expect(alertsPromptFallback()).toContain('built-in browser');
+      });
+      // 2. an iPhone tab cannot ask at all — the Home Screen step is the answer.
+      withUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile Safari/604.1', () => {
+        expect(alertsPromptFallback()).toContain('Home Screen');
+        expect(canAskForAlerts()).toBe(false);
+      });
+      // 3. an ordinary desktop Chrome can ask.
+      withUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', () => {
+        expect(canAskForAlerts()).toBe(true);
+        expect(alertsPromptFallback()).toContain('bell');
+      });
     });
   });
 

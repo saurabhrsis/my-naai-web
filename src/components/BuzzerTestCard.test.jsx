@@ -144,6 +144,28 @@ describe('signed-out buzzer check', () => {
     });
   });
 
+  it('tells an owner stuck in an app WebView to open a real browser', async () => {
+    // WhatsApp/Instagram open links in their own browser, where no notification
+    // prompt can ever appear. "Change the site permission" would send the owner
+    // hunting for a switch that does not exist on that surface.
+    delete globalThis.Notification;
+    const agent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36 Instagram 320.0.0.0');
+    try {
+      await mount();
+      const button = buttonByText('Test booking buzzer');
+      await act(async () => { button.click(); });
+      await flush();
+
+      // The sound still plays — only the banner is impossible — and the card says
+      // exactly how to get one.
+      expect(playBuzzer).toHaveBeenCalled();
+      expect(container.textContent).toContain('Instagram');
+      expect(container.textContent).toContain('Open mynaai.in in Chrome or Safari');
+    } finally {
+      agent.mockRestore();
+    }
+  });
+
   it('still lets the sound be tested when notifications are blocked and explains how to unblock alerts', async () => {
     globalThis.Notification = { permission: 'denied', requestPermission: vi.fn(() => Promise.resolve('denied')) };
     await mount();

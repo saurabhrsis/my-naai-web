@@ -373,6 +373,9 @@ img { display: block; max-width: 100%; }
 .result-count { color: var(--muted); font-size: 11px; }
 .inline-notice { display: flex; align-items: center; gap: 7px; margin: -3px 0 15px; padding: 10px 12px; border-radius: 10px; color: #e4c3bf; background: rgba(242,123,116,.08); font-size: 11px; line-height: 1.3; }
 .inline-notice button { margin-left: auto; color: var(--gold); background: transparent; font-size: 11px; font-weight: 700; }
+.alerts-invite-notice { align-items: flex-start; }
+.alerts-invite-notice > svg { flex: none; margin-top: 1px; }
+.alerts-invite-notice .notice-dismiss { flex: none; margin-left: 4px; color: var(--muted-light); font-weight: 600; align-self: center; }
 .location-fallback-notice { align-items: flex-start; }
 .location-fallback-notice > svg { flex: none; margin-top: 1px; }
 .location-fallback-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }

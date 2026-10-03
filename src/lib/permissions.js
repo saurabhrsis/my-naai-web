@@ -285,7 +285,8 @@ export function hiddenPromptHint(browser = detectBrowser()) {
   return 'No prompt appeared? Open this site’s permissions from the lock icon next to the address bar and set Notifications to Allow.';
 }
 
-export function androidAppNotificationHint(browser = detectBrowser()) {  if (!isAndroidDevice() && !ANDROID_BROWSERS.has(browser)) return '';
+export function androidAppNotificationHint(browser = detectBrowser()) {
+  if (!isAndroidDevice() && !ANDROID_BROWSERS.has(browser)) return '';
   const app = androidPermissionAppName(browser);
   const vendor = detectAndroidVendor();
   const oem = vendor === 'oppo' || vendor === 'realme' || vendor === 'oneplus'
@@ -294,6 +295,66 @@ export function androidAppNotificationHint(browser = detectBrowser()) {  if (!is
       ? ' On Vivo, also allow background activity/Auto-start for this app.'
       : '';
   return ` Also check Android Settings → Apps → ${app} → Notifications → On.${oem}`;
+}
+
+// ── Browsers that live inside other apps (the WebView case) ──────────────────
+// WhatsApp, Instagram, Facebook, LinkedIn, the Google app … open links in their
+// own WebView. That surface prompts for LOCATION (the host app already holds the
+// OS location permission) but can never prompt for NOTIFICATIONS — the API is
+// missing or answers 'denied' instantly. "Location asked, notifications did not,
+// on every device" is this case, and no site setting can fix it: the visitor has
+// to open mynaai.in in a real browser.
+export function detectInAppBrowser() {
+  if (typeof navigator === 'undefined') return '';
+  const agent = String(navigator.userAgent || '');
+  if (!agent) return '';
+  const named = [
+    [/whatsapp/i, 'WhatsApp'],
+    [/instagram/i, 'Instagram'],
+    [/fb_iab|fban|fbav|fbios|facebook/i, 'Facebook'],
+    [/messenger/i, 'Messenger'],
+    [/linkedinapp/i, 'LinkedIn'],
+    [/snapchat/i, 'Snapchat'],
+    [/gsa\//i, 'the Google app'],
+    [/bytedance|musical_ly|tiktok|barcelona/i, 'TikTok'],
+    [/line\//i, 'LINE'],
+    [/pinterest/i, 'Pinterest'],
+  ];
+  for (const [pattern, name] of named) if (pattern.test(agent)) return name;
+  // A plain Android WebView (no vendor tag) behaves exactly the same way.
+  if (/\bwv\b/i.test(agent) && isAndroidDevice()) return 'an app';
+  return '';
+}
+
+export function inAppBrowserHint(name = detectInAppBrowser()) {
+  if (!name) return '';
+  const label = name === 'an app' ? 'another app' : name;
+  return `This page is open inside ${label}’s built-in browser, which cannot show notification prompts. Open mynaai.in in Chrome or Safari (the ⋮ or ⋯ menu → Open in browser), then tap Turn on there.`;
+}
+
+// ── Can a notification popup appear here at all? ─────────────────────────────
+// The single answer every alerts surface asks before spending a tap: the API has
+// to exist, an iPhone must be running the Home Screen app (iOS gives web
+// notifications to nothing else), and the page must not be a cross-origin frame.
+export function canAskForAlerts() {
+  if (typeof window === 'undefined') return false;
+  if (!('Notification' in window)) return false;
+  if (isIosDevice() && !isIosPwaInstalled()) return false;
+  return promptsAvailable('notifications');
+}
+
+// The one line to show when a labelled "Turn on" tap produced no prompt — or
+// could not ask at all. Each branch is a real, different cause, so they are
+// checked in the order that names the most specific one first.
+export function alertsPromptFallback(browser = detectBrowser()) {
+  const inApp = detectInAppBrowser();
+  if (inApp) return inAppBrowserHint(inApp);
+  if (!promptsAvailable('notifications')) return 'This preview cannot show the notifications prompt. Try the live site.';
+  if (typeof window !== 'undefined' && !('Notification' in window)) {
+    return 'This browser cannot receive booking alerts here. Try Chrome, Edge or Samsung Internet — on iPhone, install My Naai to the Home Screen and sign in from there.';
+  }
+  if (isIosDevice() && !isIosPwaInstalled()) return IOS_ALERTS_REQUIRED_MESSAGE;
+  return hiddenPromptHint(browser) || 'Change Notifications in browser site settings to try again.';
 }
 
 export function androidLocationHint(browser = detectBrowser()) {

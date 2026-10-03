@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { BellRing, CheckCircle2, CircleAlert, RefreshCw } from 'lucide-react';
 import { displayNotification, isPushConfigured, readNotificationPermission, requestNotificationPermission } from '../lib/push';
-import { browserLabel, detectBrowser, promptsAvailable } from '../lib/permissions';
+import { browserLabel, detectBrowser, detectInAppBrowser, inAppBrowserHint, promptsAvailable } from '../lib/permissions';
 import { playBuzzer, unlockBuzzer } from '../lib/buzzer';
 import { cx } from './Shared';
 
@@ -41,6 +41,7 @@ export function BuzzerTestCard({ notify, className = '' }) {
   const [message, setMessage] = useState('');
   const [done, setDone] = useState(false);
   const embedded = !promptsAvailable('notifications');
+  const inAppBrowser = detectInAppBrowser();
 
   const read = useCallback(async () => {
     const next = await readNotificationPermission();
@@ -84,11 +85,16 @@ export function BuzzerTestCard({ notify, className = '' }) {
 
       const buzzerResult = buzzerStarted ? 'The buzzer test played.' : 'This browser could not start the buzzer.';
       if (state === 'denied' || state === 'unsupported') {
-        setMessage(embedded
-          ? `${buzzerResult} This preview cannot show the native notification prompt or alert banner; verify alerts on the live site.`
-          : state === 'denied'
-            ? `${buzzerResult} Notifications are off for this site, so no alert banner was shown. Change the site permission in browser settings to test alerts.`
-            : `${buzzerResult} This browser cannot show web alerts.`);
+        // An app's WebView (WhatsApp, Instagram, Facebook …) cannot show a
+        // notification prompt at all, and "change the site permission" would send
+        // those owners hunting for a switch that does not exist. Name the way out.
+        setMessage(inAppBrowser
+          ? `${buzzerResult} ${inAppBrowserHint(inAppBrowser)}`
+          : embedded
+            ? `${buzzerResult} This preview cannot show the native notification prompt or alert banner; verify alerts on the live site.`
+            : state === 'denied'
+              ? `${buzzerResult} Notifications are off for this site, so no alert banner was shown. Change the site permission in browser settings to test alerts.`
+              : `${buzzerResult} This browser cannot show web alerts.`);
       }
 
       const shown = state === 'granted'

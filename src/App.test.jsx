@@ -990,6 +990,121 @@ describe('Home location permission', () => {
   });
 });
 
+// The home page is where people land, so the booking-alerts ask lives there too
+// — next to the location ask, in the same labelled, non-nagging shape. Before
+// this, a visitor who saw the location popup had no way at all to trigger the
+// notification one ("location shows, notifications never does").
+describe('Home booking alerts ask', () => {
+  let container;
+  let root;
+
+  const buttonByText = text => Array.from(container.querySelectorAll('button')).find(node => node.textContent.trim().includes(text));
+  const invite = () => container.querySelector('.alerts-invite-notice');
+
+  const mount = async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => { root.render(<App />); });
+    await flush();
+  };
+
+  beforeEach(() => {
+    setPath('/');
+    localStorage.clear();
+    userSalonListPublic.mockResolvedValue({
+      status: 'SUCCESS',
+      data: { salons: [{ salonId: 'salon-9', salonName: 'Golden Scissors', genderType: 'UNISEX', address: 'Dharampeth, Nagpur', isOpen: true, waitTime: '5–10 min' }] },
+    });
+    vi.mocked(push.getPushStatus).mockReset().mockResolvedValue({ state: 'needs-permission', reason: '' });
+    vi.mocked(push.isPushConfigured).mockReset().mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    if (root) act(() => root.unmount());
+    container?.remove();
+    root = null;
+    container = null;
+    delete globalThis.Notification;
+    delete navigator.permissions;
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
+
+  it('offers one labelled tap that opens the browser prompt, and retires itself on a grant', async () => {
+    globalThis.Notification = {
+      permission: 'default',
+      requestPermission: vi.fn(() => {
+        globalThis.Notification.permission = 'granted';
+        return Promise.resolve('granted');
+      }),
+    };
+    await mount();
+
+    expect(invite()).not.toBeNull();
+    expect(invite().textContent).toContain('Turn on booking alerts');
+    // Never a surprise popup: nothing is asked until the tap.
+    expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
+
+    await act(async () => { buttonByText('Turn on').click(); });
+    await flush();
+
+    expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('.alerts-invite-notice')).toBeNull();
+    expect(container.querySelector('.toast')?.textContent).toContain('Booking alerts on');
+  });
+
+  it('remembers "Not now" instead of nagging on the next visit', async () => {
+    globalThis.Notification = { permission: 'default', requestPermission: vi.fn(() => Promise.resolve('default')) };
+    await mount();
+    expect(invite()).not.toBeNull();
+
+    await act(async () => { buttonByText('Not now').click(); });
+    await flush();
+    expect(container.querySelector('.alerts-invite-notice')).toBeNull();
+    expect(localStorage.getItem('mynaaiPermissionAsk:notifications')).toBe('later');
+
+    // A fresh mount stays quiet — the choice was remembered.
+    act(() => root.unmount());
+    container.remove();
+    await mount();
+    expect(container.querySelector('.alerts-invite-notice')).toBeNull();
+  });
+
+  it('says why no prompt can appear instead of leaving a dead button', async () => {
+    // Chrome's quieter-messaging UI resolves the ask with nothing on screen.
+    globalThis.Notification = { permission: 'default', requestPermission: vi.fn(() => Promise.resolve('default')) };
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+    await mount();
+
+    await act(async () => { buttonByText('Turn on').click(); });
+    await flush();
+    expect(container.querySelector('.location-request-note').textContent).toMatch(/bell|address bar/i);
+  });
+
+  it('tells an in-app browser (WhatsApp, Instagram …) to open a real browser', async () => {
+    // An app's WebView prompts for location but can NEVER prompt for
+    // notifications: the API is missing or answers 'denied' instantly. No site
+    // setting can fix that, so the row must name the way out — and must not
+    // spend the tap on a call that cannot work.
+    delete globalThis.Notification;
+    const agent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.0.0 Mobile Safari/537.36 WhatsApp/2.24.9.78');
+    try {
+      await mount();
+      expect(invite()).not.toBeNull();
+
+      await act(async () => { buttonByText('How to allow').click(); });
+      await flush();
+
+      const note = container.querySelector('.location-request-note').textContent;
+      expect(note).toContain('WhatsApp');
+      expect(note).toContain('Open mynaai.in in Chrome or Safari');
+    } finally {
+      agent.mockRestore();
+    }
+  });
+});
+
 // Login permission flow.
 //
 // What these tests protect (all of it is why users were being lost):
@@ -1113,7 +1228,11 @@ describe('Login permission flow', () => {
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
   });
 
-  it('calls the native notification API directly without opening app dialogs or tabs in a restricted frame', async () => {
+  it('explains a cross-origin frame instead of spending the tap on a doomed ask', async () => {
+    // Chrome and Firefox refuse Notification.requestPermission() inside a
+    // cross-origin frame, so a tap there can never produce a prompt: the card
+    // says what to do (open My Naai in its own tab) rather than firing a call
+    // that silently fails — and still substitutes neither a popup nor a tab.
     setNotificationPermission('denied');
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
     const openSpy = vi.spyOn(window, 'open');
@@ -1126,9 +1245,7 @@ describe('Login permission flow', () => {
         await act(async () => { notificationAllowButton().click(); });
         await flush();
 
-        // The browser API is invoked; the cross-origin frame itself cannot show a
-        // permission prompt, so My Naai does not substitute a popup or new tab.
-        expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+        expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
         expect(openSpy).not.toHaveBeenCalled();
         expect(container.querySelector('.permission-gate-sheet')).toBeNull();
         expect(container.querySelector('.perm-card-note').textContent).toContain('cannot show the notifications prompt');
@@ -1588,45 +1705,61 @@ describe('Login permission flow', () => {
     }
   });
 
+  // An iPhone has to be simulated at the browser level: the shipped rule
+  // (canAskForAlerts/alertsPromptFallback in lib/permissions) reads the user
+  // agent and matchMedia itself, exactly as it does in Safari.
+  const IPHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile Safari/604.1';
+  const withIosDevice = async (standalone, run) => {
+    const agent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE_UA);
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = () => ({ matches: standalone });
+    try {
+      await run();
+    } finally {
+      agent.mockRestore();
+      window.matchMedia = originalMatchMedia;
+    }
+  };
+
   it('sends an iPhone tab to the Home Screen instead of spending the tap on a prompt iOS refuses', async () => {
     // iOS gives web notifications only to an app on the Home Screen: in a Safari
     // (or Chrome) tab `Notification.requestPermission()` resolves 'denied' without
     // ever showing a prompt — while a location popup at the same moment shows
     // normally. So the tap says the real next step and never burns the permission.
-    vi.mocked(permissions.isIosDevice).mockReturnValue(true);
-    vi.mocked(permissions.isIosPwaInstalled).mockReturnValue(false);
     setNotificationPermission('default');
     const openSpy = vi.spyOn(window, 'open');
     try {
-      await mount();
+      await withIosDevice(false, async () => {
+        await mount();
 
-      await act(async () => { notificationAllowButton().click(); });
-      await flush();
-      expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
-      expect(container.querySelector('.perm-card-note').textContent).toContain('Home Screen');
-      expect(container.querySelector('.permission-gate-sheet')).toBeNull();
-      expect(openSpy).not.toHaveBeenCalled();
+        await act(async () => { notificationAllowButton().click(); });
+        await flush();
+        expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
+        expect(container.querySelector('.perm-card-note').textContent).toContain('Home Screen');
+        expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+        expect(openSpy).not.toHaveBeenCalled();
 
-      // …and Continue must not ask behind their back either.
-      await act(async () => { typeMobile('9876543210'); });
-      await act(async () => { submitPhone(); });
-      await flush();
-      expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
-      expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
+        // …and Continue must not ask behind their back either.
+        await act(async () => { typeMobile('9876543210'); });
+        await act(async () => { submitPhone(); });
+        await flush();
+        expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
+        expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
+      });
     } finally {
       openSpy.mockRestore();
     }
   });
 
   it('still asks from the installed iPhone Home Screen app', async () => {
-    vi.mocked(permissions.isIosDevice).mockReturnValue(true);
-    vi.mocked(permissions.isIosPwaInstalled).mockReturnValue(true);
     setNotificationPermission('default');
-    await mount();
+    await withIosDevice(true, async () => {
+      await mount();
 
-    await act(async () => { notificationAllowButton().click(); });
-    await flush();
-    expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+      await act(async () => { notificationAllowButton().click(); });
+      await flush();
+      expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('names the address-bar bell when the browser hides the notification prompt', async () => {

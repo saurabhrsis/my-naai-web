@@ -5,6 +5,7 @@ import { softNavigate } from './routes';
 import { readDeviceTokenSync } from './deviceTokenSync';
 import {
   detectBrowser,
+  detectInAppBrowser,
   isCrossOriginEmbeddedFrame,
   isEmbeddedFrame,
   isIosDevice,
@@ -278,7 +279,9 @@ export async function getPushStatus() {
   if (!messaging) {
     const installed = isIosPwaInstalled();
     const installedHint = installed ? '' : ' On iPhone/iPad, install the My Naai app to your home screen first.';
-    return { state: 'unsupported', reason: `This browser context cannot receive web notifications.${installedHint}` };
+    const inApp = detectInAppBrowser();
+    const inAppHint = inApp ? ` This page is open inside ${inApp === 'an app' ? 'another app' : inApp}'s built-in browser — open mynaai.in in Chrome or Safari to receive alerts.` : '';
+    return { state: 'unsupported', reason: `This browser context cannot receive web notifications.${installedHint}${inAppHint}` };
   }
   try {
     const token = await getPushToken({ requestPermission: false });
