@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell, BellRing, CheckCircle2, ChevronDown, CircleAlert, Copy, MapPin, RefreshCw, Send, Settings } from 'lucide-react';
 import { displayNotification, formatPushDiagnostics, getPushDiagnostics, getPushToken, isPushConfigured, notificationActionLimit, watchNotificationPermission } from '../lib/push';
 import { playBuzzer, unlockBuzzer } from '../lib/buzzer';
-import { androidAppNotificationHint, browserLabel, detectBrowser, isEmbeddedFrame, isIosDevice, promptsAvailable, readPermission, rememberAskChoice, requestLocation, requestNotifications, ASK_CHOICES, siteHost } from '../lib/permissions';
+import { androidAppNotificationHint, browserLabel, detectBrowser, isIosDevice, promptsAvailable, readPermission, rememberAskChoice, requestLocation, requestNotifications, ASK_CHOICES, siteHost } from '../lib/permissions';
 import { PermissionSheet } from './PermissionUI';
 import { api } from '../lib/api';
 import { withDeviceToken } from '../lib/apiPayload';
@@ -121,7 +121,10 @@ export function NotificationDiagnostics({ onEnabled }) {
   const turnOnLocation = async () => {
     setBusy('location');
     try {
-      if (isEmbeddedFrame() || !promptsAvailable('location')) {
+      // A frame that was delegated geolocation (allow="geolocation") can show the
+      // real prompt, so only the effective policy — not mere embedment — decides
+      // whether the ask is worth making.
+      if (!promptsAvailable('location')) {
         setSheet({ open: true, state: 'denied', kind: 'location' });
         return;
       }

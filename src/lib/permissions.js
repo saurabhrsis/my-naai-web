@@ -20,6 +20,12 @@
 //      `await` — the reason "I tapped Allow and no popup appeared".
 //   4. Remember an explicit "Not now". The app never nags; the user can still
 //      turn either permission on later from the Alerts & permissions card.
+//   5. Never read "the browser does not know that permission name" as "blocked
+//      here". `notifications` is not a Permissions Policy directive at all
+//      (whatwg/notifications#177), and Chromium answers
+//      `allowsFeature('notifications') === false` on EVERY page — which is how
+//      the live site came to believe it was an embedded preview and tell the
+//      visitor to "try the live site" while they were already on it.
 import { getErrorMessage } from '../components/Shared';
 
 const ASK_KEY_PREFIX = 'mynaaiPermissionAsk:';
@@ -110,6 +116,50 @@ export function isEmbeddedFrame() {
   }
 }
 
+// The embedded case browsers actually punish is the CROSS-ORIGIN one: Chrome and
+// Firefox refuse `Notification.requestPermission()` there, and the parent's
+// document is unreadable from inside. A same-origin frame (our own page embedding
+// our own page) prompts exactly like a normal tab. Reading the parent's document
+// and watching that read throw is the only signal the browser offers — the plain
+// `window.top !== window.self` test above would call both cases "embedded".
+export function isCrossOriginEmbeddedFrame() {
+  if (!isEmbeddedFrame()) return false;
+  try {
+    void window.top.document;
+    return false; // readable parent → same origin
+  } catch {
+    return true;
+  }
+}
+
+function permissionPolicyObject() {
+  if (typeof document === 'undefined') return null;
+  try {
+    return document.permissionsPolicy || document.featurePolicy || null;
+  } catch {
+    return null;
+  }
+}
+
+// `features()` is the browser's own list of the policy names it supports — no
+// matter what the current allowlist says — so it answers "do you even know this
+// word?", the question that has to come before trusting a `false`. Some policy
+// objects expose only `allowedFeatures()`; that is the fallback. `null` means the
+// browser will not say either way.
+function policyKnowsFeature(policy, feature) {
+  if (!policy) return null;
+  for (const method of ['features', 'allowedFeatures']) {
+    try {
+      if (typeof policy[method] !== 'function') continue;
+      const names = policy[method]();
+      if (names && typeof names.includes === 'function') return names.includes(feature);
+    } catch {
+      /* try the next accessor */
+    }
+  }
+  return null;
+}
+
 // Browsers refuse to show a permission prompt inside an embedded page unless the
 // page that embedded us delegates the feature with allow="...". Without that
 // delegation the browser answers 'denied' the instant we ask — which looks exactly
@@ -117,20 +167,41 @@ export function isEmbeddedFrame() {
 // settings that are not the problem. The Permissions Policy API is the only way to
 // tell the two cases apart, and it reports the *effective* policy, so a frame that
 // has been delegated the feature behaves like a normal page.
+//
+// The trap guarded here: Chromium's `allowsFeature()` logs "unrecognized feature"
+// and returns `false` for a name it has never heard of (see
+// DOMFeaturePolicy::allowsFeature + FeatureAvailable in Blink). A `false` therefore
+// only counts as a block when the browser's own feature list knows the name; for an
+// unknown name the frame remains the only honest answer.
 export function frameAllowsFeature(feature) {
-  if (typeof document === 'undefined') return true;
-  try {
-    const policy = document.permissionsPolicy || document.featurePolicy;
-    if (policy && typeof policy.allowsFeature === 'function') return policy.allowsFeature(feature) === true;
-  } catch {
-    // A policy object that refuses to answer: fall through to the frame check.
+  const policy = permissionPolicyObject();
+  if (policy && typeof policy.allowsFeature === 'function') {
+    let allowed = null;
+    try {
+      allowed = policy.allowsFeature(feature) === true;
+    } catch {
+      allowed = null; // a policy object that refuses to answer: use the frame check
+    }
+    if (allowed === true) return true;
+    if (allowed === false && policyKnowsFeature(policy, feature) !== false) return false;
   }
   return !isEmbeddedFrame();
 }
 
 // Convenience for the two permissions this app asks for.
+//
+// Location is a real Permissions Policy directive (`geolocation`, delegated with
+// allow="geolocation"), so the policy object is asked about it — and a frame that
+// was delegated it behaves like a normal page.
+//
+// Notifications are not: no browser implements a `notifications` directive, so
+// `allowsFeature('notifications')` is `false` everywhere, live site included, and
+// asking it made My Naai call every ordinary tab a preview. The only real rule for
+// this API is the frame: a cross-origin frame cannot request the permission, a
+// same-origin frame (or a normal tab) prompts like any page.
 export function promptsAvailable(kind) {
-  return frameAllowsFeature(kind === 'location' ? 'geolocation' : 'notifications');
+  if (kind === 'location') return frameAllowsFeature('geolocation');
+  return !isCrossOriginEmbeddedFrame();
 }
 
 export function detectBrowser() {

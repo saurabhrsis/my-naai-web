@@ -29,6 +29,7 @@ vi.mock('../lib/buzzer', () => ({ playBuzzer: vi.fn(() => true), unlockBuzzer: v
 import { BuzzerTestCard } from './BuzzerTestCard';
 import { displayNotification } from '../lib/push';
 import { playBuzzer, unlockBuzzer } from '../lib/buzzer';
+import { withCrossOriginFrame } from '../test/frame';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const flush = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
@@ -119,11 +120,13 @@ describe('signed-out buzzer check', () => {
   });
 
   it('tests the buzzer in an embedded preview without substituting a popup or opening a tab', async () => {
-    // An embedded preview may suppress the native prompt. It must say so rather
-    // than faking an Allow dialog, while still letting the user hear the buzzer.
-    Object.defineProperty(document, 'permissionsPolicy', { value: { allowsFeature: () => false }, configurable: true });
+    // A cross-origin frame (a preview, a portal) cannot show the native prompt:
+    // browsers refuse Notification.requestPermission() there. The card must say
+    // so rather than faking an Allow dialog, while still letting the user hear
+    // the buzzer. (A `notifications` Permissions Policy directive does not exist,
+    // so the frame — not the policy object — is what makes this case.)
     globalThis.Notification = { permission: 'default', requestPermission: vi.fn(() => Promise.resolve('default')) };
-    try {
+    await withCrossOriginFrame(async () => {
       await mount();
       const openSpy = vi.spyOn(window, 'open').mockReturnValue({});
       const button = buttonByText('Test booking buzzer');
@@ -138,9 +141,7 @@ describe('signed-out buzzer check', () => {
       expect(container.textContent).toContain('sandbox did not show a notification prompt');
       expect(displayNotification).not.toHaveBeenCalled();
       openSpy.mockRestore();
-    } finally {
-      delete document.permissionsPolicy;
-    }
+    });
   });
 
   it('still lets the sound be tested when notifications are blocked and explains how to unblock alerts', async () => {

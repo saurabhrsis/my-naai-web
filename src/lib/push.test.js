@@ -29,6 +29,7 @@ import {
   getPushStatus,
   resetPushRegistration,
 } from './push';
+import { withCrossOriginFrame, withSameOriginFrame } from '../test/frame';
 
 beforeEach(() => {
   localStorage.clear();
@@ -243,21 +244,31 @@ describe('getPushStatus permission reads', () => {
     expect(status.state).toBe('denied');
   });
 
-  it('keeps the familiar denied state inside an iframe, with the embedded explanation in the reason', async () => {
+  it('keeps the familiar denied state inside a cross-origin frame, with the framed explanation in the reason', async () => {
     const { isSupported } = await import('firebase/messaging');
     vi.mocked(isSupported).mockResolvedValueOnce(true);
     window.navigator.serviceWorker = {};
     window.Notification.permission = 'denied';
-    const original = Object.getOwnPropertyDescriptor(window, 'top');
-    Object.defineProperty(window, 'top', { value: { framed: true }, configurable: true });
-    try {
+    await withCrossOriginFrame(async () => {
       const status = await getPushStatus();
       expect(status.state).toBe('denied');
       expect(String(status.reason)).toContain('own browser tab');
-    } finally {
-      if (original) Object.defineProperty(window, 'top', original);
-      else delete window.top;
-    }
+    });
+  });
+
+  it('does not blame a same-origin frame for a notification denial', async () => {
+    // Only a CROSS-ORIGIN frame has the permission force-denied, so a
+    // same-origin frame must get the ordinary browser-settings reason.
+    const { isSupported } = await import('firebase/messaging');
+    vi.mocked(isSupported).mockResolvedValueOnce(true);
+    window.navigator.serviceWorker = {};
+    window.Notification.permission = 'denied';
+    await withSameOriginFrame(async () => {
+      const status = await getPushStatus();
+      expect(status.state).toBe('denied');
+      expect(String(status.reason)).toContain('browser permissions for this site');
+      expect(String(status.reason)).not.toContain('own browser tab');
+    });
   });
 });
 

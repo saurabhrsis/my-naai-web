@@ -8,6 +8,7 @@ import {
   detectAndroidVendor,
   detectBrowser,
   frameAllowsFeature,
+  isCrossOriginEmbeddedFrame,
   isDeviceTokenError,
   isIosPwaInstalled,
   promptsAvailable,
@@ -19,6 +20,7 @@ import {
   requestNotifications,
   watchPermission,
 } from './permissions';
+import { withCrossOriginFrame, withSameOriginFrame } from '../test/frame';
 
 // The permission plumbing behind every "I allowed it but the app still says
 // blocked" report. These tests pin the three guarantees the UI relies on:
@@ -301,35 +303,72 @@ describe('permissions', () => {
   describe('frameAllowsFeature / promptsAvailable', () => {
     afterEach(() => { delete document.permissionsPolicy; delete document.featurePolicy; });
 
-    it('trusts the effective permissions policy', () => {
-      const allowsFeature = vi.fn(feature => feature !== 'notifications');
+    it('trusts the effective permissions policy for a directive the browser knows', () => {
+      const allowsFeature = vi.fn(feature => feature !== 'geolocation');
       Object.defineProperty(document, 'permissionsPolicy', { value: { allowsFeature }, configurable: true });
 
-      expect(frameAllowsFeature('notifications')).toBe(false);
-      expect(frameAllowsFeature('geolocation')).toBe(true);
-      expect(promptsAvailable('notifications')).toBe(false);
-      expect(promptsAvailable('location')).toBe(true);
-      // The location flow must ask about geolocation, not notifications.
-      expect(allowsFeature.mock.calls.map(call => call[0])).toEqual(['notifications', 'geolocation', 'notifications', 'geolocation']);
+      expect(frameAllowsFeature('geolocation')).toBe(false);
+      expect(promptsAvailable('location')).toBe(false);
+      // jsdom is not a frame, so the notification ask stays available.
+      expect(promptsAvailable('notifications')).toBe(true);
+      // The location flow must ask about geolocation, never about notifications.
+      expect(allowsFeature.mock.calls.every(call => call[0] === 'geolocation')).toBe(true);
+    });
+
+    it('never reads an unknown feature name as a block on a normal page', () => {
+      // Exactly what Chrome does to `allowsFeature('notifications')`: the
+      // Notifications API has no Permissions Policy directive (whatwg/notifications#177),
+      // so the name is missing from the browser's `features()` list and the call
+      // answers false — on the live site too. Reading that as "blocked here" is
+      // what made an ordinary tab announce "This preview cannot show the
+      // notifications prompt. Try the live site."
+      Object.defineProperty(document, 'permissionsPolicy', {
+        value: {
+          features: () => ['geolocation', 'camera', 'microphone'],
+          allowedFeatures: () => ['geolocation', 'camera', 'microphone'],
+          allowsFeature: () => false,
+        },
+        configurable: true,
+      });
+
+      expect(frameAllowsFeature('notifications')).toBe(true);
+      expect(promptsAvailable('notifications')).toBe(true);
+      // A name the browser DOES support and refuses is still a real block.
+      expect(frameAllowsFeature('camera')).toBe(false);
+      expect(promptsAvailable('location')).toBe(false);
+    });
+
+    it('uses the frame for the notification ask: cross-origin blocks it, same-origin does not', async () => {
+      // No browser implements a `notifications` policy directive, so the frame
+      // itself is the only rule left for that API.
+      await withSameOriginFrame(async () => {
+        expect(isCrossOriginEmbeddedFrame()).toBe(false);
+        expect(promptsAvailable('notifications')).toBe(true);
+      });
+      await withCrossOriginFrame(async () => {
+        expect(isCrossOriginEmbeddedFrame()).toBe(true);
+        expect(promptsAvailable('notifications')).toBe(false);
+      });
     });
 
     it('falls back to the older featurePolicy name', () => {
       Object.defineProperty(document, 'featurePolicy', { value: { allowsFeature: () => false }, configurable: true });
-      expect(frameAllowsFeature('notifications')).toBe(false);
+      expect(frameAllowsFeature('geolocation')).toBe(false);
     });
 
     it('assumes a normal page when the browser exposes no policy API', () => {
       // jsdom exposes neither object: not embedded, so prompts are available.
-      expect(frameAllowsFeature('notifications')).toBe(true);
+      expect(frameAllowsFeature('geolocation')).toBe(true);
       expect(promptsAvailable('location')).toBe(true);
+      expect(promptsAvailable('notifications')).toBe(true);
     });
 
     it('treats a policy object that throws as unavailable, not as allowed', () => {
       Object.defineProperty(document, 'permissionsPolicy', { value: { allowsFeature: () => { throw new Error('nope'); } }, configurable: true });
       // Not embedded in jsdom, so the frame fallback still allows it here — the
       // point is that a throw never becomes an unhandled error.
-      expect(() => frameAllowsFeature('notifications')).not.toThrow();
-      expect(frameAllowsFeature('notifications')).toBe(true);
+      expect(() => frameAllowsFeature('geolocation')).not.toThrow();
+      expect(frameAllowsFeature('geolocation')).toBe(true);
     });
   });
 

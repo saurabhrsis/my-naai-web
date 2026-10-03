@@ -32,7 +32,6 @@ import {
   ALERTS_UNSUPPORTED_MESSAGE,
   IOS_ALERTS_REQUIRED_MESSAGE,
   isDeviceTokenError,
-  isEmbeddedFrame,
   isIosDevice,
   isIosPwaInstalled,
   isStandalone,
@@ -664,8 +663,10 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
   const prepareDeviceToken = useCallback(async () => {
     if (!isPushConfigured()) return '';
     if (alertsDeclined.current) return '';
-    // Sync gates first — no await before the ask, so the gesture survives.
-    if ((isIosDevice() && !isIosPwaInstalled()) || isEmbeddedFrame() || !promptsAvailable('notifications')) return '';
+    // Sync gates first — no await before the ask, so the gesture survives. The
+    // frame gate is inside `promptsAvailable('notifications')`: only a
+    // cross-origin frame has the permission force-denied.
+    if ((isIosDevice() && !isIosPwaInstalled()) || !promptsAvailable('notifications')) return '';
     const snapshot = (typeof Notification !== 'undefined' && Notification.permission) || 'default';
     // Do not treat a page-load `denied` snapshot as final. Chrome and several
     // Android/OEM browsers keep that value stale after the user re-allows the

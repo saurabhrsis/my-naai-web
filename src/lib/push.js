@@ -5,6 +5,7 @@ import { softNavigate } from './routes';
 import { readDeviceTokenSync } from './deviceTokenSync';
 import {
   detectBrowser,
+  isCrossOriginEmbeddedFrame,
   isEmbeddedFrame,
   isIosDevice,
   isIosPwaInstalled,
@@ -17,7 +18,7 @@ import {
 // the browser/device detection) lives in ./permissions so the login card, the
 // Alerts & permissions centre and this module can never drift apart. The names
 // below are re-exported because they were public API here first.
-export { detectBrowser, isEmbeddedFrame, isIosDevice, isIosPwaInstalled };
+export { detectBrowser, isCrossOriginEmbeddedFrame, isEmbeddedFrame, isIosDevice, isIosPwaInstalled };
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -262,11 +263,12 @@ export async function getPushStatus() {
   // page reload. See readNotificationPermission for why the static value lies.
   const permission = await readNotificationPermission();
   if (permission === 'denied') {
-    // Embedded pages (an iframe inside another site or a preview tool) get their
+    // A CROSS-ORIGIN frame (an iframe inside another site, a preview tool) gets its
     // notification permission force-denied by the browser, so the normal unblock
     // steps can never work there. Keep the state "denied" — every user sees the
-    // same familiar card — and carry the embedded explanation in the reason.
-    const reason = isEmbeddedFrame()
+    // same familiar card — and carry the embedded explanation in the reason. A
+    // same-origin frame is a normal page for this API and must not be blamed.
+    const reason = isCrossOriginEmbeddedFrame()
       ? 'Notifications are blocked for this site. This page appears to be open inside another page, and browsers switch notifications off for those — open My Naai in its own browser tab, then allow notifications.'
       : 'Notifications are blocked in the browser permissions for this site.';
     return { state: 'denied', reason };
@@ -721,12 +723,12 @@ export async function getPushDiagnostics() {
   const permission = await readNotificationPermission();
   add('Notification permission', permission === 'granted' ? 'ok' : permission === 'denied' ? 'fail' : 'warn', permission,
     permission === 'denied'
-      ? (isEmbeddedFrame()
+      ? (isCrossOriginEmbeddedFrame()
         ? 'Blocked because this page is embedded inside another page. Open My Naai in its own browser tab, then allow notifications.'
         : 'Allow notifications for this site in browser settings, then retry — a reload helps on browsers that cache the old value.')
       : permission === 'default' ? 'Not requested yet.' : '');
   add('Page context', isEmbeddedFrame() ? 'warn' : 'ok', isEmbeddedFrame() ? 'Embedded inside another page' : 'Normal browser tab',
-    isEmbeddedFrame() ? 'Browsers force notification permission to blocked inside embedded frames. Open My Naai in its own tab to allow them.' : '');
+    isCrossOriginEmbeddedFrame() ? 'Browsers refuse notification permission requests inside a cross-origin frame. Open My Naai in its own tab to allow them.' : '');
 
   let messaging = null;
   try { messaging = await getMessagingClient(); } catch (error) { console.debug(getErrorMessage(error, 'Messaging client unavailable.')); }

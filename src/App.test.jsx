@@ -94,6 +94,7 @@ import * as permissions from './lib/permissions';
 import * as push from './lib/push';
 import { stashPendingRoute, popPendingRoute } from './lib/pendingRoute';
 import { playBuzzer } from './lib/buzzer';
+import { withCrossOriginFrame } from './test/frame';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -1115,28 +1116,57 @@ describe('Login permission flow', () => {
   it('calls the native notification API directly without opening app dialogs or tabs in a restricted frame', async () => {
     setNotificationPermission('denied');
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
-    Object.defineProperty(document, 'permissionsPolicy', {
-      value: { allowsFeature: feature => feature !== 'notifications' },
-      configurable: true,
-    });
     const openSpy = vi.spyOn(window, 'open');
     try {
+      await withCrossOriginFrame(async () => {
+        await mount();
+        const card = container.querySelector('.login-perm-card');
+        expect(card.textContent).not.toMatch(/blocked|open in browser|how to allow/i);
+
+        await act(async () => { notificationAllowButton().click(); });
+        await flush();
+
+        // The browser API is invoked; the cross-origin frame itself cannot show a
+        // permission prompt, so My Naai does not substitute a popup or new tab.
+        expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+        expect(openSpy).not.toHaveBeenCalled();
+        expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+        expect(container.querySelector('.perm-card-note').textContent).toContain('cannot show the notifications prompt');
+      });
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it('never calls an ordinary live page a preview when the policy does not know "notifications"', async () => {
+    // Chrome answers `featurePolicy.allowsFeature('notifications') === false` on
+    // EVERY page: the Notifications API has no Permissions Policy directive, so
+    // the name is unrecognized. Reading that as "embedded preview" is exactly how
+    // the live site ended up telling visitors to "try the live site".
+    setNotificationPermission('denied');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
+    Object.defineProperty(document, 'featurePolicy', {
+      value: {
+        features: () => ['geolocation', 'camera', 'microphone'],
+        allowedFeatures: () => ['geolocation', 'camera', 'microphone'],
+        allowsFeature: () => false,
+      },
+      configurable: true,
+    });
+    try {
       await mount();
-      const card = container.querySelector('.login-perm-card');
-      expect(card.textContent).not.toMatch(/blocked|open in browser|how to allow/i);
+      expect(notificationAllowButton()).not.toBeNull();
 
       await act(async () => { notificationAllowButton().click(); });
       await flush();
 
-      // The browser API is invoked; the restricted frame itself cannot show a
-      // permission prompt, so My Naai does not substitute a popup or new tab.
+      // A denial on a normal page gets the real browser-settings route…
       expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
-      expect(openSpy).not.toHaveBeenCalled();
-      expect(container.querySelector('.permission-gate-sheet')).toBeNull();
-      expect(container.querySelector('.perm-card-note').textContent).toContain('cannot show the notifications prompt');
+      expect(container.querySelector('.perm-card-note').textContent).toContain('Change Notifications in browser site settings');
+      // …and never the preview copy.
+      expect(container.textContent).not.toContain('Try the live site');
     } finally {
-      openSpy.mockRestore();
-      delete document.permissionsPolicy;
+      delete document.featurePolicy;
     }
   });
 
@@ -1282,6 +1312,35 @@ describe('Login permission flow', () => {
     expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
     expect(api.userLogin).toHaveBeenCalledWith({ phoneNumber: '9876543210' });
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
+  });
+
+  it('still asks from the Continue tap on a live page whose policy does not know "notifications"', async () => {
+    // Chrome's featurePolicy answers false for `allowsFeature('notifications')`
+    // on every page (no such directive exists), so the old sync gate skipped both
+    // the ask and the device-token mint on a perfectly ordinary live tab — a
+    // visitor who allowed alerts never got a token on the server.
+    grantOnRequest();
+    vi.mocked(push.getPushToken).mockImplementation(async () => (globalThis.Notification.permission === 'granted' ? 'push-token-live' : ''));
+    Object.defineProperty(document, 'featurePolicy', {
+      value: {
+        features: () => ['geolocation', 'camera'],
+        allowedFeatures: () => ['geolocation', 'camera'],
+        allowsFeature: () => false,
+      },
+      configurable: true,
+    });
+    try {
+      await mount();
+      await act(async () => { typeMobile('9876543210'); });
+      await act(async () => { submitPhone(); });
+      await flush();
+
+      expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+      expect(api.userLogin).toHaveBeenCalledWith({ phoneNumber: '9876543210' });
+      expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
+    } finally {
+      delete document.featurePolicy;
+    }
   });
 
   const typeOtp = value => {
