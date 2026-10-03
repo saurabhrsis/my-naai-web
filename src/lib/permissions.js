@@ -266,8 +266,26 @@ export function buzzerHint(browser) {
   return 'Check that this device is not muted — the buzzer plays a sound and vibrates where supported.';
 }
 
-export function androidAppNotificationHint(browser = detectBrowser()) {
-  if (!isAndroidDevice() && !ANDROID_BROWSERS.has(browser)) return '';
+// A tapped "Allow" can end with no popup and no denial, and the visitor is left
+// thinking the button is dead. Two real causes, one line each: Chromium's
+// quieter-messaging UI (plus the auto-block it applies to sites people rarely
+// accept) answers the request silently and parks the decision behind the bell
+// icon in the address bar; an iPhone tab cannot ask at all — iOS gives web
+// notifications only to an app on the Home Screen. One iPhone tab CAN show a
+// location popup at the same moment, which is why "location asked, notifications
+// did not" is a report we get from iPhones specifically.
+export function hiddenPromptHint(browser = detectBrowser()) {
+  if (isIosDevice()) return '';
+  if (browser === 'chrome-android' || browser === 'samsung' || browser === 'oppo' || browser === 'vivo') {
+    return 'No prompt appeared? Tap the lock (or bell) icon next to the address bar → Permissions → Notifications → Allow.';
+  }
+  if (browser === 'chrome-desktop' || browser === 'edge' || browser === 'opera' || browser === 'firefox') {
+    return 'No prompt appeared? This browser can hide it — click the bell (or lock) icon next to the address bar → Notifications → Allow.';
+  }
+  return 'No prompt appeared? Open this site’s permissions from the lock icon next to the address bar and set Notifications to Allow.';
+}
+
+export function androidAppNotificationHint(browser = detectBrowser()) {  if (!isAndroidDevice() && !ANDROID_BROWSERS.has(browser)) return '';
   const app = androidPermissionAppName(browser);
   const vendor = detectAndroidVendor();
   const oem = vendor === 'oppo' || vendor === 'realme' || vendor === 'oneplus'

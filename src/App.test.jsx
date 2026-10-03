@@ -1565,7 +1565,11 @@ describe('Login permission flow', () => {
     }
   });
 
-  it('calls the native notification API on iOS without opening an install dialog', async () => {
+  it('sends an iPhone tab to the Home Screen instead of spending the tap on a prompt iOS refuses', async () => {
+    // iOS gives web notifications only to an app on the Home Screen: in a Safari
+    // (or Chrome) tab `Notification.requestPermission()` resolves 'denied' without
+    // ever showing a prompt — while a location popup at the same moment shows
+    // normally. So the tap says the real next step and never burns the permission.
     vi.mocked(permissions.isIosDevice).mockReturnValue(true);
     vi.mocked(permissions.isIosPwaInstalled).mockReturnValue(false);
     setNotificationPermission('default');
@@ -1575,19 +1579,50 @@ describe('Login permission flow', () => {
 
       await act(async () => { notificationAllowButton().click(); });
       await flush();
-      expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+      expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
+      expect(container.querySelector('.perm-card-note').textContent).toContain('Home Screen');
       expect(container.querySelector('.permission-gate-sheet')).toBeNull();
       expect(openSpy).not.toHaveBeenCalled();
 
-      // Dismissing the native browser prompt must not cause Continue to ask a
-      // second time as a surprise.
+      // …and Continue must not ask behind their back either.
       await act(async () => { typeMobile('9876543210'); });
       await act(async () => { submitPhone(); });
       await flush();
-      expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+      expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
       expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
     } finally {
       openSpy.mockRestore();
+    }
+  });
+
+  it('still asks from the installed iPhone Home Screen app', async () => {
+    vi.mocked(permissions.isIosDevice).mockReturnValue(true);
+    vi.mocked(permissions.isIosPwaInstalled).mockReturnValue(true);
+    setNotificationPermission('default');
+    await mount();
+
+    await act(async () => { notificationAllowButton().click(); });
+    await flush();
+    expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
+  });
+
+  it('names the address-bar bell when the browser hides the notification prompt', async () => {
+    // Chrome's quieter-messaging UI (and the auto-block it applies to sites people
+    // rarely accept) answers a request with no prompt at all and no denial. A tap
+    // that ends in silence has to say where the switch actually is.
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+    setNotificationPermission('default');
+    try {
+      await mount();
+
+      await act(async () => { notificationAllowButton().click(); });
+      await flush();
+
+      // setNotificationPermission('default') resolves the request as 'default' —
+      // exactly what a quiet Chromium answers.
+      expect(container.querySelector('.perm-card-note').textContent).toMatch(/bell|address bar/i);
+    } finally {
+      vi.restoreAllMocks();
     }
   });
 

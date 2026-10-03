@@ -30,10 +30,12 @@ import {
 import { Button, Modal, Spinner, cx, getErrorMessage } from './Shared';
 import {
   ASK_CHOICES,
+  IOS_ALERTS_REQUIRED_MESSAGE,
   androidAppNotificationHint,
   browserLabel,
   buzzerHint,
   detectBrowser,
+  hiddenPromptHint,
   promptsAvailable,
   isIosDevice,
   isIosPwaInstalled,
@@ -64,6 +66,13 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
   // 'denied' instead, which must never be dressed up as "you blocked us".
   const alertsPromptable = promptsAvailable('notifications');
   const locationPromptable = promptsAvailable('location');
+  // An iPhone/iPad tab cannot ask for web notifications at all: iOS gives them
+  // only to an app on the Home Screen. Tapping Allow there would spend the tap on
+  // a call the OS answers 'denied' without showing anything, and the reply can
+  // even stick — so this visitor gets the Home Screen step, not a dead button.
+  // (Location is unaffected, which is why "location asked but notifications did
+  // not" is an iPhone report.)
+  const alertsNeedHomeScreen = isIosDevice() && !isIosPwaInstalled();
 
   const readAlerts = useCallback(async () => {
     // Alerts may not be wired into this build yet (no Firebase web config). The
@@ -138,19 +147,26 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
 
   // Each Allow tap calls the browser API directly. The browser shows its own
   // permission prompt when the state is still askable; an app guide never
-  // replaces that prompt on the login page.
+  // replaces that prompt on the login page — except on an iPhone tab, where no
+  // prompt can exist and the Home Screen step is the whole answer.
   const allowAlerts = async () => {
     setBusy('alerts');
     setPermissionNotice('');
     try {
+      if (alertsNeedHomeScreen) {
+        setAlerts('needs-permission');
+        setPermissionNotice(IOS_ALERTS_REQUIRED_MESSAGE);
+        onDismissRef.current?.();
+        return;
+      }
       const permission = await requestNotifications();
       if (permission === 'denied') {
         // A denied setting cannot produce another native prompt. Keep the row
         // simple and leave browser/account settings as the recovery route.
         setAlerts(alertsPromptable ? 'denied' : 'embedded');
-        setPermissionNotice(alertsPromptable
-          ? 'Change Notifications in browser site settings to try again.'
-          : 'This preview cannot show the notifications prompt. Try the live site.');
+        setPermissionNotice(!alertsPromptable
+          ? 'This preview cannot show the notifications prompt. Try the live site.'
+          : 'Change Notifications in browser site settings to try again.');
         if (alertsPromptable) rememberAskChoice('notifications', ASK_CHOICES.blocked);
         onDismissRef.current?.();
         return;
@@ -158,6 +174,11 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
       if (permission !== 'granted') {
         setAlerts(permission === 'unsupported' ? 'unsupported' : 'needs-permission');
         if (!alertsPromptable) setPermissionNotice('This preview cannot show the notifications prompt. Try the live site.');
+        // A tapped Allow that ends with no popup and no denial is the quieter-UI
+        // case (Chromium answers silently and parks the decision behind the bell
+        // icon), so name where the switch actually is instead of leaving a tap
+        // that looks like it did nothing.
+        else if (permission !== 'unsupported') setPermissionNotice(hiddenPromptHint());
         // If the visitor dismissed the native prompt, Continue must not surprise
         // them by asking again during sign-in.
         onDismissRef.current?.();

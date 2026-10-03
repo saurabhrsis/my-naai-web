@@ -8,6 +8,7 @@ import {
   detectAndroidVendor,
   detectBrowser,
   frameAllowsFeature,
+  hiddenPromptHint,
   isCrossOriginEmbeddedFrame,
   isDeviceTokenError,
   isIosPwaInstalled,
@@ -250,6 +251,19 @@ describe('permissions', () => {
         spy.mockRestore();
       }
     };
+
+    it('points a silent Chromium prompt at the address-bar bell, and says nothing on iPhone', () => {
+      withUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', () => {
+        expect(hiddenPromptHint()).toContain('bell');
+      });
+      withUserAgent('Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36', () => {
+        expect(hiddenPromptHint()).toContain('Permissions');
+      });
+      withUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile Safari/604.1', () => {
+        // iPhone has the Home Screen rule instead — never a "look for a bell" line.
+        expect(hiddenPromptHint()).toBe('');
+      });
+    });
 
     it('names the browser a blocked user has to open settings in', () => {
       withUserAgent('Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36', () => {
