@@ -966,23 +966,30 @@ describe('Home location permission', () => {
     expect(buttonByText('I allowed it — Try again')).not.toBeNull();
   });
 
-  it('gives a non-modal inline note when the preview policy suppresses the native prompt', async () => {
+  it('opens a top-level tab that can prompt when the frame policy suppresses the native one', async () => {
+    // A page inside another page can never show the location popup, and no
+    // amount of copy changes that. The only useful action is a tab of its own,
+    // so the tap opens one (same URL, marked ?mynaai-ask=location) where the
+    // browser does allow the prompt — and says so in one line, not a paragraph.
     const getCurrentPosition = vi.fn((_success, fail) => fail({ code: 1, message: 'Blocked by frame policy' }));
     navigator.geolocation = { getCurrentPosition };
     Object.defineProperty(document, 'permissionsPolicy', {
       value: { allowsFeature: () => false },
       configurable: true,
     });
-    const openSpy = vi.spyOn(window, 'open');
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue({});
     try {
       await mount();
       await act(async () => { buttonByText('Use my location').click(); });
       await flush();
 
+      // The native call still gets the tap…
       expect(getCurrentPosition).toHaveBeenCalledTimes(1);
+      // …and the frame's answer sends the visitor somewhere the popup works.
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(openSpy.mock.calls[0][0]).toContain('mynaai-ask=location');
       expect(container.querySelector('.permission-gate-sheet')).toBeNull();
-      expect(container.querySelector('.location-request-note').textContent).toContain('cannot show the location prompt');
-      expect(openSpy).not.toHaveBeenCalled();
+      expect(container.querySelector('.location-request-note').textContent).toContain('New tab opened');
     } finally {
       openSpy.mockRestore();
       delete document.permissionsPolicy;
@@ -1287,7 +1294,7 @@ describe('Login permission flow', () => {
     // that silently fails — and still substitutes neither a popup nor a tab.
     setNotificationPermission('denied');
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
-    const openSpy = vi.spyOn(window, 'open');
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue({});
     try {
       await withCrossOriginFrame(async () => {
         await mount();
@@ -1298,12 +1305,12 @@ describe('Login permission flow', () => {
         await flush();
 
         expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
-        expect(openSpy).not.toHaveBeenCalled();
-        // No popup can exist in here, so the tap opens the guide that says so:
-        // still no new tab, and never a tap that just does nothing.
-        const sheet = container.querySelector('.permission-gate-sheet');
-        expect(sheet).not.toBeNull();
-        expect(sheet.textContent).toContain('cannot show the notifications prompt');
+        // No popup can exist in here — so the tap opens My Naai in a tab of its
+        // own, which is the one place the browser WILL show the popup.
+        expect(openSpy).toHaveBeenCalledTimes(1);
+        expect(openSpy.mock.calls[0][0]).toContain('mynaai-ask=notifications');
+        expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+        expect(container.querySelector('.perm-card-note').textContent).toContain('New tab opened');
       });
     } finally {
       openSpy.mockRestore();
@@ -1729,7 +1736,7 @@ describe('Login permission flow', () => {
       value: { allowsFeature: feature => feature !== 'geolocation' },
       configurable: true,
     });
-    const openSpy = vi.spyOn(window, 'open');
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue({});
     try {
       await mount();
 
@@ -1744,10 +1751,11 @@ describe('Login permission flow', () => {
       // The native geolocation API receives the tap. The browser's frame policy
       // can still deny it, but My Naai opens no modal or extra tab.
       expect(getCurrentPosition).toHaveBeenCalledTimes(1);
-      expect(openSpy).not.toHaveBeenCalled();
-      const sheet = container.querySelector('.permission-gate-sheet');
-      expect(sheet).not.toBeNull();
-      expect(sheet.textContent).toContain('cannot show the location prompt');
+      // The frame refused the prompt, so the tap opens a tab that can show it.
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(openSpy.mock.calls[0][0]).toContain('mynaai-ask=location');
+      expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+      expect(container.querySelector('.perm-card-note').textContent).toContain('New tab opened');
     } finally {
       openSpy.mockRestore();
       delete document.permissionsPolicy;

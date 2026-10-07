@@ -372,6 +372,57 @@ export function androidLocationHint(browser = detectBrowser()) {
   return oem;
 }
 
+// ── The new-tab escape hatch ─────────────────────────────────────────────────
+// Chrome and Firefox refuse `Notification.requestPermission()` in a frame that
+// belongs to another origin: the promise answers 'denied' and no popup ever
+// appears, and no `allow="..."` attribute changes that (there is no `notifications`
+// Permissions Policy directive to delegate). A preview pane, a portal, another
+// site embedding My Naai — all of it is this case, and inside it there is
+// nothing to tap that leads to a real popup.
+//
+// There IS one: open My Naai as its own top-level tab and ask there. Browsers
+// only honour it from a user gesture, so every call below happens directly in a
+// tap handler — never after an await.
+export const PENDING_ASK_PARAM = 'mynaai-ask';
+
+export function openInOwnTabForAsk(kind = 'notifications') {
+  if (typeof window === 'undefined') return false;
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set(PENDING_ASK_PARAM, kind);
+    const opened = window.open(url.toString(), '_blank');
+    return Boolean(opened);
+  } catch (error) {
+    console.debug(getErrorMessage(error, 'Could not open a new tab for the permission ask.'));
+    return false;
+  }
+}
+
+// Which permission the tab was opened to ask for, if any.
+export function pendingAskKind() {
+  if (typeof window === 'undefined') return '';
+  try {
+    const kind = String(new URLSearchParams(window.location.search).get(PENDING_ASK_PARAM) || '');
+    return kind === 'notifications' || kind === 'location' ? kind : '';
+  } catch {
+    return '';
+  }
+}
+
+// Drop the marker from the URL so a reload, a share or a bookmark never asks
+// again — the ask belongs to the tab the visitor opened for it.
+export function clearPendingAsk() {
+  if (typeof window === 'undefined') return;
+  try {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has(PENDING_ASK_PARAM)) return;
+    url.searchParams.delete(PENDING_ASK_PARAM);
+    window.history.replaceState({}, '', url.toString());
+  } catch {
+    /* a URL that cannot be rewritten still works */
+  }
+}
+
 export function siteHost() {
   try {
     return window.location.host;

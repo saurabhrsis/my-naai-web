@@ -578,6 +578,20 @@ img { display: block; max-width: 100%; }
 .shop-sort > svg { position: absolute; right: 8px; color: var(--muted); pointer-events: none; }
 .shop-toggle-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 11px; border: 1px solid var(--line); border-radius: 20px; color: var(--muted); background: var(--card); font-size: 10px; font-weight: 700; }
 .shop-toggle-chip.active { color: #111; background: var(--gold); border-color: var(--gold); }
+/* The tab that was opened just to ask for a permission (see
+   PendingPermissionAsk in src/components/PermissionUI.jsx). Sits with the
+   toasts: one line, one tap, and the browser's own popup follows. */
+/* Fixed, so it lands the same way in the app shell and on the login page —
+   the tab that opens to ask can be pointing at either. */
+.pending-ask { position: fixed; z-index: 300; right: max(12px, var(--safe-right)); bottom: max(12px, var(--safe-bottom)); display: flex; align-items: center; flex-wrap: wrap; gap: 11px; width: min(420px, calc(100vw - 24px)); padding: 12px 13px; border: 1px solid rgba(232,185,126,.42); border-radius: 14px; background: rgba(18,22,21,.97); box-shadow: 0 16px 40px rgba(0,0,0,.5); animation: confirm-rise .24s cubic-bezier(.2,.9,.25,1) both; }
+.pending-ask-icon { width: 34px; height: 34px; display: flex; flex: none; align-items: center; justify-content: center; border-radius: 10px; color: #111; background: var(--gold); }
+.pending-ask-copy { flex: 1; min-width: 140px; }
+.pending-ask-copy strong { display: block; font-size: 13px; color: var(--white); }
+.pending-ask-copy p { margin: 2px 0 0; color: var(--muted-light); font-size: 11px; line-height: 1.45; }
+.pending-ask-actions { display: flex; align-items: center; gap: 8px; }
+.pending-ask-actions .ghost { color: var(--muted); font-size: 11px; }
+.pending-ask-actions .ghost:hover { color: var(--white); }
+
 /* Crash screen — what a visitor sees instead of a blank white page when React
    cannot render the tree (see src/components/AppErrorBoundary.jsx). Dark, one
    message, one button, and the error text so support can be told what broke. */

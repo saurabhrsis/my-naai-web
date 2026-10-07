@@ -19,6 +19,7 @@ import {
   CircleAlert,
   Copy,
   Download,
+  ExternalLink,
   MapPin,
   RefreshCw,
   RotateCw,
@@ -35,10 +36,13 @@ import {
   browserLabel,
   buzzerHint,
   canAskForAlerts,
+  clearPendingAsk,
   detectBrowser,
   detectInAppBrowser,
   hiddenPromptHint,
   inAppBrowserHint,
+  openInOwnTabForAsk,
+  pendingAskKind,
   promptsAvailable,
   isIosDevice,
   isIosPwaInstalled,
@@ -214,9 +218,19 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
     setPermissionNotice('');
     try {
       if (!canAskForAlerts()) {
-        // No popup exists in this context (iPhone tab, an app's WebView, another
-        // page's frame, no Notification API): say what to do instead of spending
-        // the tap on a call that silently fails. Never a fake "you blocked us".
+        // A page inside another page can never show a popup, so the tap opens
+        // My Naai in a top-level tab — where the browser DOES show one — instead
+        // of spending itself on a call that silently fails. One short line, one
+        // real popup.
+        if (!alertsPromptable && !inAppBrowser && !alertsNeedHomeScreen) {
+          setPermissionNotice(openInOwnTabForAsk('notifications')
+            ? 'New tab opened — choose Allow in the browser popup there.'
+            : `Allow pop-ups for ${siteHost()} to open My Naai in its own tab, then tap Allow.`);
+          onDismissRef.current?.();
+          return;
+        }
+        // No popup exists in this context (iPhone tab, an app's WebView, no
+        // Notification API): say what to do instead. Never a fake "you blocked us".
         if (alertsNeedHomeScreen) setAlerts('needs-permission');
         setPermissionNotice(alertsPromptFallback());
         openGuide('notifications', alertsGuideState());
@@ -238,8 +252,15 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
             ? frameNotice('notifications')
             : `Change Notifications in browser site settings to try again.${androidAppNotificationHint()}`);
         if (alertsPromptable) rememberAskChoice('notifications', ASK_CHOICES.blocked);
-        // Still the same guide in a frame: the "open My Naai in its own tab" view
-        // is the honest answer there, not a dead tap.
+        // In a frame this block is the frame's doing, not the visitor's: open a
+        // tab that can actually show the popup (the guide has the same button).
+        if (!alertsPromptable) {
+          setPermissionNotice(openInOwnTabForAsk('notifications')
+            ? 'New tab opened — choose Allow in the browser popup there.'
+            : `Allow pop-ups for ${siteHost()} to open My Naai in its own tab, then tap Allow.`);
+          onDismissRef.current?.();
+          return;
+        }
         openGuide('notifications', 'denied');
         onDismissRef.current?.();
         return;
@@ -286,9 +307,13 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
         onNotify?.('success', 'Location on — salons are now sorted by distance for you.');
         return;
       }
-      setPermissionNotice(locationPromptable
-        ? 'Change Location in browser site settings to try again.'
-        : frameNotice('location'));
+      if (!locationPromptable) {
+        setPermissionNotice(openInOwnTabForAsk('location')
+          ? 'New tab opened — choose Allow in the location popup there.'
+          : `Allow pop-ups for ${siteHost()} to open My Naai in its own tab, then tap Allow.`);
+        return;
+      }
+      setPermissionNotice('Change Location in browser site settings to try again.');
       // Blocked at the site (code 1), blocked at the device (code 2: Android
       // Location off or the app denied a fix) or simply unavailable — each has
       // its own three steps, and a tap that ends in none of them is the dead
@@ -377,7 +402,8 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [checkFailed, setCheckFailed] = useState(false);
-  const [embeddedRequestTried, setEmbeddedRequestTried] = useState(false);
+  // null = not tried, true = the tab opened, false = the browser blocked it.
+  const [embeddedTabOpen, setEmbeddedTabOpen] = useState(null);
   const [extraHelp, setExtraHelp] = useState(false);
   // Every "Try again" tap stamps the time and refreshes the reason, so a retry
   // that still fails never looks like a dead button that "did nothing".
@@ -402,7 +428,7 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
       setState(initialState === 'unavailable' ? 'finishing' : initialState);
       setReason('');
       setCheckFailed(false);
-      setEmbeddedRequestTried(false);
+      setEmbeddedTabOpen(null);
       setExtraHelp(false);
       setLastChecked(null);
       setReportCopied(false);
@@ -559,7 +585,6 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
       if (isLocation) {
         const result = await requestLocation();
         if (result.ok) { succeed('location'); return; }
-        if (embedded) setEmbeddedRequestTried(true);
         if (result.state === 'device-settings') {
           setState('device-settings');
           setCheckFailed(false);
@@ -595,7 +620,6 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
         setLastChecked(new Date());
         return;
       }
-      if (embedded) setEmbeddedRequestTried(true);
       await readStatus();
       setLastChecked(new Date());
     } catch (askError) {
@@ -698,23 +722,22 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
 
   if (embeddedGate) {
     heading = isLocation ? 'Allow location' : 'Allow notifications';
-    // Say it up front, not only after a tap that went nowhere: a page inside
-    // another page is the one case where the browser will never show its own
-    // prompt, so a bare "Allow" button would be another dead end.
-    lede = isLocation
-      ? 'This page is open inside another page, which stops the browser showing its location prompt.'
-      : 'This page is open inside another page, which stops the browser showing its notifications prompt.';
-    const embeddedNotice = isLocation
-      ? 'This page cannot show the location prompt — open My Naai in its own browser tab and allow location there.'
-      : alertsPromptFallback();
+    // One short line and one button that produces the real popup. A page inside
+    // another page can never show the browser's own prompt, so the only useful
+    // action is a top-level tab — and three paragraphs about the frame are not
+    // an action.
+    lede = `This page cannot show the ${isLocation ? 'location' : 'notifications'} prompt — browsers only allow it on a page that is not inside another one.`;
     body = (
       <>
-        {embeddedNotice && <p className="permission-help-note permission-gate-inline-note" role="status">{embeddedNotice}</p>}
-        {embeddedRequestTried && <p className="permission-help-note permission-gate-inline-note" role="status">This page cannot show the native {isLocation ? 'location' : 'notifications'} prompt — open My Naai in its own browser tab and tap Allow there.</p>}
         <div className="permission-gate-actions">
-          <Button onClick={allow} loading={busy}>Allow</Button>
+          <Button onClick={() => setEmbeddedTabOpen(openInOwnTabForAsk(isLocation ? 'location' : 'notifications'))} loading={busy}>
+            <ExternalLink size={16} /> Open a new tab and allow
+          </Button>
         </div>
+        {embeddedTabOpen === true && <p className="permission-help-note permission-gate-inline-note" role="status">New tab opened — choose <strong>Allow</strong> in the browser popup there.</p>}
+        {embeddedTabOpen === false && <p className="permission-help-note permission-gate-inline-note" role="status">Your browser blocked the new tab. Allow pop-ups for {siteHost()} and tap again.</p>}
         <div className="permission-gate-secondary">
+          <button className="ghost" onClick={allow} disabled={busy}>Try in this page anyway</button>
           <button className="ghost" onClick={onClose}>Close</button>
         </div>
       </>
@@ -1081,6 +1104,80 @@ export function NotificationSetupCard({ compact = false, onEnabled }) {
         onGranted={token => { if (token) onEnabledRef.current?.(token); }}
       />
     </section>
+  );
+}
+
+// ── The tab that was opened just to ask ──────────────────────────────────────
+// A permission ask cannot happen inside another page, so My Naai opens this tab
+// (same URL, `?mynaai-ask=notifications|location`) and asks here, where the
+// browser does allow a popup. This is the piece that turns "open a new tab"
+// from advice into a real Allow popup.
+//
+// It fires the browser's own request as soon as it mounts, because the visitor
+// who opened this tab already asked for it — except on iPhone, where Safari
+// silently drops a request made outside a tap and can make that answer stick;
+// there, the button below owns the gesture.
+export function PendingPermissionAsk({ onNotify }) {
+  const [kind, setKind] = useState(() => pendingAskKind());
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!kind) return;
+    // The marker is single-use: a reload, share or bookmark must never ask again.
+    clearPendingAsk();
+  }, [kind]);
+
+  const ask = useCallback(async () => {
+    if (!kind) return;
+    setBusy(true);
+    try {
+      if (kind === 'location') {
+        const result = await requestLocation();
+        if (result.ok) {
+          onNotify?.('success', 'Location on — salons are now sorted by distance for you.');
+          setKind('');
+          return;
+        }
+        // A refusal here is a real one (this tab can prompt), so hand it to the
+        // sheet with the steps for this browser instead of nagging.
+        setKind('');
+        return;
+      }
+      const permission = await requestNotifications();
+      if (permission === 'granted') {
+        onNotify?.('success', 'Booking alerts on — you will hear the buzzer.');
+        setKind('');
+        return;
+      }
+      // Not granted, not blocked: the browser swallowed the popup (quieter UI).
+      // Keep the card up — the button below is a fresh, labelled gesture.
+    } finally {
+      setBusy(false);
+    }
+  }, [kind, onNotify]);
+
+  useEffect(() => {
+    // Desktop Chrome, Edge, Firefox and Android all answer a request made on
+    // load, so the popup the visitor came for appears straight away.
+    if (kind === 'notifications' && canAskForAlerts() && !isIosDevice()) ask();
+  }, [ask, kind]);
+
+  if (!kind) return null;
+  const isLocation = kind === 'location';
+  return (
+    <div className="pending-ask" role="dialog" aria-label={isLocation ? 'Allow location' : 'Allow notifications'}>
+      <span className="pending-ask-icon">{isLocation ? <MapPin size={18} /> : <BellRing size={18} />}</span>
+      <div className="pending-ask-copy">
+        <strong>{isLocation ? 'Allow location' : 'Allow notifications'}</strong>
+        <p>{isLocation
+          ? 'One tap, and salons are sorted by how far they are from you.'
+          : 'One tap, and booking requests and the buzzer reach this device.'}</p>
+      </div>
+      <div className="pending-ask-actions">
+        <Button size="small" onClick={ask} loading={busy}>{isLocation ? 'Allow location' : 'Allow'}</Button>
+        <button type="button" className="ghost" onClick={() => setKind('')}>Not now</button>
+      </div>
+    </div>
   );
 }
 

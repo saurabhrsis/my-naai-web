@@ -41,7 +41,7 @@ import {
   requestLocation,
   requestNotifications,
 } from './lib/permissions';
-import { InstallAppButton, LoginPermissionCard, NotificationSetupCard, PermissionSheet } from './components/PermissionUI';
+import { InstallAppButton, LoginPermissionCard, NotificationSetupCard, PendingPermissionAsk, PermissionSheet } from './components/PermissionUI';
 import { BuzzerTestCard } from './components/BuzzerTestCard';
 import { BOOKING_ALERT_WINDOW_MS, BookingRequestAlert } from './components/BookingRequestAlert';
 // The deviceToken rule is shared (lib/apiPayload) so the Alerts & permissions
@@ -627,6 +627,9 @@ export function GuestShell({ route, navigate, notifyInstall, showBuzzerCheck = f
       {/* The signed-out buzzer check lives on the page a tester can actually
           reach before an account exists — no login wall on iOS. */}
       {showBuzzerCheck && route.name !== 'partner' && <div className="guest-buzzer-test"><BuzzerTestCard notify={notify} /></div>}
+      {/* Signed-out pages render their own shell, so the tab that was opened to
+          ask needs the ask here too (home, salon page, About/Contact…). */}
+      <PendingPermissionAsk onNotify={notify} />
     </main>
     {toast && <div className="toast-position"><div className={cx('toast', `toast-${toast.type || 'info'}`)} role="status"><span className="toast-mark">{toast.type === 'error' ? '!' : '✓'}</span><span>{toast.message}</span><button onClick={() => setToast(null)} aria-label="Dismiss"><X size={15} /></button></div></div>}
   </div>;
@@ -858,6 +861,9 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
   if (view === 'register') return <SalonRegistration initialData={salonRegistrationData} onBack={() => { setSalonRegistrationData(null); setView('login'); }} onComplete={onComplete} notifyInstall={notifyInstall} />;
 
   return <div className="auth-page login-page"><div className="auth-visual"><div className="auth-visual-image" /><div className="auth-image-shade" /><div className="auth-visual-content"><Brand light /><div><span className="eyebrow">SALON & GROOMING, REIMAGINED</span><h1>Less waiting.<br /><em>More you.</em></h1><p>Book a great salon nearby and make the time yours.</p></div><div className="visual-quote"><span></span><p>Your time is valuable. We’re here to give it back.</p></div></div></div><div className="auth-form-panel"><div className="mobile-auth-brand"><Brand /></div><div className="auth-form-wrap">{onBrowseBack && <button className="login-back" onClick={onBrowseBack}><ChevronRight size={15} className="rotate-180" /> Browse salons</button>}<span className="eyebrow">WELCOME TO MY NAAI</span><span className="login-hero-badge"><Sparkles size={12} /> {role === 'USER' ? 'Customer login' : 'Salon partner'}</span><h1>{step === 'phone' ? role === 'USER' ? 'Login to book your favorite salon' : 'Grow your salon with My Naai' : step === 'new-user' ? 'One last thing.' : 'Check your phone.'}</h1><p className="auth-subtitle">{step === 'phone' ? role === 'USER' ? 'Sign in and book your next visit.' : 'Sign in and never miss a booking.' : step === 'new-user' ? `Let\u2019s create your My Naai profile for +91 ${mobile}.` : `Enter the 6-digit code sent to +91 ${mobile}.`}</p>{step === 'phone' && <LoginPermissionCard className="login-perm-card" onToken={() => { alertsDeclined.current = false; }} onDismiss={() => { alertsDeclined.current = true; }} />}{step === 'phone' && <div className="login-actions"><InstallAppButton onInstall={notifyInstall} /></div>}{step === 'phone' && <div className="role-switch"><button className={role === 'USER' ? 'active' : ''} onClick={() => { setRole('USER'); setError(''); }}><CircleUserRound size={16} /> Customer</button><button className={role === 'SALON' ? 'active' : ''} onClick={() => { setRole('SALON'); setError(''); }}><Store size={16} /> Salon partner</button></div>}{notice && !error && <div className="form-notice" role="status"><BellRing size={16} /><span>{notice}</span><button type="button" onClick={() => setNotice('')} aria-label="Dismiss"><X size={14} /></button></div>}{error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}{step === 'phone' && <form onSubmit={requestOtp}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" autoComplete="tel" maxLength="10" value={mobile} onChange={event => setMobile(event.target.value.replace(/\D/g, ''))} placeholder="Enter 10-digit number" autoFocus /></div></Field><Button type="submit" loading={busy}>Continue with OTP <ChevronRight size={17} /></Button></form>}{step === 'otp' && <form onSubmit={verify}><Field label="One-time password"><input className="otp-input" inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="· · · · · ·" autoFocus /></Field><Button type="submit" loading={busy}>Verify code <ChevronRight size={17} /></Button><button className="resend-link" type="button" onClick={requestOtp}>Resend code</button><button className="back-form-link" type="button" onClick={() => { setStep('phone'); setOtp(''); setError(''); }}>Use a different number</button></form>}{step === 'new-user' && <form onSubmit={createAccount}><Field label="Your name"><input value={name} onChange={event => setName(event.target.value)} placeholder="How should we call you?" autoFocus /></Field><Button type="submit" loading={busy}>Create my account <ChevronRight size={17} /></Button></form>}</div><p className="auth-legal">By continuing, you agree to My Naai’s <button type="button" onClick={() => softNavigate('/terms')}>Terms &amp; Conditions</button> and <button type="button" onClick={() => softNavigate('/privacy-policy')}>Privacy Policy</button>.</p></div>
+    {/* The login page is rendered outside the app shell, and it is where the
+        "open a new tab and allow" tap usually lands — so the ask lives here too. */}
+    <PendingPermissionAsk onNotify={(type, message) => setNotice(message)} />
       <PermissionSheet
         open={alertSheet.open}
         state={alertSheet.state}
@@ -865,6 +871,7 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
         onClose={() => { setAlertSheet(current => ({ ...current, open: false })); retryAfterAlerts.current = null; }}
         onGranted={handleAlertsGranted}
       />
+      <PendingPermissionAsk />
     </div>;
 }
 
@@ -1428,6 +1435,9 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     <div className="alert-dock">
       {toast && <div className={cx('toast', `toast-${toast.type || 'info'}`)} role="status"><span className="toast-mark">{toast.type === 'error' ? '!' : '✓'}</span><span>{toast.message}</span><button onClick={() => setToast(null)} aria-label="Dismiss"><X size={15} /></button></div>}
       {isSalon && bookingAlert && <BookingRequestAlert key={`${bookingAlert.data?.bookingRequestId || ''}:${bookingAlert.sentAt}`} alert={bookingAlert} notify={notify} navigate={shellNavigate} onDone={resolveBookingAlert} onDismiss={dismissBookingAlert} />}
+      {/* A tab opened just to ask for a permission (?mynaai-ask=…) — it can
+          show the browser's own popup, unlike a page inside another page. */}
+      <PendingPermissionAsk onNotify={notify} />
     </div>
   </div></SurfaceProvider>;
 }

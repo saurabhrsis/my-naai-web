@@ -9,6 +9,7 @@ import {
   detectBrowser,
   alertsPromptFallback,
   canAskForAlerts,
+  clearPendingAsk,
   detectInAppBrowser,
   frameAllowsFeature,
   hiddenPromptHint,
@@ -16,7 +17,10 @@ import {
   isCrossOriginEmbeddedFrame,
   isDeviceTokenError,
   isIosPwaInstalled,
+  openInOwnTabForAsk,
   promptsAvailable,
+  PENDING_ASK_PARAM,
+  pendingAskKind,
   permissionSteps,
   readAskChoice,
   readPermission,
@@ -213,6 +217,52 @@ describe('permissions', () => {
 
     it('returns a no-op unsubscribe when the Permissions API is unavailable', () => {
       expect(typeof watchPermission('location', () => {})).toBe('function');
+    });
+  });
+
+  describe('the new-tab escape hatch', () => {
+    it('opens this page as its own tab, marked with the permission to ask for', () => {
+      window.history.replaceState({}, '', '/login');
+      const openSpy = vi.spyOn(window, 'open').mockReturnValue({});
+      try {
+        expect(openInOwnTabForAsk('notifications')).toBe(true);
+        expect(openSpy).toHaveBeenCalledTimes(1);
+        const url = new URL(openSpy.mock.calls[0][0], window.location.origin);
+        expect(url.pathname).toBe('/login'); // the same page, not another site
+        expect(url.searchParams.get(PENDING_ASK_PARAM)).toBe('notifications');
+      } finally {
+        openSpy.mockRestore();
+      }
+    });
+
+    it('says so when the browser blocks the tab instead of pretending it worked', () => {
+      const openSpy = vi.spyOn(window, 'open').mockReturnValue(null);
+      try {
+        expect(openInOwnTabForAsk('location')).toBe(false);
+      } finally {
+        openSpy.mockRestore();
+      }
+    });
+
+    it('reads the pending ask from the URL, and only for a permission we ask for', () => {
+      window.history.replaceState({}, '', '/?mynaai-ask=location');
+      expect(pendingAskKind()).toBe('location');
+      window.history.replaceState({}, '', '/?mynaai-ask=notifications');
+      expect(pendingAskKind()).toBe('notifications');
+      // A stranger's query string is not an instruction to ask for anything.
+      window.history.replaceState({}, '', '/?mynaai-ask=camera');
+      expect(pendingAskKind()).toBe('');
+      window.history.replaceState({}, '', '/login');
+      expect(pendingAskKind()).toBe('');
+    });
+
+    it('drops the marker once read — a reload never asks again', () => {
+      window.history.replaceState({}, '', '/login?mynaai-ask=notifications');
+      expect(pendingAskKind()).toBe('notifications');
+      clearPendingAsk();
+      expect(window.location.search).toBe('');
+      expect(window.location.pathname).toBe('/login');
+      expect(pendingAskKind()).toBe('');
     });
   });
 

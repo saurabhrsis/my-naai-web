@@ -61,26 +61,33 @@ describe('alerts sheet states that used to go quiet on Try again', () => {
     vi.restoreAllMocks();
   });
 
-  it('the embedded sheet calls the native permission API instead of opening another tab', async () => {
-    // A cross-origin frame cannot request the notification permission — there is
-    // no `notifications` Permissions Policy directive to delegate, so the frame
-    // itself is the signal (see src/test/frame.js).
+  it('an embedded sheet opens a tab that can prompt, and still lets the visitor try here', async () => {
+    // A cross-origin frame cannot show the notification popup — there is no
+    // `notifications` Permissions Policy directive to delegate, so the frame
+    // itself is the signal (see src/test/frame.js). The only way to a real
+    // prompt is a top-level tab, so that is the sheet's primary action; the
+    // native call stays one tap away for anybody who wants to try anyway.
     globalThis.Notification = {
       permission: 'default',
       requestPermission: vi.fn(() => Promise.resolve('default')),
     };
-    const openSpy = vi.spyOn(window, 'open');
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue({});
     try {
       await withCrossOriginFrame(async () => {
         await mount('needs-permission');
-        expect(buttonByText('Allow')).not.toBeNull();
-
-        await act(async () => { buttonByText('Allow').click(); });
+        await act(async () => { buttonByText('Open a new tab').click(); });
         await flush();
 
+        expect(openSpy).toHaveBeenCalledTimes(1);
+        expect(openSpy.mock.calls[0][0]).toContain('mynaai-ask=notifications');
+        expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
+        expect(container.textContent).toContain('New tab opened');
+
+        // And the escape hatch nobody can help trying: the native API still
+        // gets the tap, in this page, on request.
+        await act(async () => { buttonByText('Try in this page anyway').click(); });
+        await flush();
         expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
-        expect(openSpy).not.toHaveBeenCalled();
-        expect(container.textContent).toContain('cannot show the native notifications prompt');
       });
     } finally {
       openSpy.mockRestore();
@@ -97,15 +104,20 @@ describe('alerts sheet states that used to go quiet on Try again', () => {
       value: { features: () => ['geolocation'], allowedFeatures: () => [], allowsFeature: () => false },
       configurable: true,
     });
-    const openSpy = vi.spyOn(window, 'open');
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue({});
     try {
       await mount('needs-permission', { kind: 'location' });
-      await act(async () => { buttonByText('Allow').click(); });
+      await act(async () => { buttonByText('Open a new tab').click(); });
       await flush();
 
+      // The tab is the action that works; the native call in this frame is not.
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(openSpy.mock.calls[0][0]).toContain('mynaai-ask=location');
+      expect(container.textContent).toContain('New tab opened');
+
+      await act(async () => { buttonByText('Try in this page anyway').click(); });
+      await flush();
       expect(getCurrentPosition).toHaveBeenCalledTimes(1);
-      expect(container.textContent).toContain('cannot show the native location prompt');
-      expect(openSpy).not.toHaveBeenCalled();
     } finally {
       openSpy.mockRestore();
       if (originalGeolocation) navigator.geolocation = originalGeolocation;
