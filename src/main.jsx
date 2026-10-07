@@ -1,6 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
+import AppErrorBoundary from './components/AppErrorBoundary';
 import { getErrorMessage } from './components/Shared';
 import { installDevToolsErrorShield } from './lib/devtoolsShield';
 import { registerPushServiceWorker } from './lib/push';
@@ -53,8 +54,12 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+// The boundary sits above <App /> so a crash in any screen still leaves the
+// visitor with a readable message and a reload button, not an empty white page.
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <App />
+    <AppErrorBoundary>
+      <App />
+    </AppErrorBoundary>
   </React.StrictMode>,
 );

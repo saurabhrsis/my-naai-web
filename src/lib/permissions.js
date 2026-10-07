@@ -434,20 +434,30 @@ export function watchPermission(kind, callback) {
   const name = kind === 'location' ? 'geolocation' : 'notifications';
   let stopped = false;
   let status = null;
-  navigator.permissions
-    .query({ name })
-    .then(result => {
-      if (stopped) return;
-      status = result;
-      status.onchange = () => {
-        try {
-          callback();
-        } catch (callbackError) {
-          console.debug(getErrorMessage(callbackError, 'Permission change handler failed.'));
-        }
-      };
-    })
-    .catch(() => { /* older browsers: the focus re-check still covers this */ });
+  // Chrome throws SecurityError *synchronously* (not as a rejected promise)
+  // when a frame it has not been delegated the feature asks for `geolocation` —
+  // which is every page inside another page, previews included. Uncaught, that
+  // throw travelled out of a `useEffect` and React tore the whole tree down: the
+  // app rendered nothing at all. A watcher is optional by definition, so every
+  // failure mode here ends in "no live updates", never in a blank page.
+  try {
+    Promise.resolve(navigator.permissions.query({ name }))
+      .then(result => {
+        if (stopped) return;
+        status = result;
+        status.onchange = () => {
+          try {
+            callback();
+          } catch (callbackError) {
+            console.debug(getErrorMessage(callbackError, 'Permission change handler failed.'));
+          }
+        };
+      })
+      .catch(() => { /* older browsers: the focus re-check still covers this */ });
+  } catch (watchError) {
+    console.debug(getErrorMessage(watchError, `Live ${kind} permission watch was refused.`));
+    return () => {};
+  }
   return () => {
     stopped = true;
     try {

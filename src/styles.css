@@ -578,6 +578,18 @@ img { display: block; max-width: 100%; }
 .shop-sort > svg { position: absolute; right: 8px; color: var(--muted); pointer-events: none; }
 .shop-toggle-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 11px; border: 1px solid var(--line); border-radius: 20px; color: var(--muted); background: var(--card); font-size: 10px; font-weight: 700; }
 .shop-toggle-chip.active { color: #111; background: var(--gold); border-color: var(--gold); }
+/* Crash screen — what a visitor sees instead of a blank white page when React
+   cannot render the tree (see src/components/AppErrorBoundary.jsx). Dark, one
+   message, one button, and the error text so support can be told what broke. */
+.crash-screen { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px 22px; background: #080a0a; color: #f2f4f4; text-align: center; }
+.crash-badge { font-size: 11px; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; color: var(--gold); }
+.crash-screen h1 { margin: 0; font-size: 22px; line-height: 1.25; }
+.crash-screen p { margin: 0; max-width: 420px; color: #a7b0af; font-size: 13px; line-height: 1.6; }
+.crash-detail { max-width: 520px; margin: 4px 0 0; padding: 10px 12px; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.04); color: #d7dcdb; font-size: 11px; text-align: left; white-space: pre-wrap; word-break: break-word; }
+.crash-reload { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; margin-top: 6px; padding: 0 20px; border: 0; border-radius: 12px; background: var(--gold); color: #0d0e0e; font-size: 13px; font-weight: 700; }
+.crash-note { color: #7f8a89; font-size: 11.5px; }
+.crash-note a { color: var(--gold); }
+
 .shop-loading { min-height: 300px; display: flex; align-items: center; justify-content: center; }
 /* Product detail */
 .shop-detail { display: grid; gap: 18px; }

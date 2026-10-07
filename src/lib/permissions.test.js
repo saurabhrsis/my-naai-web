@@ -193,6 +193,24 @@ describe('permissions', () => {
       expect(status.onchange).toBeNull();
     });
 
+    it('survives a Permissions API that throws instead of rejecting', () => {
+      // Chrome throws SecurityError SYNCHRONOUSLY when a frame it was not
+      // delegated the feature asks for `geolocation` — every page inside another
+      // page, previews included. Uncaught, that throw escaped a useEffect and
+      // React unmounted the whole app: the page rendered nothing at all. A
+      // watcher is optional, so the only acceptable answer is "no live updates".
+      const query = vi.fn(() => { throw new Error('SecurityError: geolocation is not allowed in this frame'); });
+      Object.defineProperty(navigator, 'permissions', { value: { query }, configurable: true });
+      const handler = vi.fn();
+      let unsubscribe = () => {};
+      expect(() => { unsubscribe = watchPermission('location', handler); }).not.toThrow();
+      expect(typeof unsubscribe).toBe('function');
+      expect(() => unsubscribe()).not.toThrow();
+      // The same guard covers the notifications watcher every card installs.
+      expect(() => watchPermission('notifications', handler)).not.toThrow();
+      expect(handler).not.toHaveBeenCalled();
+    });
+
     it('returns a no-op unsubscribe when the Permissions API is unavailable', () => {
       expect(typeof watchPermission('location', () => {})).toBe('function');
     });
