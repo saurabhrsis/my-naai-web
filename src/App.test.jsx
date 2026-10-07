@@ -981,7 +981,7 @@ describe('Home location permission', () => {
 
       expect(getCurrentPosition).toHaveBeenCalledTimes(1);
       expect(container.querySelector('.permission-gate-sheet')).toBeNull();
-      expect(container.querySelector('.location-request-note').textContent).toContain('cannot show the native location prompt');
+      expect(container.querySelector('.location-request-note').textContent).toContain('cannot show the location prompt');
       expect(openSpy).not.toHaveBeenCalled();
     } finally {
       openSpy.mockRestore();
@@ -1299,8 +1299,11 @@ describe('Login permission flow', () => {
 
         expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
         expect(openSpy).not.toHaveBeenCalled();
-        expect(container.querySelector('.permission-gate-sheet')).toBeNull();
-        expect(container.querySelector('.perm-card-note').textContent).toContain('cannot show the notifications prompt');
+        // No popup can exist in here, so the tap opens the guide that says so:
+        // still no new tab, and never a tap that just does nothing.
+        const sheet = container.querySelector('.permission-gate-sheet');
+        expect(sheet).not.toBeNull();
+        expect(sheet.textContent).toContain('cannot show the notifications prompt');
       });
     } finally {
       openSpy.mockRestore();
@@ -1356,7 +1359,12 @@ describe('Login permission flow', () => {
 
       expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
       expect(openSpy).not.toHaveBeenCalled();
-      expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+      // The browser answered without a grant (quieter UI, or a prompt the
+      // visitor dismissed), so the tap hands over one fresh, labelled Allow of
+      // our own instead of going quiet.
+      const sheet = container.querySelector('.permission-gate-sheet');
+      expect(sheet).not.toBeNull();
+      expect(sheet.textContent).toContain('Allow notifications');
     } finally {
       openSpy.mockRestore();
       delete document.permissionsPolicy;
@@ -1375,7 +1383,9 @@ describe('Login permission flow', () => {
       await flush();
 
       expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
-      expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+      // …and because the browser still says blocked, no popup can follow — so
+      // the tap opens the unblock guide rather than ending in silence.
+      expect(container.querySelector('.permission-gate-sheet').textContent).toContain('Alerts are blocked');
       expect(notificationAllowButton()).not.toBeNull();
     } finally {
       delete document.permissionsPolicy;
@@ -1568,7 +1578,7 @@ describe('Login permission flow', () => {
     }
   });
 
-  it('keeps the Allow button native after notification permission is denied', async () => {
+  it('keeps the Allow tap native, and opens the unblock guide when the browser still says blocked', async () => {
     globalThis.Notification = {
       permission: 'default',
       requestPermission: vi.fn(() => {
@@ -1585,15 +1595,20 @@ describe('Login permission flow', () => {
     await act(async () => { notificationAllowButton().click(); });
     await flush();
     expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+    // The browser re-answered 'denied', so no popup can appear: the tap opens
+    // the unblock guide instead of dying where it stands.
+    const sheet = container.querySelector('.permission-gate-sheet');
+    expect(sheet).not.toBeNull();
+    expect(sheet.textContent).toContain('Alerts are blocked');
     expect(notificationAllowButton()?.textContent.trim()).toBe('Allow');
 
-    // Browsers do not re-prompt after a denial. A later tap still calls the
-    // native API, but never substitutes a My Naai dialog or new browser tab.
+    // A later tap still calls the native API first — the visitor may have just
+    // unblocked the site — and never opens a new browser tab.
+    await act(async () => { buttonByText('Not now').click(); });
+    await flush();
     await act(async () => { notificationAllowButton().click(); });
     await flush();
     expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(2);
-    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
   });
 
   it('keeps the login location Allow action native after a browser denial', async () => {
@@ -1609,14 +1624,96 @@ describe('Login permission flow', () => {
     await act(async () => { locationAllowButton().click(); });
     await flush();
     expect(getCurrentPosition).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+    // The browser denied it, so the tap opens the location guide — the exact
+    // steps back, not a button that quietly does nothing.
+    const sheet = container.querySelector('.permission-gate-sheet');
+    expect(sheet).not.toBeNull();
+    expect(sheet.textContent).toContain('Location is blocked');
     expect(container.querySelector('.login-perm-card .perm-row-copy strong').textContent).toBe('Location');
 
-    // Another tap calls the browser API again but never opens a My Naai popup.
+    // Another tap calls the browser API again — nothing else, no new tab.
+    await act(async () => { buttonByText('Not now').click(); });
+    await flush();
     await act(async () => { locationAllowButton().click(); });
     await flush();
     expect(getCurrentPosition).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens the unblock guide with the three steps for the browser in use when no popup can appear', async () => {
+    // Reported from a phone: "I blocked it by mistake, now tapping Allow does
+    // nothing." A blocked permission cannot be re-asked from JavaScript, so the
+    // tap has to hand over the way back — three exact steps for the browser in
+    // front of them, not one line of small print.
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36');
+    setNotificationPermission('denied');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
+    const openSpy = vi.spyOn(window, 'open');
+    try {
+      await mount();
+      await act(async () => { notificationAllowButton().click(); });
+      await flush();
+
+      const sheet = container.querySelector('.permission-gate-sheet');
+      expect(sheet.textContent).toContain('Alerts are blocked');
+      expect(sheet.textContent).toContain('Chrome on Android');
+      const steps = Array.from(sheet.querySelectorAll('ol li')).map(node => node.textContent);
+      expect(steps).toHaveLength(3);
+      expect(steps[0]).toContain('lock icon');
+      // The way back is a tap on this page — never a new tab, never a popup the
+      // browser has already refused to show.
+      expect(buttonByText('Try again')).not.toBeNull();
+      expect(openSpy).not.toHaveBeenCalled();
+    } finally {
+      openSpy.mockRestore();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('the guide closes itself the moment the visitor unblocks the site — no extra tap', async () => {
+    setNotificationPermission('denied');
+    vi.mocked(push.getPushStatus).mockImplementation(async () => ({
+      state: globalThis.Notification.permission === 'denied' ? 'denied' : 'needs-permission',
+      reason: '',
+    }));
+    await mount();
+    await act(async () => { notificationAllowButton().click(); });
+    await flush();
+    expect(container.querySelector('.permission-gate-sheet')).not.toBeNull();
+
+    // The visitor follows the steps in the browser's own settings and comes
+    // back to the tab: the guide notices by itself, closes, and the row goes
+    // with it — nobody has to tap "Check" after already fixing the setting.
+    globalThis.Notification.permission = 'granted';
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'enabled', token: 'push-token-unblocked' });
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    await flush();
     expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+    expect(container.querySelector('.allow-alerts-button')).toBeNull();
+  });
+
+  it('the location guide closes on Try again once the visitor allows it in Settings', async () => {
+    setNotificationPermission('granted');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'enabled', token: 'push-token-location' });
+    const getCurrentPosition = vi.fn((_success, fail) => fail({ code: 1, message: 'Permission denied' }));
+    navigator.geolocation = { getCurrentPosition };
+    // Safari does not expose location permission through navigator.permissions.
+    delete navigator.permissions;
+    await mount();
+    await act(async () => { locationAllowButton().click(); });
+    await flush();
+
+    const sheet = container.querySelector('.permission-gate-sheet');
+    expect(sheet.textContent).toContain('Location is blocked');
+    expect(sheet.querySelectorAll('ol li')).toHaveLength(3);
+
+    // Allowed in Settings, so the device answers: one tap closes the guide and
+    // the row with it, and the row never comes back just because Safari cannot
+    // report the setting it just changed.
+    navigator.geolocation = { getCurrentPosition: success => success({ coords: { latitude: 21.1458, longitude: 79.0882 } }) };
+    await act(async () => { buttonByText('Try again').click(); });
+    await flush();
+    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+    expect(container.querySelector('.perm-location-button')).toBeNull();
   });
 
   it('calls the native geolocation API from Allow without opening a page or app dialog', async () => {
@@ -1648,8 +1745,9 @@ describe('Login permission flow', () => {
       // can still deny it, but My Naai opens no modal or extra tab.
       expect(getCurrentPosition).toHaveBeenCalledTimes(1);
       expect(openSpy).not.toHaveBeenCalled();
-      expect(container.querySelector('.permission-gate-sheet')).toBeNull();
-      expect(container.querySelector('.perm-card-note').textContent).toContain('cannot show the location prompt');
+      const sheet = container.querySelector('.permission-gate-sheet');
+      expect(sheet).not.toBeNull();
+      expect(sheet.textContent).toContain('cannot show the location prompt');
     } finally {
       openSpy.mockRestore();
       delete document.permissionsPolicy;
@@ -1739,7 +1837,7 @@ describe('Login permission flow', () => {
     expect(container.querySelector('.permission-gate-sheet')).toBeNull();
   });
 
-  it('does not open a My Naai dialog when an already-denied notification is tapped', async () => {
+  it('opens My Naai’s unblock guide when an already-denied notification is tapped, never a tab', async () => {
     setNotificationPermission('denied');
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
     const openSpy = vi.spyOn(window, 'open');
@@ -1749,7 +1847,11 @@ describe('Login permission flow', () => {
       await flush();
 
       expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1);
-      expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+      // No popup can appear once the browser has blocked the site, so the tap
+      // opens the guide: three steps, and still never a new browser tab.
+      const sheet = container.querySelector('.permission-gate-sheet');
+      expect(sheet).not.toBeNull();
+      expect(sheet.textContent).toContain('Alerts are blocked');
       expect(openSpy).not.toHaveBeenCalled();
       expect(notificationAllowButton()?.textContent.trim()).toBe('Allow');
     } finally {
@@ -1763,12 +1865,19 @@ describe('Login permission flow', () => {
   const IPHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile Safari/604.1';
   const withIosDevice = async (standalone, run) => {
     const agent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE_UA);
+    // The shipped UI reads device detection through lib/permissions, which is
+    // mocked in this file — so the mock has to agree with the user agent it is
+    // standing in for, or the components disagree about the device.
+    vi.mocked(permissions.isIosDevice).mockReturnValue(true);
+    vi.mocked(permissions.isIosPwaInstalled).mockReturnValue(standalone);
     const originalMatchMedia = window.matchMedia;
     window.matchMedia = () => ({ matches: standalone });
     try {
       await run();
     } finally {
       agent.mockRestore();
+      vi.mocked(permissions.isIosDevice).mockReturnValue(false);
+      vi.mocked(permissions.isIosPwaInstalled).mockReturnValue(false);
       window.matchMedia = originalMatchMedia;
     }
   };
@@ -1788,7 +1897,12 @@ describe('Login permission flow', () => {
         await flush();
         expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
         expect(container.querySelector('.perm-card-note').textContent).toContain('Home Screen');
-        expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+        // …and the guide carries the same answer in full: the three steps to
+        // put My Naai on the Home Screen, where iOS does allow web alerts.
+        const sheet = container.querySelector('.permission-gate-sheet');
+        expect(sheet).not.toBeNull();
+        expect(sheet.textContent).toContain('Install My Naai to get alerts');
+        expect(sheet.textContent).toContain('Add to Home Screen');
         expect(openSpy).not.toHaveBeenCalled();
 
         // …and Continue must not ask behind their back either.

@@ -679,7 +679,7 @@ export function HomeScreen({ session, navigate, notify }) {
         // sandbox can refuse the API before a prompt exists; do not replace
         // that failed native prompt with an app sheet.
         if (!promptsAvailable('location')) {
-          setLocationRequestNote('This preview cannot show the native location prompt. Try the live site.');
+          setLocationRequestNote('This page is open inside another page, so the browser cannot show the location prompt here. Open My Naai in its own browser tab, then tap Allow there.');
           return;
         }
         setLocationSheetState('denied');

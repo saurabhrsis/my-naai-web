@@ -349,7 +349,10 @@ export function canAskForAlerts() {
 export function alertsPromptFallback(browser = detectBrowser()) {
   const inApp = detectInAppBrowser();
   if (inApp) return inAppBrowserHint(inApp);
-  if (!promptsAvailable('notifications')) return 'This preview cannot show the notifications prompt. Try the live site.';
+  // Name the fix, not just the failure: "try the live site" is useless to
+  // somebody whose live site is the page that is embedded. Opening My Naai in
+  // its own tab is the one action that works in every embedded case.
+  if (!promptsAvailable('notifications')) return 'This page is open inside another page, so the browser cannot show the notifications prompt here. Open My Naai in its own browser tab, then tap Allow there.';
   if (typeof window !== 'undefined' && !('Notification' in window)) {
     return 'This browser cannot receive booking alerts here. Try Chrome, Edge or Samsung Internet — on iPhone, install My Naai to the Home Screen and sign in from there.';
   }

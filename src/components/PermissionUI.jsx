@@ -44,22 +44,33 @@ import {
   isIosPwaInstalled,
   isStandalone,
   permissionSteps,
+  ALERTS_UNCONFIGURED_MESSAGE,
   readPermission,
   rememberAskChoice,
   requestLocation,
   requestNotifications,
   siteHost,
+  watchPermission,
 } from '../lib/permissions';
 import { formatPushDiagnostics, getPushDiagnostics, getPushStatus, getPushToken, isPushConfigured, watchNotificationPermission } from '../lib/push';
 
 // Compact login rows call the browser's permission API directly from each Allow
-// tap. The login surface never opens an app dialog; a permission already blocked
-// by the browser must be recovered through browser/account settings instead.
+// tap, so the browser — not My Naai — owns the popup. When it cannot produce one
+// (a block, an iPhone tab, a page inside another page), the same tap opens the
+// unblock guide rather than dying in silence: a denied permission can never be
+// re-asked from JavaScript, so the steps ARE the recovery.
 export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = '' }) {
   const [alerts, setAlerts] = useState('checking');
   const [location, setLocation] = useState('checking');
   const [busy, setBusy] = useState('');
   const [permissionNotice, setPermissionNotice] = useState('');
+  // The tap that produced no browser popup opens the same guide the Account
+  // screen uses: three exact steps for the browser in front of them, a Try
+  // again that re-reads the setting, and it closes itself once the block is
+  // lifted. Before this, a visitor who had blocked alerts only got one line of
+  // small print — and the only way forward was hunting through browser
+  // settings, which is what "it does nothing" really meant.
+  const [guide, setGuide] = useState({ open: false, kind: 'notifications', state: 'needs-permission' });
   const onTokenRef = useRef(onToken);
   onTokenRef.current = onToken;
   const onDismissRef = useRef(onDismiss);
@@ -116,9 +127,16 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
   const readLocation = useCallback(async () => {
     const next = await readPermission('location');
     // Safari and several mobile browsers do not expose a live location setting
-    // through the Permissions API. Preserve a denial we observed from
-    // getCurrentPosition instead of turning it back into "Allow" on focus.
-    setLocation(current => ['denied', 'device-settings'].includes(current) && next === 'default' ? current : next);
+    // through the Permissions API, so an empty answer says nothing. Preserve
+    // what we actually observed: a denial from getCurrentPosition must not turn
+    // back into "Allow" on focus — and a fix that worked must not lose its
+    // grant and put the row back on the page either.
+    setLocation(current => {
+      if (next === 'granted') return 'granted';
+      if (['denied', 'device-settings'].includes(current) && next === 'default') return current;
+      if (current === 'granted' && next === 'default') return 'granted';
+      return next;
+    });
     return next;
   }, []);
 
@@ -153,10 +171,44 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
     };
   }, [readAlerts, readLocation]);
 
-  // Each Allow tap calls the browser API directly. The browser shows its own
-  // permission prompt when the state is still askable; an app guide never
-  // replaces that prompt on the login page — except on an iPhone tab, where no
-  // prompt can exist and the Home Screen step is the whole answer.
+  // Each Allow tap calls the browser API directly, so the browser — not My Naai
+  // — owns the popup. When it answers with a block (or cannot ask here at all),
+  // the tap opens the unblock guide instead of dying: a denied permission can
+  // never be re-asked from JavaScript, so the three steps ARE the recovery, and
+  // leaving them out is what made the button look broken.
+  const openGuide = useCallback((kind, state) => setGuide({ open: true, kind, state }), []);
+
+  const closeGuide = useCallback(() => {
+    setGuide(current => ({ ...current, open: false }));
+    // Coming back from the guide is exactly when a switch flipped in the
+    // browser's own settings becomes visible.
+    readAlerts();
+    readLocation();
+  }, [readAlerts, readLocation]);
+
+  // A permission the guide finished: bank the token and re-read both rows so the
+  // page can never keep asking for something the visitor just allowed.
+  const guideGranted = useCallback(value => {
+    if (value === 'location') setLocation('granted');
+    else if (value) onTokenRef.current?.(value);
+    readAlerts();
+    readLocation();
+  }, [readAlerts, readLocation]);
+
+  // The one line for a page that lives inside another page: name the fix (open
+  // My Naai in its own tab), not only the failure — "try the live site" is
+  // useless to somebody whose live site is the page that is embedded.
+  const frameNotice = kind => `This page is open inside another page, so the browser cannot show the ${kind} prompt here. Open My Naai in its own browser tab, then tap Allow there.`;
+
+  // Which view the guide opens on when no popup can appear in this context.
+  // Each branch is a different real cause — never a generic one.
+  const alertsGuideState = () => {
+    if (inAppBrowser) return 'unsupported'; // names the app: open in a real browser
+    if (alertsNeedHomeScreen) return 'needs-permission'; // iPhone tab → install gate
+    if (!alertsPromptable) return 'denied'; // cross-origin frame → the embedded view
+    return 'unsupported'; // no Notification API here at all
+  };
+
   const allowAlerts = async () => {
     setBusy('alerts');
     setPermissionNotice('');
@@ -167,36 +219,41 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
         // the tap on a call that silently fails. Never a fake "you blocked us".
         if (alertsNeedHomeScreen) setAlerts('needs-permission');
         setPermissionNotice(alertsPromptFallback());
+        openGuide('notifications', alertsGuideState());
         onDismissRef.current?.();
         return;
       }
       const permission = await requestNotifications();
       if (permission === 'denied') {
-        // A denied setting cannot produce another native prompt. Keep the row
-        // simple and leave browser/account settings as the recovery route — plus,
-        // on Android, the browser APP's own notification switch, which keeps the
-        // site setting stuck at Blocked until it is on (Android 13+ and OEM
-        // builds). Android users hit exactly this: they tap Allow, no popup can
-        // appear, and nothing says why.
+        // A denied setting cannot produce another native prompt, so the tap
+        // hands the visitor the way back: three steps for the browser in front
+        // of them, plus — on Android — the browser APP's own notification
+        // switch, which keeps the site setting stuck at Blocked until it is on
+        // (Android 13+ and OEM builds). Android users hit exactly this: they tap
+        // Allow, no popup can appear, and nothing says why.
         setAlerts(alertsPromptable ? 'denied' : 'embedded');
         setPermissionNotice(inAppBrowser
           ? inAppBrowserHint(inAppBrowser)
           : !alertsPromptable
-            ? 'This preview cannot show the notifications prompt. Try the live site.'
+            ? frameNotice('notifications')
             : `Change Notifications in browser site settings to try again.${androidAppNotificationHint()}`);
         if (alertsPromptable) rememberAskChoice('notifications', ASK_CHOICES.blocked);
+        // Still the same guide in a frame: the "open My Naai in its own tab" view
+        // is the honest answer there, not a dead tap.
+        openGuide('notifications', 'denied');
         onDismissRef.current?.();
         return;
       }
       if (permission !== 'granted') {
         setAlerts(permission === 'unsupported' ? 'unsupported' : 'needs-permission');
         if (inAppBrowser) setPermissionNotice(inAppBrowserHint(inAppBrowser));
-        else if (!alertsPromptable) setPermissionNotice('This preview cannot show the notifications prompt. Try the live site.');
+        else if (!alertsPromptable) setPermissionNotice(frameNotice('notifications'));
         // A tapped Allow that ends with no popup and no denial is the quieter-UI
         // case (Chromium answers silently and parks the decision behind the bell
-        // icon), so name where the switch actually is instead of leaving a tap
-        // that looks like it did nothing.
+        // icon), so name where the switch actually is — and offer a fresh,
+        // labelled Allow of our own, which is a new gesture the browser accepts.
         else if (permission !== 'unsupported') setPermissionNotice(hiddenPromptHint());
+        openGuide('notifications', permission === 'unsupported' ? 'unsupported' : 'needs-permission');
         // If the visitor dismissed the native prompt, Continue must not surprise
         // them by asking again during sign-in.
         onDismissRef.current?.();
@@ -227,11 +284,19 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
       setLocation(result.ok ? 'granted' : result.state === 'denied' ? 'denied' : result.state === 'device-settings' ? 'device-settings' : result.state === 'unsupported' ? 'unsupported' : 'default');
       if (result.ok) {
         onNotify?.('success', 'Location on — salons are now sorted by distance for you.');
-      } else if (result.state === 'denied') {
-        setPermissionNotice(locationPromptable
-          ? 'Change Location in browser site settings to try again.'
-          : 'This preview cannot show the location prompt. Try the live site.');
+        return;
       }
+      setPermissionNotice(locationPromptable
+        ? 'Change Location in browser site settings to try again.'
+        : frameNotice('location'));
+      // Blocked at the site (code 1), blocked at the device (code 2: Android
+      // Location off or the app denied a fix) or simply unavailable — each has
+      // its own three steps, and a tap that ends in none of them is the dead
+      // button a visitor cannot recover from.
+      openGuide('location', result.state === 'denied' ? 'denied'
+        : result.state === 'device-settings' ? 'device-settings'
+          : result.state === 'unsupported' ? 'unsupported'
+            : 'needs-permission');
     } finally {
       setBusy('');
     }
@@ -292,6 +357,13 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
         </div>
       )}
       {permissionNotice && <p className="perm-card-note" role="status">{permissionNotice}</p>}
+      <PermissionSheet
+        open={guide.open}
+        kind={guide.kind}
+        state={guide.state}
+        onClose={closeGuide}
+        onGranted={guideGranted}
+      />
     </section>
   );
 }
@@ -345,6 +417,21 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
       setState(mapped);
       return { state: mapped, token: '' };
     }
+    // A build with no Firebase config cannot mint a token, but the browser
+    // permission is still exactly what the visitor can give — so read it here
+    // instead of letting "not switched on for this build" swallow a real block.
+    // That difference is "here is how to unblock it" versus "nothing else to do
+    // here", and only one of those is true.
+    if (!isPushConfigured()) {
+      const permission = await readPermission('notifications');
+      const mapped = permission === 'granted' ? 'unconfigured'
+        : permission === 'denied' ? 'denied'
+          : permission === 'unsupported' ? 'unsupported'
+            : 'needs-permission';
+      setState(mapped);
+      setReason(mapped === 'unconfigured' ? ALERTS_UNCONFIGURED_MESSAGE : '');
+      return { state: mapped, token: '' };
+    }
     try {
       const status = await getPushStatus();
       const mapped = status.state === 'unavailable' ? 'finishing' : status.state;
@@ -375,7 +462,15 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
   // in the browser (or the browser finally reports it), it re-reads and closes
   // itself on success — no Check tap needed.
   useEffect(() => {
-    if (!open || isLocation) return undefined;
+    if (!open) return undefined;
+    if (isLocation) {
+      // Watching the live setting means a block lifted in the browser's own
+      // settings closes this sheet by itself — nobody has to tap anything.
+      return watchPermission('location', async () => {
+        const status = await readStatus().catch(() => null);
+        if (status?.state === 'granted') succeed('location');
+      });
+    }
     return watchNotificationPermission(async () => {
       const status = await readStatus();
       if (status.state === 'enabled' && status.token) succeed(status.token);
@@ -386,10 +481,19 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
   // own UI (or one the browser was slow to report) becomes visible: re-read and
   // close on success, exactly like the cards do.
   useEffect(() => {
-    if (!open || isLocation) return undefined;
+    if (!open) return undefined;
     const recheck = () => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-      readStatus().then(status => { if (status.state === 'enabled' && status.token) succeed(status.token); }).catch(() => {});
+      readStatus().then(status => {
+        // Location only ever closes on success: a browser that cannot report a
+        // block through the Permissions API must never downgrade a real
+        // "blocked" view back to "Allow location".
+        if (isLocation) {
+          if (status.state === 'granted') succeed('location');
+          return;
+        }
+        if (status.state === 'enabled' && status.token) succeed(status.token);
+      }).catch(() => {});
     };
     window.addEventListener('focus', recheck);
     document.addEventListener('visibilitychange', recheck);
@@ -594,10 +698,19 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
 
   if (embeddedGate) {
     heading = isLocation ? 'Allow location' : 'Allow notifications';
-    lede = '';
+    // Say it up front, not only after a tap that went nowhere: a page inside
+    // another page is the one case where the browser will never show its own
+    // prompt, so a bare "Allow" button would be another dead end.
+    lede = isLocation
+      ? 'This page is open inside another page, which stops the browser showing its location prompt.'
+      : 'This page is open inside another page, which stops the browser showing its notifications prompt.';
+    const embeddedNotice = isLocation
+      ? 'This page cannot show the location prompt — open My Naai in its own browser tab and allow location there.'
+      : alertsPromptFallback();
     body = (
       <>
-        {embeddedRequestTried && <p className="permission-help-note permission-gate-inline-note" role="status">This preview cannot show the native {isLocation ? 'location' : 'notifications'} prompt. Try the live site.</p>}
+        {embeddedNotice && <p className="permission-help-note permission-gate-inline-note" role="status">{embeddedNotice}</p>}
+        {embeddedRequestTried && <p className="permission-help-note permission-gate-inline-note" role="status">This page cannot show the native {isLocation ? 'location' : 'notifications'} prompt — open My Naai in its own browser tab and tap Allow there.</p>}
         <div className="permission-gate-actions">
           <Button onClick={allow} loading={busy}>Allow</Button>
         </div>

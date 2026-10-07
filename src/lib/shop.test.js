@@ -18,7 +18,6 @@ const {
   cartLineFromProduct,
   cartTotals,
   filterShopProducts,
-  formatAddress,
   isLowStock,
   loadOrders,
   loadShopProducts,
