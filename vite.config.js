@@ -237,6 +237,11 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     allowedHosts: true,
+    // Nothing the dev server serves may be cached. A preview panel that holds
+    // one old copy of a module is enough to break the app with "does not
+    // provide an export named …" — the entry point reloads, but the stale
+    // module underneath it does not, and the page renders blank. Dev-only.
+    headers: { 'Cache-Control': 'no-store, must-revalidate' },
     proxy: {
       '/api': { target: 'https://backend.mynaai.in', changeOrigin: true, secure: false },
       '/getfiles': { target: 'https://backend.mynaai.in', changeOrigin: true, secure: false },
@@ -247,5 +252,6 @@ export default defineConfig({
   preview: {
     host: '0.0.0.0',
     allowedHosts: true,
+    headers: { 'Cache-Control': 'no-store, must-revalidate' },
   },
 });
