@@ -56,9 +56,10 @@ The complete portal behavior and operational notes are in [`docs/MY-NAAI-WEB-POR
 
 The salon partner's **Shop** tab (Queue · History · Products · Shop · Account) is a self-contained e-commerce flow for the supplies a salon buys — hair colour, scrubs, scissors, consumables. My Naai admin publishes the catalog; the partner carts it, orders it to the salon's own address and follows the delivery.
 
-- **Browse** — search and category chips over the admin catalog, with price, strikethrough MRP, unit and stock. Out-of-stock items stay on the shelf but cannot be ordered.
-- **Product** — image, description, pack size and stock, then a quantity stepper and *Add to cart*.
-- **Cart** — per-line quantity, remove, clear, and a live summary (items total, savings, total). **There are no delivery charges**: what the items cost is what the salon pays, and the summary shows *Delivery — Free*.
+- **Browse** — search, category chips, an **In stock only** toggle and sorting (Relevance, price both ways, name, top rated), with a live "N products" count and a *Clear filters* escape when nothing matches. Each tile shows price, strikethrough MRP, discount, unit, rating and an *Only N left* badge. Out-of-stock items stay on the shelf but cannot be ordered.
+- **Product** — every photo admin attached (main image plus tappable thumbnails), rating, brand chip, description, pack size and stock, then a quantity stepper and *Add to cart*. A **Share** button copies or shares the deep link, and **More from \<category\>** suggests the rest of that shelf.
+- **Cart** — per-line quantity, *Save for later*, remove, clear, and a live summary (items total, savings, total). **There are no delivery charges**: what the items cost is what the salon pays, and the summary shows *Delivery — Free*. An empty cart suggests popular products instead of dead-ending.
+- **Saved for later** — a second, per-salon list parked beside the cart. Saved items are never ordered and never counted in the total; they survive going out of stock (it may be back next week) but not being removed from the catalog.
 - **Checkout** — the delivery address is **the salon's own address by default** (read from the salon profile, refreshed from `/api/salons/get-salon` because a stored session can be as thin as `{ salon: { salonId } }`). Any field can be changed for a one-off delivery, and **Use salon address** puts it back. Payment is **cash on delivery — there is no payment gateway in this flow**; missing or malformed address fields are named inline instead of failing at the API.
 - **My orders** — All / Active / Delivered / Cancelled, newest first, each opening a detail screen with the items, the delivery address, the money and a status tracker.
 - **Cancel** — any order that has not been **delivered** can be cancelled, through the app's own confirmation sheet (`useConfirm()`, never `window.confirm`). Delivered and cancelled are final.
@@ -69,12 +70,12 @@ The cart is kept per salon in local storage (`mynaai:shop-cart`), and a restored
 
 | Endpoint | Body | Response |
 | --- | --- | --- |
-| `POST /api/shop/product-list` | `{ search?, category? }` | `{ status: 'SUCCESS', data: { products: [...] } }` |
+| `POST /api/shop/product-list` | `{ search?, category?, sort? }` | `{ status: 'SUCCESS', data: { products: [...] } }` |
 | `POST /api/orders/create` | `{ items: [{ productId, quantity }], address, note?, paymentMethod }` | `{ data: { order } }` |
 | `POST /api/orders/list` | `{}` | `{ data: { orders: [...] } }` |
 | `POST /api/orders/cancel` | `{ orderId, reason? }` | `{ data: { order } }` |
 
-Orders travel `PLACED → CONFIRMED → PACKED → SHIPPED → OUT_FOR_DELIVERY → DELIVERED`, with `CANCELLED` as the other exit; only `DELIVERED`/`CANCELLED` are final. A ready-to-paste Express + Sequelize controller for all four routes — including re-pricing every line from the catalog, server-side delivery fees and a per-salon owner filter — is in [`backend/shopOrders.js`](backend/shopOrders.js).
+Orders travel `PLACED → CONFIRMED → PACKED → SHIPPED → OUT_FOR_DELIVERY → DELIVERED`, with `CANCELLED` as the other exit; only `DELIVERED`/`CANCELLED` are final. A ready-to-paste Express + Sequelize controller for all four routes — including re-pricing every line from the catalog, no delivery charge and a per-salon owner filter — is in [`backend/shopOrders.js`](backend/shopOrders.js).
 
 ### Reviewing the flow before the backend ships
 

@@ -22,7 +22,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const CATALOG = [
   { productId: 'p1', productName: 'Hair Colour — Natural Brown', brand: 'Keune', category: 'Hair colour', price: 520, mrp: 590, stock: 12, unit: '1 tube', productImage: '' },
-  { productId: 'p2', productName: 'Scalp Scrub — Charcoal', brand: 'Pure Roots', category: 'Hair care', price: 480, mrp: 549, stock: 4, unit: '200 ml', productImage: '' },
+  { productId: 'p2', productName: 'Scalp Scrub — Charcoal', brand: 'Pure Roots', category: 'Hair care', price: 480, mrp: 549, stock: 4, rating: 4.4, unit: '200 ml', productImage: '', imagesArray: ['/scrub-front.png', '/scrub-back.png'] },
   // Out of stock: it must appear on the shelf but refuse to be ordered.
   { productId: 'p3', productName: 'Professional Scissors', brand: 'Naai Pro', category: 'Tools', price: 1150, mrp: 1499, stock: 0, unit: '1 piece', productImage: '' },
 ];
@@ -88,6 +88,15 @@ async function settle(ms = 15) {
 }
 
 const click = async element => { await act(async () => { element.dispatchEvent(new MouseEvent('click', { bubbles: true })); }); };
+// Same native-setter trick as `type`, for <select>: React installs a value
+// tracker there too, so a plain assignment is invisible to onChange.
+const choose = async (select, value) => {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+  await act(async () => {
+    setter.call(select, value);
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+};
 // React installs its own value tracker on every input, so assigning `.value`
 // directly leaves the tracker stale and onChange never fires. Going through the
 // prototype's native setter is what a real keystroke does.
@@ -198,6 +207,134 @@ describe('SalonShopScreen — product → cart', () => {
     await settle();
     expect(container.querySelector('.shop-cart-row .shop-qty span').textContent).toBe('4');
     expect(container.querySelector('.shop-cart-row .shop-qty button[aria-label="Increase quantity"]').disabled).toBe(true);
+  });
+});
+
+describe('SalonShopScreen — sorting and filters', () => {
+  const tileNames = () => Array.from(container.querySelectorAll('.shop-product-card h3')).map(node => node.textContent);
+
+  it('sorts the shelf by price, name and rating', async () => {
+    await mount();
+    expect(tileNames()).toEqual(['Hair Colour — Natural Brown', 'Scalp Scrub — Charcoal', 'Professional Scissors']);
+
+    await choose(container.querySelector('.shop-sort select'), 'price-asc');
+    await settle();
+    expect(tileNames()).toEqual(['Scalp Scrub — Charcoal', 'Hair Colour — Natural Brown', 'Professional Scissors']);
+
+    await choose(container.querySelector('.shop-sort select'), 'price-desc');
+    await settle();
+    expect(tileNames()).toEqual(['Professional Scissors', 'Hair Colour — Natural Brown', 'Scalp Scrub — Charcoal']);
+  });
+
+  it('hides what cannot be ordered when in-stock only is on', async () => {
+    await mount();
+    expect(tileNames()).toHaveLength(3);
+    await click(findByText('button', 'In stock only'));
+    await settle();
+    expect(tileNames()).toEqual(['Hair Colour — Natural Brown', 'Scalp Scrub — Charcoal']);
+    expect(container.querySelector('.shop-count').textContent).toContain('2 products');
+  });
+
+  it('says when nothing matches and offers to clear the filters', async () => {
+    await mount();
+    await type(container.querySelector('.shop-search input'), 'zzzz');
+    await settle(350);
+    expect(text()).toContain('Nothing matches those filters');
+    await click(findByText('button', 'Clear filters'));
+    await settle(350);
+    expect(container.querySelectorAll('.shop-product-card')).toHaveLength(3);
+  });
+
+  it('shows how many products the shelf is showing', async () => {
+    await mount();
+    expect(container.querySelector('.shop-count').textContent).toContain('3 products');
+  });
+});
+
+describe('SalonShopScreen — product page polish', () => {
+  it('shows every photo admin attached, as tappable thumbnails', async () => {
+    await mount();
+    await click(container.querySelectorAll('.shop-product-open')[1]); // the two-photo scrub
+    await settle();
+    const thumbs = container.querySelectorAll('.shop-thumb');
+    expect(thumbs).toHaveLength(2);
+    expect(thumbs[0].className).toContain('active');
+    expect(container.querySelector('.shop-photo-count').textContent).toContain('1 / 2');
+    await click(thumbs[1]);
+    await settle();
+    expect(container.querySelectorAll('.shop-thumb')[1].className).toContain('active');
+    expect(container.querySelector('.shop-photo-count').textContent).toContain('2 / 2');
+  });
+
+  it('shows the rating, brand chip and low-stock warning', async () => {
+    await mount();
+    await click(container.querySelectorAll('.shop-product-open')[1]);
+    await settle();
+    expect(text()).toContain('4.4');
+    expect(container.querySelector('.shop-chip').textContent).toContain('Hair care');
+    expect(text()).toContain('Only 4 left');
+  });
+
+  it('suggests more from the same category', async () => {
+    await mount();
+    await click(container.querySelector('.shop-product-open'));
+    await settle();
+    expect(text()).toContain('More from Hair colour');
+    const related = Array.from(container.querySelectorAll('.shop-related-card strong')).map(node => node.textContent);
+    expect(related).not.toContain('Hair Colour — Natural Brown');
+    expect(related.length).toBeGreaterThan(0);
+    // Tapping a suggestion opens that product.
+    await click(container.querySelector('.shop-related-card'));
+    await settle();
+    expect(text()).toContain('Add to cart');
+  });
+
+  it('offers a share button for the product link', async () => {
+    await mount();
+    await click(container.querySelector('.shop-product-open'));
+    await settle();
+    expect(container.querySelector('.shop-share-button')).not.toBeNull();
+  });
+});
+
+describe('SalonShopScreen — cart extras', () => {
+  it('parks a line in “saved for later” and can bring it back', async () => {
+    await mount();
+    await click(addButtons()[0]);
+    await settle();
+    await click(container.querySelector('.shop-cart-bar button'));
+    await settle();
+    expect(container.querySelectorAll('.shop-cart-layout .shop-cart-row')).toHaveLength(1);
+
+    await click(container.querySelector('.shop-save-line'));
+    await settle();
+    // The cart empties (so the total no longer counts it) and the item waits in
+    // the saved list instead of being deleted.
+    expect(container.querySelector('.shop-saved .shop-cart-row')).not.toBeNull();
+    expect(text()).toContain('Saved for later (1)');
+    expect(text()).toContain('Saved items are never ordered');
+    const stored = JSON.parse(localStorage.getItem('mynaai:shop-saved'));
+    expect(stored['salon-1'][0].productId).toBe('p1');
+    expect(JSON.parse(localStorage.getItem('mynaai:shop-cart'))['salon-1']).toBeUndefined();
+
+    await click(findByText('button', 'Move to cart'));
+    await settle();
+    expect(container.querySelectorAll('.shop-cart-layout .shop-cart-row')).toHaveLength(1);
+    expect(container.querySelector('.shop-saved')).toBeNull();
+  });
+
+  it('suggests products when the cart is empty, and tapping one adds it', async () => {
+    await mount();
+    await click(addButtons()[0]);
+    await settle();
+    await click(container.querySelector('.shop-cart-bar button'));
+    await settle();
+    await click(container.querySelector('.shop-save-line'));
+    await settle();
+    expect(text()).toContain('Popular in the shop');
+    await click(container.querySelector('.shop-related-card'));
+    await settle();
+    expect(container.querySelectorAll('.shop-cart-layout .shop-cart-row')).toHaveLength(1);
   });
 });
 

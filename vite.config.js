@@ -62,18 +62,18 @@ const SALON_FIXTURES = Array.from({ length: 57 }, (item, index) => salonFixture(
 // reviewed at all. This mirrors the sample catalog in src/lib/shop.js and keeps
 // the orders in memory for the life of the dev server.
 const SHOP_PRODUCTS = [
-  { productId: 'shop-01', productName: 'Professional Hair Cutting Scissors 6.5"', brand: 'Naai Pro', category: 'Tools', price: 1150, mrp: 1499, stock: 24, unit: '1 piece', productImage: '', description: 'Japanese stainless steel barber scissors with an adjustable tension screw.' },
-  { productId: 'shop-02', productName: 'Texturising Thinning Scissors', brand: 'Naai Pro', category: 'Tools', price: 890, mrp: 1100, stock: 18, unit: '1 piece', productImage: '', description: '28-tooth thinning shear for de-bulking and blending.' },
-  { productId: 'shop-03', productName: 'Hair Colour Tube — Natural Brown 60ml', brand: 'Keune', category: 'Hair colour', price: 520, mrp: 590, stock: 60, unit: '1 tube', productImage: '', description: 'Permanent professional hair colour with 100% grey coverage.' },
-  { productId: 'shop-04', productName: 'Hair Colour — Burgundy 60ml', brand: 'Keune', category: 'Hair colour', price: 520, mrp: 590, stock: 44, unit: '1 tube', productImage: '', description: 'Vibrant Burgundy permanent colour with a conditioning base.' },
-  { productId: 'shop-05', productName: 'Ammonia-Free Hair Colour Kit (Pack of 3)', brand: 'Gentle Look', category: 'Hair colour', price: 1250, mrp: 1499, stock: 15, unit: 'pack of 3', productImage: '', description: 'Ammonia-free three-tube kit for sensitive scalps.' },
-  { productId: 'shop-06', productName: 'Scalp Scrub — Charcoal Detox 200ml', brand: 'Pure Roots', category: 'Hair care', price: 480, mrp: 549, stock: 33, unit: '200 ml', productImage: '', description: 'Charcoal and salicylic acid scrub that lifts build-up and excess oil.' },
-  { productId: 'shop-07', productName: 'Keratin Repair Shampoo 500ml', brand: 'Silk Route', category: 'Hair care', price: 690, mrp: 799, stock: 50, unit: '500 ml', productImage: '', description: 'Sulphate-free keratin shampoo for chemically treated hair.' },
-  { productId: 'shop-08', productName: 'Argan Oil Hair Serum 100ml', brand: 'Silk Route', category: 'Hair care', price: 560, mrp: 650, stock: 38, unit: '100 ml', productImage: '', description: 'Lightweight argan serum for shine and heat protection.' },
-  { productId: 'shop-09', productName: 'Disposable Salon Towels (Pack of 100)', brand: 'Clean Cut', category: 'Consumables', price: 399, mrp: 499, stock: 90, unit: 'pack of 100', productImage: '', description: 'Absorbent, lint-free disposable towels, one per client.' },
-  { productId: 'shop-10', productName: 'Hair Colour Brush & Bowl Set', brand: 'Naai Pro', category: 'Consumables', price: 220, mrp: 280, stock: 65, unit: '1 set', productImage: '', description: 'Non-slip mixing bowl with a colour brush and tint comb.' },
-  { productId: 'shop-11', productName: 'Shaving Razor + 10 Blades', brand: 'Sharp Edge', category: 'Consumables', price: 340, mrp: 399, stock: 47, unit: '1 razor + 10 blades', productImage: '', description: 'Classic barber razor with ten stainless blades.' },
-  { productId: 'shop-12', productName: 'Barber Cape — Waterproof', brand: 'Clean Cut', category: 'Consumables', price: 450, mrp: 549, stock: 0, unit: '1 piece', productImage: '', description: 'Anti-static waterproof cape with an adjustable snap closure.' },
+  { productId: 'shop-01', rating: 4.5, productName: 'Professional Hair Cutting Scissors 6.5"', brand: 'Naai Pro', category: 'Tools', price: 1150, mrp: 1499, stock: 24, unit: '1 piece', productImage: '', description: 'Japanese stainless steel barber scissors with an adjustable tension screw.' },
+  { productId: 'shop-02', rating: 4.2, productName: 'Texturising Thinning Scissors', brand: 'Naai Pro', category: 'Tools', price: 890, mrp: 1100, stock: 18, unit: '1 piece', productImage: '', description: '28-tooth thinning shear for de-bulking and blending.' },
+  { productId: 'shop-03', rating: 4.7, productName: 'Hair Colour Tube — Natural Brown 60ml', brand: 'Keune', category: 'Hair colour', price: 520, mrp: 590, stock: 60, unit: '1 tube', productImage: '', description: 'Permanent professional hair colour with 100% grey coverage.' },
+  { productId: 'shop-04', rating: 4.1, productName: 'Hair Colour — Burgundy 60ml', brand: 'Keune', category: 'Hair colour', price: 520, mrp: 590, stock: 44, unit: '1 tube', productImage: '', description: 'Vibrant Burgundy permanent colour with a conditioning base.' },
+  { productId: 'shop-05', rating: 4.6, productName: 'Ammonia-Free Hair Colour Kit (Pack of 3)', brand: 'Gentle Look', category: 'Hair colour', price: 1250, mrp: 1499, stock: 15, unit: 'pack of 3', productImage: '', description: 'Ammonia-free three-tube kit for sensitive scalps.' },
+  { productId: 'shop-06', rating: 4.4, productName: 'Scalp Scrub — Charcoal Detox 200ml', brand: 'Pure Roots', category: 'Hair care', price: 480, mrp: 549, stock: 33, unit: '200 ml', productImage: '', description: 'Charcoal and salicylic acid scrub that lifts build-up and excess oil.' },
+  { productId: 'shop-07', rating: 4.3, imagesArray: ['/assets/brand/product-placeholder.svg', '/assets/brand/naai-mark.svg'], productName: 'Keratin Repair Shampoo 500ml', brand: 'Silk Route', category: 'Hair care', price: 690, mrp: 799, stock: 50, unit: '500 ml', productImage: '', description: 'Sulphate-free keratin shampoo for chemically treated hair.' },
+  { productId: 'shop-08', rating: 4.9, productName: 'Argan Oil Hair Serum 100ml', brand: 'Silk Route', category: 'Hair care', price: 560, mrp: 650, stock: 38, unit: '100 ml', productImage: '', description: 'Lightweight argan serum for shine and heat protection.' },
+  { productId: 'shop-09', rating: 4.0, productName: 'Disposable Salon Towels (Pack of 100)', brand: 'Clean Cut', category: 'Consumables', price: 399, mrp: 499, stock: 90, unit: 'pack of 100', productImage: '', description: 'Absorbent, lint-free disposable towels, one per client.' },
+  { productId: 'shop-10', rating: 3.9, productName: 'Hair Colour Brush & Bowl Set', brand: 'Naai Pro', category: 'Consumables', price: 220, mrp: 280, stock: 65, unit: '1 set', productImage: '', description: 'Non-slip mixing bowl with a colour brush and tint comb.' },
+  { productId: 'shop-11', rating: 4.8, imagesArray: ['/assets/brand/product-placeholder.svg', '/assets/brand/salon-placeholder.svg', '/assets/brand/person-placeholder.svg'], productName: 'Shaving Razor + 10 Blades', brand: 'Sharp Edge', category: 'Consumables', price: 340, mrp: 399, stock: 47, unit: '1 razor + 10 blades', productImage: '', description: 'Classic barber razor with ten stainless blades.' },
+  { productId: 'shop-12', rating: 4.4, productName: 'Barber Cape — Waterproof', brand: 'Clean Cut', category: 'Consumables', price: 450, mrp: 549, stock: 0, unit: '1 piece', productImage: '', description: 'Anti-static waterproof cape with an adjustable snap closure.' },
 ];
 
 const SHOP_ORDERS = [];
@@ -173,10 +173,19 @@ function devSalonFixturePlugin() {
         if (path === '/api/shop/product-list') {
           const query = String(body.search || '').trim().toLowerCase();
           const category = String(body.category || '').trim().toLowerCase();
-          const products = SHOP_PRODUCTS.filter(product => (
+          let products = SHOP_PRODUCTS.filter(product => (
             (!category || category === 'all' || String(product.category).toLowerCase() === category)
             && (!query || `${product.productName} ${product.brand} ${product.category}`.toLowerCase().includes(query))
           ));
+          // The app offers the same five sorts the live API will implement.
+          const sorters = {
+            'price-asc': (a, b) => a.price - b.price,
+            'price-desc': (a, b) => b.price - a.price,
+            name: (a, b) => a.productName.localeCompare(b.productName),
+            rating: (a, b) => (b.rating || 0) - (a.rating || 0),
+          };
+          const sorter = sorters[String(body.sort || '').trim()];
+          if (sorter) products = [...products].sort(sorter);
           console.log(`[dev shop fixture] product-list → ${products.length}/${SHOP_PRODUCTS.length}`);
           return sendJson(res, { status: 'SUCCESS', data: { products } });
         }

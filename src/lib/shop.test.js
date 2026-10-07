@@ -18,15 +18,22 @@ const {
   cartLineFromProduct,
   cartTotals,
   filterShopProducts,
+  formatAddress,
+  isLowStock,
   loadOrders,
   loadShopProducts,
   maxOrderQuantity,
   normalizeOrder,
   normalizeShopProduct,
   readCart,
+  readSaved,
   reconcileCart,
+  reconcileSaved,
+  relatedShopProducts,
   salonAddressFromProfile,
   saveCart,
+  saveSaved,
+  sortShopProducts,
   submitOrder,
   validateAddress,
 } = await import('./shop');
@@ -207,6 +214,85 @@ describe('filterShopProducts', () => {
     expect(filterShopProducts(products, { category: 'Hair care' }).map(item => item.id)).toEqual(['p2']);
     expect(filterShopProducts(products, { category: 'All' })).toHaveLength(2);
     expect(filterShopProducts(products, {})).toHaveLength(2);
+  });
+});
+
+describe('product photos', () => {
+  it('flattens every shape admin can send into one list', () => {
+    expect(normalizeShopProduct({ ...PRODUCT, imagesArray: ['a.png', 'b.png'] }).images.slice(0, 2)).toEqual(['a.png', 'b.png']);
+    expect(normalizeShopProduct({ ...PRODUCT, images: ['a.png'] }).images).toEqual(['a.png']);
+    expect(normalizeShopProduct(PRODUCT).images).toEqual([]);
+  });
+
+  it('keeps the single product image as the first photo', () => {
+    const product = normalizeShopProduct({ ...PRODUCT, productImage: 'main.png', images: ['extra.png'] });
+    expect(product.images).toEqual(['main.png', 'extra.png']);
+    expect(product.image).toBe('main.png');
+  });
+});
+
+describe('shelf sorting and filtering', () => {
+  const shelf = [
+    normalizeShopProduct({ ...PRODUCT, productId: 'a', productName: 'Argan Serum', price: 560, rating: 4.1, category: 'Hair care' }),
+    normalizeShopProduct({ ...PRODUCT, productId: 'b', productName: 'Colour Tube', price: 520, rating: 4.8, category: 'Hair colour' }),
+    normalizeShopProduct({ ...PRODUCT, productId: 'c', productName: 'Scissors', price: 1150, rating: 4.6, stock: 0, category: 'Tools' }),
+  ];
+
+  it('sorts by price both ways, by name and by rating', () => {
+    expect(sortShopProducts(shelf, 'price-asc').map(item => item.id)).toEqual(['b', 'a', 'c']);
+    expect(sortShopProducts(shelf, 'price-desc').map(item => item.id)).toEqual(['c', 'a', 'b']);
+    expect(sortShopProducts(shelf, 'name').map(item => item.id)).toEqual(['a', 'b', 'c']);
+    expect(sortShopProducts(shelf, 'rating').map(item => item.id)).toEqual(['b', 'c', 'a']);
+    // Relevance is the API's own order — never reshuffled.
+    expect(sortShopProducts(shelf, 'relevance').map(item => item.id)).toEqual(['a', 'b', 'c']);
+    expect(sortShopProducts(shelf).map(item => item.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('does not mutate the shelf it was given', () => {
+    const original = shelf.map(item => item.id);
+    sortShopProducts(shelf, 'price-desc');
+    expect(shelf.map(item => item.id)).toEqual(original);
+  });
+
+  it('hides what cannot be ordered when in-stock only is on', () => {
+    expect(filterShopProducts(shelf, { inStockOnly: true }).map(item => item.id)).toEqual(['a', 'b']);
+    expect(filterShopProducts(shelf, {}).map(item => item.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('flags low stock without alarming about a well-stocked shelf', () => {
+    expect(isLowStock(normalizeShopProduct({ ...PRODUCT, stock: 4 }))).toBe(true);
+    expect(isLowStock(normalizeShopProduct({ ...PRODUCT, stock: 60 }))).toBe(false);
+    // Sold out is not "low stock" — it has its own chip.
+    expect(isLowStock(normalizeShopProduct({ ...PRODUCT, stock: 0 }))).toBe(false);
+  });
+
+  it('suggests the same category first, then the rest of the shelf', () => {
+    const related = relatedShopProducts(shelf, shelf[1], 6);
+    expect(related.map(item => item.id)).toEqual(['a', 'c']);
+    expect(relatedShopProducts(shelf, null, 2).map(item => item.id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('saved for later', () => {
+  it('is stored per salon, next to the cart', () => {
+    saveSaved('salon-1', [cartLineFromProduct(normalizeShopProduct(PRODUCT), 1)]);
+    saveSaved('salon-2', [cartLineFromProduct(normalizeShopProduct({ ...PRODUCT, productId: 'p9' }), 1)]);
+    expect(readSaved('salon-1')).toHaveLength(1);
+    expect(readSaved('salon-2')[0].productId).toBe('p9');
+    expect(readSaved('salon-3')).toEqual([]);
+  });
+
+  it('keeps a saved item that went out of stock, and drops one that was removed', () => {
+    const saved = [
+      cartLineFromProduct(normalizeShopProduct(PRODUCT), 1),
+      cartLineFromProduct(normalizeShopProduct({ ...PRODUCT, productId: 'gone' }), 1),
+    ];
+    const products = [normalizeShopProduct({ ...PRODUCT, stock: 0 })];
+    const next = reconcileSaved(saved, products);
+    expect(next).toHaveLength(1);
+    expect(next[0].productId).toBe('p1');
+    // Out of stock is survivable for a saved item — it may be back next week.
+    expect(next[0].available).toBe(false);
   });
 });
 

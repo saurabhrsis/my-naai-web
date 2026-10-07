@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Bookmark,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   ClipboardList,
   ClipboardX,
@@ -11,9 +13,11 @@ import {
   Plus,
   RotateCcw,
   Search,
+  Share2,
   ShoppingBag,
   ShoppingCart,
   Store,
+  Tag,
   Trash2,
   Truck,
   Wallet,
@@ -21,19 +25,27 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import {
+  SORT_OPTIONS,
   SHOP_CATEGORIES,
   cancelShopOrder,
   cartLineFromProduct,
   cartTotals,
   filterShopProducts,
   formatAddress,
+  isLowStock,
   loadOrders,
   loadShopProducts,
   maxOrderQuantity,
   readCart,
+  readSaved,
   reconcileCart,
+  reconcileSaved,
+  relatedShopProducts,
   salonAddressFromProfile,
   saveCart,
+  saveSaved,
+  shareShopProduct,
+  sortShopProducts,
   submitOrder,
   validateAddress,
 } from '../lib/shop';
@@ -44,6 +56,7 @@ import {
   Field,
   ImageWithFallback,
   PageHeader,
+  Rating,
   SkeletonCard,
   Spinner,
   StatusPill,
@@ -74,7 +87,9 @@ export function SalonShopScreen({ session, navigate, notify, params = {} }) {
   }, [navigate]);
 
   // ── Catalog ────────────────────────────────────────────────────────────────
-  const [filters, setFilters] = useState({ search: '', category: 'All' });
+  // `sort` is sent to the API as well as applied here, so a backend that can
+  // sort returns an ordered page and one that cannot still reads right.
+  const [filters, setFilters] = useState({ search: '', category: 'All', sort: 'relevance', inStockOnly: false });
   const [reloadTick, setReloadTick] = useState(0);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -87,7 +102,7 @@ export function SalonShopScreen({ session, navigate, notify, params = {} }) {
     // Typing in the search box must not fire one request per keystroke.
     const timer = window.setTimeout(async () => {
       try {
-        const result = await loadShopProducts(filters);
+        const result = await loadShopProducts({ search: filters.search, category: filters.category, sort: filters.sort });
         if (!alive) return;
         setProducts(result.products);
         setCatalogSource(result.source);
@@ -102,7 +117,7 @@ export function SalonShopScreen({ session, navigate, notify, params = {} }) {
       }
     }, filters.search ? 300 : 0);
     return () => { alive = false; window.clearTimeout(timer); };
-  }, [filters.search, filters.category, reloadTick]);
+  }, [filters.search, filters.category, filters.sort, reloadTick]);
 
   // ── Cart ───────────────────────────────────────────────────────────────────
   const [cart, setCart] = useState(() => readCart(salonId));
@@ -125,6 +140,41 @@ export function SalonShopScreen({ session, navigate, notify, params = {} }) {
 
   const totals = useMemo(() => cartTotals(cart), [cart]);
   const quantityOf = useCallback(id => cart.find(item => item.productId === id)?.quantity || 0, [cart]);
+
+  // "Save for later" — parked lines that are never ordered and never counted in
+  // the total. It lives beside the cart so a partner can set an item aside
+  // instead of deleting it and hunting for it again.
+  const [saved, setSaved] = useState(() => readSaved(salonId));
+  useEffect(() => { saveSaved(salonId, saved); }, [salonId, saved]);
+  const savedRef = useRef(saved);
+  savedRef.current = saved;
+  useEffect(() => {
+    if (!products.length || !savedRef.current.length) return;
+    const next = reconcileSaved(savedRef.current, products);
+    if (next.length !== savedRef.current.length) setSaved(next);
+  }, [products]);
+
+  // Both moves are plain state updates, never nested inside an updater: React
+  // may replay an updater, and a side effect in there would run twice.
+  const saveForLater = useCallback(id => {
+    const line = cart.find(item => item.productId === id);
+    if (!line) return;
+    setCart(current => current.filter(item => item.productId !== id));
+    setSaved(current => (current.some(item => item.productId === id) ? current : [...current, line]));
+    notify?.('success', 'Saved for later.');
+  }, [cart, notify]);
+
+  const moveToCart = useCallback(id => {
+    const line = saved.find(item => item.productId === id);
+    if (!line) return;
+    const limit = Math.max(1, maxOrderQuantity(line));
+    setSaved(current => current.filter(item => item.productId !== id));
+    setCart(current => (current.some(item => item.productId === id)
+      ? current
+      : [...current, { ...line, quantity: Math.min(Math.max(1, Number(line.quantity) || 1), limit) }]));
+  }, [saved]);
+
+  const removeSaved = useCallback(id => setSaved(current => current.filter(item => item.productId !== id)), []);
 
   const addToCart = useCallback((product, quantity = 1) => {
     const limit = maxOrderQuantity(product);
@@ -277,10 +327,14 @@ export function SalonShopScreen({ session, navigate, notify, params = {} }) {
   }, [cart, go, notify, products]);
 
   // ── Current view ───────────────────────────────────────────────────────────
-  const visibleProducts = useMemo(() => filterShopProducts(products, filters), [products, filters]);
+  const visibleProducts = useMemo(
+    () => sortShopProducts(filterShopProducts(products, filters), filters.sort),
+    [products, filters],
+  );
   const product = view === 'product' ? products.find(item => item.id === productId) : null;
   const order = view === 'order' ? orders.find(item => item.id === orderId) : null;
   const activeOrders = orders.filter(item => !['DELIVERED', 'CANCELLED'].includes(item.status));
+  const isFiltered = Boolean(filters.search) || filters.category !== 'All' || filters.inStockOnly;
 
   if (view === 'product') {
     if (!product && !loading) {
@@ -292,25 +346,34 @@ export function SalonShopScreen({ session, navigate, notify, params = {} }) {
     if (!product) return <div className="screen shop-screen"><PageHeader title="Product" onBack={() => go('browse')} /><div className="shop-loading"><Spinner label="Loading product…" /></div></div>;
     return <ProductDetailView
       product={product}
+      related={relatedShopProducts(products, product)}
       quantity={quantityOf(product.id)}
       totals={totals}
       onBack={() => go('browse')}
       onAdd={quantity => addToCart(product, quantity)}
       onSetQuantity={quantity => setQuantity(product.id, quantity)}
       onOpenCart={() => go('cart')}
+      onOpenProduct={id => go('product', { productId: id })}
+      onShare={() => shareShopProduct(product, notify)}
     />;
   }
 
   if (view === 'cart') {
     return <CartView
       items={cart}
+      saved={saved}
       totals={totals}
+      suggestions={relatedShopProducts(products, null, 4)}
       onBack={() => go('browse')}
       onSetQuantity={setQuantity}
       onRemove={id => setQuantity(id, 0)}
+      onSaveForLater={saveForLater}
+      onMoveToCart={moveToCart}
+      onRemoveSaved={removeSaved}
       onClear={() => setCart([])}
       onCheckout={() => go('checkout')}
       onBrowse={() => go('browse')}
+      onAddSuggestion={item => addToCart(item, 1)}
     />;
   }
 
@@ -377,9 +440,14 @@ export function SalonShopScreen({ session, navigate, notify, params = {} }) {
     <PageHeader
       title="Salon shop"
       subtitle="Colours, scrubs, scissors and consumables — delivered to your salon."
-      action={<button type="button" className="shop-orders-entry" onClick={() => go('orders')}>
-        <ClipboardList size={15} /> My orders{orders.length ? <span>{orders.length}</span> : null}
-      </button>}
+      action={<>
+        {totals.itemCount > 0 && <button type="button" className="shop-cart-entry" onClick={() => go('cart')} aria-label={`Open cart, ${totals.itemCount} items`}>
+          <ShoppingCart size={15} /> <span>{totals.itemCount}</span>
+        </button>}
+        <button type="button" className="shop-orders-entry" onClick={() => go('orders')}>
+          <ClipboardList size={15} /> My orders{orders.length ? <span>{orders.length}</span> : null}
+        </button>
+      </>}
     />
     {catalogSource === 'sample' && <p className="shop-sample-notice" role="status"><Store size={14} /> Showing the sample catalog — the shop service could not be reached. Orders placed now are saved on this device.</p>}
     {loadError && <div className="shop-error-card" role="alert"><span>{loadError}</span><Button size="small" variant="secondary" onClick={() => setReloadTick(value => value + 1)}>Retry</Button></div>}
@@ -390,6 +458,21 @@ export function SalonShopScreen({ session, navigate, notify, params = {} }) {
     </label>
     <div className="booking-tabs shop-tabs">
       {SHOP_CATEGORIES.map(category => <button key={category} type="button" className={filters.category === category ? 'active' : ''} onClick={() => setFilters(current => ({ ...current, category }))}>{category}</button>)}
+    </div>
+    <div className="shop-toolbar">
+      <span className="shop-count" role="status">{loading ? 'Loading the shelf…' : `${visibleProducts.length} product${visibleProducts.length === 1 ? '' : 's'}`}</span>
+      <div className="shop-toolbar-controls">
+        <label className="shop-sort">
+          <span>Sort</span>
+          <select value={filters.sort} onChange={event => setFilters(current => ({ ...current, sort: event.target.value }))} aria-label="Sort products">
+            {SORT_OPTIONS.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}
+          </select>
+          <ChevronDown size={14} />
+        </label>
+        <button type="button" className={cx('shop-toggle-chip', filters.inStockOnly && 'active')} aria-pressed={filters.inStockOnly} onClick={() => setFilters(current => ({ ...current, inStockOnly: !current.inStockOnly }))}>
+          <CheckCircle2 size={13} /> In stock only
+        </button>
+      </div>
     </div>
     {loading
       ? <div className="product-grid shop-grid">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} />)}</div>
@@ -402,7 +485,12 @@ export function SalonShopScreen({ session, navigate, notify, params = {} }) {
           onAdd={() => addToCart(item, 1)}
           onSetQuantity={quantity => setQuantity(item.id, quantity)}
         />)}</div>
-        : <EmptyState icon={ShoppingBag} title="No products found" message={filters.search || filters.category !== 'All' ? 'Try another search or category.' : 'Admin has not published the catalog yet.'} />}
+        : <EmptyState
+          icon={ShoppingBag}
+          title="No products found"
+          message={isFiltered ? 'Nothing matches those filters — try clearing them.' : 'Admin has not published the catalog yet.'}
+          action={isFiltered ? <Button variant="secondary" onClick={() => setFilters({ search: '', category: 'All', sort: 'relevance', inStockOnly: false })}>Clear filters</Button> : null}
+        />}
     {totals.itemCount > 0 && <div className="shop-cart-bar">
       <div className="shop-cart-bar-copy">
         <small>{totals.itemCount} item{totals.itemCount === 1 ? '' : 's'} in cart</small>
@@ -418,13 +506,16 @@ export function SalonShopScreen({ session, navigate, notify, params = {} }) {
 function ShopProductCard({ product, quantity, onOpen, onAdd, onSetQuantity }) {
   const limit = maxOrderQuantity(product);
   const inStock = product.available && limit > 0;
+  const photoCount = product.images?.length || 0;
   const discount = product.mrp > product.price ? Math.round(((product.mrp - product.price) / product.mrp) * 100) : 0;
   return <article className="product-card shop-product-card">
     <button type="button" className="shop-product-open" onClick={onOpen} aria-label={`View ${product.name}`}>
       <div className="product-image-wrap">
-        <ImageWithFallback src={product.image} fallback={PRODUCT_PLACEHOLDER} alt={product.name} className="product-image" />
+        <ImageWithFallback src={product.images?.[0] || product.image} fallback={PRODUCT_PLACEHOLDER} alt={product.name} className="product-image" />
         {discount > 0 && <span className="shop-discount-label">-{discount}%</span>}
         {!inStock && <span className="stock-label out-stock">Out of stock</span>}
+        {inStock && isLowStock(product) && <span className="stock-label low-stock">Only {product.stock} left</span>}
+        {photoCount > 1 && <span className="shop-photo-count">{photoCount} photos</span>}
       </div>
       <div className="product-copy">
         <span className="product-salon">{product.brand || product.category}</span>
@@ -433,6 +524,7 @@ function ShopProductCard({ product, quantity, onOpen, onAdd, onSetQuantity }) {
           <strong>{formatCurrency(product.price)}</strong>
           {product.mrp > 0 && <s className="shop-mrp">{formatCurrency(product.mrp)}</s>}
         </div>
+        {Number(product.rating) > 0 && <Rating value={product.rating} />}
         {product.unit && <small className="shop-unit">{product.unit}</small>}
       </div>
     </button>
@@ -446,21 +538,50 @@ function ShopProductCard({ product, quantity, onOpen, onAdd, onSetQuantity }) {
 
 // ── Product detail ───────────────────────────────────────────────────────────
 
-function ProductDetailView({ product, quantity, totals, onBack, onAdd, onSetQuantity, onOpenCart }) {
+function ProductDetailView({ product, related = [], quantity, totals, onBack, onAdd, onSetQuantity, onOpenCart, onOpenProduct, onShare }) {
   const [draftQuantity, setDraftQuantity] = useState(1);
+  // Admin can attach several photos to one product. They are shown as a main
+  // image plus tappable thumbnails — no swipe gallery, nothing to get lost in.
+  const photos = product.images?.length ? product.images : (product.image ? [product.image] : []);
+  const [photoIndex, setPhotoIndex] = useState(0);
+  useEffect(() => { setPhotoIndex(0); }, [product.id]);
   const limit = maxOrderQuantity(product);
   const inStock = product.available && limit > 0;
   const discount = product.mrp > product.price ? Math.round(((product.mrp - product.price) / product.mrp) * 100) : 0;
+  const activePhoto = photos[Math.min(photoIndex, photos.length - 1)];
   return <div className="screen shop-screen shop-detail-screen">
-    <PageHeader title="Product" onBack={onBack} compact />
+    <PageHeader
+      title="Product"
+      onBack={onBack}
+      compact
+      action={<button type="button" className="shop-share-button" onClick={onShare} aria-label={`Share ${product.name}`}><Share2 size={15} /> Share</button>}
+    />
     <div className="shop-detail">
-      <div className="shop-detail-media">
-        <ImageWithFallback src={product.image} fallback={PRODUCT_PLACEHOLDER} alt={product.name} className="shop-detail-image" />
-        {discount > 0 && <span className="shop-discount-label">-{discount}%</span>}
+      <div>
+        <div className="shop-detail-media">
+          <ImageWithFallback src={activePhoto} fallback={PRODUCT_PLACEHOLDER} alt={product.name} className="shop-detail-image" />
+          {discount > 0 && <span className="shop-discount-label">-{discount}%</span>}
+          {photos.length > 1 && <span className="shop-photo-count">{Math.min(photoIndex, photos.length - 1) + 1} / {photos.length}</span>}
+        </div>
+        {photos.length > 1 && <div className="shop-thumb-row">
+          {photos.map((src, index) => <button
+            key={`${src}-${index}`}
+            type="button"
+            className={cx('shop-thumb', index === Math.min(photoIndex, photos.length - 1) && 'active')}
+            onClick={() => setPhotoIndex(index)}
+            aria-label={`Show photo ${index + 1} of ${photos.length}`}
+          >
+            <ImageWithFallback src={src} fallback={PRODUCT_PLACEHOLDER} alt="" />
+          </button>)}
+        </div>}
       </div>
       <div className="shop-detail-copy">
         <span className="eyebrow">{product.brand || product.category}</span>
         <h2>{product.name}</h2>
+        <div className="shop-detail-meta">
+          {Number(product.rating) > 0 && <Rating value={product.rating} />}
+          <span className="shop-chip"><Tag size={12} /> {product.category}</span>
+        </div>
         <div className="shop-detail-price">
           <strong>{formatCurrency(product.price)}</strong>
           {product.mrp > 0 && <s>{formatCurrency(product.mrp)}</s>}
@@ -469,8 +590,8 @@ function ProductDetailView({ product, quantity, totals, onBack, onAdd, onSetQuan
         <p className="shop-detail-note">{product.description || 'A My Naai partner essential for your salon.'}</p>
         <div className="shop-detail-facts">
           {product.unit ? <span><Package size={14} /> {product.unit}</span> : null}
-          <span><ShoppingBag size={14} /> {product.category}</span>
-          <span className={inStock ? '' : 'is-out'}><Truck size={14} /> {inStock ? (product.stock > 0 && product.stock <= 10 ? `Only ${product.stock} left` : 'In stock') : 'Out of stock'}</span>
+          <span><ShoppingBag size={14} /> {product.brand || 'My Naai shop'}</span>
+          <span className={inStock ? '' : 'is-out'}><Truck size={14} /> {inStock ? (isLowStock(product) ? `Only ${product.stock} left` : 'In stock') : 'Out of stock'}</span>
         </div>
         <div className="shop-detail-buy">
           {quantity > 0
@@ -486,6 +607,16 @@ function ProductDetailView({ product, quantity, totals, onBack, onAdd, onSetQuan
         <p className="shop-detail-delivery"><Truck size={14} /> Free delivery — you pay only for the items. Delivered to your salon address.</p>
       </div>
     </div>
+    {related.length > 0 && <section className="shop-related">
+      <h3>More from {product.category || 'the shop'}</h3>
+      <div className="shop-related-row">
+        {related.map(item => <button key={item.id} type="button" className="shop-related-card" onClick={() => onOpenProduct(item.id)}>
+          <ImageWithFallback src={item.images?.[0] || item.image} fallback={PRODUCT_PLACEHOLDER} alt={item.name} />
+          <strong>{item.name}</strong>
+          <b>{formatCurrency(item.price)}</b>
+        </button>)}
+      </div>
+    </section>}
     {totals.itemCount > 0 && <div className="shop-cart-bar">
       <div className="shop-cart-bar-copy">
         <small>{totals.itemCount} item{totals.itemCount === 1 ? '' : 's'} in cart</small>
@@ -498,7 +629,7 @@ function ProductDetailView({ product, quantity, totals, onBack, onAdd, onSetQuan
 
 // ── Cart ─────────────────────────────────────────────────────────────────────
 
-function CartView({ items, totals, onBack, onSetQuantity, onRemove, onClear, onCheckout, onBrowse }) {
+function CartView({ items, saved = [], totals, suggestions = [], onBack, onSetQuantity, onRemove, onSaveForLater, onMoveToCart, onRemoveSaved, onClear, onCheckout, onBrowse, onAddSuggestion }) {
   return <div className="screen shop-screen">
     <PageHeader
       title="Your cart"
@@ -507,11 +638,24 @@ function CartView({ items, totals, onBack, onSetQuantity, onRemove, onClear, onC
       action={items.length ? <button type="button" className="refresh-text-button" onClick={onClear}><Trash2 size={15} /> Clear</button> : null}
     />
     {!items.length
-      ? <EmptyState icon={ShoppingCart} title="Your cart is empty" message="Add the colours, scrubs and tools your salon needs." action={<Button onClick={onBrowse}><ShoppingBag size={16} /> Browse the shop</Button>} />
+      ? <>
+        <EmptyState icon={ShoppingCart} title="Your cart is empty" message="Add the colours, scrubs and tools your salon needs." action={<Button onClick={onBrowse}><ShoppingBag size={16} /> Browse the shop</Button>} />
+        {suggestions.length > 0 && <section className="shop-related">
+          <h3>Popular in the shop</h3>
+          <div className="shop-related-row">
+            {suggestions.map(item => <button key={item.id} type="button" className="shop-related-card" onClick={() => onAddSuggestion(item)} aria-label={`Add ${item.name} to the cart`}>
+              <ImageWithFallback src={item.images?.[0] || item.image} fallback={PRODUCT_PLACEHOLDER} alt={item.name} />
+              <strong>{item.name}</strong>
+              <b>{formatCurrency(item.price)}</b>
+              <em>{item.available && maxOrderQuantity(item) ? 'Add' : 'Sold out'}</em>
+            </button>)}
+          </div>
+        </section>}
+      </>
       : <div className="shop-cart-layout">
         <div className="shop-cart-list">
           {items.map(item => <article className="shop-cart-row" key={item.productId}>
-            <div className="shop-cart-thumb"><ImageWithFallback src={item.image} fallback={PRODUCT_PLACEHOLDER} alt={item.name} /></div>
+            <div className="shop-cart-thumb"><ImageWithFallback src={item.images?.[0] || item.image} fallback={PRODUCT_PLACEHOLDER} alt={item.name} /></div>
             <div className="shop-cart-copy">
               <strong>{item.name}</strong>
               <small>{item.unit || item.category || 'My Naai shop'}</small>
@@ -519,7 +663,10 @@ function CartView({ items, totals, onBack, onSetQuantity, onRemove, onClear, onC
             </div>
             <div className="shop-cart-controls">
               <QuantityStepper value={item.quantity} max={item.stock ? Math.min(item.stock, 99) : 99} onChange={value => onSetQuantity(item.productId, value)} compact />
-              <button type="button" className="shop-cart-remove" onClick={() => onRemove(item.productId)} aria-label={`Remove ${item.name}`}><Trash2 size={14} /></button>
+              <div className="shop-cart-row-actions">
+                <button type="button" className="shop-save-line" onClick={() => onSaveForLater(item.productId)}><Bookmark size={13} /> Save for later</button>
+                <button type="button" className="shop-cart-remove" onClick={() => onRemove(item.productId)} aria-label={`Remove ${item.name}`}><Trash2 size={14} /></button>
+              </div>
             </div>
           </article>)}
         </div>
@@ -530,6 +677,27 @@ function CartView({ items, totals, onBack, onSetQuantity, onRemove, onClear, onC
           <p className="shop-summary-foot">No online payment — you pay on delivery.</p>
         </aside>
       </div>}
+    {saved.length > 0 && <section className="shop-saved">
+      <div className="shop-panel-head"><h3><Bookmark size={15} /> Saved for later ({saved.length})</h3></div>
+      <div className="shop-cart-list">
+        {saved.map(item => {
+          const canOrder = item.available !== false && Number(item.stock || 0) !== 0;
+          return <article className="shop-cart-row is-saved" key={item.productId}>
+            <div className="shop-cart-thumb"><ImageWithFallback src={item.images?.[0] || item.image} fallback={PRODUCT_PLACEHOLDER} alt={item.name} /></div>
+            <div className="shop-cart-copy">
+              <strong>{item.name}</strong>
+              <small>{item.unit || item.category || 'My Naai shop'}</small>
+              <div className="shop-cart-line-price"><b>{formatCurrency(item.price)}</b>{canOrder ? null : <s>Out of stock</s>}</div>
+            </div>
+            <div className="shop-cart-controls">
+              <Button size="small" variant="secondary" disabled={!canOrder} onClick={() => onMoveToCart(item.productId)}><ShoppingCart size={14} /> Move to cart</Button>
+              <button type="button" className="shop-cart-remove" onClick={() => onRemoveSaved(item.productId)} aria-label={`Remove ${item.name} from saved items`}><Trash2 size={14} /></button>
+            </div>
+          </article>;
+        })}
+      </div>
+      <p className="shop-summary-foot">Saved items are never ordered and are not counted in the total.</p>
+    </section>}
   </div>;
 }
 

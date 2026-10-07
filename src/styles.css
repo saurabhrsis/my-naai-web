@@ -512,6 +512,8 @@ img { display: block; max-width: 100%; }
    orders are cash on delivery — so the whole flow is catalog → cart → checkout →
    orders → cancel-until-delivered, with no third-party step in the middle. */
 .shop-screen { padding-bottom: 64px; }
+.shop-cart-entry { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 10px; border: 1px solid rgba(232,185,126,.45); border-radius: 10px; color: var(--gold); background: var(--gold-wash); font-size: 11px; font-weight: 700; }
+.shop-cart-entry span { min-width: 17px; padding: 1px 5px; border-radius: 20px; color: #111; background: var(--gold); font-size: 9px; text-align: center; }
 .shop-orders-entry { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 11px; border: 1px solid rgba(232,185,126,.3); border-radius: 10px; color: var(--gold); background: var(--gold-wash); font-size: 11px; font-weight: 700; }
 .shop-orders-entry span { min-width: 17px; padding: 1px 5px; border-radius: 20px; color: #111; background: var(--gold); font-size: 9px; text-align: center; }
 .shop-sample-notice { display: flex; align-items: flex-start; gap: 8px; margin: -6px 0 15px; padding: 10px 12px; border: 1px dashed rgba(232,185,126,.4); border-radius: 12px; color: #d9c09a; background: rgba(232,185,126,.07); font-size: 11.5px; line-height: 1.5; }
@@ -525,6 +527,36 @@ img { display: block; max-width: 100%; }
 .shop-discount-label { position: absolute; top: 9px; right: 9px; padding: 5px 7px; border-radius: 6px; color: #111; background: var(--gold); font-size: 9px; font-weight: 800; }
 .shop-mrp { color: #7d8685; font-size: 11px; }
 .shop-unit { display: block; margin-top: 7px; color: #8f9897; font-size: 10px; }
+/* "Only 4 left" is a real nudge on a supply order, so it gets its own chip
+   instead of hiding inside the product facts. */
+.stock-label.low-stock { color: #1a1206; background: rgba(232,185,126,.9); }
+.shop-photo-count { position: absolute; right: 9px; bottom: 9px; padding: 4px 7px; border-radius: 6px; color: #d7efe0; background: rgba(10, 18, 14, .74); font-size: 8px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.shop-detail-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-bottom: 8px; }
+.shop-chip { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 20px; color: var(--gold); background: var(--gold-wash); font-size: 9.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.shop-share-button { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 11px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted-light); background: var(--card); font-size: 11px; font-weight: 700; }
+/* Admin can attach several photos: the main image plus tappable thumbnails.
+   A plain row, not a swipe gallery — nothing to get lost in. */
+.shop-thumb-row { display: flex; gap: 8px; margin-top: 10px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+.shop-thumb-row::-webkit-scrollbar { display: none; }
+.shop-thumb { width: 58px; height: 58px; flex: none; overflow: hidden; border: 2px solid transparent; border-radius: 11px; background: var(--card-raised); }
+.shop-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.shop-thumb.active { border-color: var(--gold); }
+/* Related products / empty-cart suggestions */
+.shop-related { margin-top: 26px; }
+.shop-related h3 { margin: 0 0 12px; font-size: 14px; }
+.shop-related-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; }
+.shop-related-card { display: flex; flex-direction: column; gap: 5px; padding: 9px; border: 1px solid var(--line); border-radius: 15px; background: var(--card); font: inherit; text-align: left; color: inherit; }
+.shop-related-card img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 10px; background: var(--card-raised); }
+.shop-related-card strong { overflow: hidden; font-size: 11.5px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.shop-related-card b { color: var(--gold); font-size: 12px; }
+.shop-related-card em { color: var(--gold); font-size: 9.5px; font-style: normal; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+/* Saved for later */
+.shop-saved { margin-top: 22px; padding: 15px 14px; border: 1px solid var(--line); border-radius: 18px; background: var(--card); }
+.shop-saved .shop-panel-head { margin-bottom: 10px; }
+.shop-cart-row.is-saved { background: rgba(255,255,255,.02); }
+.shop-cart-row-actions { display: flex; align-items: center; gap: 8px; }
+.shop-save-line { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; font-weight: 700; }
+.shop-save-line:hover { color: var(--gold); }
 .shop-card-actions { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 0 11px 11px; }
 .shop-card-actions .btn { width: 100%; }
 /* The cart bar floats ABOVE the fixed bottom nav (≈57px tall at 9px from the
@@ -535,6 +567,17 @@ img { display: block; max-width: 100%; }
 .shop-cart-bar-copy { min-width: 0; }
 .shop-cart-bar-copy small { display: block; color: var(--muted); font-size: 10px; }
 .shop-cart-bar-copy strong { color: var(--gold); font-size: 16px; }
+/* Toolbar: how many products the current filters return, sort and in-stock.
+   It wraps under the search box on a phone instead of squeezing the chips. */
+.shop-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; }
+.shop-count { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.shop-toolbar-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.shop-sort { position: relative; display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 9px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--muted); font-size: 10px; font-weight: 700; }
+.shop-sort select { min-height: 30px; padding-right: 14px; border: 0; outline: 0; color: var(--white); background: transparent; font-size: 11px; font-weight: 700; }
+.shop-sort select option { color: #111616; background: #f4f6f5; }
+.shop-sort > svg { position: absolute; right: 8px; color: var(--muted); pointer-events: none; }
+.shop-toggle-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 11px; border: 1px solid var(--line); border-radius: 20px; color: var(--muted); background: var(--card); font-size: 10px; font-weight: 700; }
+.shop-toggle-chip.active { color: #111; background: var(--gold); border-color: var(--gold); }
 .shop-loading { min-height: 300px; display: flex; align-items: center; justify-content: center; }
 /* Product detail */
 .shop-detail { display: grid; gap: 18px; }
@@ -1625,6 +1668,7 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .booking-main { padding: 17px; }
   /* Big phones and up: the three facts pair off instead of stacking. */
   .booking-details { grid-template-columns: repeat(2, minmax(0, 1fr)); font-size: 11px; }
+  .shop-related-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .shop-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .shop-cart-controls { flex-direction: row; }
   .shop-tracker-step small { font-size: 9.5px; }
@@ -1685,6 +1729,8 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .queue-card-actions .btn { flex: 0 0 auto; min-width: 168px; }
   .history-card, .notification-card { max-width: 850px; }
   .shop-cart-layout, .shop-checkout-layout { grid-template-columns: minmax(0, 1fr) 320px; gap: 18px; }
+  .shop-related-row { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; }
+  .shop-related, .shop-saved { max-width: 850px; }
   .shop-cart-list, .shop-cart-row, .shop-order-list, .shop-order-card, .shop-tracker, .shop-detail-actions { max-width: 850px; }
   .shop-summary-card { position: sticky; top: 84px; }
   .shop-detail { grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 24px; }

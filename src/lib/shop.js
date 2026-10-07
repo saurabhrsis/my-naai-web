@@ -49,13 +49,13 @@ export const SHOP_CATEGORIES = ['All', 'Hair colour', 'Hair care', 'Tools', 'Con
 export const SAMPLE_SHOP_PRODUCTS = [
   { productId: 'shop-01', productName: 'Professional Hair Cutting Scissors 6.5"', brand: 'Naai Pro', category: 'Tools', price: 1150, mrp: 1499, stock: 24, unit: '1 piece', description: 'Japanese stainless steel barber scissors with an adjustable tension screw. Balanced for long cutting sessions and safe on wet or dry hair.' },
   { productId: 'shop-02', productName: 'Texturising Thinning Scissors', brand: 'Naai Pro', category: 'Tools', price: 890, mrp: 1100, stock: 18, unit: '1 piece', description: '28-tooth thinning shear for de-bulking and blending. Rubber finger inserts and a finger rest for all-day use.' },
-  { productId: 'shop-03', productName: 'Hair Trimmer Professional T-900', brand: 'Trimline', category: 'Tools', price: 2499, mrp: 2999, stock: 9, unit: '1 set', description: 'Cordless trimmer with a 180-minute battery, four guide combs and a zero-gap adjustable blade. Mains or cordless.' },
+  { productId: 'shop-03', productName: 'Hair Trimmer Professional T-900', brand: 'Trimline', category: 'Tools', price: 2499, mrp: 2999, stock: 9, rating: 4.6, unit: '1 set', description: 'Cordless trimmer with a 180-minute battery, four guide combs and a zero-gap adjustable blade. Mains or cordless.' },
   { productId: 'shop-04', productName: 'Hair Dryer 2000W Professional', brand: 'Airstar', category: 'Tools', price: 1890, mrp: 2299, stock: 12, unit: '1 piece', description: '2000 W AC motor with two speeds, three heat settings and a cool shot. Comes with a concentrator and a diffuser.' },
-  { productId: 'shop-05', productName: 'Hair Colour Tube — Natural Brown 60ml', brand: 'Keune', category: 'Hair colour', price: 520, mrp: 590, stock: 60, unit: '1 tube', description: 'Permanent professional hair colour with 100% grey coverage. Mix 1:1 with developer. Patch test 48 hours before use.' },
+  { productId: 'shop-05', productName: 'Hair Colour Tube — Natural Brown 60ml', brand: 'Keune', category: 'Hair colour', price: 520, mrp: 590, stock: 60, rating: 4.7, unit: '1 tube', description: 'Permanent professional hair colour with 100% grey coverage. Mix 1:1 with developer. Patch test 48 hours before use.' },
   { productId: 'shop-06', productName: 'Hair Colour — Burgundy 60ml', brand: 'Keune', category: 'Hair colour', price: 520, mrp: 590, stock: 44, unit: '1 tube', description: 'Vibrant Burgundy permanent colour with a conditioning base. Long-lasting shine, full grey coverage.' },
   { productId: 'shop-07', productName: 'Ammonia-Free Hair Colour Kit (Pack of 3)', brand: 'Gentle Look', category: 'Hair colour', price: 1250, mrp: 1499, stock: 15, unit: 'pack of 3', description: 'Ammonia-free three-tube kit for sensitive scalps, with gloves, brush and mixing bowl included.' },
   { productId: 'shop-08', productName: 'Developer / Oxidant 20 Vol 500ml', brand: 'Keune', category: 'Hair colour', price: 320, mrp: 380, stock: 70, unit: '500 ml', description: 'Cream developer for permanent colour, 20 volume (6%). Stable, easy-to-measure bottle.' },
-  { productId: 'shop-09', productName: 'Scalp Scrub — Charcoal Detox 200ml', brand: 'Pure Roots', category: 'Hair care', price: 480, mrp: 549, stock: 33, unit: '200 ml', description: 'Charcoal and salicylic acid scalp scrub that lifts product build-up, flakes and excess oil. Use once a week before shampoo.' },
+  { productId: 'shop-09', productName: 'Scalp Scrub — Charcoal Detox 200ml', brand: 'Pure Roots', category: 'Hair care', price: 480, mrp: 549, stock: 33, rating: 4.4, unit: '200 ml', description: 'Charcoal and salicylic acid scalp scrub that lifts product build-up, flakes and excess oil. Use once a week before shampoo.' },
   { productId: 'shop-10', productName: 'Anti-Dandruff Scalp Scrub 250ml', brand: 'Pure Roots', category: 'Hair care', price: 420, mrp: 499, stock: 41, unit: '250 ml', description: 'Zinc pyrithione scrub for itchy, flaky scalps. Soothes between two washes.' },
   { productId: 'shop-11', productName: 'Keratin Repair Shampoo 500ml', brand: 'Silk Route', category: 'Hair care', price: 690, mrp: 799, stock: 50, unit: '500 ml', description: 'Sulphate-free keratin shampoo for chemically treated hair. Smooths the cuticle and cuts frizz.' },
   { productId: 'shop-12', productName: 'Argan Oil Hair Serum 100ml', brand: 'Silk Route', category: 'Hair care', price: 560, mrp: 650, stock: 38, unit: '100 ml', description: 'Lightweight argan serum for shine and heat protection. Two to three drops on damp or dry hair.' },
@@ -98,6 +98,16 @@ function firstString(...values) {
 // The catalog is shared with other My Naai surfaces, so a product arrives under
 // several names (`productId`/`id`, `productName`/`name`, `isAvailable`/
 // `inStock`) and `available` has been seen as `true`, `"true"` and `1`.
+// A product can carry several photos. Admin may send `imagesArray`, `images`,
+// `imageUrls` or a single `productImage`; every shape is flattened to one list
+// so the shelf shows the first photo and the product page can show the rest.
+export function productImages(item = {}) {
+  const list = [].concat(item.imagesArray || item.images || item.imageUrls || []).filter(Boolean);
+  const single = firstString(item.productImage, item.image, item.imageUrl);
+  if (single && !list.includes(single)) list.unshift(single);
+  return list.filter(value => typeof value === 'string' && value.trim());
+}
+
 export function normalizeShopProduct(item = {}) {
   const stock = pickNumber([item.stock, item.stockCount, item.quantityAvailable, item.availableQuantity], 0);
   const availableValue = item.isAvailable ?? item.available ?? item.inStock ?? true;
@@ -118,6 +128,7 @@ export function normalizeShopProduct(item = {}) {
     // `stock === 0` from a backend that never sends availability still reads as
     // sold out; a backend that sends neither gets the shelf's default stock.
     image: firstString(item.productImage, item.image, item.imageUrl),
+    images: productImages(item),
     rating: pickNumber([item.rating], 0),
   };
 }
@@ -262,6 +273,7 @@ export function cartLineFromProduct(product, quantity = 1) {
     brand: product.brand,
     category: product.category,
     image: product.image,
+    images: Array.isArray(product.images) ? product.images : (product.image ? [product.image] : []),
     unit: product.unit,
     price: Number(product.price) || 0,
     mrp: Number(product.mrp) || 0,
@@ -334,6 +346,7 @@ export function validateAddress(address = {}) {
 // ── Local storage: cart + offline orders ─────────────────────────────────────
 
 const CART_KEY = 'mynaai:shop-cart';
+const SAVED_KEY = 'mynaai:shop-saved';
 const ORDERS_KEY = 'mynaai:shop-orders';
 
 function readStore(key) {
@@ -382,6 +395,22 @@ export function readLocalOrders(salonId) {
   return Array.isArray(orders) ? orders.map(normalizeOrder) : [];
 }
 
+// "Save for later" — a second, per-salon list next to the cart. Nothing here is
+// ordered; it exists so a partner can park an item instead of deleting it.
+export function readSaved(salonId) {
+  const store = readStore(SAVED_KEY);
+  const items = store[String(salonId || '')];
+  return Array.isArray(items) ? items.filter(item => item && item.productId).map(item => ({ ...item, quantity: Math.max(1, toNumber(item.quantity, 1)) })) : [];
+}
+
+export function saveSaved(salonId, items) {
+  const store = readStore(SAVED_KEY);
+  const key = String(salonId || '');
+  if (!items || !items.length) delete store[key];
+  else store[key] = items;
+  writeStore(SAVED_KEY, store);
+}
+
 function writeLocalOrders(salonId, orders) {
   const store = readStore(ORDERS_KEY);
   const key = String(salonId || '');
@@ -426,7 +455,72 @@ function matchesFilters(product, { search = '', category = '' } = {}) {
 // A server that ignores the filters (or the sample fallback) still shows the
 // right shelf, so the screen filters what it received as well.
 export function filterShopProducts(products = [], filters = {}) {
-  return (products || []).filter(product => matchesFilters(product, filters));
+  return (products || []).filter(product => matchesFilters(product, filters)
+    && (!filters.inStockOnly || (product.available && maxOrderQuantity(product) > 0)));
+}
+
+// "Only 4 left" is the nudge a supply order actually responds to — but only
+// when there is genuinely little left, not for every product under the sun.
+export const LOW_STOCK_THRESHOLD = 10;
+
+export function isLowStock(product) {
+  const stock = Number(product?.stock || 0);
+  return Boolean(product?.available) && stock > 0 && stock <= LOW_STOCK_THRESHOLD;
+}
+
+// Sorting is offered in the UI and also sent to the API, so a backend that can
+// sort returns the page already ordered and one that cannot still reads right.
+export const SORT_OPTIONS = [
+  { key: 'relevance', label: 'Relevance' },
+  { key: 'price-asc', label: 'Price: low to high' },
+  { key: 'price-desc', label: 'Price: high to low' },
+  { key: 'name', label: 'Name A–Z' },
+  { key: 'rating', label: 'Top rated' },
+];
+
+export function sortShopProducts(products = [], sort = 'relevance') {
+  const list = [...(products || [])];
+  const byName = (a, b) => String(a.name).localeCompare(String(b.name));
+  if (sort === 'price-asc') return list.sort((a, b) => Number(a.price) - Number(b.price) || byName(a, b));
+  if (sort === 'price-desc') return list.sort((a, b) => Number(b.price) - Number(a.price) || byName(a, b));
+  if (sort === 'name') return list.sort(byName);
+  if (sort === 'rating') return list.sort((a, b) => Number(b.rating) - Number(a.rating) || byName(a, b));
+  return list;
+}
+
+// "More from Hair colour" — same category first, then the rest of the shelf, so
+// the row is never empty on a small catalog.
+export function relatedShopProducts(products = [], product = null, limit = 6) {
+  const others = (products || []).filter(item => item.id !== product?.id);
+  const sameCategory = others.filter(item => item.category && item.category === product?.category);
+  const rest = others.filter(item => item.category !== product?.category);
+  return [...sameCategory, ...rest].slice(0, limit);
+}
+
+// A deep link a partner can paste into WhatsApp — the shop's views are routes,
+// so this opens the exact product on any device.
+export function shopProductUrl(product) {
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  return `${origin}/shop?view=product&productId=${encodeURIComponent(product?.id || '')}`;
+}
+
+export async function shareShopProduct(product, notify) {
+  const url = shopProductUrl(product);
+  const name = product?.name || 'this product';
+  try {
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      await navigator.share({ title: `${name} — My Naai shop`, text: `${name} for your salon, on the My Naai shop.`, url });
+      return;
+    }
+  } catch (shareError) {
+    if (shareError?.name === 'AbortError') return; // the partner closed the sheet
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    notify?.('success', 'Product link copied — share it anywhere.');
+  } catch {
+    notify?.('error', 'Could not share this product. Copy the link from the address bar.');
+  }
 }
 
 // Product list. Server-side filtering is preferred (the catalog will be big);
@@ -528,6 +622,19 @@ export function reconcileCart(items = [], products = []) {
     if (!product.available || maxOrderQuantity(product) === 0) return lines;
     const quantity = Math.min(Math.max(1, toNumber(item.quantity, 1)), maxOrderQuantity(product));
     lines.push({ ...cartLineFromProduct(product, quantity) });
+    return lines;
+  }, []);
+}
+
+// Saved items are parked, not ordered — they survive a product going out of
+// stock (it may be back next week) but not being removed from the catalog.
+export function reconcileSaved(items = [], products = []) {
+  if (!Array.isArray(items) || !items.length) return [];
+  const byId = new Map(products.map(product => [product.id, product]));
+  return items.reduce((lines, item) => {
+    const product = byId.get(item.productId);
+    if (!product) return lines;
+    lines.push({ ...item, price: product.price, mrp: product.mrp, stock: product.stock, available: product.available, name: product.name, image: product.image || item.image, unit: product.unit || item.unit });
     return lines;
   }, []);
 }
