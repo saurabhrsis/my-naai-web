@@ -30,7 +30,7 @@
 //     body: { items: [{ productId, quantity }], address: { name, phone, line1,
 //            line2, city, state, pincode }, note, paymentMethod }
 //     data: { order: { orderId, orderNumber, status, createdAt, items, subtotal,
-//                      deliveryFee, totalAmount, paymentMethod, address,
+//                      totalAmount, paymentMethod, address,
 //                      timeline } }
 //
 //   POST /api/orders/list
@@ -49,7 +49,7 @@
 //   db.ShopProduct : productId, productName, brand, category, price, mrp, stock,
 //                    unit, productImage, description, isAvailable
 //   db.Order       : orderId, salonId, orderNumber, status, subtotal,
-//                    deliveryFee, totalAmount, paymentMethod, note,
+//                    totalAmount, paymentMethod, note,
 //                    address (JSON), createdAt
 //   db.OrderItem   : orderItemId, orderId, productId, productName, unit,
 //                    productImage, quantity, price, lineTotal
@@ -68,10 +68,9 @@ const ORDER_FLOW = ['PLACED', 'CONFIRMED', 'PACKED', 'SHIPPED', 'OUT_FOR_DELIVER
 const FINAL_STATUSES = ['DELIVERED', 'CANCELLED'];
 const DEFAULT_STATUS = 'PLACED';
 
-// Money rules — identical to src/lib/shop.js, so the app's cart and the stored
-// order can never disagree about what an order costs.
-const DELIVERY_FEE = 49;
-const FREE_DELIVERY_ABOVE = 999;
+// Money rule — identical to src/lib/shop.js, so the app's cart and the stored
+// order can never disagree: there are no delivery charges, the total is the
+// subtotal.
 
 function normalizeStatus(value) {
   const status = String(value || '').trim().toUpperCase();
@@ -183,7 +182,6 @@ function publicOrder(row = {}, items = [], events = []) {
   const status = normalizeStatus(value.status);
   const lines = items.map(publicItem);
   const subtotal = toNumber(value.subtotal, lines.reduce((sum, line) => sum + line.lineTotal, 0));
-  const deliveryFee = toNumber(value.deliveryFee, 0);
   return {
     orderId: value.orderId ?? value.id ?? null,
     orderNumber: value.orderNumber || (value.orderId ? `MN${value.orderId}` : ''),
@@ -192,8 +190,7 @@ function publicOrder(row = {}, items = [], events = []) {
     items: lines,
     itemCount: lines.reduce((sum, line) => sum + line.quantity, 0),
     subtotal,
-    deliveryFee,
-    totalAmount: toNumber(value.totalAmount, subtotal + deliveryFee),
+    totalAmount: toNumber(value.totalAmount, subtotal),
     paymentMethod: value.paymentMethod || 'COD',
     note: value.note || '',
     address: value.address && typeof value.address === 'string' ? safeJson(value.address) : (value.address || {}),
@@ -345,10 +342,9 @@ const createOrder = async (req, res) => {
     if (!lines.length) return res.status(400).json({ status: 'FAILED', message: problems[0] || 'None of these items are available.' });
 
     const subtotal = lines.reduce((sum, line) => sum + line.lineTotal, 0);
-    // The client sends its own delivery fee; the server recomputes it so a
-    // tampered body cannot ship an order for free.
-    const deliveryFee = subtotal >= FREE_DELIVERY_ABOVE ? 0 : DELIVERY_FEE;
-    const totalAmount = subtotal + deliveryFee;
+    // No delivery fee: what the items cost is what the salon pays. A fee in the
+    // request body is ignored rather than charged.
+    const totalAmount = subtotal;
 
     const now = new Date();
     let orderId = null;
@@ -357,7 +353,6 @@ const createOrder = async (req, res) => {
         salonId,
         status: DEFAULT_STATUS,
         subtotal,
-        deliveryFee,
         totalAmount,
         paymentMethod: String(req.body.paymentMethod || 'COD').toUpperCase() === 'COD' ? 'COD' : String(req.body.paymentMethod || 'COD').slice(0, 24),
         note: String(req.body.note || '').slice(0, 300),
@@ -378,7 +373,7 @@ const createOrder = async (req, res) => {
     }
 
     const order = publicOrder(
-      { orderId, orderNumber: orderId ? `MN${orderId}` : `MN${Date.now()}`, status: DEFAULT_STATUS, subtotal, deliveryFee, totalAmount, paymentMethod: 'COD', note: String(req.body.note || ''), address, createdAt: now },
+      { orderId, orderNumber: orderId ? `MN${orderId}` : `MN${Date.now()}`, status: DEFAULT_STATUS, subtotal, totalAmount, paymentMethod: 'COD', note: String(req.body.note || ''), address, createdAt: now },
       lines,
     );
     return res.status(201).json({ status: 'SUCCESS', message: problems[0] || 'Order placed.', data: { order } });

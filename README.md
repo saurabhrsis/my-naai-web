@@ -58,7 +58,7 @@ The salon partner's **Shop** tab (Queue · History · Products · Shop · Accoun
 
 - **Browse** — search and category chips over the admin catalog, with price, strikethrough MRP, unit and stock. Out-of-stock items stay on the shelf but cannot be ordered.
 - **Product** — image, description, pack size and stock, then a quantity stepper and *Add to cart*.
-- **Cart** — per-line quantity, remove, clear, and a live summary (items total, savings, delivery, total). Delivery is ₹49 and free at ₹999 and above.
+- **Cart** — per-line quantity, remove, clear, and a live summary (items total, savings, total). **There are no delivery charges**: what the items cost is what the salon pays, and the summary shows *Delivery — Free*.
 - **Checkout** — the delivery address is **the salon's own address by default** (read from the salon profile, refreshed from `/api/salons/get-salon` because a stored session can be as thin as `{ salon: { salonId } }`). Any field can be changed for a one-off delivery, and **Use salon address** puts it back. Payment is **cash on delivery — there is no payment gateway in this flow**; missing or malformed address fields are named inline instead of failing at the API.
 - **My orders** — All / Active / Delivered / Cancelled, newest first, each opening a detail screen with the items, the delivery address, the money and a status tracker.
 - **Cancel** — any order that has not been **delivered** can be cancelled, through the app's own confirmation sheet (`useConfirm()`, never `window.confirm`). Delivered and cancelled are final.

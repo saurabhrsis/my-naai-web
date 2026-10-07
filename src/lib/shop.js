@@ -38,8 +38,10 @@ export const SHOP_CATEGORIES = ['All', 'Hair colour', 'Hair care', 'Tools', 'Con
 
 // Money rules for the cart. One place, so the cart, the checkout summary and
 // the stored order can never disagree about what an order costs.
-export const DELIVERY_FEE = 49;
-export const FREE_DELIVERY_ABOVE = 999;
+//
+// There are NO delivery charges: what the items cost is what the salon pays.
+// No fee line, no free-delivery threshold, nothing to add at checkout — the
+// total is the subtotal.
 
 // What admin adds today: the things a salon actually buys (scrubs, scissors,
 // hair colours, consumables). Used only by the dev/sample fallback — a real
@@ -195,8 +197,9 @@ export function normalizeOrder(item = {}) {
   const status = String(firstString(item.status, item.orderStatus) || 'PLACED').toUpperCase();
   const linesTotal = items.reduce((sum, line) => sum + line.lineTotal, 0);
   const subtotal = pickNumber([item.subtotal, item.subTotal, item.itemTotal], linesTotal);
-  const deliveryFee = pickNumber([item.deliveryFee, item.deliveryCharge, item.shippingFee], 0);
-  const totalAmount = pickNumber([item.totalAmount, item.total, item.grandTotal, item.amount], subtotal + deliveryFee);
+  // Delivery is free, so the total is what the items cost. A `deliveryFee`
+  // that an older payload still carries is ignored rather than charged.
+  const totalAmount = pickNumber([item.totalAmount, item.total, item.grandTotal, item.amount], subtotal);
   const address = normalizeAddress(item.address || item.deliveryAddress || item.shippingAddress || {});
   const timeline = Array.isArray(item.timeline) && item.timeline.length
     ? item.timeline.map(step => ({ status: String(step.status || '').toUpperCase(), at: toTimestamp(step.at || step.createdAt) }))
@@ -210,7 +213,6 @@ export function normalizeOrder(item = {}) {
     items,
     itemCount: items.reduce((sum, line) => sum + line.quantity, 0),
     subtotal,
-    deliveryFee,
     totalAmount,
     paymentMethod: firstString(item.paymentMethod, item.paymentMode) || 'COD',
     note: firstString(item.note, item.notes, item.deliveryNote),
@@ -242,14 +244,12 @@ export function cartTotals(items = []) {
     subtotal += price * quantity;
     if (mrp > price) savings += (mrp - price) * quantity;
   });
-  const deliveryFee = itemCount === 0 || subtotal >= FREE_DELIVERY_ABOVE ? 0 : DELIVERY_FEE;
   return {
     itemCount,
     subtotal,
     savings,
-    deliveryFee,
-    total: subtotal + deliveryFee,
-    amountToFreeDelivery: subtotal >= FREE_DELIVERY_ABOVE ? 0 : FREE_DELIVERY_ABOVE - subtotal,
+    // Delivery is free — the salon pays exactly what the items cost.
+    total: subtotal,
   };
 }
 
@@ -460,7 +460,6 @@ function orderPayload({ items, address, note, paymentMethod }, totals) {
     note: String(note || '').trim(),
     itemCount: totals.itemCount,
     subtotal: totals.subtotal,
-    deliveryFee: totals.deliveryFee,
     totalAmount: totals.total,
   };
 }

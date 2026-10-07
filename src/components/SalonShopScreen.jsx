@@ -21,8 +21,6 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import {
-  DELIVERY_FEE,
-  FREE_DELIVERY_ABOVE,
   SHOP_CATEGORIES,
   cancelShopOrder,
   cartLineFromProduct,
@@ -485,7 +483,7 @@ function ProductDetailView({ product, quantity, totals, onBack, onAdd, onSetQuan
               <Button disabled={!inStock} onClick={() => onAdd(draftQuantity)}><ShoppingCart size={16} /> {inStock ? 'Add to cart' : 'Out of stock'}</Button>
             </>}
         </div>
-        <p className="shop-detail-delivery"><Truck size={14} /> Free delivery above {formatCurrency(FREE_DELIVERY_ABOVE)} · otherwise {formatCurrency(DELIVERY_FEE)}. Delivered to your salon address.</p>
+        <p className="shop-detail-delivery"><Truck size={14} /> Free delivery — you pay only for the items. Delivered to your salon address.</p>
       </div>
     </div>
     {totals.itemCount > 0 && <div className="shop-cart-bar">
@@ -686,7 +684,6 @@ function OrderDetailView({ order, cancelling, onBack, onCancel, onReorder }) {
     <aside className="shop-summary-card">
       <h3>Payment summary</h3>
       <div className="shop-summary-row"><span>Items total</span><b>{formatCurrency(order.subtotal)}</b></div>
-      <div className="shop-summary-row"><span>Delivery</span><b>{order.deliveryFee ? formatCurrency(order.deliveryFee) : 'Free'}</b></div>
       <div className="shop-summary-row total"><span>Total</span><b>{formatCurrency(order.totalAmount)}</b></div>
       <p className="shop-summary-foot">{order.paymentMethod === 'COD' ? 'Cash on delivery — pay when the parcel arrives.' : order.paymentMethod}{order.note ? ` · “${order.note}”` : ''}</p>
     </aside>
@@ -712,8 +709,7 @@ function SummaryRows({ totals }) {
   return <>
     <div className="shop-summary-row"><span>Items total</span><b>{formatCurrency(totals.subtotal)}</b></div>
     {totals.savings > 0 ? <div className="shop-summary-row"><span>You save</span><b className="is-good">-{formatCurrency(totals.savings)}</b></div> : null}
-    <div className="shop-summary-row"><span>Delivery</span><b>{totals.deliveryFee ? formatCurrency(totals.deliveryFee) : 'Free'}</b></div>
-    {totals.amountToFreeDelivery > 0 ? <p className="shop-free-hint"><Truck size={13} /> Add {formatCurrency(totals.amountToFreeDelivery)} more for free delivery.</p> : null}
+    <div className="shop-summary-row"><span>Delivery</span><b>Free</b></div>
     <div className="shop-summary-row total"><span>Total</span><b>{formatCurrency(totals.total)}</b></div>
   </>;
 }

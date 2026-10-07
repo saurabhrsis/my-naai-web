@@ -107,16 +107,15 @@ function fixtureOrder(body) {
     };
   }).map(line => ({ ...line, lineTotal: line.price * line.quantity }));
   const subtotal = items.reduce((sum, line) => sum + line.lineTotal, 0);
-  const deliveryFee = Number(body.deliveryFee || 0);
   return {
     orderId: `order-${shopOrderSeq}`,
     orderNumber: `MN${shopOrderSeq}`,
     status: 'PLACED',
     createdAt: Date.now(),
     items,
+    // No delivery charges: the total is what the items cost.
     subtotal,
-    deliveryFee,
-    totalAmount: Number(body.totalAmount || subtotal + deliveryFee),
+    totalAmount: Number(body.totalAmount || subtotal),
     paymentMethod: body.paymentMethod || 'COD',
     note: body.note || '',
     address: body.address || {},

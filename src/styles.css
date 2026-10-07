@@ -582,7 +582,6 @@ img { display: block; max-width: 100%; }
 .shop-summary-row.total { margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--line); }
 .shop-summary-row.total span { color: var(--white); font-size: 13px; font-weight: 700; }
 .shop-summary-row.total b { color: var(--gold); font-size: 19px; }
-.shop-free-hint { display: flex; align-items: center; gap: 6px; margin: 4px 0 2px; padding: 8px 10px; border-radius: 10px; color: #d9c09a; background: rgba(232,185,126,.08); font-size: 10.5px; }
 .shop-block-button { width: 100%; margin-top: 13px; }
 .shop-summary-foot { margin: 10px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
 .shop-panel { margin-bottom: 14px; padding: 15px 14px; border: 1px solid var(--line); border-radius: 18px; background: var(--card); }

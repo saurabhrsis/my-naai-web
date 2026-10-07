@@ -13,8 +13,6 @@ vi.mock('./api', async () => {
 });
 
 const {
-  DELIVERY_FEE,
-  FREE_DELIVERY_ABOVE,
   cancelShopOrder,
   canCancelOrder,
   cartLineFromProduct,
@@ -78,24 +76,24 @@ describe('normalizeShopProduct', () => {
 });
 
 describe('cartTotals', () => {
-  it('charges delivery below the free-delivery threshold', () => {
+  // Delivery is free: the salon pays exactly what the items cost, with no fee
+  // line and no threshold to reach.
+  it('charges nothing beyond the items', () => {
     const totals = cartTotals([{ price: 200, quantity: 2 }]);
     expect(totals.subtotal).toBe(400);
-    expect(totals.deliveryFee).toBe(DELIVERY_FEE);
-    expect(totals.total).toBe(400 + DELIVERY_FEE);
-    expect(totals.amountToFreeDelivery).toBe(FREE_DELIVERY_ABOVE - 400);
+    expect(totals.total).toBe(400);
+    expect(totals.deliveryFee).toBeUndefined();
+    expect(totals.amountToFreeDelivery).toBeUndefined();
   });
 
-  it('delivers free at the threshold and adds up savings', () => {
+  it('adds up savings against the MRP', () => {
     const totals = cartTotals([{ price: 1000, mrp: 1200, quantity: 1 }]);
-    expect(totals.deliveryFee).toBe(0);
     expect(totals.savings).toBe(200);
     expect(totals.total).toBe(1000);
-    expect(totals.amountToFreeDelivery).toBe(0);
   });
 
   it('is empty-safe', () => {
-    expect(cartTotals([])).toMatchObject({ itemCount: 0, subtotal: 0, deliveryFee: 0, total: 0 });
+    expect(cartTotals([])).toMatchObject({ itemCount: 0, subtotal: 0, total: 0 });
   });
 });
 
@@ -146,8 +144,7 @@ describe('normalizeOrder', () => {
       items: [{ productId: 'p1', productName: 'Scrub', quantity: 2, price: 400 }],
     });
     expect(order.subtotal).toBe(800);
-    // What the order was actually charged is authoritative; the screen never
-    // re-adds a delivery fee to a total the backend already settled.
+    // Delivery is free, so the total is the items — no fee is added anywhere.
     expect(order.totalAmount).toBe(800);
     expect(order.itemCount).toBe(2);
     expect(order.statusMeta.label).toBe('Order placed');
@@ -276,7 +273,7 @@ describe('shop API', () => {
     expect(payload.paymentMethod).toBe('COD');
     expect(payload.note).toBe('Ring the bell');
     expect(payload.subtotal).toBe(1040);
-    expect(payload.deliveryFee).toBe(0);
+    expect(payload.deliveryFee).toBeUndefined();
     expect(payload.totalAmount).toBe(1040);
   });
 

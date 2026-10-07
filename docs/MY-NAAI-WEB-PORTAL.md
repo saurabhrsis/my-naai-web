@@ -208,7 +208,7 @@ The **Shop** tab is the partner's own supply store and is deliberately separate 
 
 **The delivery address defaults to the salon's own address.** `salonAddressFromProfile()` reads the stored session first and then re-reads `/api/salons/get-salon`, because a partner session can be as thin as `{ salon: { salonId } }` and the checkout needs a real pincode. A partner who edits any field keeps their copy (`addressTouched`) and gets **Use salon address** to put it back. `validateAddress()` names the exact field that is wrong (6-digit pincode, 10-digit phone) rather than disabling the button silently.
 
-**Money lives in one place.** `cartTotals()` in `src/lib/shop.js` owns items total, savings, the ₹49 delivery fee, the ₹999 free-delivery threshold and the total, so the cart, the checkout summary, the payload sent to the API and the stored order can never disagree.
+**Money lives in one place.** `cartTotals()` in `src/lib/shop.js` owns items total, savings and the total, so the cart, the checkout summary, the payload sent to the API and the stored order can never disagree. **There are no delivery charges** — the total *is* the items total (the summary just says *Delivery — Free*), and `createOrder` sends no `deliveryFee` at all.
 
 **Cancel rule.** `canCancelOrder()` is "anything not delivered": `PLACED`, `CONFIRMED`, `PACKED`, `SHIPPED` and `OUT_FOR_DELIVERY` are cancellable; `DELIVERED` and `CANCELLED` are final. Cancelling goes through `useConfirm()` — never `window.confirm`, which is suppressed in some installed-PWA webviews and returns `false`, making the button look dead.
 

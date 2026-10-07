@@ -48,7 +48,6 @@ const placedOrder = (overrides = {}) => ({
   createdAt: Date.now(),
   items: [{ productId: 'p1', productName: 'Hair Colour — Natural Brown', quantity: 2, price: 520 }],
   subtotal: 1040,
-  deliveryFee: 0,
   totalAmount: 1040,
   paymentMethod: 'COD',
   address: { name: 'Ravi', phone: '9876543210', line1: '12 Sitabuldi Main Road', city: 'Nagpur', state: 'Maharashtra', pincode: '440012' },
@@ -237,14 +236,23 @@ describe('SalonShopScreen — checkout', () => {
     expect(notify).toHaveBeenCalledWith('success', 'Order MN1001 placed.');
   });
 
-  it('adds a delivery fee below the free-delivery threshold and shows it', async () => {
+  it('charges no delivery — the total is what the items cost', async () => {
     await mount();
     await click(addButtons()[1]); // ₹480 scrub
     await settle();
     await click(container.querySelector('.shop-cart-bar button'));
     await settle();
-    expect(container.querySelector('.shop-summary-card').textContent).toContain('49');
-    expect(container.querySelector('.shop-free-hint')).not.toBeNull();
+    const summary = container.querySelector('.shop-summary-card').textContent;
+    expect(summary).toContain('480');
+    expect(summary).not.toContain('529');
+    // Delivery is called out as free, never as a charge.
+    expect(summary).toContain('Free');
+    // Cart → checkout (the button is named the same on both screens), then place.
+    await click(findByText('button', 'Place order'));
+    await settle();
+    await click(findByText('button', 'Place order'));
+    await settle(30);
+    expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({ subtotal: 480, totalAmount: 480 }));
   });
 
   it('refuses to place an order with an incomplete address', async () => {
