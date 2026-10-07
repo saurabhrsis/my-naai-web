@@ -1287,6 +1287,38 @@ describe('Login permission flow', () => {
     expect(container.querySelector('.permission-gate-sheet')).toBeNull();
   });
 
+  it('hands over a tappable, copyable link when a popup blocker refuses the tab', async () => {
+    // Reported from the preview pane: "Allow pop-ups for … to open My Naai in
+    // its own tab". A frame without `allow-popups` (and every popup blocker)
+    // makes window.open return null, so the visitor was left with an
+    // instruction to change a browser setting. There is always a manual way
+    // out, so it has to be on the screen: a link to the very same page.
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36');
+    globalThis.Notification = { permission: 'denied', requestPermission: vi.fn(() => Promise.resolve('denied')) };
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'denied', reason: '' });
+    // The blocker: window.open answers null.
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null);
+    try {
+      await withCrossOriginFrame(async () => {
+        await mount();
+        await act(async () => { notificationAllowButton().click(); });
+        await flush();
+
+        const sheet = container.querySelector('.permission-gate-sheet');
+        expect(sheet).not.toBeNull();
+        const link = sheet.querySelector('.open-own-tab-link');
+        expect(link).not.toBeNull();
+        expect(link.getAttribute('href')).toContain('mynaai-ask=notifications');
+        // Tap it, copy it, or open it by hand — never "change a browser setting".
+        expect(sheet.textContent).not.toContain('Allow pop-ups');
+        expect(buttonByText('Copy the link')).not.toBeNull();
+      });
+    } finally {
+      openSpy.mockRestore();
+      vi.restoreAllMocks();
+    }
+  });
+
   it('explains a cross-origin frame instead of spending the tap on a doomed ask', async () => {
     // Chrome and Firefox refuse Notification.requestPermission() inside a
     // cross-origin frame, so a tap there can never produce a prompt: the card

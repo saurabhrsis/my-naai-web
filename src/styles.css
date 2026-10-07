@@ -578,6 +578,16 @@ img { display: block; max-width: 100%; }
 .shop-sort > svg { position: absolute; right: 8px; color: var(--muted); pointer-events: none; }
 .shop-toggle-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 11px; border: 1px solid var(--line); border-radius: 20px; color: var(--muted); background: var(--card); font-size: 10px; font-weight: 700; }
 .shop-toggle-chip.active { color: #111; background: var(--gold); border-color: var(--gold); }
+/* "Open My Naai in a new tab" — the escape hatch from a page that can never
+   show a permission popup. Styled as the primary action because it is one. */
+.open-own-tab { display: flex; flex-direction: column; align-items: center; gap: 9px; margin-bottom: 14px; }
+.open-own-tab-link { display: inline-flex; align-items: center; justify-content: center; gap: 9px; width: 100%; min-height: 46px; padding: 0 18px; border-radius: 12px; background: var(--gold); color: #0d0e0e; font-size: 13px; font-weight: 700; text-decoration: none; box-shadow: 0 4px 14px rgba(232,185,126,.24); }
+.open-own-tab-link:hover { background: #f0cd96; }
+.open-own-tab-link:active { transform: scale(.98); }
+.open-own-tab-foot { display: flex; align-items: center; }
+.open-own-tab-foot .ghost { color: var(--muted-light); font-size: 11px; font-weight: 600; }
+.open-own-tab-url { width: 100%; font-size: 11px; }
+
 /* The tab that was opened just to ask for a permission (see
    PendingPermissionAsk in src/components/PermissionUI.jsx). Sits with the
    toasts: one line, one tap, and the browser's own popup follows. */

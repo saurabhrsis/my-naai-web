@@ -42,6 +42,7 @@ import {
   hiddenPromptHint,
   inAppBrowserHint,
   openInOwnTabForAsk,
+  ownTabAskUrl,
   pendingAskKind,
   promptsAvailable,
   isIosDevice,
@@ -223,9 +224,15 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
         // of spending itself on a call that silently fails. One short line, one
         // real popup.
         if (!alertsPromptable && !inAppBrowser && !alertsNeedHomeScreen) {
-          setPermissionNotice(openInOwnTabForAsk('notifications')
-            ? 'New tab opened — choose Allow in the browser popup there.'
-            : `Allow pop-ups for ${siteHost()} to open My Naai in its own tab, then tap Allow.`);
+          // Try the automatic tab first (one tap when the browser allows it),
+          // and fall back to the guide, which carries a link the visitor can
+          // tap or copy even when a popup blocker refuses window.open.
+          if (openInOwnTabForAsk('notifications')) {
+            setPermissionNotice('New tab opened — choose Allow in the browser popup there.');
+          } else {
+            setPermissionNotice('This page can never show the popup — open My Naai in a tab of its own.');
+            openGuide('notifications', 'denied');
+          }
           onDismissRef.current?.();
           return;
         }
@@ -255,9 +262,12 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
         // In a frame this block is the frame's doing, not the visitor's: open a
         // tab that can actually show the popup (the guide has the same button).
         if (!alertsPromptable) {
-          setPermissionNotice(openInOwnTabForAsk('notifications')
-            ? 'New tab opened — choose Allow in the browser popup there.'
-            : `Allow pop-ups for ${siteHost()} to open My Naai in its own tab, then tap Allow.`);
+          if (openInOwnTabForAsk('notifications')) {
+            setPermissionNotice('New tab opened — choose Allow in the browser popup there.');
+          } else {
+            setPermissionNotice('This page can never show the popup — open My Naai in a tab of its own.');
+            openGuide('notifications', 'denied');
+          }
           onDismissRef.current?.();
           return;
         }
@@ -308,9 +318,12 @@ export function LoginPermissionCard({ onToken, onNotify, onDismiss, className = 
         return;
       }
       if (!locationPromptable) {
-        setPermissionNotice(openInOwnTabForAsk('location')
-          ? 'New tab opened — choose Allow in the location popup there.'
-          : `Allow pop-ups for ${siteHost()} to open My Naai in its own tab, then tap Allow.`);
+        if (openInOwnTabForAsk('location')) {
+          setPermissionNotice('New tab opened — choose Allow in the location popup there.');
+        } else {
+          setPermissionNotice('This page can never show the popup — open My Naai in a tab of its own.');
+          openGuide('location', 'denied');
+        }
         return;
       }
       setPermissionNotice('Change Location in browser site settings to try again.');
@@ -729,13 +742,10 @@ export function PermissionSheet({ open, onClose, onGranted, state: initialState 
     lede = `This page cannot show the ${isLocation ? 'location' : 'notifications'} prompt — browsers only allow it on a page that is not inside another one.`;
     body = (
       <>
-        <div className="permission-gate-actions">
-          <Button onClick={() => setEmbeddedTabOpen(openInOwnTabForAsk(isLocation ? 'location' : 'notifications'))} loading={busy}>
-            <ExternalLink size={16} /> Open a new tab and allow
-          </Button>
-        </div>
+        {/* A link, not a scripted popup: popup blockers and frames without
+            `allow-popups` swallow window.open, and both are common. */}
+        <OpenInOwnTab kind={isLocation ? 'location' : 'notifications'} />
         {embeddedTabOpen === true && <p className="permission-help-note permission-gate-inline-note" role="status">New tab opened — choose <strong>Allow</strong> in the browser popup there.</p>}
-        {embeddedTabOpen === false && <p className="permission-help-note permission-gate-inline-note" role="status">Your browser blocked the new tab. Allow pop-ups for {siteHost()} and tap again.</p>}
         <div className="permission-gate-secondary">
           <button className="ghost" onClick={allow} disabled={busy}>Try in this page anyway</button>
           <button className="ghost" onClick={onClose}>Close</button>
@@ -1104,6 +1114,54 @@ export function NotificationSetupCard({ compact = false, onEnabled }) {
         onGranted={token => { if (token) onEnabledRef.current?.(token); }}
       />
     </section>
+  );
+}
+
+// The way out of a page that can never show a popup: a link to this same page in
+// a tab of its own. A real link is the most permissive navigation there is — it
+// survives popup blockers that swallow window.open and iframes without
+// `allow-popups` — and when even it is refused, the address itself is on the
+// screen to copy. There is always a next step, never just an explanation.
+export function OpenInOwnTab({ kind = 'notifications', label = 'Open My Naai in a new tab' }) {
+  const url = ownTabAskUrl(kind);
+  const [copied, setCopied] = useState(false);
+  const [showUrl, setShowUrl] = useState(false);
+
+  const copy = async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 2200);
+        return;
+      }
+    } catch (clipboardError) {
+      console.debug(getErrorMessage(clipboardError, 'Clipboard write was blocked; showing the link instead.'));
+    }
+    // iOS Safari outside a gesture, installed PWAs, non-secure contexts: show
+    // the address so it can be selected by hand.
+    setShowUrl(true);
+  };
+
+  return (
+    <div className="open-own-tab">
+      <a className="open-own-tab-link" href={url} target="_blank" rel="noopener noreferrer">
+        <ExternalLink size={16} /> {label}
+      </a>
+      <div className="open-own-tab-foot">
+        <button type="button" className="ghost" onClick={copy}><Copy size={13} /> {copied ? 'Link copied' : 'Copy the link'}</button>
+      </div>
+      {showUrl && (
+        <textarea
+          className="report-textarea open-own-tab-url"
+          rows={2}
+          readOnly
+          value={url}
+          aria-label="My Naai link to open in a new tab"
+          onFocus={event => event.target.select()}
+        />
+      )}
+    </div>
   );
 }
 

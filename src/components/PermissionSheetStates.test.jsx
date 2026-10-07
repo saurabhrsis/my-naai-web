@@ -75,13 +75,15 @@ describe('alerts sheet states that used to go quiet on Try again', () => {
     try {
       await withCrossOriginFrame(async () => {
         await mount('needs-permission');
-        await act(async () => { buttonByText('Open a new tab').click(); });
-        await flush();
-
-        expect(openSpy).toHaveBeenCalledTimes(1);
-        expect(openSpy.mock.calls[0][0]).toContain('mynaai-ask=notifications');
+        // A link, not a scripted popup: popup blockers and frames without
+        // `allow-popups` swallow window.open, and both are common. The link is
+        // the one thing that always survives.
+        const link = container.querySelector('.open-own-tab-link');
+        expect(link).not.toBeNull();
+        expect(link.getAttribute('target')).toBe('_blank');
+        expect(link.getAttribute('href')).toContain('mynaai-ask=notifications');
         expect(globalThis.Notification.requestPermission).not.toHaveBeenCalled();
-        expect(container.textContent).toContain('New tab opened');
+        expect(openSpy).not.toHaveBeenCalled();
 
         // And the escape hatch nobody can help trying: the native API still
         // gets the tap, in this page, on request.
@@ -107,13 +109,11 @@ describe('alerts sheet states that used to go quiet on Try again', () => {
     const openSpy = vi.spyOn(window, 'open').mockReturnValue({});
     try {
       await mount('needs-permission', { kind: 'location' });
-      await act(async () => { buttonByText('Open a new tab').click(); });
-      await flush();
 
-      // The tab is the action that works; the native call in this frame is not.
-      expect(openSpy).toHaveBeenCalledTimes(1);
-      expect(openSpy.mock.calls[0][0]).toContain('mynaai-ask=location');
-      expect(container.textContent).toContain('New tab opened');
+      // The link is the action that works; the native call in this frame is not.
+      const link = container.querySelector('.open-own-tab-link');
+      expect(link.getAttribute('href')).toContain('mynaai-ask=location');
+      expect(getCurrentPosition).not.toHaveBeenCalled();
 
       await act(async () => { buttonByText('Try in this page anyway').click(); });
       await flush();

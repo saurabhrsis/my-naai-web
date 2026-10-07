@@ -398,6 +398,20 @@ export function openInOwnTabForAsk(kind = 'notifications') {
   }
 }
 
+// The link to hand over when window.open is blocked. Popup blockers — and any
+// frame without `allow-popups` — silently refuse window.open, so the visitor
+// needs something they can tap or copy with their own hands. This is the app's
+// own address, so opening it lands exactly where they were.
+export function ownTabAskUrl(kind = 'notifications') {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set(PENDING_ASK_PARAM, kind);
+    return url.toString();
+  } catch {
+    return '';
+  }
+}
+
 // Which permission the tab was opened to ask for, if any.
 export function pendingAskKind() {
   if (typeof window === 'undefined') return '';

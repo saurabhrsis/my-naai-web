@@ -18,6 +18,7 @@ import {
   isDeviceTokenError,
   isIosPwaInstalled,
   openInOwnTabForAsk,
+  ownTabAskUrl,
   promptsAvailable,
   PENDING_ASK_PARAM,
   pendingAskKind,
@@ -254,6 +255,15 @@ describe('permissions', () => {
       expect(pendingAskKind()).toBe('');
       window.history.replaceState({}, '', '/login');
       expect(pendingAskKind()).toBe('');
+    });
+
+    it('gives back the full address so a blocked popup still has a way out', () => {
+      window.history.replaceState({}, '', '/login?x=1');
+      const url = new URL(ownTabAskUrl('notifications'), window.location.origin);
+      // The app's own address, same page — not a different site, not a bare host.
+      expect(url.pathname).toBe('/login');
+      expect(url.searchParams.get(PENDING_ASK_PARAM)).toBe('notifications');
+      expect(url.searchParams.get('x')).toBe('1'); // nothing already here is lost
     });
 
     it('drops the marker once read — a reload never asks again', () => {

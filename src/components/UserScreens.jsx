@@ -87,7 +87,7 @@ import {
   useIsAppSurface,
 } from './Shared';
 import { NotificationDiagnostics } from './NotificationDiagnostics';
-import { ASK_CHOICES, alertsPromptFallback, canAskForAlerts, openInOwnTabForAsk, promptsAvailable, readAskChoice, readPermission, rememberAskChoice, requestLocation, requestNotifications, siteHost, watchPermission } from '../lib/permissions';
+import { ASK_CHOICES, alertsPromptFallback, canAskForAlerts, openInOwnTabForAsk, promptsAvailable, readAskChoice, readPermission, rememberAskChoice, requestLocation, requestNotifications, watchPermission } from '../lib/permissions';
 import { PermissionSheet } from './PermissionUI';
 import { BuzzerTestCard } from './BuzzerTestCard';
 
@@ -680,10 +680,15 @@ export function HomeScreen({ session, navigate, notify }) {
         // that failed native prompt with an app sheet.
         if (!promptsAvailable('location')) {
           // A frame can never show the location popup, so open a top-level tab
-          // that can — one tap, one real prompt, no paragraph about it.
-          setLocationRequestNote(openInOwnTabForAsk('location')
-            ? 'New tab opened — choose Allow in the location popup there.'
-            : `Allow pop-ups for ${siteHost()} to open My Naai in its own tab, then tap Allow.`);
+          // that can. A popup blocker may refuse window.open — then the sheet
+          // carries a link the visitor can tap or copy, which always works.
+          if (openInOwnTabForAsk('location')) {
+            setLocationRequestNote('New tab opened — choose Allow in the location popup there.');
+          } else {
+            setLocationRequestNote('This page can never show the popup — open My Naai in a tab of its own.');
+            setLocationSheetState('denied');
+            setLocationSheetOpen(true);
+          }
           return;
         }
         setLocationSheetState('denied');
