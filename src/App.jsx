@@ -378,6 +378,23 @@ function AppRoot() {
     window.history.replaceState({}, '', routeToPath(nextRoute, nextParams));
   }, []);
   const logout = useCallback(() => { clearDeviceTokenSync(); clearSession(); resetLiveUpdatesSocket(); setSession(null); setRoute({ name: 'home', params: {} }); window.history.replaceState({}, '', '/'); }, []);
+  // The expired-subscription paywall's own sign-out. It clears exactly what a
+  // normal logout clears, but lands on the LOGIN PAGE instead of the public
+  // home: a partner locked out by an expired plan has to be able to sign back
+  // in (salon role preselected, so one OTP is all it takes) — and the public
+  // website is still one tap away from the login page's own "Browse salons"
+  // link. `clearSession()` fires `mynaai:session-expired`, whose listener
+  // routes to the app home; the route is set AFTER it (same React batch), so
+  // the login page is what renders.
+  const logoutToLogin = useCallback(() => {
+    clearDeviceTokenSync();
+    clearSession();
+    resetLiveUpdatesSocket();
+    setSession(null);
+    const next = { name: 'login', params: { role: 'SALON' } };
+    setRoute(next);
+    window.history.replaceState({}, '', routeToPath(next.name, next.params));
+  }, []);
   const updateSessionUser = useCallback((user, sessionPatch = {}) => setSession(current => {
     if (!current) return current;
     const nextUser = { ...current.user, ...user };
@@ -504,7 +521,7 @@ function AppRoot() {
     // check — reachable on iOS without signing in.
     return <GuestShell route={route} navigate={navigate} notifyInstall={installPrompt ? install : null} showBuzzerCheck={route.name === 'partner'} />;
   }
-  return <AppShell session={session} route={route} navigate={navigate} onLogout={logout} onSessionUpdate={updateSessionUser} notifyInstall={installPrompt ? install : null} />;
+  return <AppShell session={session} route={route} navigate={navigate} onLogout={logout} onLogoutToLogin={logoutToLogin} onSessionUpdate={updateSessionUser} notifyInstall={installPrompt ? install : null} />;
 }
 
 // The pre-login shell: full salon discovery without an account. The header
@@ -973,12 +990,18 @@ function Brand({ light = false }) {
   );
 }
 
-function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyInstall }) {
+function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessionUpdate, notifyInstall }) {
   const isSalon = session.role === 'SALON';
   const confirm = useConfirm();
   // Even on the paywall the partner gets the same in-app confirmation: the
-  // notice is the only sign-out control left on that screen.
-  const confirmSignOut = async () => { if (await confirm(LOGOUT_CONFIRM)) onLogout?.(); };
+  // notice is the only sign-out control left on that screen. That sign-out ends
+  // on the LOGIN PAGE, not the app's default home — a partner whose plan expired
+  // can only get out through this control, so it has to leave them somewhere
+  // they can act: sign back in with the salon role already selected, or take the
+  // login page's "Browse salons" link to the public website. It falls back to
+  // the plain sign-out if a host shell (a test, an embed) never provided the
+  // login-landing variant.
+  const confirmSignOut = async () => { if (await confirm(LOGOUT_CONFIRM)) (onLogoutToLogin || onLogout)?.(); };
   const nav = isSalon ? SALON_NAV : USER_NAV;
   const primaryRoutes = nav.map(item => item.name);
   const utilityRoutes = ['detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'salonAbout', 'salonFaq', 'salonTerms', 'subscription', 'editProfile', 'bookingRequest'];
@@ -1363,7 +1386,7 @@ function AppShell({ session, route, navigate, onLogout, onSessionUpdate, notifyI
   // no account. After successful payment, handleSessionUpdate flips the gate
   // to active and the full portal is unlocked.
   const gateContent = isSubscriptionLocked
-    ? <SubscriptionScreen session={session} navigate={safeNavigate} notify={notify} params={{ mode: 'RENEW', forceRenewal: true }} onSessionUpdate={handleSessionUpdate} onLogout={onLogout} />
+    ? <SubscriptionScreen session={session} navigate={safeNavigate} notify={notify} params={{ mode: 'RENEW', forceRenewal: true }} onSessionUpdate={handleSessionUpdate} onLogout={confirmSignOut} />
     : isCheckingSubscription
       ? <SubscriptionGateLoading />
       : render();
