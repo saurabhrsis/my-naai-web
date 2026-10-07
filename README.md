@@ -52,6 +52,40 @@ Response and session interpretation is shared rather than inlined per screen: `s
 
 The complete portal behavior and operational notes are in [`docs/MY-NAAI-WEB-PORTAL.md`](docs/MY-NAAI-WEB-PORTAL.md). Firebase setup, browser token generation and notification payload processing are documented in [`docs/FIREBASE-WEB-PUSH.md`](docs/FIREBASE-WEB-PUSH.md).
 
+## Salon shop (partner e-commerce)
+
+The salon partner's **Shop** tab (Queue · History · Products · Shop · Account) is a self-contained e-commerce flow for the supplies a salon buys — hair colour, scrubs, scissors, consumables. My Naai admin publishes the catalog; the partner carts it, orders it to the salon's own address and follows the delivery.
+
+- **Browse** — search and category chips over the admin catalog, with price, strikethrough MRP, unit and stock. Out-of-stock items stay on the shelf but cannot be ordered.
+- **Product** — image, description, pack size and stock, then a quantity stepper and *Add to cart*.
+- **Cart** — per-line quantity, remove, clear, and a live summary (items total, savings, delivery, total). Delivery is ₹49 and free at ₹999 and above.
+- **Checkout** — the delivery address is **the salon's own address by default** (read from the salon profile, refreshed from `/api/salons/get-salon` because a stored session can be as thin as `{ salon: { salonId } }`). Any field can be changed for a one-off delivery, and **Use salon address** puts it back. Payment is **cash on delivery — there is no payment gateway in this flow**; missing or malformed address fields are named inline instead of failing at the API.
+- **My orders** — All / Active / Delivered / Cancelled, newest first, each opening a detail screen with the items, the delivery address, the money and a status tracker.
+- **Cancel** — any order that has not been **delivered** can be cancelled, through the app's own confirmation sheet (`useConfirm()`, never `window.confirm`). Delivered and cancelled are final.
+
+The cart is kept per salon in local storage (`mynaai:shop-cart`), and a restored cart is re-checked against the catalog when it loads: a product admin has removed, hidden or run out of is dropped or capped at what is actually left, so an order can never be placed for stock that is gone.
+
+### API contract
+
+| Endpoint | Body | Response |
+| --- | --- | --- |
+| `POST /api/shop/product-list` | `{ search?, category? }` | `{ status: 'SUCCESS', data: { products: [...] } }` |
+| `POST /api/orders/create` | `{ items: [{ productId, quantity }], address, note?, paymentMethod }` | `{ data: { order } }` |
+| `POST /api/orders/list` | `{}` | `{ data: { orders: [...] } }` |
+| `POST /api/orders/cancel` | `{ orderId, reason? }` | `{ data: { order } }` |
+
+Orders travel `PLACED → CONFIRMED → PACKED → SHIPPED → OUT_FOR_DELIVERY → DELIVERED`, with `CANCELLED` as the other exit; only `DELIVERED`/`CANCELLED` are final. A ready-to-paste Express + Sequelize controller for all four routes — including re-pricing every line from the catalog, server-side delivery fees and a per-salon owner filter — is in [`backend/shopOrders.js`](backend/shopOrders.js).
+
+### Reviewing the flow before the backend ships
+
+Those endpoints are new, so the dev server can serve them itself:
+
+```bash
+MYNAAI_DEV_MOCK_API=1 npm run dev     # also mocks the salon list, as before
+```
+
+It answers the four routes from a 12-product fixture and keeps orders in memory (including cancels), so the whole flow is clickable end to end. Without the flag — and in any production build — an unreachable shop degrades to the sample catalog **on the Vite dev server only** (or when `VITE_SHOP_FALLBACK=true`), and says so in a notice; a deployed build otherwise shows the honest empty shelf and a Retry, never a product admin did not publish. Orders placed in fallback mode are stored on the device.
+
 ## PWA
 
 - Startup is intentionally immediate: session state is restored synchronously from local storage instead of showing a timed splash screen.

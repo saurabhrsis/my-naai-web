@@ -292,7 +292,10 @@ img { display: block; max-width: 100%; }
 .mobile-shell-menu button.active { color: var(--gold); background: var(--gold-wash); }
 .mobile-shell-menu-logout { margin-top: 5px; color: #ff9d95 !important; border-top: 1px solid var(--line); border-radius: 0 0 12px 12px !important; }
 .mobile-shell-menu-logout:hover { background: rgba(242, 123, 116, .1) !important; }
-.mobile-nav { position: fixed; z-index: 40; left: max(10px, var(--safe-left)); right: max(10px, var(--safe-right)); bottom: max(9px, var(--safe-bottom)); display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 8px 5px 7px; border: 1px solid rgba(255,255,255,.1); border-radius: 20px; background: rgba(17,20,20,.94); box-shadow: 0 12px 45px rgba(0,0,0,.5); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
+/* `grid-auto-flow: column` rather than `repeat(4, …)`: the bar renders four
+   tabs for a customer and five for a salon partner (Shop was added), and a
+   hard-coded column count turned the fifth tab into an overflowing strip. */
+.mobile-nav { position: fixed; z-index: 40; left: max(10px, var(--safe-left)); right: max(10px, var(--safe-right)); bottom: max(9px, var(--safe-bottom)); display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); padding: 8px 5px 7px; border: 1px solid rgba(255,255,255,.1); border-radius: 20px; background: rgba(17,20,20,.94); box-shadow: 0 12px 45px rgba(0,0,0,.5); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
 .mobile-nav button { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 3px 2px; color: #6f7978; background: transparent; font-size: 9px; font-weight: 700; white-space: nowrap; }
 .mobile-nav button.active { color: var(--gold); }
 .mobile-nav button.active svg { filter: drop-shadow(0 0 5px rgba(232,185,126,.35)); }
@@ -502,6 +505,138 @@ img { display: block; max-width: 100%; }
 .product-manage-row > div:last-child { flex: none; }
 .small-icon-button { width: 27px; height: 27px; display: inline-flex; align-items: center; justify-content: center; margin-left: 3px; border-radius: 8px; color: var(--gold); background: var(--gold-wash); }
 .small-icon-button.danger { color: var(--red); background: rgba(242,123,116,.1); }
+
+/* ── Salon shop (partner e-commerce) ─────────────────────────────────────────
+   The shop is the partner's own supply store: admin publishes the catalog, the
+   salon carts it and it is delivered to the salon address. No payment gateway —
+   orders are cash on delivery — so the whole flow is catalog → cart → checkout →
+   orders → cancel-until-delivered, with no third-party step in the middle. */
+.shop-screen { padding-bottom: 64px; }
+.shop-orders-entry { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 11px; border: 1px solid rgba(232,185,126,.3); border-radius: 10px; color: var(--gold); background: var(--gold-wash); font-size: 11px; font-weight: 700; }
+.shop-orders-entry span { min-width: 17px; padding: 1px 5px; border-radius: 20px; color: #111; background: var(--gold); font-size: 9px; text-align: center; }
+.shop-sample-notice { display: flex; align-items: flex-start; gap: 8px; margin: -6px 0 15px; padding: 10px 12px; border: 1px dashed rgba(232,185,126,.4); border-radius: 12px; color: #d9c09a; background: rgba(232,185,126,.07); font-size: 11.5px; line-height: 1.5; }
+.shop-sample-notice svg { flex: none; margin-top: 1px; }
+.shop-error-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 15px; padding: 12px 14px; border: 1px solid rgba(242,123,116,.35); border-radius: 13px; color: #ffc6c2; background: rgba(242,123,116,.09); font-size: 12px; }
+.shop-search { margin-bottom: 13px; }
+.shop-tabs { margin-bottom: 16px; }
+.shop-product-card { display: flex; flex-direction: column; }
+.shop-product-open { display: block; width: 100%; padding: 0; text-align: left; background: transparent; color: inherit; }
+.shop-product-open .product-image-wrap { overflow: hidden; }
+.shop-discount-label { position: absolute; top: 9px; right: 9px; padding: 5px 7px; border-radius: 6px; color: #111; background: var(--gold); font-size: 9px; font-weight: 800; }
+.shop-mrp { color: #7d8685; font-size: 11px; }
+.shop-unit { display: block; margin-top: 7px; color: #8f9897; font-size: 10px; }
+.shop-card-actions { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 0 11px 11px; }
+.shop-card-actions .btn { width: 100%; }
+/* The cart bar floats ABOVE the fixed bottom nav (≈57px tall at 9px from the
+   bottom), not on top of it — a bar covering the tab you were about to tap is
+   worse than no bar. The screen keeps 64px of bottom padding so the last row of
+   products can never hide behind it. */
+.shop-cart-bar { position: fixed; z-index: 41; left: max(10px, var(--safe-left)); right: max(10px, var(--safe-right)); bottom: calc(74px + var(--safe-bottom)); display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid rgba(232,185,126,.28); border-radius: 16px; background: rgba(20,24,23,.96); box-shadow: 0 12px 40px rgba(0,0,0,.5); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
+.shop-cart-bar-copy { min-width: 0; }
+.shop-cart-bar-copy small { display: block; color: var(--muted); font-size: 10px; }
+.shop-cart-bar-copy strong { color: var(--gold); font-size: 16px; }
+.shop-loading { min-height: 300px; display: flex; align-items: center; justify-content: center; }
+/* Product detail */
+.shop-detail { display: grid; gap: 18px; }
+.shop-detail-media { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: 20px; background: linear-gradient(155deg, #262c2b, #161b1a 60%, #111514); }
+.shop-detail-image { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; }
+.shop-detail-copy h2 { margin: 6px 0 10px; font-size: 21px; line-height: 1.25; }
+.shop-detail-price { display: flex; align-items: baseline; flex-wrap: wrap; gap: 9px; }
+.shop-detail-price strong { color: var(--gold); font-size: 24px; }
+.shop-detail-price s { color: #7d8685; font-size: 12px; }
+.shop-detail-price em { color: var(--green); font-size: 11px; font-style: normal; font-weight: 700; }
+.shop-detail-note { margin: 12px 0 14px; color: var(--muted-light); font-size: 12.5px; line-height: 1.6; }
+.shop-detail-facts { display: flex; flex-wrap: wrap; gap: 8px; }
+.shop-detail-facts span { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted-light); background: var(--card); font-size: 10.5px; font-weight: 600; }
+.shop-detail-facts svg { flex: none; color: var(--gold); }
+.shop-detail-facts .is-out { color: #ffc6c2; }
+.shop-detail-buy { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 16px 0 12px; }
+.shop-detail-delivery { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+/* Quantity stepper — 30px targets (26px compact) so a phone tap never misses. */
+.shop-qty { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 11px; background: var(--card-raised); }
+.shop-qty button { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; color: var(--gold); background: transparent; }
+.shop-qty button:disabled { color: #5f6968; }
+.shop-qty span { min-width: 26px; text-align: center; color: var(--white); font-size: 12.5px; font-weight: 700; }
+.shop-qty.compact button { width: 26px; height: 26px; }
+.shop-qty.compact span { min-width: 20px; font-size: 11.5px; }
+/* Cart + checkout */
+.shop-cart-layout, .shop-checkout-layout { display: grid; gap: 16px; align-items: start; }
+.shop-cart-list { display: flex; flex-direction: column; gap: 11px; }
+.shop-cart-row { display: flex; align-items: center; gap: 12px; padding: 11px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
+.shop-cart-thumb { width: 62px; height: 62px; flex: none; overflow: hidden; border-radius: 12px; background: var(--card-raised); }
+.shop-cart-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.shop-cart-thumb.small { width: 42px; height: 42px; border-radius: 10px; }
+.shop-cart-copy { flex: 1; min-width: 0; }
+.shop-cart-copy strong { display: block; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.shop-cart-copy small { color: var(--muted); font-size: 10.5px; }
+.shop-cart-line-price { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
+.shop-cart-line-price b { color: var(--gold); font-size: 13.5px; }
+.shop-cart-line-price s { color: #7d8685; font-size: 10.5px; }
+.shop-cart-controls { flex: none; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.shop-cart-remove { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; color: var(--red); background: rgba(242,123,116,.1); }
+.shop-summary-card { padding: 16px 15px; border: 1px solid var(--line); border-radius: 18px; background: var(--card); }
+.shop-summary-card h3 { margin: 0 0 12px; font-size: 14px; }
+.shop-summary-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; color: var(--muted-light); font-size: 12px; }
+.shop-summary-row b { color: var(--white); font-size: 12.5px; }
+.shop-summary-row b.is-good { color: var(--green); }
+.shop-summary-row.total { margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--line); }
+.shop-summary-row.total span { color: var(--white); font-size: 13px; font-weight: 700; }
+.shop-summary-row.total b { color: var(--gold); font-size: 19px; }
+.shop-free-hint { display: flex; align-items: center; gap: 6px; margin: 4px 0 2px; padding: 8px 10px; border-radius: 10px; color: #d9c09a; background: rgba(232,185,126,.08); font-size: 10.5px; }
+.shop-block-button { width: 100%; margin-top: 13px; }
+.shop-summary-foot { margin: 10px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
+.shop-panel { margin-bottom: 14px; padding: 15px 14px; border: 1px solid var(--line); border-radius: 18px; background: var(--card); }
+.shop-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.shop-panel-head h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13.5px; }
+.shop-panel-head svg { flex: none; color: var(--gold); }
+.shop-panel-note { margin: -4px 0 12px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.shop-reset-address { display: inline-flex; align-items: center; gap: 6px; padding: 7px 9px; border-radius: 9px; color: var(--gold); background: var(--gold-wash); font-size: 10px; font-weight: 700; }
+.shop-form-grid { display: grid; grid-template-columns: 1fr; gap: 13px; }
+.shop-form-wide { grid-column: 1 / -1; }
+.shop-checkout-items { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+.shop-checkout-item { display: flex; align-items: center; gap: 11px; }
+.shop-checkout-item > div { flex: 1; min-width: 0; }
+.shop-checkout-item strong { display: block; overflow: hidden; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.shop-checkout-item small { color: var(--muted); font-size: 10.5px; }
+.shop-checkout-item b { flex: none; color: var(--gold); font-size: 12.5px; }
+.shop-payment-option { display: flex; align-items: center; gap: 11px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; }
+.shop-payment-option.is-selected { border-color: rgba(232,185,126,.55); background: rgba(232,185,126,.07); }
+.shop-payment-option input { flex: none; accent-color: var(--gold); }
+.shop-payment-option > span { flex: 1; min-width: 0; }
+.shop-payment-option strong { display: block; font-size: 12.5px; }
+.shop-payment-option small { color: var(--muted); font-size: 10.5px; line-height: 1.5; }
+.shop-payment-option > svg { flex: none; color: var(--gold); }
+/* Orders */
+.shop-order-list { display: flex; flex-direction: column; gap: 12px; }
+.shop-order-card { overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: var(--card); }
+.shop-order-open { display: flex; align-items: center; gap: 12px; width: 100%; padding: 13px; text-align: left; background: transparent; color: var(--white); }
+.shop-order-thumbs { flex: none; display: flex; }
+.shop-order-thumbs span { width: 42px; height: 42px; overflow: hidden; margin-right: -12px; border: 2px solid var(--card); border-radius: 11px; background: var(--card-raised); }
+.shop-order-thumbs img { width: 100%; height: 100%; object-fit: cover; }
+.shop-order-thumbs em { display: inline-flex; align-items: center; padding-left: 16px; color: var(--muted); font-size: 10.5px; font-style: normal; }
+.shop-order-copy { flex: 1; min-width: 0; }
+.shop-order-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.shop-order-title-row h3 { margin: 3px 0 0; font-size: 14px; }
+.shop-order-copy p { margin: 6px 0 0; color: var(--muted); font-size: 10.5px; }
+.shop-order-total { display: block; margin-top: 6px; color: var(--gold); font-size: 14px; }
+.shop-order-open > svg { flex: none; color: var(--muted); }
+/* Same treatment as .cancel-booking: 10px red copy with a real tap area. */
+.shop-order-cancel { position: relative; display: inline-flex; align-items: center; gap: 5px; width: 100%; padding: 0 13px 12px; color: var(--red); background: transparent; font-size: 10.5px; font-weight: 700; }
+.shop-order-cancel::after { content: ''; position: absolute; inset: -8px 0 0; }
+.shop-tracker { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; margin-bottom: 12px; }
+.shop-tracker-step { position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
+.shop-tracker-dot { width: 15px; height: 15px; display: flex; align-items: center; justify-content: center; border: 2px solid var(--line); border-radius: 50%; background: var(--card); }
+.shop-tracker-step.done .shop-tracker-dot { border-color: var(--gold); background: var(--gold); color: #111; }
+.shop-tracker-step.current .shop-tracker-dot { border-color: var(--gold); box-shadow: 0 0 0 4px rgba(232,185,126,.14); }
+.shop-tracker-step small { color: var(--muted); font-size: 9px; line-height: 1.2; }
+.shop-tracker-step.done small { color: var(--white); }
+.shop-tracker-step:not(:last-child)::after { content: ''; position: absolute; top: 7px; left: 58%; right: -42%; height: 2px; background: var(--line); }
+.shop-tracker-step.done:not(:last-child)::after { background: var(--gold); }
+.shop-cancelled-banner { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 11px 13px; border: 1px solid rgba(242,123,116,.35); border-radius: 13px; color: #ffc6c2; background: rgba(242,123,116,.09); font-size: 12px; }
+.shop-status-note { margin: 0 0 15px; color: var(--muted-light); font-size: 12px; }
+.shop-address-line { margin: 0 0 4px; color: var(--white); font-size: 12.5px; }
+.shop-address-line.muted { color: var(--muted-light); font-size: 11.5px; line-height: 1.5; }
+.shop-detail-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
 .toggle { display: inline-flex; align-items: center; gap: 7px; color: var(--muted-light); font-size: 10px; cursor: pointer; }
 .toggle input { position: absolute; opacity: 0; pointer-events: none; }
 .toggle-track { position: relative; width: 32px; height: 18px; padding: 2px; border-radius: 20px; background: #303636; transition: background .2s; }
@@ -1491,6 +1626,9 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .booking-main { padding: 17px; }
   /* Big phones and up: the three facts pair off instead of stacking. */
   .booking-details { grid-template-columns: repeat(2, minmax(0, 1fr)); font-size: 11px; }
+  .shop-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .shop-cart-controls { flex-direction: row; }
+  .shop-tracker-step small { font-size: 9.5px; }
   .request-detail-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .modal-backdrop { align-items: center; }
   .modal-card { border-radius: 22px; }
@@ -1547,6 +1685,14 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .queue-card-actions { justify-content: flex-end; }
   .queue-card-actions .btn { flex: 0 0 auto; min-width: 168px; }
   .history-card, .notification-card { max-width: 850px; }
+  .shop-cart-layout, .shop-checkout-layout { grid-template-columns: minmax(0, 1fr) 320px; gap: 18px; }
+  .shop-cart-list, .shop-cart-row, .shop-order-list, .shop-order-card, .shop-tracker, .shop-detail-actions { max-width: 850px; }
+  .shop-summary-card { position: sticky; top: 84px; }
+  .shop-detail { grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 24px; }
+  .shop-detail-image { aspect-ratio: 1 / 1; }
+  /* The bottom nav becomes a centred 620px pill here, so the floating cart bar
+     matches it instead of stretching the full width. */
+  .shop-cart-bar { max-width: 620px; margin-right: auto; margin-left: auto; }
   .salon-profile-hero { max-width: 800px; padding: 24px; }
   .salon-profile-photo { width: 90px; height: 94px; }
   .salon-profile-copy h2 { font-size: 22px; }
@@ -1581,6 +1727,9 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
      hidden at 760px — three widths before the sidebar existed. */
   .mobile-shell-bar { display: none; }
   .mobile-nav { display: none; }
+  /* Sidebar takes over navigation, so the floating cart bar no longer has a
+     bottom bar to clear — it drops to the corner like every other dock. */
+  .shop-cart-bar { left: auto; right: 34px; bottom: calc(24px + var(--safe-bottom)); max-width: 360px; margin-right: 0; margin-left: 0; }
   /* overflow-y keeps .sidebar-bottom reachable: on short windows (1024-1200px
      tablets, laptops with a 700px-tall viewport) the brand + role + nav + tip
      stack exceeds 100svh, and the Sign out button spilled below the viewport of

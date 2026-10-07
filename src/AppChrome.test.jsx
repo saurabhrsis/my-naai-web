@@ -333,7 +333,9 @@ describe('Bottom navigation labels', () => {
     await mount();
 
     const labels = tabLabels();
-    expect(labels).toEqual(['Queue', 'History', 'Products', 'Account']);
+    // Five tabs now: the partner's own supply shop sits between the salon's
+    // retail catalog (Products) and Account, and its bar label is 'Shop'.
+    expect(labels).toEqual(['Queue', 'History', 'Products', 'Shop', 'Account']);
     labels.forEach(label => expect(label[0]).toBe(label[0].toUpperCase()));
   });
 
@@ -462,5 +464,34 @@ describe('Expired-subscription paywall sign-out', () => {
     expect(container.querySelector('.login-page')).toBeNull();
     expect(currentPath()).toBe('/subscription?mode=RENEW&forceRenewal=true');
     expect(localStorage.getItem('mynaai')).not.toBeNull();
+  });
+});
+
+// ── 5. Salon shop tab ───────────────────────────────────────────────────────
+// The partner supply shop is a fifth tab in the salon bar and one route
+// (`/shop`) in the salon route list. If either half is missing the partner sees
+// no way in at all, so the wiring is pinned here.
+describe('Salon shop tab', () => {
+  it('opens the shop from the bottom bar and keeps the salon’s other tabs', async () => {
+    signIn('SALON', '/queue');
+    await mount();
+
+    const labels = Array.from(container.querySelectorAll('.mobile-nav button span')).map(node => node.textContent);
+    expect(labels).toContain('Shop');
+
+    const shopTab = Array.from(container.querySelectorAll('.mobile-nav button')).find(node => node.textContent.includes('Shop'));
+    await act(async () => { shopTab.click(); });
+    await flush();
+
+    expect(window.location.pathname).toBe('/shop');
+    expect(container.querySelector('.shop-screen')).not.toBeNull();
+    expect(container.querySelector('.mobile-nav button[aria-current="page"]').textContent).toContain('Shop');
+  });
+
+  it('serves /shop directly (a shared or reloaded link)', async () => {
+    signIn('SALON', '/shop');
+    await mount();
+
+    expect(container.querySelector('.shop-screen')).not.toBeNull();
   });
 });

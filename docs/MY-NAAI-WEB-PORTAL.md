@@ -200,6 +200,26 @@ The editor's **Cancel** button is never disabled. It used to render `disabled={i
 
 Both paths use `useConfirm()`, never `window.confirm` — the native dialog is suppressed in some installed-PWA webviews, where it returns `false` and makes a button look dead on exactly one device.
 
+## 6b. Salon shop (partner e-commerce)
+
+The **Shop** tab is the partner's own supply store and is deliberately separate from **Products**: *Products* is the retail catalog the salon sells to its customers (`/api/products/*`, untouched), while *Shop* is what the salon **buys** — hair colour, scrubs, scissors, consumables — published by My Naai admin. There is **no payment gateway**; an order is placed and settled on delivery, so no Razorpay order is ever created for it.
+
+**The flow.** Browse (search + category chips, price, MRP, unit, stock) → Product (details and quantity) → Cart (line quantities, remove, summary) → Checkout (delivery address, COD) → My orders (All / Active / Delivered / Cancelled) → Order detail (items, address, money, tracker, cancel, reorder).
+
+**The delivery address defaults to the salon's own address.** `salonAddressFromProfile()` reads the stored session first and then re-reads `/api/salons/get-salon`, because a partner session can be as thin as `{ salon: { salonId } }` and the checkout needs a real pincode. A partner who edits any field keeps their copy (`addressTouched`) and gets **Use salon address** to put it back. `validateAddress()` names the exact field that is wrong (6-digit pincode, 10-digit phone) rather than disabling the button silently.
+
+**Money lives in one place.** `cartTotals()` in `src/lib/shop.js` owns items total, savings, the ₹49 delivery fee, the ₹999 free-delivery threshold and the total, so the cart, the checkout summary, the payload sent to the API and the stored order can never disagree.
+
+**Cancel rule.** `canCancelOrder()` is "anything not delivered": `PLACED`, `CONFIRMED`, `PACKED`, `SHIPPED` and `OUT_FOR_DELIVERY` are cancellable; `DELIVERED` and `CANCELLED` are final. Cancelling goes through `useConfirm()` — never `window.confirm`, which is suppressed in some installed-PWA webviews and returns `false`, making the button look dead.
+
+**The cart is per salon and self-healing.** It is stored under `mynaai:shop-cart` keyed by salon id, so a partner never inherits another salon's cart. When the catalog arrives, `reconcileCart()` drops anything admin has removed, hidden or run out of and caps a line at the stock actually left — a restored cart can never order stock that is gone. Cart lines keep the price the partner saw when adding.
+
+**Routing.** The shop is one route with a view: `/shop`, `/shop?view=cart`, `/shop?view=product&productId=…`, `/shop?view=order&orderId=…`. Every step is a real history entry, so the browser back button and the phone gesture walk back through the flow and a shared link opens the exact step it names.
+
+**Backend.** `POST /api/shop/product-list`, `POST /api/orders/create`, `POST /api/orders/list` and `POST /api/orders/cancel` are new. A ready-to-paste Express + Sequelize controller is in [`backend/shopOrders.js`](../backend/shopOrders.js); it re-prices every line from the catalog (a price in the request body is a client's opinion), recomputes the delivery fee server-side, refuses to cancel a delivered order and scopes every read to the salon on the request — falling back to a JS-side owner filter if the `salonId` column is not there yet rather than querying the whole table.
+
+**Before those endpoints exist.** `MYNAAI_DEV_MOCK_API=1 npm run dev` answers the four routes from a 12-product fixture with orders held in memory, so the flow is clickable end to end. On any Vite dev server (or with `VITE_SHOP_FALLBACK=true`) an unreachable shop degrades to the sample catalog and **says so in a notice**; a deployed build without the flag shows the honest empty shelf and a Retry. Orders placed in fallback mode are stored on the device.
+
 ## 7. Browser permissions
 
 One notification permission does everything: booking alerts (the backend stores the browser's `deviceToken`), the salon buzzer, delay requests, and the 30-minute booking reminders (§3). It is asked compactly and always with a working next step — a labelled button on the login page, in the same tap as Continue with OTP, on the salon registration steps, and later from **Alerts & permissions** in either Account screen. Location is a separate, optional row asked in context (**Use my location**, the salon address editor, salon signup) and a dismissal is remembered:
@@ -470,6 +490,9 @@ request runs a 60-second countdown that a second dialog would eat into.
 | `public/firebase-messaging-sw.js` | Background push display and notification click routing |
 | `src/components/UserScreens.jsx` | Customer screens, bookings and delay response |
 | `src/components/SalonScreens.jsx` | Salon queue, booking request, delay action and partner screens |
+| `src/components/SalonShopScreen.jsx` | Partner supply shop: browse, product, cart, checkout, orders, order detail |
+| `src/lib/shop.js` | Shop domain: catalog/order normalization, cart totals, cancel rule, per-salon cart storage and the shop API calls |
+| `backend/shopOrders.js` | Drop-in Express + Sequelize controller for `/api/shop/product-list` and `/api/orders/create|list|cancel`. Copied into the API repo, not built with the web app |
 | `src/main.jsx` | Root offline shell worker registration |
 | `src/styles.css` | Responsive mobile-first layout through large desktop widths, with the device safe-area padding for installed PWAs |
 

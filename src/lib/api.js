@@ -395,6 +395,15 @@ export const api = {
   createProductList: payload => post('/api/products/create', payload),
   updateProductList: payload => post('/api/products/update', payload),
   deleteProduct: productId => post('/api/products/delete', { productId }),
+
+  // Salon supply shop (partner e-commerce). The catalog is published by My Naai
+  // admin and ordered by the salon; payment is offline (COD), so there is no
+  // gateway call in this flow. Contract + ready-to-paste controller:
+  // backend/shopOrders.js.
+  shopProductList: payload => post('/api/shop/product-list', payload),
+  createOrder: payload => post('/api/orders/create', payload),
+  orderList: payload => post('/api/orders/list', payload || {}),
+  cancelOrder: payload => post('/api/orders/cancel', payload),
   salonNotificationList: payload => post('/api/notifications/get-salon-notification-list', payload),
   salonNotificationCount: payload => get('/api/notifications/get-notification-count', { params: payload }),
 

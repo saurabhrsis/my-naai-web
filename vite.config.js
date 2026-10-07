@@ -54,6 +54,76 @@ function salonFixture(index) {
 
 const SALON_FIXTURES = Array.from({ length: 57 }, (item, index) => salonFixture(index));
 
+// ── Salon supply shop fixture ───────────────────────────────────────────────
+// The partner Shop tab talks to four endpoints the live API does not have yet
+// (/api/shop/product-list, /api/orders/create|list|cancel — see
+// backend/shopOrders.js for the contract the backend implements). Without a
+// fixture the tab is an empty shelf in every preview and the flow cannot be
+// reviewed at all. This mirrors the sample catalog in src/lib/shop.js and keeps
+// the orders in memory for the life of the dev server.
+const SHOP_PRODUCTS = [
+  { productId: 'shop-01', productName: 'Professional Hair Cutting Scissors 6.5"', brand: 'Naai Pro', category: 'Tools', price: 1150, mrp: 1499, stock: 24, unit: '1 piece', productImage: '', description: 'Japanese stainless steel barber scissors with an adjustable tension screw.' },
+  { productId: 'shop-02', productName: 'Texturising Thinning Scissors', brand: 'Naai Pro', category: 'Tools', price: 890, mrp: 1100, stock: 18, unit: '1 piece', productImage: '', description: '28-tooth thinning shear for de-bulking and blending.' },
+  { productId: 'shop-03', productName: 'Hair Colour Tube — Natural Brown 60ml', brand: 'Keune', category: 'Hair colour', price: 520, mrp: 590, stock: 60, unit: '1 tube', productImage: '', description: 'Permanent professional hair colour with 100% grey coverage.' },
+  { productId: 'shop-04', productName: 'Hair Colour — Burgundy 60ml', brand: 'Keune', category: 'Hair colour', price: 520, mrp: 590, stock: 44, unit: '1 tube', productImage: '', description: 'Vibrant Burgundy permanent colour with a conditioning base.' },
+  { productId: 'shop-05', productName: 'Ammonia-Free Hair Colour Kit (Pack of 3)', brand: 'Gentle Look', category: 'Hair colour', price: 1250, mrp: 1499, stock: 15, unit: 'pack of 3', productImage: '', description: 'Ammonia-free three-tube kit for sensitive scalps.' },
+  { productId: 'shop-06', productName: 'Scalp Scrub — Charcoal Detox 200ml', brand: 'Pure Roots', category: 'Hair care', price: 480, mrp: 549, stock: 33, unit: '200 ml', productImage: '', description: 'Charcoal and salicylic acid scrub that lifts build-up and excess oil.' },
+  { productId: 'shop-07', productName: 'Keratin Repair Shampoo 500ml', brand: 'Silk Route', category: 'Hair care', price: 690, mrp: 799, stock: 50, unit: '500 ml', productImage: '', description: 'Sulphate-free keratin shampoo for chemically treated hair.' },
+  { productId: 'shop-08', productName: 'Argan Oil Hair Serum 100ml', brand: 'Silk Route', category: 'Hair care', price: 560, mrp: 650, stock: 38, unit: '100 ml', productImage: '', description: 'Lightweight argan serum for shine and heat protection.' },
+  { productId: 'shop-09', productName: 'Disposable Salon Towels (Pack of 100)', brand: 'Clean Cut', category: 'Consumables', price: 399, mrp: 499, stock: 90, unit: 'pack of 100', productImage: '', description: 'Absorbent, lint-free disposable towels, one per client.' },
+  { productId: 'shop-10', productName: 'Hair Colour Brush & Bowl Set', brand: 'Naai Pro', category: 'Consumables', price: 220, mrp: 280, stock: 65, unit: '1 set', productImage: '', description: 'Non-slip mixing bowl with a colour brush and tint comb.' },
+  { productId: 'shop-11', productName: 'Shaving Razor + 10 Blades', brand: 'Sharp Edge', category: 'Consumables', price: 340, mrp: 399, stock: 47, unit: '1 razor + 10 blades', productImage: '', description: 'Classic barber razor with ten stainless blades.' },
+  { productId: 'shop-12', productName: 'Barber Cape — Waterproof', brand: 'Clean Cut', category: 'Consumables', price: 450, mrp: 549, stock: 0, unit: '1 piece', productImage: '', description: 'Anti-static waterproof cape with an adjustable snap closure.' },
+];
+
+const SHOP_ORDERS = [];
+let shopOrderSeq = 2407;
+
+// A signed-in partner session. The sandbox (and an offline laptop) cannot reach
+// backend.mynaai.in, so without this the login form is a dead end and the
+// partner screens — including the new Shop tab — cannot be opened in a preview
+// at all. Any 10-digit number signs in; the OTP is 123456.
+const DEV_SALON = {
+  ...SALON_FIXTURES[0],
+  token: 'dev-salon-token',
+  userId: SALON_FIXTURES[0].salonId,
+  profileCompleted: true,
+  isNewSalon: false,
+  subscriptionExpired: false,
+};
+
+function fixtureOrder(body) {
+  shopOrderSeq += 1;
+  const catalogue = new Map(SHOP_PRODUCTS.map(item => [item.productId, item]));
+  const items = (body.items || []).map(line => {
+    const product = catalogue.get(line.productId) || {};
+    return {
+      productId: line.productId,
+      productName: product.productName || line.name || 'Product',
+      unit: product.unit || '',
+      productImage: product.productImage || '',
+      quantity: Number(line.quantity) || 1,
+      price: Number(line.price) || product.price || 0,
+    };
+  }).map(line => ({ ...line, lineTotal: line.price * line.quantity }));
+  const subtotal = items.reduce((sum, line) => sum + line.lineTotal, 0);
+  const deliveryFee = Number(body.deliveryFee || 0);
+  return {
+    orderId: `order-${shopOrderSeq}`,
+    orderNumber: `MN${shopOrderSeq}`,
+    status: 'PLACED',
+    createdAt: Date.now(),
+    items,
+    subtotal,
+    deliveryFee,
+    totalAmount: Number(body.totalAmount || subtotal + deliveryFee),
+    paymentMethod: body.paymentMethod || 'COD',
+    note: body.note || '',
+    address: body.address || {},
+    timeline: [{ status: 'PLACED', at: Date.now() }],
+  };
+}
+
 const readBody = req => new Promise(resolve => {
   let raw = '';
   req.on('data', chunk => { raw += chunk; });
@@ -79,8 +149,57 @@ function devSalonFixturePlugin() {
         const path = String(req.url || '').split('?')[0];
         const isList = path === '/api/salons/salon-list' || path === '/api/salons/salon-list-public';
         const isDetail = path === '/api/salons/get-salon-by-id';
-        if (!isList && !isDetail) return next();
+        const isShop = path.startsWith('/api/shop/') || path.startsWith('/api/orders/');
+        // Signed-in partner fixtures: without these a preview cannot get past
+        // the OTP form, because backend.mynaai.in is unreachable from a sandbox.
+        const isSalonAuth = path === '/api/salons/send-otp' || path === '/api/salons/login' || path === '/api/salons/get-salon';
+        const isBookingList = path === '/api/booking/get-booking-list';
+        if (!isList && !isDetail && !isShop && !isSalonAuth && !isBookingList) return next();
         const body = req.method === 'POST' ? await readBody(req) : {};
+        if (path === '/api/salons/send-otp') {
+          console.log('[dev salon fixture] OTP requested — use 123456');
+          return sendJson(res, { status: 'SUCCESS', message: 'OTP sent (dev fixture: 123456)' });
+        }
+        if (path === '/api/salons/login') {
+          if (String(body.otp || '') !== '123456') return sendJson(res, { status: 'FAILED', message: 'Invalid OTP (dev fixture expects 123456)' });
+          console.log('[dev salon fixture] signed in as', DEV_SALON.salonId);
+          return sendJson(res, { status: 'SUCCESS', data: DEV_SALON, isNewSalon: false, profileCompleted: true });
+        }
+        if (path === '/api/salons/get-salon') {
+          return sendJson(res, { status: 'SUCCESS', data: { salon: DEV_SALON } });
+        }
+        if (path === '/api/booking/get-booking-list') {
+          return sendJson(res, { status: 'SUCCESS', data: { bookings: [] } });
+        }
+        if (path === '/api/shop/product-list') {
+          const query = String(body.search || '').trim().toLowerCase();
+          const category = String(body.category || '').trim().toLowerCase();
+          const products = SHOP_PRODUCTS.filter(product => (
+            (!category || category === 'all' || String(product.category).toLowerCase() === category)
+            && (!query || `${product.productName} ${product.brand} ${product.category}`.toLowerCase().includes(query))
+          ));
+          console.log(`[dev shop fixture] product-list → ${products.length}/${SHOP_PRODUCTS.length}`);
+          return sendJson(res, { status: 'SUCCESS', data: { products } });
+        }
+        if (path === '/api/orders/create') {
+          const order = fixtureOrder(body);
+          SHOP_ORDERS.unshift(order);
+          console.log(`[dev shop fixture] order ${order.orderNumber} placed (${order.items.length} lines, Rs ${order.totalAmount})`);
+          return sendJson(res, { status: 'SUCCESS', data: { order } });
+        }
+        if (path === '/api/orders/list') {
+          return sendJson(res, { status: 'SUCCESS', data: { orders: SHOP_ORDERS } });
+        }
+        if (path === '/api/orders/cancel') {
+          const order = SHOP_ORDERS.find(item => item.orderId === body.orderId);
+          if (!order) return sendJson(res, { status: 'FAILED', message: 'Order not found' });
+          // A delivered parcel cannot be called back — the same rule the app applies.
+          if (order.status === 'DELIVERED') return sendJson(res, { status: 'FAILED', message: 'This order has already been delivered.' });
+          order.status = 'CANCELLED';
+          order.timeline = [...(order.timeline || []), { status: 'CANCELLED', at: Date.now() }];
+          console.log(`[dev shop fixture] order ${order.orderNumber} cancelled`);
+          return sendJson(res, { status: 'SUCCESS', data: { order } });
+        }
         if (isDetail) {
           const salon = SALON_FIXTURES.find(item => item.salonId === body.salonId);
           return sendJson(res, salon ? { status: 'SUCCESS', data: salon } : { status: 'FAILED', message: 'Salon not found' });

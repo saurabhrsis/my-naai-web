@@ -20,6 +20,7 @@ import {
   UsersRound,
   X,
   ShieldCheck,
+  ShoppingBag,
 } from 'lucide-react';
 import { api, clearSession, getToken, isPlanExpiredResponse, isUnknownSalonResponse, setToken } from './lib/api';
 import { persistSession, readLocalSession, restoreSession } from './lib/session';
@@ -78,6 +79,7 @@ import {
   SalonProductsScreen,
   SalonQueueScreen,
 } from './components/SalonScreens';
+import { SalonShopScreen } from './components/SalonShopScreen';
 import { SubscriptionScreen } from './components/SubscriptionScreen';
 import { ConfirmProvider, LOGOUT_CONFIRM, useConfirm } from './components/ConfirmDialog';
 import { SALON_ABOUT_CONTENT, SALON_FAQ_CONTENT, SALON_TERMS_CONTENT } from './lib/salonContent';
@@ -97,6 +99,10 @@ const SALON_NAV = [
   { name: 'queue', label: 'Customer queue', short: 'Queue', icon: UsersRound },
   { name: 'history', label: 'History', short: 'History', icon: History },
   { name: 'salonProducts', label: 'Products', short: 'Products', icon: Package },
+  // The partner's own supply shop: My Naai admin publishes the catalog, the
+  // salon orders what it needs and it is delivered to the salon address. The
+  // Products tab above (the salon's own retail catalog) is untouched.
+  { name: 'shop', label: 'Salon shop', short: 'Shop', icon: ShoppingBag },
   { name: 'account', label: 'Account', short: 'Account', icon: CircleUserRound },
 ];
 
@@ -141,7 +147,7 @@ function saveSession(session) {
 // falls back to the role's home instead of rendering a screen the shell has
 // no branch for.
 const USER_ROUTE_NAMES = ['home', 'bookings', 'products', 'account', 'detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'privacy', 'contact'];
-const SALON_ROUTE_NAMES = ['queue', 'history', 'salonProducts', 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
+const SALON_ROUTE_NAMES = ['queue', 'history', 'salonProducts', 'shop', 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
 // Every route a visitor may open WITHOUT an account — salons are browsable
 // first, login only appears when they try to book (the client's headline
 // ask). The info pages are public too: the site footer links About/FAQ/Terms/
@@ -1372,6 +1378,7 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     if (route.name === 'queue') return <SalonQueueScreen {...props} />;
     if (route.name === 'history') return <SalonHistoryScreen {...props} />;
     if (route.name === 'salonProducts') return <SalonProductsScreen {...props} />;
+    if (route.name === 'shop') return <SalonShopScreen {...props} params={route.params} />;
     if (route.name === 'account') return <SalonAccountScreen {...props} onLogout={onLogout} />;
     if (route.name === 'notifications') return <NotificationsScreen {...props} />;
     if (route.name === 'editProfile') return <EditSalonProfileScreen {...props} params={route.params} onLogout={onLogout} />;
