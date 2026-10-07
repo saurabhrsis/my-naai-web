@@ -1228,6 +1228,58 @@ describe('Login permission flow', () => {
     expect(headings().some(text => /Check your phone/.test(text))).toBe(true);
   });
 
+  // The two taps below are asserted INSIDE the tap's own synchronous turn: the
+  // browser API must already have been invoked by the time the click handler
+  // returns. Safari silently drops a permission popup requested after an
+  // `await` (src/lib/permissions.js, rule 3), so "it worked in a test that
+  // flushed promises first" is not the guarantee that matters — this is.
+  it('opens the browser notification prompt from the Allow tap itself, before any promise resolves', async () => {
+    const requestPermission = vi.fn(() => {
+      globalThis.Notification.permission = 'granted';
+      return Promise.resolve('granted');
+    });
+    globalThis.Notification = { permission: 'default', requestPermission };
+    // A live-permission read that never answers: anything that awaited a
+    // permission status (or a device token) before asking would never reach
+    // requestPermission at all.
+    Object.defineProperty(navigator, 'permissions', {
+      value: { query: vi.fn(() => new Promise(() => {})) },
+      configurable: true,
+    });
+    await mount();
+
+    const allowButton = notificationAllowButton();
+    expect(allowButton).not.toBeNull();
+    await act(async () => {
+      allowButton.click();
+      expect(requestPermission).toHaveBeenCalledTimes(1);
+    });
+    await flush();
+    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+  });
+
+  it('opens the browser location prompt from the Allow tap itself, before any promise resolves', async () => {
+    setNotificationPermission('granted');
+    vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'enabled', token: 'push-token-geo' });
+    const getCurrentPosition = vi.fn(success => success({ coords: { latitude: 21.1458, longitude: 79.0882 } }));
+    navigator.geolocation = { getCurrentPosition };
+    // Safari does not expose location permission through navigator.permissions,
+    // so the read falls back to 'default' and the row stays on the page.
+    delete navigator.permissions;
+    await mount();
+
+    const allowButton = locationAllowButton();
+    expect(allowButton).not.toBeNull();
+    await act(async () => {
+      allowButton.click();
+      // The native geolocation call — the one that shows the browser's own
+      // "Allow location" popup — happened in the tap itself.
+      expect(getCurrentPosition).toHaveBeenCalledTimes(1);
+    });
+    await flush();
+    expect(container.querySelector('.permission-gate-sheet')).toBeNull();
+  });
+
   it('explains a cross-origin frame instead of spending the tap on a doomed ask', async () => {
     // Chrome and Firefox refuse Notification.requestPermission() inside a
     // cross-origin frame, so a tap there can never produce a prompt: the card

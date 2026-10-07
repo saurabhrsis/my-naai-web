@@ -484,8 +484,12 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
     </div>
     {isForcedRenewal && onLogout && (
       <div className="forced-renewal-footer">
+        {/* The way off a hard paywall. It signs the partner out and lands on the
+            LOGIN page (salon role preselected), where they can either sign back
+            in or tap "Browse salons" to reach the public website — without this
+            the expired-plan screen was the only screen they could see. */}
         <button className="forced-renewal-logout" onClick={onLogout}><LogOut size={15} /> Sign out</button>
-        <span className="forced-renewal-help">Need help? Call <a href={`tel:${SUPPORT_PHONE}`}>{SUPPORT_PHONE}</a></span>
+        <span className="forced-renewal-help">Signs you out to the login page — browse the website from there. Need help? Call <a href={`tel:${SUPPORT_PHONE}`}>{SUPPORT_PHONE}</a></span>
       </div>
     )}
   </div>;
