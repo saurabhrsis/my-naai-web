@@ -113,7 +113,7 @@ export function normalizePlanDetails(profile = {}) {
     ? explicitExpired
     : explicitActive !== null
       ? !explicitActive
-      : expiredByDate ?? expiredByStatus;
+      : expiredByStatus ?? expiredByDate;
   const daysLeft = Number.isFinite(expiryTime) ? Math.ceil((expiryTime - Date.now()) / 86400000) : null;
   return {
     planType,

@@ -28,6 +28,11 @@ describe('subscription state', () => {
     expect(plan.isActive).toBe(true);
   });
 
+  it('trusts an explicit active plan status over an old expiry after renewal', () => {
+    const state = getSubscriptionState({ planType: 'monthly', planExpiryDate: '2020-01-01', subscriptionStatus: 'ACTIVE' });
+    expect(state.active).toBe(true);
+  });
+
   it('does not infer subscription state from the salon account status', () => {
     const state = getSubscriptionState({ planType: 'monthly', status: 'CLOSED' });
     expect(state.known).toBe(false);
