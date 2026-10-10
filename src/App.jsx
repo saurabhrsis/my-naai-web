@@ -54,7 +54,7 @@ import { popPendingRoute, stashPendingRoute } from './lib/pendingRoute';
 import { legacyHashToRoute, parseRoutePath, routeToPath, softNavigate } from './lib/routes';
 import { DEFAULT_SERVICES } from './lib/defaultServices';
 import { getSubscriptionState } from './lib/planDetails';
-import { getSalonSubscriptionProfile, getSalonSubscriptionState, salonProfileNeedsCompletion as salonNeedsProfileCompletion } from './lib/salonProfile';
+import { salonProfileNeedsCompletion as salonNeedsProfileCompletion } from './lib/salonProfile';
 import { flagIsFalse, flagIsTrue } from './lib/flags';
 import { STATE_OPTIONS } from './lib/stateOptions';
 import {
@@ -1021,19 +1021,16 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     setBookingAlert(null);
     navigate('queue');
   }, [navigate]);
-  const cachedSubscription = useMemo(() => getSalonSubscriptionState(session), [session]);
-  const [subscriptionGate, setSubscriptionGate] = useState(() => {
-    if (!isSalon || session.isNewSalon) return 'active';
-    // Even a cached active plan is revalidated before a partner screen mounts;
-    // expiry can happen while the portal is closed.
-    return cachedSubscription.expired ? 'locked' : 'checking';
-  });
+  // Never lock based on a stored session's expiry date. Check the current
+  // subscription with the API before rendering partner screens.
+  const [subscriptionGate, setSubscriptionGate] = useState(() =>
+    !isSalon || session.isNewSalon ? 'active' : 'checking'
+  );
   const subscriptionGateRef = useRef(subscriptionGate);
   useEffect(() => { subscriptionGateRef.current = subscriptionGate; }, [subscriptionGate]);
   const routeName = useRef(route.name);
   useEffect(() => { routeName.current = route.name; }, [route.name]);
-  // Screens read the session through this ref so `handleSessionUpdate` below can
-  // keep a stable identity (see its comment).
+  // Keep the latest session available to the device-token sync effect.
   const sessionRef = useRef(session);
   useEffect(() => { sessionRef.current = session; }, [session]);
 
@@ -1046,12 +1043,8 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
       setSubscriptionGate('active');
       return undefined;
     }
-    const cached = getSalonSubscriptionState(session);
-    if (cached.expired) {
-      setSubscriptionGate('locked');
-      return undefined;
-    }
-
+    // Cached expiry is only a provisional lock. Always recheck the server:
+    // a payment made on another device can have renewed this salon already.
     let cancelled = false;
     let expiryTimer;
     setSubscriptionGate('checking');
@@ -1081,7 +1074,9 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
           setSubscriptionGate('locked');
           return;
         }
-        scheduleExpiry(state.plan);
+        // Do not schedule a stale expiry when the server explicitly reports
+        // an active plan (e.g. just after a renewal).
+        if (state.plan?.expiryDate && new Date(state.plan.expiryDate).getTime() > Date.now()) scheduleExpiry(state.plan);
         // A profile without subscription fields is treated as unknown rather
         // than expired. The API remains the source of truth for restricted
         // actions and will emit PLAN_EXPIRED if the account is actually blocked.
@@ -1326,23 +1321,19 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     return () => { cancelled = true; window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
   }, [isSalon, session.userId]);
 
-  // NOTE: deliberately not keyed on `session`. Screens list this callback in the
-  // dependency array of their data loader (SalonAccountScreen, SubscriptionScreen)
-  // and then call it from inside that loader. Depending on `session` gave it a new
-  // identity on every write, which recreated `load`, re-fired the loader effect,
-  // refetched, wrote again — an endless loop that pinned the salon account screen on
-  // "Loading salon profile…" while spamming GET /api/salon/profile. The latest
-  // session is read from sessionRef instead, so identity stays stable and the
-  // handler still sees current data.
+  // Keep this callback independent of `session`: account and subscription
+  // loaders depend on its identity and would refetch on every session write.
   const handleSessionUpdate = useCallback((user = {}, sessionPatch = {}) => {
     onSessionUpdate?.(user, sessionPatch);
     if (!isSalon) return;
-    const nextProfile = { ...getSalonSubscriptionProfile(sessionRef.current), ...(user || {}) };
+    // Only the incoming update may change the gate. Merging stored profile
+    // dates here can relock a salon immediately after a successful payment.
     const explicitlyExpired = flagIsTrue(user?.subscriptionExpired) || flagIsTrue(sessionPatch?.subscriptionExpired);
     const explicitlyActive = flagIsFalse(user?.subscriptionExpired) || flagIsFalse(sessionPatch?.subscriptionExpired);
-    const nextState = getSubscriptionState(nextProfile);
-    if (explicitlyExpired || nextState.expired) setSubscriptionGate('locked');
-    else if (explicitlyActive || nextState.active) setSubscriptionGate('active');
+    const nextState = getSubscriptionState(user);
+    if (explicitlyActive) setSubscriptionGate('active');
+    else if (explicitlyExpired || nextState.expired) setSubscriptionGate('locked');
+    else if (nextState.active) setSubscriptionGate('active');
   }, [isSalon, onSessionUpdate]);
 
   const isSubscriptionLocked = isSalon && subscriptionGate === 'locked';

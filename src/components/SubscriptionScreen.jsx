@@ -177,7 +177,7 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
       planStatus: 'ACTIVE',
       subscriptionExpired: false,
       profileCompleted: true,
-    }, {});
+    }, { subscriptionExpired: false });
     setPaymentState('idle');
     notify?.('success', 'Plan renewed successfully. Welcome back!');
     // When renewal was forced by expiry, send the salon straight to the queue
