@@ -362,12 +362,32 @@ function AppRoot() {
         };
       } catch (profileError) {
         console.debug(getErrorMessage(profileError, 'Could not preflight salon profile completion.'));
-        // A plan-expired response is authoritative even when the profile call
-        // is rejected. Preserve the existing safe onboarding fallback for any
-        // other profile error so an incomplete salon cannot reach the dashboard.
-        resolvedSession = isPlanExpiredResponse(profileError)
-          ? { ...nextSession, subscriptionExpired: true, user: { ...(nextSession.user || {}), subscriptionExpired: true } }
-          : { ...nextSession, isNewSalon: true };
+        // The backend subscription record (planType / planStartDate /
+        // planEndDate / isPlanActive — written by every purchase, including ones
+        // made in the MOBILE app) is the arbiter even when get-salon fails. It
+        // can travel in the rejection body and in the login response
+        // (user.salon / user.salon.subscription). A partner who bought on the
+        // mobile app must never be flagged expired — or bounced into onboarding
+        // — on a web login just because this one call failed.
+        const errorState = getSubscriptionState(salonProfileFromResponse({ data: profileError?.data }));
+        const loginProfile = getSalonSubscriptionProfile({ user: nextSession.user });
+        const loginState = getSubscriptionState(loginProfile);
+        const recordActive = errorState.active || (!errorState.known && loginState.active);
+        const recordExpired = errorState.expired || (!errorState.known && loginState.expired);
+        if (recordActive) {
+          resolvedSession = {
+            ...nextSession,
+            subscriptionExpired: false,
+            user: { ...(nextSession.user || {}), subscriptionExpired: false },
+            ...(salonNeedsProfileCompletion(loginProfile) ? { isNewSalon: true } : {}),
+          };
+        } else if (isPlanExpiredResponse(profileError) || recordExpired) {
+          resolvedSession = { ...nextSession, subscriptionExpired: true, user: { ...(nextSession.user || {}), subscriptionExpired: true } };
+        } else {
+          // Any other profile error keeps the safe onboarding fallback so an
+          // incomplete salon cannot reach the dashboard.
+          resolvedSession = { ...nextSession, isNewSalon: true };
+        }
       }
     }
     const stored = saveSession(resolvedSession);
@@ -1092,9 +1112,13 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
       .catch(error => {
         if (cancelled) return;
         // Same arbiter on the error path: a PLAN_EXPIRED rejection whose body
-        // carries a live subscription record does not lock the portal.
+        // carries a live backend record does not lock the portal, and neither
+        // does a failed fetch when the record cached at login (the login
+        // response's user.salon.subscription) says the plan is live — a
+        // purchase made in the mobile app must survive a web login.
         const errorState = getSubscriptionState(salonProfileFromResponse({ data: error?.data }));
-        if (errorState.active) {
+        const cachedState = getSubscriptionState(getSalonSubscriptionProfile(sessionRef.current));
+        if (errorState.active || (!errorState.known && cachedState.active)) {
           setSubscriptionGate('active');
           return;
         }
@@ -1121,23 +1145,35 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
         navigate('subscription', { mode: 'RENEW', forceRenewal: true }, { replace: true });
       }
     };
+    // The backend record (isPlanActive / planStartDate / planEndDate) is the
+    // arbiter wherever it appears: the get-salon response, a PLAN_EXPIRED
+    // rejection body, or the copy cached at login from the login response.
+    const releaseIfRecordActive = (state, cachedState) => {
+      if (state.active || (!state.known && cachedState?.active)) {
+        // The record says the plan is live — swallow the stale signal and
+        // re-arm the one-shot alert latch so a genuine later expiry is still
+        // delivered.
+        resetPlanExpiredAlert();
+        return true;
+      }
+      return false;
+    };
+    const cachedState = getSubscriptionState(getSalonSubscriptionProfile(sessionRef.current));
     if (!session.userId) {
       lockNow();
       return;
     }
     api.salonProfile({ salonId: session.userId })
       .then(response => {
-        const state = getSubscriptionState(salonProfileFromResponse(response));
-        if (state.active) {
-          // The record says the plan is live — swallow the stale signal and
-          // re-arm the one-shot alert latch so a genuine later expiry is still
-          // delivered.
-          resetPlanExpiredAlert();
-          return;
-        }
-        lockNow();
+        if (!releaseIfRecordActive(getSubscriptionState(salonProfileFromResponse(response)), cachedState)) lockNow();
       })
-      .catch(lockNow);
+      .catch(error => {
+        // The fetch was rejected — but the rejection body can still carry the
+        // backend record, and the login-time copy always does. Never lock a
+        // partner whose record says the plan is live (e.g. bought in the
+        // mobile app) because this one call failed.
+        if (!releaseIfRecordActive(getSubscriptionState(salonProfileFromResponse({ data: error?.data })), cachedState)) lockNow();
+      });
   }, [navigate, route.name, route.params, session.userId]);
 
   useEffect(() => {

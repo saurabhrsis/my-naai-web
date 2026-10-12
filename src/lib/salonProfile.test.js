@@ -126,6 +126,17 @@ describe('salonProfileFromResponse', () => {
     expect(profile.subscription).toEqual(record);
   });
 
+  it('descends double-nested bodies and PLAN_EXPIRED rejections that carry the record', () => {
+    // Some backend releases wrap the payload as `data.data`, including the
+    // bodies of PLAN_EXPIRED rejections.
+    const deep = salonProfileFromResponse({ data: { data: { salon: { salonName: 'X' }, subscription: record } } });
+    expect(deep.subscription).toEqual(record);
+    expect(deep.salonName).toBe('X');
+    const rejection = salonProfileFromResponse({ data: { status: 'PLAN_EXPIRED', message: 'renew', data: { subscription: record } } });
+    expect(rejection.subscription).toEqual(record);
+    expect(getSalonSubscriptionState({ user: { salon: { subscription: record } } }).active).toBe(true);
+  });
+
   it('flattens data.salon over the data root', () => {
     const profile = salonProfileFromResponse({ data: { planType: 'quarterly', salon: { planType: 'monthly', ownerName: 'Ravi' } } });
     expect(profile.planType).toBe('monthly');

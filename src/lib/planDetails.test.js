@@ -86,6 +86,15 @@ describe('renewal record (planStartDate / planEndDate / isPlanActive)', () => {
     expect(state.active).toBe(true);
   });
 
+  it('prefers the backend record over a PLAN_EXPIRED status echoed in the same payload', () => {
+    // The record fields are what the backend maintains (including purchases
+    // made in the mobile app); a stale status code must not override them and
+    // strand the partner on the paywall. The nested `status` here is one the
+    // legacy chain would have trusted.
+    expect(getSubscriptionState({ status: 'PLAN_EXPIRED', subscription: LIVE_RECORD }).active).toBe(true);
+    expect(getSubscriptionState({ planType: 'monthly', subscription: { ...LIVE_RECORD, status: 'EXPIRED' } }).active).toBe(true);
+  });
+
   it('locks only when the record itself is over', () => {
     const state = getSubscriptionState({
       planType: 'monthly',

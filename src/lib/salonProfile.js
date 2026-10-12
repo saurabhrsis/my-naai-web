@@ -60,15 +60,22 @@ export function getSalonSubscriptionState(session) {
 // Flattens a `get-salon`-style response into one profile object. The backend
 // has shipped this payload in several shapes: the plan fields sit flat on
 // `data`, on `data.salon`, or as a sibling `data.subscription` document next to
-// `data.salon`. Taking only `data.salon` (the old `data.salon || data` pick)
-// silently dropped the sibling subscription record — the record that
-// `renew-salon-plan` maintains — and the paywall then decided "expired" from
-// stale fields. Merging keeps every plan field visible to
-// `normalizePlanDetails`.
+// `data.salon` — and error bodies wrap the payload one level deeper (`data.data`).
+// Taking only `data.salon` (the old `data.salon || data` pick) silently dropped
+// the subscription record — the backend fields `renew-salon-plan` maintains
+// (planType / planStartDate / planEndDate / isPlanActive) — and the paywall then
+// decided "expired" from stale signals. Merging every level keeps the backend
+// record visible to `normalizePlanDetails`.
 export function salonProfileFromResponse(response) {
-  const data = response?.data && typeof response.data === 'object' && !Array.isArray(response.data) ? response.data : {};
-  const salon = data.salon && typeof data.salon === 'object' && !Array.isArray(data.salon) ? data.salon : null;
-  const merged = salon ? { ...data, ...salon } : { ...data };
+  const isObject = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  const levels = [];
+  if (isObject(response?.data)) levels.push(response.data);
+  if (isObject(response?.data?.data)) levels.push(response.data.data);
+  const merged = {};
+  for (const level of levels) Object.assign(merged, level);
+  for (const level of levels) {
+    if (isObject(level?.salon)) Object.assign(merged, level.salon);
+  }
   return {
     ...merged,
     ...(merged.profileCompleted === undefined && response?.profileCompleted !== undefined ? { profileCompleted: response.profileCompleted } : {}),
