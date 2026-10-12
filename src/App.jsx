@@ -21,7 +21,7 @@ import {
   X,
   ShieldCheck,
 } from 'lucide-react';
-import { api, clearSession, getToken, isPlanExpiredResponse, isUnknownSalonResponse, setToken } from './lib/api';
+import { api, clearSession, getToken, isPlanExpiredResponse, isUnknownSalonResponse, resetPlanExpiredAlert, setToken } from './lib/api';
 import { persistSession, readLocalSession, restoreSession } from './lib/session';
 import { closeNotification, deletePushToken, displayNotification, getNotificationRoute, getPushStatus, getPushToken, isActionableNotification, isPushConfigured, normalizePushPayload, recordForegroundMessage, setupPush, watchNotificationPermission } from './lib/push';
 import {
@@ -54,7 +54,7 @@ import { popPendingRoute, stashPendingRoute } from './lib/pendingRoute';
 import { legacyHashToRoute, parseRoutePath, routeToPath, softNavigate } from './lib/routes';
 import { DEFAULT_SERVICES } from './lib/defaultServices';
 import { getSubscriptionState } from './lib/planDetails';
-import { salonProfileNeedsCompletion as salonNeedsProfileCompletion } from './lib/salonProfile';
+import { getSalonSubscriptionProfile, salonProfileFromResponse, salonProfileNeedsCompletion as salonNeedsProfileCompletion } from './lib/salonProfile';
 import { flagIsFalse, flagIsTrue } from './lib/flags';
 import { STATE_OPTIONS } from './lib/stateOptions';
 import {
@@ -338,22 +338,26 @@ function AppRoot() {
       if (nextSession.token) setToken(nextSession.token);
       try {
         const response = await api.salonProfile({ salonId: nextSession.userId });
-        const profileData = response?.data?.salon || response?.data || {};
-        const fetchedProfile = {
-          ...profileData,
-          ...(profileData.profileCompleted === undefined && response?.profileCompleted !== undefined ? { profileCompleted: response.profileCompleted } : {}),
-          ...(profileData.isNewSalon === undefined && response?.isNewSalon !== undefined ? { isNewSalon: response.isNewSalon } : {}),
-        };
+        // One flattening helper so a subscription record returned as a sibling
+        // of `data.salon` is never dropped before the plan check below.
+        const fetchedProfile = salonProfileFromResponse(response);
         const planState = getSubscriptionState(fetchedProfile);
+        // `subscriptionExpired` is a cache this app writes, not an API field:
+        // without explicitly clearing it here, a `true` from before the renewal
+        // survives the merge above (the profile carries `isPlanActive`, not this
+        // flag) and re-locks the salon on every later session read.
+        const planFlag = planState.expired
+          ? { subscriptionExpired: true }
+          : planState.active ? { subscriptionExpired: false } : {};
         const profilePatch = {
           ...(nextSession.user || {}),
           ...fetchedProfile,
-          ...(planState.expired ? { subscriptionExpired: true } : {}),
+          ...planFlag,
         };
         resolvedSession = {
           ...nextSession,
           user: profilePatch,
-          ...(planState.expired ? { subscriptionExpired: true } : {}),
+          ...planFlag,
           ...(salonNeedsProfileCompletion(fetchedProfile) ? { isNewSalon: true } : {}),
         };
       } catch (profileError) {
@@ -1064,19 +1068,22 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     api.salonProfile({ salonId: session.userId })
       .then(response => {
         if (cancelled) return;
-        if (isPlanExpiredResponse(response)) {
-          setSubscriptionGate('locked');
-          return;
-        }
-        const profile = response?.data?.salon || response?.data || {};
+        const profile = salonProfileFromResponse(response);
         const state = getSubscriptionState(profile);
-        if (state.expired) {
+        // The subscription record (planStartDate / planEndDate / isPlanActive)
+        // is checked BEFORE any stale signal: a response that still carries a
+        // PLAN_EXPIRED status from a cached salon document must not force
+        // mode=RENEW&forceRenewal=true while the record itself is live.
+        if (state.expired || (!state.active && isPlanExpiredResponse(response))) {
           setSubscriptionGate('locked');
           return;
         }
         // Do not schedule a stale expiry when the server explicitly reports
-        // an active plan (e.g. just after a renewal).
-        if (state.plan?.expiryDate && new Date(state.plan.expiryDate).getTime() > Date.now()) scheduleExpiry(state.plan);
+        // an active plan (e.g. just after a renewal). A record flag of
+        // `isPlanActive: true` is absolute: no date timer may raise the renewal
+        // modal while it is live — the backend flips the flag (or emits
+        // PLAN_EXPIRED) when the plan actually ends.
+        if (state.plan?.expiryDate && state.plan.isPlanActive !== true && new Date(state.plan.expiryDate).getTime() > Date.now()) scheduleExpiry(state.plan);
         // A profile without subscription fields is treated as unknown rather
         // than expired. The API remains the source of truth for restricted
         // actions and will emit PLAN_EXPIRED if the account is actually blocked.
@@ -1084,7 +1091,14 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
       })
       .catch(error => {
         if (cancelled) return;
-        setSubscriptionGate(isPlanExpiredResponse(error) ? 'locked' : 'active');
+        // Same arbiter on the error path: a PLAN_EXPIRED rejection whose body
+        // carries a live subscription record does not lock the portal.
+        const errorState = getSubscriptionState(salonProfileFromResponse({ data: error?.data }));
+        if (errorState.active) {
+          setSubscriptionGate('active');
+          return;
+        }
+        setSubscriptionGate(isPlanExpiredResponse(error) || errorState.expired ? 'locked' : 'active');
       });
 
     return () => {
@@ -1096,12 +1110,35 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
   // A server-side PLAN_EXPIRED response can arrive after the initial check (for
   // example exactly at midnight). It is a hard redirect, not a dismissible
   // warning, and the renewal screen is the only salon view left mounted.
+  // First, though, the salon's subscription record is the arbiter: a PLAN_EXPIRED
+  // signal emitted from a stale copy of the salon document (before
+  // `renew-salon-plan` rewrote planStartDate / planEndDate / isPlanActive) must
+  // not force mode=RENEW&forceRenewal=true on a partner whose plan is live.
   const forceSalonRenewal = useCallback(() => {
-    setSubscriptionGate('locked');
-    if (route.name !== 'subscription' || route.params?.mode !== 'RENEW' || !flagIsTrue(route.params?.forceRenewal)) {
-      navigate('subscription', { mode: 'RENEW', forceRenewal: true }, { replace: true });
+    const lockNow = () => {
+      setSubscriptionGate('locked');
+      if (route.name !== 'subscription' || route.params?.mode !== 'RENEW' || !flagIsTrue(route.params?.forceRenewal)) {
+        navigate('subscription', { mode: 'RENEW', forceRenewal: true }, { replace: true });
+      }
+    };
+    if (!session.userId) {
+      lockNow();
+      return;
     }
-  }, [navigate, route.name, route.params]);
+    api.salonProfile({ salonId: session.userId })
+      .then(response => {
+        const state = getSubscriptionState(salonProfileFromResponse(response));
+        if (state.active) {
+          // The record says the plan is live — swallow the stale signal and
+          // re-arm the one-shot alert latch so a genuine later expiry is still
+          // delivered.
+          resetPlanExpiredAlert();
+          return;
+        }
+        lockNow();
+      })
+      .catch(lockNow);
+  }, [navigate, route.name, route.params, session.userId]);
 
   useEffect(() => {
     if (!isSalon) return undefined;
@@ -1328,12 +1365,18 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     if (!isSalon) return;
     // Only the incoming update may change the gate. Merging stored profile
     // dates here can relock a salon immediately after a successful payment.
+    // The subscription record (planStartDate / planEndDate / isPlanActive —
+    // read through the same user.salon merge the account screens use) decides
+    // before the cached `subscriptionExpired` flag: that flag is written by
+    // this app and can survive in the session across a renewal made on another
+    // device or in the mobile app.
     const explicitlyExpired = flagIsTrue(user?.subscriptionExpired) || flagIsTrue(sessionPatch?.subscriptionExpired);
     const explicitlyActive = flagIsFalse(user?.subscriptionExpired) || flagIsFalse(sessionPatch?.subscriptionExpired);
-    const nextState = getSubscriptionState(user);
-    if (explicitlyActive) setSubscriptionGate('active');
-    else if (explicitlyExpired || nextState.expired) setSubscriptionGate('locked');
+    const nextState = getSubscriptionState(getSalonSubscriptionProfile({ user }));
+    if (nextState.expired) setSubscriptionGate('locked');
     else if (nextState.active) setSubscriptionGate('active');
+    else if (explicitlyActive) setSubscriptionGate('active');
+    else if (explicitlyExpired) setSubscriptionGate('locked');
   }, [isSalon, onSessionUpdate]);
 
   const isSubscriptionLocked = isSalon && subscriptionGate === 'locked';

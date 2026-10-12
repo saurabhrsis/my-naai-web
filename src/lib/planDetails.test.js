@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { PARTNER_PLANS, RENEWAL_PLANS, getSubscriptionState, normalizePlanDetails } from './planDetails';
 
+// The subscription record `renew-salon-plan` maintains on every renewal:
+// planType / planStartDate / planEndDate / isPlanActive / createdAt /
+// updatedAt. Built relative to now so the suite never goes stale.
+const LIVE_RECORD = {
+  planType: 'monthly',
+  planStartDate: new Date(Date.now() - 3 * 86400000).toISOString(),
+  planEndDate: new Date(Date.now() + 27 * 86400000).toISOString(),
+  isPlanActive: true,
+  createdAt: new Date(Date.now() - 31 * 86400000).toISOString(),
+  updatedAt: new Date(Date.now() - 3 * 86400000).toISOString(),
+};
+
 describe('subscription state', () => {
   it('marks a salon with a past expiry date as expired', () => {
     const plan = normalizePlanDetails({
@@ -37,6 +49,77 @@ describe('subscription state', () => {
     const state = getSubscriptionState({ planType: 'monthly', status: 'CLOSED' });
     expect(state.known).toBe(false);
     expect(state.expired).toBe(false);
+  });
+});
+
+describe('renewal record (planStartDate / planEndDate / isPlanActive)', () => {
+  it('reads the record fields the renewal endpoint maintains', () => {
+    const plan = normalizePlanDetails(LIVE_RECORD);
+    expect(plan.expired).toBe(false);
+    expect(plan.isActive).toBe(true);
+    expect(plan.startDate).toBe(LIVE_RECORD.planStartDate);
+    expect(plan.expiryDate).toBe(LIVE_RECORD.planEndDate);
+    expect(plan.daysLeft).toBeGreaterThan(25);
+  });
+
+  it('keeps a renewed salon unlocked despite a stale cached subscriptionExpired flag', () => {
+    // The flag this app writes had latched `true` before the renewal; the
+    // record is live. The paywall must not force mode=RENEW&forceRenewal=true.
+    const state = getSubscriptionState({ ...LIVE_RECORD, subscriptionExpired: true, planExpired: true });
+    expect(state.expired).toBe(false);
+    expect(state.active).toBe(true);
+  });
+
+  it('finds the record nested under subscription, plan or the salon object', () => {
+    expect(getSubscriptionState({ salonName: 'Glamour Studio', subscription: LIVE_RECORD }).active).toBe(true);
+    expect(getSubscriptionState({ salonName: 'Glamour Studio', plan: LIVE_RECORD }).active).toBe(true);
+    expect(getSubscriptionState({ salon: LIVE_RECORD }).active).toBe(true);
+    // Singleton-array form some releases return.
+    expect(getSubscriptionState({ subscription: [LIVE_RECORD] }).active).toBe(true);
+  });
+
+  it('prefers the renewed record window over a stale legacy expiry alias', () => {
+    const state = getSubscriptionState({
+      ...LIVE_RECORD,
+      planExpiryDate: new Date(Date.now() - 86400000).toISOString(),
+    });
+    expect(state.active).toBe(true);
+  });
+
+  it('locks only when the record itself is over', () => {
+    const state = getSubscriptionState({
+      planType: 'monthly',
+      planStartDate: new Date(Date.now() - 60 * 86400000).toISOString(),
+      planEndDate: new Date(Date.now() - 30 * 86400000).toISOString(),
+      isPlanActive: false,
+    });
+    expect(state.expired).toBe(true);
+  });
+
+  it('never treats a plan with isPlanActive: true as expired — no renewal modal, even past planEndDate', () => {
+    // The flag is the switch the backend maintains. While it is true the
+    // renewal modal must not show — not for a passed planEndDate, and not for
+    // stale expiry flags cached before the renewal.
+    const state = getSubscriptionState({
+      planType: 'monthly',
+      planStartDate: new Date(Date.now() - 60 * 86400000).toISOString(),
+      planEndDate: new Date(Date.now() - 60_000).toISOString(),
+      isPlanActive: true,
+      subscriptionExpired: true,
+    });
+    expect(state.expired).toBe(false);
+    expect(state.active).toBe(true);
+    expect(state.plan.isPlanActive).toBe(true);
+  });
+
+  it('treats a future planEndDate as active even when the flag is missing or falsy-but-stale', () => {
+    expect(getSubscriptionState({ planType: 'monthly', planEndDate: LIVE_RECORD.planEndDate }).active).toBe(true);
+    expect(getSubscriptionState({ planType: 'monthly', planEndDate: LIVE_RECORD.planEndDate, isPlanActive: false }).active).toBe(true);
+  });
+
+  it('treats isPlanActive as a veto when the record carries no window', () => {
+    expect(getSubscriptionState({ planType: 'monthly', isPlanActive: false }).expired).toBe(true);
+    expect(getSubscriptionState({ planType: 'monthly', isPlanActive: true }).active).toBe(true);
   });
 });
 

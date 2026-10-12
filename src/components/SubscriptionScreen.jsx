@@ -16,7 +16,8 @@ import { api, resetPlanExpiredAlert } from '../lib/api';
 import { getPushToken, isPushConfigured } from '../lib/push';
 import { normalizeDeviceToken } from '../lib/apiPayload';
 import { rememberLoginToken } from '../lib/deviceToken';
-import { FREE_ONBOARDING_PLAN, PARTNER_PLANS, RENEWAL_PLANS } from '../lib/planDetails';
+import { FREE_ONBOARDING_PLAN, PARTNER_PLANS, RENEWAL_PLANS, getSubscriptionState } from '../lib/planDetails';
+import { getSalonSubscriptionProfile, salonProfileFromResponse } from '../lib/salonProfile';
 import {
   clearPendingPayment,
   clearRedirectedPaymentParams,
@@ -84,6 +85,29 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
   const registrationData = params.registrationData;
   const isRegistration = Boolean(registrationData);
   const isForcedRenewal = !isRegistration && Boolean(params.forceRenewal || params.forceRenewal === 'true');
+  // mode=RENEW&forceRenewal=true is only trusted once the subscription fields
+  // agree the plan is actually over. A stale paywall URL — a tab reopened after
+  // renewing on another device, an installed app resuming its last route — must
+  // not tell a partner whose record (isPlanActive / planEndDate) is live that
+  // their subscription has expired.
+  const cachedPlanState = useMemo(
+    () => (isForcedRenewal && session ? getSubscriptionState(getSalonSubscriptionProfile(session)) : null),
+    [isForcedRenewal, session],
+  );
+  const [planLive, setPlanLive] = useState(() => cachedPlanState?.active === true);
+  useEffect(() => {
+    if (!isForcedRenewal || !session?.userId) return undefined;
+    let cancelled = false;
+    api.salonProfile({ salonId: session.userId })
+      .then(response => {
+        if (cancelled) return;
+        const state = getSubscriptionState(salonProfileFromResponse(response));
+        if (state.known) setPlanLive(state.active);
+      })
+      .catch(() => { /* keep the current reading; the paywall copy stays */ });
+    return () => { cancelled = true; };
+  }, [isForcedRenewal, session?.userId]);
+  const forcedRenewal = isForcedRenewal && !planLive;
   const isUpgrade = Boolean(isForcedRenewal || params.isUpgrade || params.mode === 'RENEW');
   const isOnboarding = params.isOnboarding === true || params.isOnboarding === 'true';
   const showFreeOnboarding = isOnboarding && !isRegistration;
@@ -171,10 +195,20 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
     // previous plan while it re-reads the profile. The explicit active flag also
     // releases the hard paywall immediately, before the profile refresh returns.
     const returnedPlan = response?.data?.subscription || response?.data?.plan || response?.subscription || response?.plan || {};
+    // The paywall re-checks the record fields (isPlanActive / planEndDate). Make
+    // them coherent here even if the renewal response echoes the pre-renewal
+    // record: active flag, and an end date inside the plan's own window.
+    const windowDays = Number(/(\d+)\s*days?/i.exec(plan.duration || '')?.[1]) || 30;
+    const returnedEnd = new Date(returnedPlan.planEndDate || returnedPlan.planExpiryDate || '').getTime();
+    const ensuredEndDate = Number.isFinite(returnedEnd) && returnedEnd > Date.now()
+      ? returnedPlan.planEndDate || returnedPlan.planExpiryDate
+      : new Date(Date.now() + windowDays * 86400000).toISOString();
     onSessionUpdate?.({
       ...returnedPlan,
       planType: returnedPlan.planType || plan.id,
       planStatus: 'ACTIVE',
+      isPlanActive: true,
+      planEndDate: ensuredEndDate,
       subscriptionExpired: false,
       profileCompleted: true,
     }, { subscriptionExpired: false });
@@ -183,13 +217,13 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
     // When renewal was forced by expiry, send the salon straight to the queue
     // so full software access is restored immediately. Normal upgrades go to
     // account.
-    if (isForcedRenewal) {
+    if (forcedRenewal) {
       navigate('queue', {}, { replace: true });
     } else {
       navigate('account', {}, { replace: true });
     }
     return 'renew';
-  }, [isForcedRenewal, navigate, notify, onAuthComplete, onSessionUpdate]);
+  }, [forcedRenewal, navigate, notify, onAuthComplete, onSessionUpdate]);
 
   // A successful payment that could not be recorded is the one dangerous
   // failure: tell the partner exactly what happened, with the references
@@ -482,7 +516,7 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
       <span>{gateway.status === 'ready' ? 'Secure payments powered by Razorpay · UPI, cards, netbanking and wallets' : gateway.status === 'checking' ? 'Preparing Razorpay Checkout…' : 'Razorpay Checkout could not load on this network'}</span>
       {gateway.status !== 'ready' && <button type="button" onClick={gateway.check}>Retry</button>}
     </div>
-    {isForcedRenewal && onLogout && (
+    {forcedRenewal && onLogout && (
       <div className="forced-renewal-footer">
         {/* The way off a hard paywall. It signs the partner out and lands on the
             LOGIN page (salon role preselected), where they can either sign back

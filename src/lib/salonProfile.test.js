@@ -3,6 +3,7 @@ import {
   getSalonSubscriptionProfile,
   getSalonSubscriptionState,
   hasCoordinate,
+  salonProfileFromResponse,
   salonProfileNeedsCompletion,
 } from './salonProfile';
 
@@ -106,5 +107,39 @@ describe('getSalonSubscriptionState', () => {
     const state = getSalonSubscriptionState({ user: { ...completeProfile } });
     expect(state.expired).toBe(false);
     expect(state.known).toBe(false);
+  });
+});
+
+describe('salonProfileFromResponse', () => {
+  const record = {
+    planType: 'monthly',
+    planStartDate: new Date(Date.now() - 86400000).toISOString(),
+    planEndDate: new Date(Date.now() + 26 * 86400000).toISOString(),
+    isPlanActive: true,
+  };
+
+  it('keeps a subscription record returned as a sibling of data.salon', () => {
+    const profile = salonProfileFromResponse({ data: { salon: { salonName: 'Glamour Studio' }, subscription: record } });
+    expect(profile.salonName).toBe('Glamour Studio');
+    // The old `data.salon || data` pick dropped this record entirely, and the
+    // paywall then decided "expired" from stale fields.
+    expect(profile.subscription).toEqual(record);
+  });
+
+  it('flattens data.salon over the data root', () => {
+    const profile = salonProfileFromResponse({ data: { planType: 'quarterly', salon: { planType: 'monthly', ownerName: 'Ravi' } } });
+    expect(profile.planType).toBe('monthly');
+    expect(profile.ownerName).toBe('Ravi');
+  });
+
+  it('keeps root completion flags when the salon object omits them', () => {
+    const profile = salonProfileFromResponse({ data: { salon: { salonName: 'X' } }, profileCompleted: true, isNewSalon: false });
+    expect(profile.profileCompleted).toBe(true);
+    expect(profile.isNewSalon).toBe(false);
+  });
+
+  it('tolerates empty or malformed responses', () => {
+    expect(salonProfileFromResponse(null)).toEqual({});
+    expect(salonProfileFromResponse({ data: 'oops' })).toEqual({});
   });
 });

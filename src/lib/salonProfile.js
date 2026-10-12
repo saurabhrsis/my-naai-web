@@ -56,3 +56,22 @@ export function getSalonSubscriptionProfile(session) {
 export function getSalonSubscriptionState(session) {
   return getSubscriptionState(getSalonSubscriptionProfile(session));
 }
+
+// Flattens a `get-salon`-style response into one profile object. The backend
+// has shipped this payload in several shapes: the plan fields sit flat on
+// `data`, on `data.salon`, or as a sibling `data.subscription` document next to
+// `data.salon`. Taking only `data.salon` (the old `data.salon || data` pick)
+// silently dropped the sibling subscription record — the record that
+// `renew-salon-plan` maintains — and the paywall then decided "expired" from
+// stale fields. Merging keeps every plan field visible to
+// `normalizePlanDetails`.
+export function salonProfileFromResponse(response) {
+  const data = response?.data && typeof response.data === 'object' && !Array.isArray(response.data) ? response.data : {};
+  const salon = data.salon && typeof data.salon === 'object' && !Array.isArray(data.salon) ? data.salon : null;
+  const merged = salon ? { ...data, ...salon } : { ...data };
+  return {
+    ...merged,
+    ...(merged.profileCompleted === undefined && response?.profileCompleted !== undefined ? { profileCompleted: response.profileCompleted } : {}),
+    ...(merged.isNewSalon === undefined && response?.isNewSalon !== undefined ? { isNewSalon: response.isNewSalon } : {}),
+  };
+}

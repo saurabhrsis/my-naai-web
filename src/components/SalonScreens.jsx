@@ -81,7 +81,7 @@ import {
 
 // The incomplete-profile gate is shared with the auth flow in src/App.jsx: one
 // predicate decides whether a partner sees onboarding or the dashboard.
-import { hasCoordinate, salonProfileNeedsCompletion } from '../lib/salonProfile';
+import { hasCoordinate, salonProfileFromResponse, salonProfileNeedsCompletion } from '../lib/salonProfile';
 
 function getList(response, keys = []) {
   if (Array.isArray(response?.data)) return response.data;
@@ -90,12 +90,10 @@ function getList(response, keys = []) {
 }
 
 function getSalonData(response) {
-  const data = response?.data?.salon || response?.data || {};
-  return {
-    ...data,
-    ...(data.profileCompleted === undefined && response?.profileCompleted !== undefined ? { profileCompleted: response.profileCompleted } : {}),
-    ...(data.isNewSalon === undefined && response?.isNewSalon !== undefined ? { isNewSalon: response.isNewSalon } : {}),
-  };
+  // One flattening helper with the auth flow: a subscription record returned
+  // as a sibling of `data.salon` stays visible to normalizePlanDetails instead
+  // of being dropped by the old `data.salon || data` pick.
+  return salonProfileFromResponse(response);
 }
 
 function isSameDate(value, offset = 0) {
