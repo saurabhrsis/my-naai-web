@@ -2052,31 +2052,37 @@ img.image-fallback-tile {
 .shop-screen { padding-bottom: 148px; }
 
 /* Delivery promise strip under the header (Blinkit's "10 min" bar). */
-.shop-hero-strip { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 2px 0 14px; padding: 11px 14px; border: 1px solid rgba(46, 204, 113, .28); border-radius: 14px; background: linear-gradient(100deg, rgba(46, 204, 113, .12), rgba(247, 201, 72, .08)); color: var(--muted-light); font-size: 11px; }
-.shop-hero-strip span { display: inline-flex; align-items: center; gap: 6px; }
-.shop-hero-strip span svg { color: var(--shop-green-soft); flex: none; }
-.shop-hero-strip strong { color: var(--white); }
+.shop-hero-strip { display: flex; align-items: center; gap: 12px; margin: 2px 0 14px; padding: 12px 14px; border: 1px solid rgba(46, 204, 113, .32); border-radius: 16px; background: linear-gradient(110deg, rgba(46, 204, 113, .14), rgba(46, 204, 113, .04) 55%, rgba(247, 201, 72, .08)); }
+.shop-hero-icon { display: grid; place-items: center; width: 40px; height: 40px; flex: none; border-radius: 12px; background: var(--shop-green); color: #08130c; box-shadow: 0 6px 16px rgba(35, 180, 92, .3); }
+.shop-hero-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.shop-hero-copy strong { color: var(--white); font-size: 13.5px; line-height: 1.3; }
+.shop-hero-copy span { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--muted-light); font-size: 10.5px; font-weight: 700; }
+.shop-hero-copy span svg { color: var(--shop-green-soft); flex: none; }
+.shop-hero-copy span i { font-style: normal; color: var(--muted); }
 
 .shop-search { margin-bottom: 12px; }
 .shop-search:focus-within { border-color: rgba(46, 204, 113, .6); box-shadow: 0 0 0 3px rgba(46, 204, 113, .08); }
 
-/* Chip rows — categories scroll horizontally, exactly like the quick-commerce apps. */
-.shop-chip-row { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 10px; scrollbar-width: none; }
+/* Filter panel — labelled rows inside one soft card; chips scroll horizontally
+   like the quick-commerce apps. */
+.shop-filters { display: flex; flex-direction: column; gap: 13px; margin-bottom: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255, 255, 255, .025); }
+.shop-filter-label { display: block; margin-bottom: 7px; color: var(--muted); font-size: 9.5px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+.shop-filter-duo { display: grid; grid-template-columns: 1fr auto; gap: 13px; align-items: end; }
+@media (max-width: 560px) { .shop-filter-duo { grid-template-columns: 1fr; } }
+.shop-chip-row { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
 .shop-chip-row::-webkit-scrollbar { display: none; }
-.shop-chip { flex: none; min-height: 34px; padding: 0 14px; border: 1px solid var(--line); border-radius: 20px; color: var(--muted-light); background: var(--card); font-size: 11.5px; font-weight: 700; white-space: nowrap; }
-.shop-chip:hover { border-color: rgba(46, 204, 113, .45); }
-.shop-chip.active { color: #0c130e; background: var(--shop-green); border-color: var(--shop-green); box-shadow: 0 4px 14px rgba(35, 180, 92, .25); }
-.shop-chip.small { min-height: 29px; padding: 0 11px; font-size: 10.5px; }
-
-.shop-filter-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.shop-chip { flex: none; min-height: 34px; padding: 0 14px; border: 1px solid var(--line); border-radius: 20px; color: var(--muted-light); background: var(--card); font-size: 11.5px; font-weight: 700; white-space: nowrap; cursor: pointer; transition: border-color .15s, background .15s, color .15s; }
+.shop-chip:hover { border-color: rgba(46, 204, 113, .5); color: var(--white); }
+.shop-chip.active { color: #0c130e; background: var(--shop-green); border-color: var(--shop-green); box-shadow: 0 4px 14px rgba(35, 180, 92, .28); }
+.shop-chip.small { min-height: 30px; padding: 0 12px; font-size: 11px; }
 .shop-chip-group { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
 .shop-chip-group::-webkit-scrollbar { display: none; }
-.shop-sort { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 6px 0 12px; border: 1px solid var(--line); border-radius: 20px; background: var(--card); color: var(--muted-light); font-size: 11px; font-weight: 700; }
-.shop-sort svg { color: var(--shop-green-soft); }
-.shop-sort select { min-width: 0; max-width: 170px; height: 30px; border: 0; outline: 0; color: var(--white); background: transparent; font-size: 11px; font-weight: 700; }
+.shop-sort { display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 0 8px 0 12px; border: 1px solid var(--line); border-radius: 20px; background: var(--card); color: var(--muted-light); font-size: 11px; font-weight: 700; cursor: pointer; transition: border-color .15s; }
+.shop-sort:hover { border-color: rgba(46, 204, 113, .5); }
+.shop-sort svg { color: var(--shop-green-soft); flex: none; }
+.shop-sort select { min-width: 0; max-width: 190px; height: 26px; border: 0; outline: 0; color: var(--white); background: transparent; font-size: 11px; font-weight: 700; cursor: pointer; }
 .shop-sort select option { color: #111; background: var(--card); }
-
-.shop-price-row { margin-bottom: 4px; }
+.shop-price-row { margin: 0; }
 
 .shop-count-line { display: flex; align-items: center; gap: 8px; margin: 8px 2px 12px; color: var(--muted); font-size: 11px; }
 .shop-count-line strong { color: var(--white); font-size: 12px; }
@@ -2089,7 +2095,7 @@ img.image-fallback-tile {
 .skeleton-card.shop-skeleton { min-height: 262px; }
 
 .shop-card { position: relative; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 16px; background: var(--card); overflow: hidden; transition: border-color .18s, transform .18s; }
-.shop-card:hover { border-color: rgba(46, 204, 113, .4); transform: translateY(-2px); }
+.shop-card:hover { border-color: rgba(46, 204, 113, .45); transform: translateY(-2px); box-shadow: 0 12px 32px rgba(0, 0, 0, .35); }
 .shop-card.out-of-stock { opacity: .62; }
 .shop-off-badge { position: absolute; top: 8px; left: 8px; z-index: 2; padding: 3px 7px; border-radius: 8px; background: var(--shop-green); color: #08130c; font-size: 9.5px; font-weight: 800; letter-spacing: .02em; }
 .shop-off-badge.inline { position: static; display: inline-block; margin-left: 7px; vertical-align: middle; }

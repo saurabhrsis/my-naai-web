@@ -94,6 +94,7 @@ export function ShopProductCard({ product, qty, onAdd, onSetQty, onOpen }) {
           <div>
             <strong>{formatCurrency(product.price)}</strong>
             {product.mrp > 0 && <s>{formatCurrency(product.mrp)}</s>}
+            {off > 0 && <em className="shop-off-badge inline">{off}% off</em>}
           </div>
           {product.rating > 0 && (
             <span className="shop-rating">
@@ -169,6 +170,7 @@ export function ShopScreen({ session, navigate, notify }) {
     [products, search, category, gender, priceRange, sort],
   );
   const totals = useMemo(() => cartTotals(cart), [cart]);
+  const city = session?.user?.salon?.city || session?.user?.city || '';
   const qtyFor = id => cart.find(line => line.productId === String(id))?.qty || 0;
 
   const handleAdd = product => {
@@ -197,41 +199,56 @@ export function ShopScreen({ session, navigate, notify }) {
         action={<button className="refresh-text-button" onClick={() => navigate('shopOrders')}><Package size={15} /> My orders</button>}
       />
       <div className="shop-hero-strip" role="note">
-        <span><Zap size={15} /> <strong>Next-day delivery</strong> in your city</span>
-        <span><Truck size={15} /> Free above {formatCurrency(499)}</span>
-        <span><Clock3 size={15} /> Order by 10 pm</span>
+        <span className="shop-hero-icon" aria-hidden="true"><Truck size={19} /></span>
+        <div className="shop-hero-copy">
+          <strong>Next-day delivery{city ? ` to ${city}` : ' to your salon'}</strong>
+          <span><Clock3 size={12} /> Order by 10 pm <i>·</i> <Zap size={12} /> FREE above {formatCurrency(FREE_DELIVERY_ABOVE)}</span>
+        </div>
       </div>
       <label className="search-field shop-search">
         <Search size={17} />
         <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search shampoo, clippers, beard oil…" aria-label="Search shop products" />
       </label>
 
-      <div className="shop-chip-row" role="list" aria-label="Categories">
-        <button type="button" role="listitem" className={cx('shop-chip', category === 'all' && 'active')} onClick={() => setCategory('all')}>All</button>
-        {categories.map(item => (
-          <button key={item.id} type="button" role="listitem" className={cx('shop-chip', category === item.id && 'active')} onClick={() => setCategory(item.id)}>{item.label}</button>
-        ))}
-      </div>
-
-      <div className="shop-filter-row">
-        <div className="shop-chip-group" role="group" aria-label="Gender">
-          <button type="button" className={cx('shop-chip small', gender === 'all' && 'active')} onClick={() => setGender('all')}>All</button>
-          {SHOP_GENDERS.map(item => (
-            <button key={item.id} type="button" className={cx('shop-chip small', gender === item.id && 'active')} onClick={() => setGender(item.id)}>{item.label}</button>
-          ))}
+      <section className="shop-filters" aria-label="Filter products">
+        <div className="shop-filter-block">
+          <span className="shop-filter-label">Category</span>
+          <div className="shop-chip-row" role="list" aria-label="Categories">
+            <button type="button" role="listitem" className={cx('shop-chip', category === 'all' && 'active')} onClick={() => setCategory('all')}>All</button>
+            {categories.map(item => (
+              <button key={item.id} type="button" role="listitem" className={cx('shop-chip', category === item.id && 'active')} onClick={() => setCategory(item.id)}>{item.label}</button>
+            ))}
+          </div>
         </div>
-        <label className="shop-sort">
-          <SlidersHorizontal size={13} />
-          <select value={sort} onChange={event => setSort(event.target.value)} aria-label="Sort products">
-            {SORT_OPTIONS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
-          </select>
-        </label>
-      </div>
-      <div className="shop-chip-row shop-price-row" role="group" aria-label="Price range">
-        {PRICE_RANGES.map(item => (
-          <button key={item.id} type="button" className={cx('shop-chip small', priceRange === item.id && 'active')} onClick={() => setPriceRange(item.id)}>{item.label}</button>
-        ))}
-      </div>
+        <div className="shop-filter-duo">
+          <div className="shop-filter-block">
+            <span className="shop-filter-label">For</span>
+            <div className="shop-chip-group" role="group" aria-label="Gender">
+              <button type="button" className={cx('shop-chip small', gender === 'all' && 'active')} onClick={() => setGender('all')}>All</button>
+              {SHOP_GENDERS.map(item => (
+                <button key={item.id} type="button" className={cx('shop-chip small', gender === item.id && 'active')} onClick={() => setGender(item.id)}>{item.label}</button>
+              ))}
+            </div>
+          </div>
+          <div className="shop-filter-block">
+            <span className="shop-filter-label">Sort</span>
+            <label className="shop-sort">
+              <SlidersHorizontal size={13} />
+              <select value={sort} onChange={event => setSort(event.target.value)} aria-label="Sort products">
+                {SORT_OPTIONS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+              </select>
+            </label>
+          </div>
+        </div>
+        <div className="shop-filter-block">
+          <span className="shop-filter-label">Price</span>
+          <div className="shop-chip-row shop-price-row" role="group" aria-label="Price range">
+            {PRICE_RANGES.map(item => (
+              <button key={item.id} type="button" className={cx('shop-chip small', priceRange === item.id && 'active')} onClick={() => setPriceRange(item.id)}>{item.label}</button>
+            ))}
+          </div>
+        </div>
+      </section>
 
       {loading ? (
         <div className="shop-grid">{[1, 2, 3, 4, 5, 6].map(item => <SkeletonCard key={item} className="shop-skeleton" />)}</div>

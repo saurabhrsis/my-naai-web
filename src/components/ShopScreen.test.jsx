@@ -78,6 +78,14 @@ describe('ShopScreen', () => {
     const { container } = await render(<ShopScreen session={SESSION} navigate={navigate} notify={vi.fn()} />);
     expect(container.querySelectorAll('.shop-card')).toHaveLength(6);
     expect(container.textContent).not.toContain('Out of stock wax');
+    // Delivery banner is city-aware and the filter panel is labelled.
+    expect(container.textContent).toContain('Next-day delivery to Nagpur');
+    expect(container.textContent).toContain('Order by 10 pm');
+    expect(container.textContent).toContain('Category');
+    expect(container.textContent).toContain('Sort');
+    expect(container.textContent).toContain('Price');
+    // Discount is shown on the card (badge + inline next to the price).
+    expect(container.textContent).toContain('17% off');
 
     // First card after "Popular" sorting is the Keratin Shampoo (highest rating,
     // ₹499 — exactly on the free-delivery threshold, so no delivery fee).
