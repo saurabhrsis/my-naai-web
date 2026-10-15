@@ -120,6 +120,31 @@ export function inferGender(name) {
 // One shape for every product no matter which endpoint it came from: the
 // customer shelf (`get-all-salons-products-list`), a salon's own catalog
 // (`/api/products/list`) or a future shop-only endpoint.
+// Product photos use the same file-path pattern as the salon photos on the
+// home screen (stored paths are normalised by `getFileUrl` at render time).
+// The product editor joins multiple uploads with a comma into the single
+// `productImage` field the backend API accepts, so anything — one path, a
+// comma/pipe list, or a JSON array — parses to an ordered array where the
+// first image is the cover.
+export function parseProductImages(item = {}) {
+  let raw = item.productImages ?? item.images ?? item.productImage ?? item.image ?? '';
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith('[')) {
+      try { raw = JSON.parse(trimmed); } catch { raw = trimmed; }
+    }
+    if (typeof raw === 'string') raw = raw.split(/[,|]+/);
+  }
+  if (!Array.isArray(raw)) raw = raw ? [raw] : [];
+  const seen = new Set();
+  const images = [];
+  raw.forEach(value => {
+    const text = String(value || '').trim();
+    if (text && !seen.has(text)) { seen.add(text); images.push(text); }
+  });
+  return images;
+}
+
 export function normalizeShopProduct(item = {}, index = 0) {
   const id = item.productId || item.id || `shop-product-${index}`;
   const name = item.productName || item.name || 'Untitled product';
@@ -127,6 +152,7 @@ export function normalizeShopProduct(item = {}, index = 0) {
   const rawMrp = Number(item.mrp ?? item.marketPrice ?? item.mrpPrice ?? 0);
   const mrp = rawMrp > price ? rawMrp : 0;
   const salon = item.salon || {};
+  const images = parseProductImages(item);
   return {
     id,
     name,
@@ -135,7 +161,8 @@ export function normalizeShopProduct(item = {}, index = 0) {
     rating: Number(item.rating || 0),
     reviews: item.reviews ?? item.reviewCount ?? '',
     available: item.isAvailable ?? item.available ?? true,
-    image: item.productImage || item.image || '',
+    image: images[0] || '',
+    images,
     description: item.description || item.productDescription || '',
     salonName: salon.salonName || item.salonName || '',
     salonGenderType: String(salon.genderType || item.salonGenderType || '').toUpperCase(),

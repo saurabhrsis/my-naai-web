@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Banknote,
   ChevronRight,
-  Clock3,
   Minus,
   Package,
   Plus,
@@ -10,7 +9,6 @@ import {
   Search,
   ShieldCheck,
   ShoppingBag,
-  SlidersHorizontal,
   Star,
   Truck,
   Zap,
@@ -18,7 +16,6 @@ import {
 import { api, getFileUrl } from '../lib/api';
 import {
   PRICE_RANGES,
-  SORT_OPTIONS,
   SHOP_GENDERS,
   applyShopFilters,
   categoryChipsFor,
@@ -158,7 +155,6 @@ export function ShopScreen({ session, navigate, notify }) {
   const [category, setCategory] = useState('all');
   const [gender, setGender] = useState('all');
   const [priceRange, setPriceRange] = useState('all');
-  const [sort, setSort] = useState('popular');
 
   // The cart belongs to the signed-in salon account; re-key it when the
   // session changes (a second salon signing in on the same device).
@@ -166,11 +162,10 @@ export function ShopScreen({ session, navigate, notify }) {
 
   const categories = useMemo(() => categoryChipsFor(products), [products]);
   const visible = useMemo(
-    () => applyShopFilters(products, { search, category, gender, priceRange, sort }),
-    [products, search, category, gender, priceRange, sort],
+    () => applyShopFilters(products, { search, category, gender, priceRange }),
+    [products, search, category, gender, priceRange],
   );
   const totals = useMemo(() => cartTotals(cart), [cart]);
-  const city = session?.user?.salon?.city || session?.user?.city || '';
   const qtyFor = id => cart.find(line => line.productId === String(id))?.qty || 0;
 
   const handleAdd = product => {
@@ -188,7 +183,6 @@ export function ShopScreen({ session, navigate, notify }) {
     setCategory('all');
     setGender('all');
     setPriceRange('all');
-    setSort('popular');
   };
 
   return (
@@ -196,58 +190,45 @@ export function ShopScreen({ session, navigate, notify }) {
       <PageHeader
         title="Naai Shop"
         subtitle="Grooming stock for your salon, supplied by My Naai."
-        action={<button className="refresh-text-button" onClick={() => navigate('shopOrders')}><Package size={15} /> My orders</button>}
+        action={
+          <div className="shop-header-actions">
+            <button type="button" className="refresh-text-button" onClick={() => navigate('shopCart')}><ShoppingBag size={15} /> My cart{totals.itemCount > 0 ? ` · ${totals.itemCount}` : ''}</button>
+            <button type="button" className="refresh-text-button" onClick={() => navigate('shopOrders')}><Package size={15} /> My orders</button>
+          </div>
+        }
       />
-      <div className="shop-hero-strip" role="note">
-        <span className="shop-hero-icon" aria-hidden="true"><Truck size={19} /></span>
-        <div className="shop-hero-copy">
-          <strong>Next-day delivery{city ? ` to ${city}` : ' to your salon'}</strong>
-          <span><Clock3 size={12} /> Order by 10 pm <i>·</i> <Zap size={12} /> FREE above {formatCurrency(FREE_DELIVERY_ABOVE)}</span>
-        </div>
-      </div>
       <label className="search-field shop-search">
         <Search size={17} />
         <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search shampoo, clippers, beard oil…" aria-label="Search shop products" />
       </label>
 
-      <section className="shop-filters" aria-label="Filter products">
-        <div className="shop-filter-block">
-          <span className="shop-filter-label">Category</span>
-          <div className="shop-chip-row" role="list" aria-label="Categories">
-            <button type="button" role="listitem" className={cx('shop-chip', category === 'all' && 'active')} onClick={() => setCategory('all')}>All</button>
+      <section className="shop-filters-selects" aria-label="Filter products">
+        <label className="shop-filter-select">
+          <span>Category</span>
+          <select value={category} onChange={event => setCategory(event.target.value)} aria-label="Category">
+            <option value="all">All categories</option>
             {categories.map(item => (
-              <button key={item.id} type="button" role="listitem" className={cx('shop-chip', category === item.id && 'active')} onClick={() => setCategory(item.id)}>{item.label}</button>
+              <option key={item.id} value={item.id}>{item.label}</option>
             ))}
-          </div>
-        </div>
-        <div className="shop-filter-duo">
-          <div className="shop-filter-block">
-            <span className="shop-filter-label">For</span>
-            <div className="shop-chip-group" role="group" aria-label="Gender">
-              <button type="button" className={cx('shop-chip small', gender === 'all' && 'active')} onClick={() => setGender('all')}>All</button>
-              {SHOP_GENDERS.map(item => (
-                <button key={item.id} type="button" className={cx('shop-chip small', gender === item.id && 'active')} onClick={() => setGender(item.id)}>{item.label}</button>
-              ))}
-            </div>
-          </div>
-          <div className="shop-filter-block">
-            <span className="shop-filter-label">Sort</span>
-            <label className="shop-sort">
-              <SlidersHorizontal size={13} />
-              <select value={sort} onChange={event => setSort(event.target.value)} aria-label="Sort products">
-                {SORT_OPTIONS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
-              </select>
-            </label>
-          </div>
-        </div>
-        <div className="shop-filter-block">
-          <span className="shop-filter-label">Price</span>
-          <div className="shop-chip-row shop-price-row" role="group" aria-label="Price range">
+          </select>
+        </label>
+        <label className="shop-filter-select">
+          <span>For</span>
+          <select value={gender} onChange={event => setGender(event.target.value)} aria-label="Gender">
+            <option value="all">All</option>
+            {SHOP_GENDERS.map(item => (
+              <option key={item.id} value={item.id}>{item.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="shop-filter-select">
+          <span>Price</span>
+          <select value={priceRange} onChange={event => setPriceRange(event.target.value)} aria-label="Price">
             {PRICE_RANGES.map(item => (
-              <button key={item.id} type="button" className={cx('shop-chip small', priceRange === item.id && 'active')} onClick={() => setPriceRange(item.id)}>{item.label}</button>
+              <option key={item.id} value={item.id}>{item.label}</option>
             ))}
-          </div>
-        </div>
+          </select>
+        </label>
       </section>
 
       {loading ? (
@@ -284,9 +265,13 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
   const [cart, setCart] = useState(() => readCart(ownerId));
 
   useEffect(() => { setCart(readCart(ownerId)); }, [ownerId]);
+  // A different product resets the gallery to its cover photo.
+  useEffect(() => { setActiveImage(0); }, [productId]);
 
   const totals = useMemo(() => cartTotals(cart), [cart]);
   const product = useMemo(() => products.find(value => String(value.id) === productId) || null, [products, productId]);
+  const images = useMemo(() => (product?.images?.length ? product.images : product?.image ? [product.image] : []), [product]);
+  const [activeImage, setActiveImage] = useState(0);
   const similar = useMemo(() => (
     product
       ? products
@@ -335,10 +320,19 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
     <div className="screen shop-detail-page">
       <PageHeader title="Product details" onBack={() => navigate('shop')} />
       <div className="shop-detail-hero">
-        <ImageWithFallback src={getFileUrl(product.image)} fallback={PRODUCT_PLACEHOLDER} alt={product.name} className="shop-detail-hero-image" />
+        <ImageWithFallback src={getFileUrl(images[Math.min(activeImage, images.length - 1)] || '')} fallback={PRODUCT_PLACEHOLDER} alt={product.name} className="shop-detail-hero-image" />
         {!product.available && <span className="shop-stock-veil">Out of stock</span>}
         {off > 0 && <span className="shop-off-badge shop-off-badge-hero">{off}% off</span>}
       </div>
+      {images.length > 1 && (
+        <div className="shop-detail-thumbs" role="group" aria-label="Product images">
+          {images.map((image, index) => (
+            <button key={image} type="button" className={cx('shop-detail-thumb', index === Math.min(activeImage, images.length - 1) && 'active')} onClick={() => setActiveImage(index)} aria-label={`Show image ${index + 1} of ${images.length}`}>
+              <ImageWithFallback src={getFileUrl(image)} fallback={PRODUCT_PLACEHOLDER} alt="" />
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="shop-detail-tags">
         <span className="shop-detail-tag">{categoryLabel(product.category)}</span>

@@ -26,6 +26,9 @@ const PRODUCT_FIXTURES = [
   // Two more hair-care items so the details page has same-category suggestions.
   { productId: 'sp6', productName: 'Argan Hair Serum 100ml', price: 449, mrp: 549, rating: 4.3, isAvailable: true },
   { productId: 'sp7', productName: 'Repair Hair Mask 250ml', price: 399, rating: 4.1, isAvailable: true },
+  // Unavailable on purpose (grid stays at 6) but reachable by direct link —
+  // it carries two photos so the details gallery has something to switch.
+  { productId: 'sp8', productName: 'Twin Image Shampoo 100ml', price: 299, rating: 4.0, isAvailable: false, productImage: 'img-a.jpg, img-b.jpg' },
 ];
 
 const SESSION = {
@@ -78,12 +81,15 @@ describe('ShopScreen', () => {
     const { container } = await render(<ShopScreen session={SESSION} navigate={navigate} notify={vi.fn()} />);
     expect(container.querySelectorAll('.shop-card')).toHaveLength(6);
     expect(container.textContent).not.toContain('Out of stock wax');
-    // Delivery banner is city-aware and the filter panel is labelled.
-    expect(container.textContent).toContain('Next-day delivery to Nagpur');
-    expect(container.textContent).toContain('Order by 10 pm');
+    // Header carries both the cart shortcut (beside My orders) and the
+    // labelled filter row — no delivery banner, no sort control.
+    expect(buttonsContaining('My cart', container).length).toBe(1);
+    expect(buttonsContaining('My orders', container).length).toBe(1);
     expect(container.textContent).toContain('Category');
-    expect(container.textContent).toContain('Sort');
+    expect(container.textContent).toContain('For');
     expect(container.textContent).toContain('Price');
+    expect(container.querySelector('.shop-hero-strip')).toBeNull();
+    expect(container.querySelector('.shop-sort')).toBeNull();
     // Discount is shown on the card (badge + inline next to the price).
     expect(container.textContent).toContain('17% off');
 
@@ -112,25 +118,28 @@ describe('ShopScreen', () => {
     expect(navigate).toHaveBeenCalledWith('shopCart');
   });
 
-  it('filters by category chip and price range', async () => {
+  it('filters with the category, gender and price selects', async () => {
     const { container } = await render(<ShopScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
-    await act(async () => { buttonByText('Beard & grooming', container).click(); });
-    const names = Array.from(container.querySelectorAll('.shop-card h3')).map(node => node.textContent);
-    expect(names).toEqual(['Beard Oil 30ml']);
+    const setFilter = async (label, value) => {
+      const select = Array.from(container.querySelectorAll('select')).find(item => item.getAttribute('aria-label') === label);
+      select.value = value;
+      await act(async () => { select.dispatchEvent(new Event('change', { bubbles: true })); });
+    };
 
-    await act(async () => { buttonByText('All', container).click(); });
+    await setFilter('Category', 'beard-grooming');
+    expect(Array.from(container.querySelectorAll('.shop-card h3')).map(node => node.textContent)).toEqual(['Beard Oil 30ml']);
+
+    await setFilter('Category', 'all');
     expect(container.querySelectorAll('.shop-card')).toHaveLength(6);
 
-    // Sorting by price desc puts the clipper first.
-    await act(async () => {
-      container.querySelector('.shop-sort select').value = 'price-desc';
-      container.querySelector('.shop-sort select').dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    expect(container.querySelector('.shop-card h3').textContent).toBe('Hair Clipper Pro');
+    await setFilter('Gender', 'men');
+    expect(Array.from(container.querySelectorAll('.shop-card h3')).map(node => node.textContent)).toEqual(['Beard Oil 30ml']);
 
-    // The price range stacks on top of the active sort (₹499 counts as under ₹500).
-    await act(async () => { buttonByText('Under ₹500', container).click(); });
-    expect(Array.from(container.querySelectorAll('.shop-card h3')).map(node => node.textContent)).toEqual(['Keratin Shampoo 200ml', 'Argan Hair Serum 100ml', 'Face Scrub', 'Repair Hair Mask 250ml', 'Beard Oil 30ml']);
+    // The price range stacks on the other filters (₹499 counts as under ₹500;
+    // default popular order = rating, high to low).
+    await setFilter('Gender', 'all');
+    await setFilter('Price', 'under500');
+    expect(Array.from(container.querySelectorAll('.shop-card h3')).map(node => node.textContent)).toEqual(['Keratin Shampoo 200ml', 'Beard Oil 30ml', 'Argan Hair Serum 100ml', 'Repair Hair Mask 250ml', 'Face Scrub']);
   });
 
   it('opens the product details page when a card is tapped', async () => {
@@ -197,6 +206,19 @@ describe('ShopProductDetailScreen', () => {
     expect(container.textContent).toContain('Product not available');
     expect(container.querySelectorAll('.shop-card').length).toBe(0);
     expect(container.querySelector('.shop-detail-name')).toBeNull();
+  });
+
+  it('switches the hero between multiple product photos', async () => {
+    const { container } = await render(
+      <ShopProductDetailScreen session={SESSION} params={{ productId: 'sp8' }} navigate={vi.fn()} notify={vi.fn()} />
+    );
+    const hero = container.querySelector('.shop-detail-hero-image');
+    expect(hero.src).toContain('img-a.jpg'); // cover first
+    const thumbs = container.querySelectorAll('.shop-detail-thumb');
+    expect(thumbs).toHaveLength(2);
+    await act(async () => { thumbs[1].click(); });
+    expect(container.querySelector('.shop-detail-hero-image').src).toContain('img-b.jpg');
+    expect(container.querySelectorAll('.shop-detail-thumb')[1].className).toContain('active');
   });
 
   it('shows out-of-stock products with the control disabled', async () => {

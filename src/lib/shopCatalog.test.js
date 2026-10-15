@@ -9,6 +9,7 @@ import {
   inferGender,
   matchesPriceRange,
   normalizeShopProduct,
+  parseProductImages,
 } from './shopCatalog';
 
 describe('inferCategory', () => {
@@ -38,6 +39,32 @@ describe('inferGender', () => {
     expect(inferGender('Bridal Hair Oil for Women')).toBe('women');
     expect(inferGender('Unisex Family Shampoo')).toBe('unisex');
     expect(inferGender('Plain Shampoo')).toBe('');
+  });
+});
+
+describe('parseProductImages', () => {
+  it('parses the comma-joined multi-image field the editor saves', () => {
+    expect(parseProductImages({ productImage: 'a.jpg, b.jpg, c.jpg' })).toEqual(['a.jpg', 'b.jpg', 'c.jpg']);
+  });
+
+  it('accepts single paths, pipe lists, JSON arrays and real arrays', () => {
+    expect(parseProductImages({ productImage: '/uploads/one.jpg' })).toEqual(['/uploads/one.jpg']);
+    expect(parseProductImages({ productImage: 'a.jpg|b.jpg' })).toEqual(['a.jpg', 'b.jpg']);
+    expect(parseProductImages({ productImage: '["a.jpg","b.jpg"]' })).toEqual(['a.jpg', 'b.jpg']);
+    expect(parseProductImages({ images: ['a.jpg', 'b.jpg'] })).toEqual(['a.jpg', 'b.jpg']);
+    expect(parseProductImages({ productImages: ['a.jpg'] })).toEqual(['a.jpg']);
+  });
+
+  it('dedupes, trims and drops empties — first image stays the cover', () => {
+    expect(parseProductImages({ productImage: ' a.jpg , , a.jpg ,b.jpg ' })).toEqual(['a.jpg', 'b.jpg']);
+    expect(parseProductImages({ productImage: '' })).toEqual([]);
+    expect(parseProductImages({})).toEqual([]);
+  });
+
+  it('exposes the first image as product.image for the card and cart', () => {
+    const product = normalizeShopProduct({ productId: 'p9', productName: 'Twin', price: 99, productImage: 'cover.jpg, back.jpg' });
+    expect(product.image).toBe('cover.jpg');
+    expect(product.images).toEqual(['cover.jpg', 'back.jpg']);
   });
 });
 

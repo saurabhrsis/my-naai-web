@@ -19,17 +19,20 @@ list with a live status tracker, and **cancel order** before dispatch.
 | Cart, bill math, order lifecycle, timeline | `src/lib/shopOrders.js` |
 | Order-less Razorpay checkout | `src/lib/razorpay.js` (`openRazorpayOrderlessCheckout`, `getRazorpayKeyId`) |
 | Design tokens + all `.shop-*` styles | `src/styles.css` (bottom section) |
-| Product editor category/gender fields | `src/components/SalonScreens.jsx` (`SalonProductsScreen`) |
+| Product editor (category/gender + **multiple image uploads**) | `src/components/SalonScreens.jsx` (`SalonProductsScreen`) |
+| Multi-image parsing (`productImage` comma list → ordered array) | `src/lib/shopCatalog.js` (`parseProductImages`) |
 
 ## Flow
 
 ```
-Shop tab ── search / category chips / gender chips / price range / sort
+Shop tab ── search / Category · For · Price selects (one compact strip)
+   │  header: My cart (N) · My orders
    │  tap a card ──────────────► Product details page ── ADD → stepper
-   │                                        │  hero image, price + MRP + % off, seller,
-   │  ADD → stepper (per product,           │  category/gender/stock tags, delivery facts,
-   │  persisted to the cart)                │  description, "You may also like" (same
-   │                                        │  category), floating cart bar
+   │                                        │  photo gallery (cover + thumbs,
+   │  ADD → stepper (per product,           │  multiple admin-uploaded photos),
+   │  persisted to the cart)                │  price + MRP + % off, seller, tags,
+   │                                        │  delivery facts, description,
+   │                                        │  "You may also like", cart bar
    ▼
 "3 items · ₹1,240 → View cart" floating bar
    ▼
@@ -60,13 +63,22 @@ Order detail ── 4-step tracker (Placed → Packed → Out for delivery → D
 
 ## Filters
 
-- **Category chips:** Hair care · Beard & grooming · Skin & face · Fragrance ·
+The whole filter area is one compact strip of **three labelled selects**
+(Category · For · Price) — no chip rows and no sort control, so the grid
+starts high on the screen and the space stays free for products. Default
+order is always *popular* (rating, high to low). The shop header also carries
+a **My cart** shortcut (with the live item count) beside **My orders**.
+
+- **Category:** All + Hair care · Beard & grooming · Skin & face · Fragrance ·
   Hair colour · Tools & equipment · Kits & sets (+ any category the backend
   sends that is not in the fixed list).
-- **Gender chips:** Men / Women / Unisex.
-- **Price:** Any · Under ₹500 · ₹500–₹1,000 · ₹1,000+.
-- **Sort:** Popular (rating) · Price low→high · Price high→low.
+- **For:** All / Men / Women / Unisex.
+- **Price:** Any price · Under ₹500 · ₹500–₹1,000 · ₹1,000+.
 - **Search** across name, salon and description.
+
+Delivery facts (free-above-₹499, order-by) are managed by the backend, so the
+shop no longer renders a delivery banner — only the bill card and the
+details-page delivery card still state the fee/free rule.
 
 All filtering is client-side over the catalog (`applyShopFilters` in
 `shopCatalog.js` — pure, fully unit-tested). The catalog endpoint
@@ -97,6 +109,12 @@ as `shopProduct?productId=`) instead of an inline sheet:
   online payment, free cancellation until dispatch) and an **About this
   product** card (description, with a fallback line when the backend sends
   none);
+- **Photo gallery** — products can carry multiple admin-uploaded photos
+  (the editor joins them into the single `productImage` field with commas,
+  the same file-path pattern the home-screen salon photos use; `getFileUrl`
+  normalises each one at render time). The details page shows the cover big
+  with a thumbnail strip; the card and cart use the first photo as the cover
+  (the admin catalog card shows a "+N more" badge);
 - **"You may also like"** — same category, available, self excluded, by rating
   (max 6), each card tappable to another details page;
 - the floating **"N items · ₹X → View cart"** bar follows you, so a product

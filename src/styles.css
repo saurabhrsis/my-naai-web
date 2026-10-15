@@ -1405,9 +1405,15 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
 .modal-form { display: flex; flex-direction: column; gap: 15px; }
 .modal-form .form-actions { display: flex; gap: 8px; margin-top: 4px; }
 .form-actions .btn { flex: 1; }
-.image-upload-box { position: relative; min-height: 130px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; overflow: hidden; border: 1px dashed rgba(232,185,126,.42); border-radius: 13px; color: var(--gold); background: #101414; font-size: 11px; cursor: pointer; }
-.image-upload-box img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-.image-upload-box input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.image-multi-upload { display: flex; flex-wrap: wrap; gap: 9px; }
+.image-multi-thumb { position: relative; width: 74px; height: 74px; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255, 255, 255, .1); background: #101414; }
+.image-multi-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: center; }
+.image-multi-cover { position: absolute; top: 5px; left: 5px; padding: 2px 7px; border-radius: 7px; background: var(--shop-green); color: #08130c; font-size: 8.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.image-multi-remove { position: absolute; top: 5px; right: 5px; width: 22px; height: 22px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(8, 10, 10, .78); color: #fff; cursor: pointer; }
+.image-multi-remove:hover { background: rgba(242, 123, 116, .9); }
+.image-multi-add { position: relative; width: 74px; height: 74px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border: 1px dashed rgba(46, 204, 113, .45); border-radius: 12px; color: var(--shop-green-soft); background: rgba(46, 204, 113, .05); font-size: 10px; font-weight: 700; cursor: pointer; }
+.image-multi-add input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.product-more-images { position: absolute; top: 8px; right: 8px; padding: 3px 8px; border-radius: 8px; background: rgba(8, 10, 10, .82); color: var(--white); font-size: 9.5px; font-weight: 800; backdrop-filter: blur(6px); }
 .switch-form-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px; border: 1px solid rgba(255, 255, 255, .08); border-radius: 12px; background: #141918; }
 .switch-form-row > span { display: flex; flex-direction: column; gap: 4px; }
 .switch-form-row strong { color: #ffffff; font-size: 13px; }
@@ -2052,37 +2058,18 @@ img.image-fallback-tile {
 .shop-screen { padding-bottom: 148px; }
 
 /* Delivery promise strip under the header (Blinkit's "10 min" bar). */
-.shop-hero-strip { display: flex; align-items: center; gap: 12px; margin: 2px 0 14px; padding: 12px 14px; border: 1px solid rgba(46, 204, 113, .32); border-radius: 16px; background: linear-gradient(110deg, rgba(46, 204, 113, .14), rgba(46, 204, 113, .04) 55%, rgba(247, 201, 72, .08)); }
-.shop-hero-icon { display: grid; place-items: center; width: 40px; height: 40px; flex: none; border-radius: 12px; background: var(--shop-green); color: #08130c; box-shadow: 0 6px 16px rgba(35, 180, 92, .3); }
-.shop-hero-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.shop-hero-copy strong { color: var(--white); font-size: 13.5px; line-height: 1.3; }
-.shop-hero-copy span { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--muted-light); font-size: 10.5px; font-weight: 700; }
-.shop-hero-copy span svg { color: var(--shop-green-soft); flex: none; }
-.shop-hero-copy span i { font-style: normal; color: var(--muted); }
-
 .shop-search { margin-bottom: 12px; }
 .shop-search:focus-within { border-color: rgba(46, 204, 113, .6); box-shadow: 0 0 0 3px rgba(46, 204, 113, .08); }
 
-/* Filter panel — labelled rows inside one soft card; chips scroll horizontally
-   like the quick-commerce apps. */
-.shop-filters { display: flex; flex-direction: column; gap: 13px; margin-bottom: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255, 255, 255, .025); }
-.shop-filter-label { display: block; margin-bottom: 7px; color: var(--muted); font-size: 9.5px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
-.shop-filter-duo { display: grid; grid-template-columns: 1fr auto; gap: 13px; align-items: end; }
-@media (max-width: 560px) { .shop-filter-duo { grid-template-columns: 1fr; } }
-.shop-chip-row { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
-.shop-chip-row::-webkit-scrollbar { display: none; }
-.shop-chip { flex: none; min-height: 34px; padding: 0 14px; border: 1px solid var(--line); border-radius: 20px; color: var(--muted-light); background: var(--card); font-size: 11.5px; font-weight: 700; white-space: nowrap; cursor: pointer; transition: border-color .15s, background .15s, color .15s; }
-.shop-chip:hover { border-color: rgba(46, 204, 113, .5); color: var(--white); }
-.shop-chip.active { color: #0c130e; background: var(--shop-green); border-color: var(--shop-green); box-shadow: 0 4px 14px rgba(35, 180, 92, .28); }
-.shop-chip.small { min-height: 30px; padding: 0 12px; font-size: 11px; }
-.shop-chip-group { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
-.shop-chip-group::-webkit-scrollbar { display: none; }
-.shop-sort { display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 0 8px 0 12px; border: 1px solid var(--line); border-radius: 20px; background: var(--card); color: var(--muted-light); font-size: 11px; font-weight: 700; cursor: pointer; transition: border-color .15s; }
-.shop-sort:hover { border-color: rgba(46, 204, 113, .5); }
-.shop-sort svg { color: var(--shop-green-soft); flex: none; }
-.shop-sort select { min-width: 0; max-width: 190px; height: 26px; border: 0; outline: 0; color: var(--white); background: transparent; font-size: 11px; font-weight: 700; cursor: pointer; }
-.shop-sort select option { color: #111; background: var(--card); }
-.shop-price-row { margin: 0; }
+/* Compact filter row — three labelled selects on one line (no chip rows,
+   no sort control), so the whole filter area is a single 38px strip. */
+.shop-filters-selects { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.shop-filter-select { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.shop-filter-select > span { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+.shop-filter-select select { width: 100%; height: 38px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--white); font-size: 11.5px; font-weight: 700; padding: 0 8px; cursor: pointer; transition: border-color .15s; }
+.shop-filter-select select:hover, .shop-filter-select select:focus { border-color: rgba(46, 204, 113, .55); outline: none; }
+.shop-filter-select select option { color: #111; background: var(--card); }
+.shop-header-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 
 .shop-count-line { display: flex; align-items: center; gap: 8px; margin: 8px 2px 12px; color: var(--muted); font-size: 11px; }
 .shop-count-line strong { color: var(--white); font-size: 12px; }
@@ -2143,6 +2130,10 @@ img.image-fallback-tile {
 .shop-detail-hero { position: relative; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; background: #101414; aspect-ratio: 4 / 3; max-height: 400px; }
 .shop-detail-hero-image { width: 100%; height: 100%; object-fit: cover; object-position: center; }
 .shop-off-badge-hero { top: 10px; right: 10px; left: auto; }
+.shop-detail-thumbs { display: flex; gap: 8px; margin-top: 9px; }
+.shop-detail-thumb { width: 52px; height: 52px; flex: none; padding: 0; border: 2px solid var(--line); border-radius: 10px; overflow: hidden; background: #101414; cursor: pointer; }
+.shop-detail-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: center; }
+.shop-detail-thumb.active { border-color: var(--shop-green); box-shadow: 0 0 0 3px rgba(46, 204, 113, .18); }
 .shop-detail-tags { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 10px; }
 .shop-detail-tag { padding: 4px 11px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted-light); background: var(--card); font-size: 10.5px; font-weight: 700; }
 .shop-detail-tag.in-stock { color: var(--shop-green-soft); border-color: rgba(46, 204, 113, .4); background: var(--shop-green-wash); }

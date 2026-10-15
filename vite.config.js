@@ -57,7 +57,7 @@ const SALON_FIXTURES = Array.from({ length: 57 }, (item, index) => salonFixture(
 // The Naai Shop catalog under the same env flag: the products endpoint the
 // shop screen reads, with the category/gender facets the shop filters use.
 const SHOP_PRODUCT_FIXTURES = [
-  { productId: 'shop-1', productName: 'Keratin Repair Shampoo 200ml', price: 499, mrp: 649, rating: 4.8, isAvailable: true, productImage: '', category: 'hair-care', gender: 'UNISEX', salon: { salonName: 'My Naai Supplies', genderType: 'UNISEX' } },
+  { productId: 'shop-1', productName: 'Keratin Repair Shampoo 200ml', price: 499, mrp: 649, rating: 4.8, isAvailable: true, productImage: '/assets/brand/product-placeholder.svg, /assets/brand/salon-placeholder.svg', category: 'hair-care', gender: 'UNISEX', salon: { salonName: 'My Naai Supplies', genderType: 'UNISEX' } },
   { productId: 'shop-2', productName: 'Matte Clay Pomade 90g', price: 599, mrp: 749, rating: 4.6, isAvailable: true, productImage: '', category: 'hair-care', gender: 'MALE', salon: { salonName: 'My Naai Supplies', genderType: 'UNISEX' } },
   { productId: 'shop-3', productName: 'Beard Oil 30ml', price: 299, mrp: 399, rating: 4.7, isAvailable: true, productImage: '', category: 'beard-grooming', gender: 'MALE', salon: { salonName: 'My Naai Supplies', genderType: 'UNISEX' } },
   { productId: 'shop-4', productName: 'Beard Trimmer Pro', price: 1899, mrp: 2499, rating: 4.4, isAvailable: true, productImage: '', category: 'tools-equipment', gender: 'MALE', salon: { salonName: 'My Naai Supplies', genderType: 'UNISEX' } },

@@ -32,7 +32,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { api, getFileUrl } from '../lib/api';
+import { api } from '../lib/api';
 import { closeNotification } from '../lib/push';
 import { DEFAULT_SERVICES } from '../lib/defaultServices';
 import { normalizePlanDetails } from '../lib/planDetails';
@@ -50,7 +50,7 @@ import {
   toInputTime,
 } from '../lib/bookingTime';
 import { STATE_OPTIONS } from '../lib/stateOptions';
-import { SHOP_CATEGORIES } from '../lib/shopCatalog';
+import { SHOP_CATEGORIES, parseProductImages } from '../lib/shopCatalog';
 import { SALON_ABOUT_CONTENT, SALON_FAQ_CONTENT, SALON_TERMS_CONTENT } from '../lib/salonContent';
 import { NotificationDiagnostics } from './NotificationDiagnostics';
 import { promptsAvailable, readPermission, requestLocation } from '../lib/permissions';
@@ -417,7 +417,7 @@ export function SalonHistoryScreen({ notify }) {
   return <div className="screen history-screen"><PageHeader title="Customer history" subtitle="A record of the work you have completed." action={<button className="refresh-text-button" onClick={load}><History size={15} /> Refresh</button>} />{loading ? <div className="list-stack">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} className="history-skeleton" />)}</div> : items.length ? <div className="history-list">{items.map((item, index) => <article className="history-card" key={item.bookingId || index}><div className="history-avatar">{getInitials(item.userName || 'Guest')}</div><div className="history-copy"><div className="history-heading"><h3>{item.userName || 'Guest'}</h3><span>{formatDate(item.bookingDate)}</span></div><p>{item.services || item.serviceNames || 'Salon service'}</p><div><span><UserRound size={13} /> {item.barberName || 'Any specialist'}</span><span><Clock3 size={13} /> {formatTime(item.bookingTime)}</span></div></div><CheckCircle2 className="history-check" size={19} /></article>)}</div> : <EmptyState icon={History} title="No completed bookings" message="Your completed services will be listed here." />}</div>;
 }
 
-function normalizeProduct(item = {}) { return { ...item, id: item.productId || item.id, name: item.productName || item.name || 'Unnamed product', price: item.price || 0, rating: Number(item.rating || 0), available: item.isAvailable ?? item.available ?? true, image: item.productImage || item.image || '' }; }
+function normalizeProduct(item = {}) { const images = parseProductImages(item); return { ...item, id: item.productId || item.id, name: item.productName || item.name || 'Unnamed product', price: item.price || 0, rating: Number(item.rating || 0), available: item.isAvailable ?? item.available ?? true, image: images[0] || '', images }; }
 
 export function SalonProductsScreen({ notify }) {
   const confirm = useConfirm();
@@ -426,19 +426,28 @@ export function SalonProductsScreen({ notify }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
-  const emptyForm = { productName: '', price: '', rating: '0', isAvailable: true, productImage: '', imageFile: null, preview: '', category: '', gender: 'UNISEX' };
+  const emptyForm = { productName: '', price: '', rating: '0', isAvailable: true, imageItems: [], category: '', gender: 'UNISEX' };
   const [form, setForm] = useState(emptyForm);
   const load = useCallback(async () => { setLoading(true); try { const response = await api.salonProductList({}); setProducts(getList(response, ['products']).map(normalizeProduct)); } catch (error) { notify?.('error', getErrorMessage(error, 'Unable to load product catalog.')); } finally { setLoading(false); } }, [notify]);
   useEffect(() => { load(); }, [load]);
   const openAdd = () => { setEditing(null); setForm(emptyForm); setModalOpen(true); };
-  const openEdit = item => { setEditing(item.id); setForm({ productName: item.name, price: String(item.price), rating: String(item.rating || 0), isAvailable: item.available, productImage: item.image, imageFile: null, preview: item.image ? getFileUrl(item.image) : '', category: item.category || '', gender: String(item.gender || 'unisex').toUpperCase() }); setModalOpen(true); };
+  const openEdit = item => { setEditing(item.id); setForm({ productName: item.name, price: String(item.price), rating: String(item.rating || 0), isAvailable: item.available, imageItems: parseProductImages(item).map(src => ({ src, file: null })), category: item.category || '', gender: String(item.gender || 'unisex').toUpperCase() }); setModalOpen(true); };
   const save = async event => {
     event.preventDefault();
     if (!form.productName.trim() || !form.price) return notify?.('error', 'Product name and price are required.');
     setSaving(true);
     try {
-      let productImage = form.productImage;
-      if (form.imageFile) { const uploaded = await api.uploadImage(form.imageFile); productImage = uploaded?.url || uploaded?.data?.url || uploaded?.path || ''; }
+      // Upload the newly added photos (existing ones keep their server paths)
+      // and join everything into the single productImage field — the same
+      // file-path pattern the salon photos use; the first image is the cover.
+      const imageUrls = [];
+      for (const entry of form.imageItems) {
+        if (entry.file) {
+          const uploaded = await api.uploadImage(entry.file);
+          imageUrls.push(uploaded?.url || uploaded?.data?.url || uploaded?.path || '');
+        } else imageUrls.push(entry.src);
+      }
+      const productImage = imageUrls.filter(Boolean).join(', ');
       // category/gender power the Naai Shop filters; when the backend does not
       // persist them yet the shop falls back to name-based inference.
       const payload = { productId: editing || null, productName: form.productName.trim(), price: form.price, rating: Math.min(5, Math.max(0, Number(form.rating) || 0)), isAvailable: form.isAvailable, productImage, phoneNumber: '', category: form.category || '', gender: form.gender || 'UNISEX' };
@@ -449,6 +458,12 @@ export function SalonProductsScreen({ notify }) {
       setModalOpen(false); notify?.('success', editing ? 'Product updated.' : 'Product added.');
     } catch (error) { notify?.('error', getErrorMessage(error, 'Could not save product.')); } finally { setSaving(false); }
   };
+  const addImageFiles = event => {
+    const files = Array.from(event.target.files || []).slice(0, Math.max(0, 8 - form.imageItems.length));
+    if (files.length) setForm(current => ({ ...current, imageItems: [...current.imageItems, ...files.map(file => ({ src: URL.createObjectURL(file), file }))] }));
+    event.target.value = '';
+  };
+  const removeImageItem = index => setForm(current => { const entry = current.imageItems[index]; if (entry?.file) URL.revokeObjectURL(entry.src); return { ...current, imageItems: current.imageItems.filter((_, i) => i !== index) }; });
   const remove = async item => {
     const confirmed = await confirm({
       title: `Delete ${item.name}?`,
@@ -465,7 +480,7 @@ export function SalonProductsScreen({ notify }) {
     const next = { ...item, available: !item.available }; setProducts(current => current.map(value => value.id === item.id ? next : value));
     try { await api.updateProductList({ productId: item.id, productName: item.name, price: item.price, rating: item.rating, isAvailable: next.available, productImage: item.image || '', category: item.category || '', gender: item.gender || 'UNISEX' }); } catch (error) { setProducts(current => current.map(value => value.id === item.id ? item : value)); notify?.('error', getErrorMessage(error, 'Availability could not be updated.')); }
   };
-  return <div className="screen salon-products-screen"><PageHeader title="Product catalog" subtitle="Manage the products customers can discover." action={<Button size="small" onClick={openAdd}><Plus size={16} /> Add product</Button>} />{loading ? <div className="product-grid">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} />)}</div> : products.length ? <div className="product-grid salon-product-grid">{products.map(item => <article className="product-card salon-product-card" key={item.id}><div className="product-image-wrap"><ImageWithFallback src={item.image} fallback={PRODUCT_PLACEHOLDER} alt={item.name} className="product-image" /><span className={cx('stock-label', item.available ? 'in-stock' : 'out-stock')}>{item.available ? 'In stock' : 'Out of stock'}</span></div><div className="product-copy"><h3>{item.name}</h3><div className="product-price-row"><strong>{formatCurrency(item.price)}</strong><Rating value={item.rating} /></div><div className="product-manage-row"><Toggle checked={item.available} onChange={() => toggle(item)} label={item.available ? 'Available' : 'Hidden'} /><div><button className="small-icon-button" onClick={() => openEdit(item)} aria-label={`Edit ${item.name}`}><Pencil size={15} /></button><button className="small-icon-button danger" onClick={() => remove(item)} aria-label={`Delete ${item.name}`}><Trash2 size={15} /></button></div></div></div></article>)}</div> : <EmptyState icon={Package} title="No products yet" message="Add your first product to the customer shelf." action={<Button onClick={openAdd}><Plus size={16} /> Add product</Button>} />}<Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editing ? 'Edit product' : 'Add product'}><form className="modal-form" onSubmit={save}><Field label="Product image" hint="Optional · JPG or PNG"><label className="image-upload-box">{form.preview ? <img src={form.preview} alt="Product preview" /> : <><ImagePlus size={24} /><span>Choose an image</span></>}<input type="file" accept="image/*" onChange={event => { const file = event.target.files?.[0]; if (file) setForm(current => ({ ...current, imageFile: file, preview: URL.createObjectURL(file) })); }} /></label></Field><Field label="Product name"><input value={form.productName} onChange={event => setForm(current => ({ ...current, productName: event.target.value }))} placeholder="e.g. Matte Clay Pomade" autoFocus /></Field><div className="form-two-col"><Field label="Price"><input type="number" min="0" value={form.price} onChange={event => setForm(current => ({ ...current, price: event.target.value }))} placeholder="499" /></Field><Field label="Rating"><input type="number" min="0" max="5" step="0.1" value={form.rating} onChange={event => setForm(current => ({ ...current, rating: event.target.value }))} placeholder="4.8" /></Field></div><div className="form-two-col"><Field label="Shop category" hint="Used by the Naai Shop filters · optional"><select value={form.category} onChange={event => setForm(current => ({ ...current, category: event.target.value }))}><option value="">Guess from the name</option>{SHOP_CATEGORIES.map(category => <option key={category.id} value={category.id}>{category.label}</option>)}</select></Field><Field label="Shop gender" hint="Who the product is for · Unisex by default"><select value={form.gender} onChange={event => setForm(current => ({ ...current, gender: event.target.value }))}><option value="MALE">Men</option><option value="FEMALE">Women</option><option value="UNISEX">Unisex</option></select></Field></div><div className="switch-form-row"><span><strong>Available for customers</strong><small>Show this product on the shelf</small></span><Toggle checked={form.isAvailable} onChange={value => setForm(current => ({ ...current, isAvailable: value }))} /></div><div className="form-actions"><Button type="button" variant="secondary" onClick={() => setModalOpen(false)}>Cancel</Button><Button type="submit" loading={saving}>{editing ? 'Save changes' : 'Add product'}</Button></div></form></Modal></div>;
+  return <div className="screen salon-products-screen"><PageHeader title="Product catalog" subtitle="Manage the products customers can discover." action={<Button size="small" onClick={openAdd}><Plus size={16} /> Add product</Button>} />{loading ? <div className="product-grid">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} />)}</div> : products.length ? <div className="product-grid salon-product-grid">{products.map(item => <article className="product-card salon-product-card" key={item.id}><div className="product-image-wrap"><ImageWithFallback src={item.image} fallback={PRODUCT_PLACEHOLDER} alt={item.name} className="product-image" /><span className={cx('stock-label', item.available ? 'in-stock' : 'out-stock')}>{item.available ? 'In stock' : 'Out of stock'}</span>{(item.images?.length || 0) > 1 && <span className="product-more-images">+{item.images.length - 1} more</span>}</div><div className="product-copy"><h3>{item.name}</h3><div className="product-price-row"><strong>{formatCurrency(item.price)}</strong><Rating value={item.rating} /></div><div className="product-manage-row"><Toggle checked={item.available} onChange={() => toggle(item)} label={item.available ? 'Available' : 'Hidden'} /><div><button className="small-icon-button" onClick={() => openEdit(item)} aria-label={`Edit ${item.name}`}><Pencil size={15} /></button><button className="small-icon-button danger" onClick={() => remove(item)} aria-label={`Delete ${item.name}`}><Trash2 size={15} /></button></div></div></div></article>)}</div> : <EmptyState icon={Package} title="No products yet" message="Add your first product to the customer shelf." action={<Button onClick={openAdd}><Plus size={16} /> Add product</Button>} />}<Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editing ? 'Edit product' : 'Add product'}><form className="modal-form" onSubmit={save}><Field label="Product images" hint="Optional · up to 8 · the first image is the cover"><div className="image-multi-upload">{form.imageItems.map((entry, index) => <div className="image-multi-thumb" key={entry.src}><img src={entry.src} alt={`Product image ${index + 1}`} />{index === 0 && <span className="image-multi-cover">Cover</span>}<button type="button" className="image-multi-remove" onClick={() => removeImageItem(index)} aria-label={`Remove image ${index + 1}`}><X size={12} /></button></div>)}{form.imageItems.length < 8 && <label className="image-multi-add"><ImagePlus size={20} /><span>{form.imageItems.length ? 'Add more' : 'Add images'}</span><input type="file" accept="image/*" multiple onChange={addImageFiles} /></label>}</div></Field><Field label="Product name"><input value={form.productName} onChange={event => setForm(current => ({ ...current, productName: event.target.value }))} placeholder="e.g. Matte Clay Pomade" autoFocus /></Field><div className="form-two-col"><Field label="Price"><input type="number" min="0" value={form.price} onChange={event => setForm(current => ({ ...current, price: event.target.value }))} placeholder="499" /></Field><Field label="Rating"><input type="number" min="0" max="5" step="0.1" value={form.rating} onChange={event => setForm(current => ({ ...current, rating: event.target.value }))} placeholder="4.8" /></Field></div><div className="form-two-col"><Field label="Shop category" hint="Used by the Naai Shop filters · optional"><select value={form.category} onChange={event => setForm(current => ({ ...current, category: event.target.value }))}><option value="">Guess from the name</option>{SHOP_CATEGORIES.map(category => <option key={category.id} value={category.id}>{category.label}</option>)}</select></Field><Field label="Shop gender" hint="Who the product is for · Unisex by default"><select value={form.gender} onChange={event => setForm(current => ({ ...current, gender: event.target.value }))}><option value="MALE">Men</option><option value="FEMALE">Women</option><option value="UNISEX">Unisex</option></select></Field></div><div className="switch-form-row"><span><strong>Available for customers</strong><small>Show this product on the shelf</small></span><Toggle checked={form.isAvailable} onChange={value => setForm(current => ({ ...current, isAvailable: value }))} /></div><div className="form-actions"><Button type="button" variant="secondary" onClick={() => setModalOpen(false)}>Cancel</Button><Button type="submit" loading={saving}>{editing ? 'Save changes' : 'Add product'}</Button></div></form></Modal></div>;
 }
 
 // On-brand placeholders: a catalog item or specialist without an uploaded photo
