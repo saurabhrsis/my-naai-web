@@ -211,24 +211,47 @@ export function describePaymentFailure(error) {
   return 'The payment could not be completed. You will not be charged for a failed attempt.';
 }
 
+/* ------------------------------------------------------------------ *\
+ * Key resolution
+ * ------------------------------------------------------------------ */
+
+// The public Razorpay key. A configured `VITE_RAZORPAY_KEY_ID` wins; the
+// mobile app's live key is the production fallback. Anything that is not a
+// real `rzp_(test|live)_…` id (an empty var, a leftover placeholder such as
+// `your_key_here`) is rejected rather than handed to Checkout, which would
+// fail with an opaque gateway error.
+export const FALLBACK_RAZORPAY_KEY = 'rzp_live_ST8yVm3RaFMiHW';
+export function getRazorpayKeyId() {
+  const configured = import.meta.env?.VITE_RAZORPAY_KEY_ID;
+  const value = typeof configured === 'string' ? configured.trim() : '';
+  if (/^rzp_(test|live)_[A-Za-z0-9]+$/.test(value)) return value;
+  if (value) console.warn('VITE_RAZORPAY_KEY_ID is not a valid Razorpay key id; using the built-in fallback key.');
+  return /^rzp_(test|live)_[A-Za-z0-9]+$/.test(FALLBACK_RAZORPAY_KEY) ? FALLBACK_RAZORPAY_KEY : '';
+}
+
 /* ------------------------------------------------------------------ *
  * Checkout
  * ------------------------------------------------------------------ */
 
-// Opens Razorpay Checkout and always resolves with an explicit outcome:
+// One sheet lifecycle for both checkout shapes. `orderId` is optional:
+//   · the plan/subscription flow sends the Razorpay order created by the
+//     backend (`create-payment-order`) — amount must match the order;
+//   · the Naai Shop flow pays order-less (no backend order exists yet) and
+//     Razorpay simply charges the key + amount, returning a payment id.
+// Both always resolve with an explicit outcome:
 //   { status: 'success',   payment: { paymentId, orderId, signature } }
 //   { status: 'cancelled', error? }   — partner closed the sheet / pressed back
 //   { status: 'failed',    error }    — gateway or bank failure
 //   { status: 'unavailable', error }  — checkout.js could not be used
 // `onEvent` receives { type: 'opened' | 'app-switch' | 'returned' | 'failed' | 'dismissed' }
 // so the UI can tell the partner what is happening while a UPI app is in front.
-export function openRazorpayCheckout({
+function launchCheckout({
   key,
   orderId,
   amount,
   currency = 'INR',
   name = 'My Naai',
-  description = 'Salon partner subscription',
+  description = 'My Naai payment',
   image = '',
   themeColor = '#e8b97e',
   prefill = {},
@@ -238,10 +261,6 @@ export function openRazorpayCheckout({
   return new Promise(resolve => {
     if (!isBrowser() || !window.Razorpay) {
       resolve({ status: 'unavailable', error: { description: 'Razorpay Checkout is unavailable on this device or network.' } });
-      return;
-    }
-    if (!key || !orderId || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
-      resolve({ status: 'failed', error: { description: 'The payment request is incomplete. Please try again.' } });
       return;
     }
 
@@ -292,7 +311,9 @@ export function openRazorpayCheckout({
         currency,
         name,
         description,
-        order_id: orderId,
+        // Order-less checkout (the shop cart) omits order_id entirely —
+        // Razorpay then charges the key directly for the given amount.
+        ...(orderId ? { order_id: orderId } : {}),
         ...(image ? { image } : {}),
         prefill: { name: '', email: '', contact: '', ...prefill },
         notes,
@@ -352,4 +373,49 @@ export function openRazorpayCheckout({
       });
     }
   });
+}
+
+// The subscription/renewal/registration flow: a backend-created Razorpay
+// order, amount must match it. Kept with the exact contract it always had —
+// missing key OR order id is an incomplete request, not a launch.
+export function openRazorpayCheckout({
+  key,
+  orderId,
+  amount,
+  currency = 'INR',
+  name = 'My Naai',
+  description = 'Salon partner subscription',
+  image = '',
+  themeColor = '#e8b97e',
+  prefill = {},
+  notes = {},
+  onEvent = () => {},
+} = {}) {
+  if (!key || !orderId || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+    return Promise.resolve({ status: 'failed', error: { description: 'The payment request is incomplete. Please try again.' } });
+  }
+  return launchCheckout({ key, orderId, amount, currency, name, description, image, themeColor, prefill, notes, onEvent });
+}
+
+// Order-less payment for the Naai Shop cart: no backend Razorpay order
+// exists (shop orders live client-side until a /api/orders controller
+// lands), so Checkout opens with just the key + amount. The handler still
+// returns a `razorpay_payment_id`, which the order record stores for
+// support and refunds.
+export function openRazorpayOrderlessCheckout({
+  key,
+  amount,
+  currency = 'INR',
+  name = 'My Naai',
+  description = 'My Naai Shop order',
+  image = '',
+  themeColor = '#e8b97e',
+  prefill = {},
+  notes = {},
+  onEvent = () => {},
+} = {}) {
+  if (!key || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+    return Promise.resolve({ status: 'failed', error: { description: 'The payment request is incomplete. Please try again.' } });
+  }
+  return launchCheckout({ key, amount, currency, name, description, image, themeColor, prefill, notes, onEvent });
 }

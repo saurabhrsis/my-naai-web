@@ -23,6 +23,7 @@ import {
   clearRedirectedPaymentParams,
   describePaymentFailure,
   extractRazorpayOrder,
+  getRazorpayKeyId,
   isPendingPaymentFresh,
   loadRazorpayCheckout,
   openRazorpayCheckout,
@@ -40,19 +41,8 @@ import { Button, GOLD, PageHeader, cx, formatCurrency, getErrorMessage } from '.
 const SUPPORT_PHONE = '8380017393';
 // Same logo the mobile app shows inside Razorpay Checkout.
 const CHECKOUT_IMAGE = 'https://res.cloudinary.com/dfdkzozqi/image/upload/v1773818628/my_naai_pay_gateway_ucntco.png';
-const FALLBACK_KEY = 'rzp_live_ST8yVm3RaFMiHW';
-
-// A configured value wins; the mobile app's live key is the production
-// fallback. Anything that is not a real `rzp_(test|live)_…` id (an empty var, a
-// leftover placeholder such as `your_key_here`) is rejected rather than handed
-// to Checkout, which would fail with an opaque gateway error.
-function getRazorpayKey() {
-  const configured = import.meta.env?.VITE_RAZORPAY_KEY_ID;
-  const value = typeof configured === 'string' ? configured.trim() : '';
-  if (/^rzp_(test|live)_[A-Za-z0-9]+$/.test(value)) return value;
-  if (value) console.warn('VITE_RAZORPAY_KEY_ID is not a valid Razorpay key id; using the built-in fallback key.');
-  return /^rzp_(test|live)_[A-Za-z0-9]+$/.test(FALLBACK_KEY) ? FALLBACK_KEY : '';
-}
+// The public key lives in src/lib/razorpay.js (`getRazorpayKeyId`) so the
+// shop checkout and the plan flows resolve it identically.
 
 // checkout.js is loaded with `async` in index.html; this state keeps the button
 // honest about whether the gateway is actually usable before a partner taps it.
@@ -252,7 +242,7 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
     // The public key is what Checkout authenticates with. An empty/placeholder
     // value produced an opaque Razorpay error only after the sheet tried to
     // open, so check it up front and say so plainly.
-    const key = getRazorpayKey();
+    const key = getRazorpayKeyId();
     if (!key) {
       setPaymentState('idle');
       setNotice({ tone: 'error', title: 'Payments are not configured', text: `This build has no Razorpay key, so payments cannot be taken here. Please call ${SUPPORT_PHONE} — do not attempt to pay.` });

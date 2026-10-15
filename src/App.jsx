@@ -15,6 +15,7 @@ import {
   Menu,
   Package,
   Scissors,
+  ShoppingBag,
   Sparkles,
   Store,
   UsersRound,
@@ -78,6 +79,9 @@ import {
   SalonProductsScreen,
   SalonQueueScreen,
 } from './components/SalonScreens';
+import { ShopScreen } from './components/ShopScreen';
+import { ShopCartScreen, ShopCheckoutScreen } from './components/ShopCartCheckout';
+import { ShopOrderScreen, ShopOrdersScreen } from './components/ShopOrders';
 import { SubscriptionScreen } from './components/SubscriptionScreen';
 import { ConfirmProvider, LOGOUT_CONFIRM, useConfirm } from './components/ConfirmDialog';
 import { SALON_ABOUT_CONTENT, SALON_FAQ_CONTENT, SALON_TERMS_CONTENT } from './lib/salonContent';
@@ -96,6 +100,7 @@ const USER_NAV = [
 const SALON_NAV = [
   { name: 'queue', label: 'Customer queue', short: 'Queue', icon: UsersRound },
   { name: 'history', label: 'History', short: 'History', icon: History },
+  { name: 'shop', label: 'Naai Shop', short: 'Shop', icon: ShoppingBag },
   { name: 'salonProducts', label: 'Products', short: 'Products', icon: Package },
   { name: 'account', label: 'Account', short: 'Account', icon: CircleUserRound },
 ];
@@ -141,7 +146,7 @@ function saveSession(session) {
 // falls back to the role's home instead of rendering a screen the shell has
 // no branch for.
 const USER_ROUTE_NAMES = ['home', 'bookings', 'products', 'account', 'detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'privacy', 'contact'];
-const SALON_ROUTE_NAMES = ['queue', 'history', 'salonProducts', 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
+const SALON_ROUTE_NAMES = ['queue', 'history', 'shop', 'shopCart', 'shopCheckout', 'shopOrders', 'shopOrder', 'salonProducts', 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
 // Every route a visitor may open WITHOUT an account — salons are browsable
 // first, login only appears when they try to book (the client's headline
 // ask). The info pages are public too: the site footer links About/FAQ/Terms/
@@ -1441,6 +1446,11 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     }
     if (route.name === 'queue') return <SalonQueueScreen {...props} />;
     if (route.name === 'history') return <SalonHistoryScreen {...props} />;
+    if (route.name === 'shop') return <ShopScreen {...props} />;
+    if (route.name === 'shopCart') return <ShopCartScreen {...props} />;
+    if (route.name === 'shopCheckout') return <ShopCheckoutScreen {...props} />;
+    if (route.name === 'shopOrders') return <ShopOrdersScreen {...props} />;
+    if (route.name === 'shopOrder') return <ShopOrderScreen {...props} params={route.params} />;
     if (route.name === 'salonProducts') return <SalonProductsScreen {...props} />;
     if (route.name === 'account') return <SalonAccountScreen {...props} onLogout={onLogout} />;
     if (route.name === 'notifications') return <NotificationsScreen {...props} />;
@@ -1610,6 +1620,8 @@ function MobileShellBar({ session, nav, route, navigate, onLogout, notifyInstall
 // shipped a lowercase "bookings" / "queue" sitting next to "Discover",
 // "Products" and "Account" — visible on every phone and tablet. Each nav entry
 // now carries its own `short` label and the bar just renders it.
-function MobileNav({ nav, route, navigate }) { return <nav className="mobile-nav">{nav.map(item => <button key={item.name} className={route.name === item.name ? 'active' : ''} aria-current={route.name === item.name ? 'page' : undefined} onClick={() => navigate(item.name)}><item.icon size={20} /><span>{item.short || item.label}</span></button>)}</nav>; }
+// The column count follows the nav's length: customer roles show four tabs,
+// salon partners five (Queue, History, Shop, Products, Account).
+function MobileNav({ nav, route, navigate }) { return <nav className="mobile-nav" style={{ gridTemplateColumns: `repeat(${nav.length}, minmax(0, 1fr))` }}>{nav.map(item => <button key={item.name} className={route.name === item.name ? 'active' : ''} aria-current={route.name === item.name ? 'page' : undefined} onClick={() => navigate(item.name)}><item.icon size={20} /><span>{item.short || item.label}</span></button>)}</nav>; }
 
 function PartnerInfo({ type, navigate }) { const content = type === 'about' ? SALON_ABOUT_CONTENT : type === 'faq' ? SALON_FAQ_CONTENT : SALON_TERMS_CONTENT; return <div className="screen info-screen"><div className="page-header"><div className="page-header-leading"><button className="icon-btn ghost" onClick={() => navigate(-1)} aria-label="Go back"><ChevronRight size={19} className="rotate-180" /></button><div><span className="eyebrow">{content.eyebrow}</span><h1>{content.title}</h1></div></div></div><div className="info-intro"><Sparkles size={18} /><p>{content.intro || 'Everything you need to know about partnering with My Naai.'}</p></div><div className="info-sections">{content.sections.map(section => <section key={section.title}><h2>{section.title}</h2><p>{section.text}</p></section>)}</div><div className="info-contact"><span className="info-contact-icon"><HelpCircle size={18} /></span><div><strong>Need more help?</strong><p>Call our partner team on 8380017393</p></div><button onClick={() => window.open('tel:8380017393')}><ChevronRight size={17} /></button></div></div>; }

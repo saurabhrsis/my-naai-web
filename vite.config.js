@@ -54,6 +54,89 @@ function salonFixture(index) {
 
 const SALON_FIXTURES = Array.from({ length: 57 }, (item, index) => salonFixture(index));
 
+// The Naai Shop catalog under the same env flag: the products endpoint the
+// shop screen reads, with the category/gender facets the shop filters use.
+const SHOP_PRODUCT_FIXTURES = [
+  { productId: 'shop-1', productName: 'Keratin Repair Shampoo 200ml', price: 499, mrp: 649, rating: 4.8, isAvailable: true, productImage: '', category: 'hair-care', gender: 'UNISEX', salon: { salonName: 'My Naai Supplies', genderType: 'UNISEX' } },
+  { productId: 'shop-2', productName: 'Matte Clay Pomade 90g', price: 599, mrp: 749, rating: 4.6, isAvailable: true, productImage: '', category: 'hair-care', gender: 'MALE', salon: { salonName: 'My Naai Supplies', genderType: 'UNISEX' } },
+  { productId: 'shop-3', productName: 'Beard Oil 30ml', price: 299, mrp: 399, rating: 4.7, isAvailable: true, productImage: '', category: 'beard-grooming', gender: 'MALE', salon: { salonName: 'My Naai Supplies', genderType: 'UNISEX' } },
+  { productId: 'shop-4', productName: 'Beard Trimmer Pro', price: 1899, mrp: 2499, rating: 4.4, isAvailable: true, productImage: '', category: 'tools-equipment', gender: 'MALE', salon: { salonName: 'My Naai Supplies', genderType: 'UNISEX' } },
+  { productId: 'shop-5', productName: 'Hair Clipper 2200', price: 2499, mrp: 2999, rating: 4.5, isAvailable: true, productImage: '', category: 'tools-equipment', gender: 'UNISEX', salon: { salonName: 'My Naai Supplies', genderType: 'UNISEX' } },
+  { productId: 'shop-6', productName: 'Argan Hair Serum 100ml', price: 449, mrp: 599, rating: 4.3, isAvailable: true, productImage: '', category: 'hair-care', gender: 'FEMALE', salon: { salonName: 'My Naai Supplies', genderType: 'UNISEX' } },
+  { productId: 'shop-7', productName: 'Henna Hair Colour Pack', price: 349, mrp: 449, rating: 4.2, isAvailable: true, productImage: '', category: 'hair-colour', gender: 'FEMALE', salon: { salonName: 'My Naai Supplies', genderType: 'UNISEX' } },
+  { productId: 'shop-8', productName: 'Sandalwood Perfume 50ml', price: 799, mrp: 999, rating: 4.6, isAvailable: true, productImage: '', category: 'fragrance', gender: 'UNISEX', salon: { salonName: 'My Naai Supplies', genderType: 'UNISEX' } },
+  { productId: 'shop-9', productName: 'Face Cleanser for Oily Skin 150ml', price: 399, mrp: 499, rating: 4.1, isAvailable: true, productImage: '', category: 'skin-face', gender: 'UNISEX', salon: { salonName: 'My Naai Supplies', genderType: 'UNISEX' } },
+  { productId: 'shop-10', productName: 'Hair Spa Ritual Kit', price: 1299, mrp: 1599, rating: 4.9, isAvailable: true, productImage: '', category: 'kits-sets', gender: 'UNISEX', salon: { salonName: 'My Naai Supplies', genderType: 'UNISEX' } },
+  { productId: 'shop-11', productName: 'Salon Cape & Apron Set', price: 899, mrp: 1199, rating: 4.0, isAvailable: true, productImage: '', category: 'tools-equipment', gender: 'UNISEX', salon: { salonName: 'My Naai Supplies', genderType: 'UNISEX' } },
+  { productId: 'shop-12', productName: 'Castor Hair Oil 200ml', price: 249, mrp: 329, rating: 4.4, isAvailable: false, productImage: '', category: 'hair-care', gender: 'UNISEX', salon: { salonName: 'My Naai Supplies', genderType: 'UNISEX' } },
+];
+
+// A complete demo salon so a partner can sign in OFFLINE (any number, any
+// OTP) and walk the whole portal — queue, shop, checkout, orders — without
+// the real backend. Active plan on purpose: an expired plan would paywall the
+// shell before the shop is ever reachable.
+const DEV_SALON = {
+  salonId: 'dev-salon-1',
+  salonName: 'Golden Scissors',
+  genderType: 'UNISEX',
+  ownerName: 'Ramesh Kumar',
+  phoneNumber: '9876543210',
+  addressLine1: '10 Dharampeth Main Road',
+  address: 'Dharampeth, Nagpur',
+  city: 'Nagpur',
+  state: 'Maharashtra',
+  pincode: '440010',
+  latitude: 21.1458,
+  longitude: 79.0882,
+  isOpen: true,
+  imageUrl: '',
+  imagesArray: [],
+  profileCompleted: true,
+  planType: 'quarterly',
+  planStartDate: '2026-10-01',
+  planEndDate: '2027-01-01',
+  isPlanActive: true,
+  businessHours: [{ openingTime: '09:00:00', closingTime: '21:00:00', holidayDays: ['1'] }],
+  services: SERVICES,
+  barbers: [
+    { barberId: 'dev-barber-1', fullName: 'Amit Jichkar', isAvailable: true, ratingAverage: 4.8 },
+    { barberId: 'dev-barber-2', fullName: 'Rahul Wankhede', isAvailable: true, ratingAverage: 4.5 },
+  ],
+};
+
+// Everything the signed-in shell reads on boot, answered from the fixtures so
+// no request leaks to the (unreachable-in-sandbox) production API. The real
+// endpoints are untouched in production builds — `apply: 'serve'` plus the
+// env flag keep this strictly a local-preview aid.
+const DEV_MOCK_ENDPOINTS = {
+  '/api/salons/send-otp': { status: 'SUCCESS', message: 'OTP sent (dev fixture)' },
+  '/api/salons/login': {
+    status: 'SUCCESS',
+    data: { token: 'dev-salon-token', userId: 'dev-salon-1', profileCompleted: true, salon: DEV_SALON },
+  },
+  '/api/salons/get-salon': { status: 'SUCCESS', data: DEV_SALON },
+  '/api/salons/open-close': { status: 'SUCCESS' },
+  '/api/users/send-otp': { status: 'SUCCESS', message: 'OTP sent (dev fixture)' },
+  '/api/users/verify-otp': body => ({
+    status: 'SUCCESS',
+    isUserExist: true,
+    data: { token: 'dev-user-token', userId: 'dev-user-1', fullName: 'Demo Customer', phoneNumber: body?.phoneNumber || '9876500000' },
+  }),
+  '/api/users/profile': { status: 'SUCCESS', data: { userId: 'dev-user-1', fullName: 'Demo Customer', phoneNumber: '9876500000' } },
+  '/api/users/update': { status: 'SUCCESS' },
+  '/api/booking/get-booking-list': { status: 'SUCCESS', data: { bookings: [] } },
+  '/api/booking/get-list': { status: 'SUCCESS', data: { bookings: [] } },
+  '/api/booking/get-completed-bookings': { status: 'SUCCESS', data: { bookings: [] } },
+  '/api/products/list': { status: 'SUCCESS', data: { products: SHOP_PRODUCT_FIXTURES.slice(0, 4) } },
+  '/api/notifications/register-device': { status: 'SUCCESS' },
+  '/api/notifications/test-push': { status: 'SUCCESS' },
+  '/api/notifications/get-salon-notification-list': { status: 'SUCCESS', data: { notifications: [] } },
+  '/api/notifications/get-user-notification-list': { status: 'SUCCESS', data: { notifications: [] } },
+  '/api/notifications/get-salon-notification-count': { status: 'SUCCESS', data: { count: 0 } },
+  '/api/notifications/get-user-notification-count': { status: 'SUCCESS', data: { count: 0 } },
+  '/api/advertisement/get-advertisement': { status: 'SUCCESS', data: { advertisements: [] } },
+};
+
 const readBody = req => new Promise(resolve => {
   let raw = '';
   req.on('data', chunk => { raw += chunk; });
@@ -79,6 +162,13 @@ function devSalonFixturePlugin() {
         const path = String(req.url || '').split('?')[0];
         const isList = path === '/api/salons/salon-list' || path === '/api/salons/salon-list-public';
         const isDetail = path === '/api/salons/get-salon-by-id';
+        const isShopProducts = path === '/api/products/get-all-salons-products-list';
+        if (isShopProducts) return sendJson(res, { status: 'SUCCESS', data: { products: SHOP_PRODUCT_FIXTURES } });
+        const mock = DEV_MOCK_ENDPOINTS[path];
+        if (mock) {
+          const body = req.method === 'POST' ? await readBody(req) : {};
+          return sendJson(res, typeof mock === 'function' ? mock(body) : mock);
+        }
         if (!isList && !isDetail) return next();
         const body = req.method === 'POST' ? await readBody(req) : {};
         if (isDetail) {
