@@ -33,7 +33,9 @@ Shop tab ── search / category chips / gender chips / price range / sort
    ▼
 "3 items · ₹1,240 → View cart" floating bar
    ▼
-Cart ── steppers, remove, bill (item total, MRP savings, delivery fee)
+Cart ── Blinkit-style rows: quantity stepper (minus at 1 removes the
+           line), per-line totals, free-delivery progress bar, bill (item total,
+           MRP savings + "you saved" line, delivery fee), to-pay footer bar
    ▼
 Checkout ── delivery address (prefilled from the salon profile, editable)
            └── Pay online (Razorpay, UPI/cards/netbanking)
