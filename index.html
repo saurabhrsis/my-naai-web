@@ -58,24 +58,44 @@
       if (import.meta.env.DEV) {
         const problems = [];
         const overlay = document.getElementById('mynaai-dev-error-overlay');
-        const show = () => {
+        // A proxy/browser cache may still hold an OLD copy of this page
+        // (older than the per-process ?v= module versioning). If that old
+        // copy fails to load the app, reload ONCE through a fresh URL —
+        // a different URL is a different cache key, so the origin serves
+        // the current page. The mynaaiFresh marker prevents loops.
+        let selfHealed = false;
+        const FRESH_MARK = 'mynaaiFresh=';
+        const selfHeal = (context) => {
+          if (selfHealed || location.search.indexOf(FRESH_MARK) !== -1) return false;
+          selfHealed = true;
+          overlay.style.display = 'block';
+          overlay.textContent = context + ' — reloading once through a fresh URL to bypass the cached copy…';
+          setTimeout(() => {
+            location.replace(location.pathname + (location.search ? location.search + '&' : '?') + FRESH_MARK + Date.now());
+          }, 900);
+          return true;
+        };
+        const show = (context) => {
           if (!overlay || !problems.length) return;
           overlay.style.display = 'block';
-          overlay.textContent = 'DEV ERROR (not shown in production) — ' + problems.slice(0, 3).join(' | ');
+          overlay.textContent = (context || 'DEV ERROR (not shown in production) — ') + problems.slice(0, 3).join(' | ');
         };
         window.addEventListener('error', event => {
-          if (event.message) { problems.push(event.message + (event.filename ? ' @ ' + event.filename + ':' + event.lineno : '')); show(); }
+          if (event.message) {
+            problems.push(event.message + (event.filename ? ' @ ' + event.filename + ':' + event.lineno : ''));
+            if (!selfHeal('Load failed')) show('DEV ERROR (not shown in production) — ');
+          }
         }, true);
         window.addEventListener('unhandledrejection', event => {
           const reason = event.reason;
           problems.push((reason && (reason.message || String(reason))) || 'unhandled rejection');
-          show();
+          if (!selfHeal('Load failed')) show('DEV ERROR (not shown in production) — ');
         });
         setTimeout(() => {
           const root = document.getElementById('root');
           if (!root || root.childElementCount === 0) {
             if (!problems.length) problems.push('App did not mount and no JS error was captured — check the browser Network tab for a failed module');
-            show();
+            if (!selfHeal('App did not mount')) show('DEV ERROR (not shown in production) — ');
           }
         }, 6000);
       }
