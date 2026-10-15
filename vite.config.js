@@ -152,6 +152,44 @@ const sendJson = (res, payload) => {
   res.end(JSON.stringify(payload));
 };
 
+// Dev-only: never let the browser or a preview proxy cache Vite's transformed
+// modules. A cached transform of one file (say an older shopCatalog.js)
+// served next to a newer importer (SalonScreens.jsx) is exactly the
+// "module does not provide an export named …" blank page. no-store is the
+// strong directive — no-cache only means "revalidate", which a wedged
+// in-flight reload can skip.
+function devNoStorePlugin() {
+  return {
+    name: 'mynaai-dev-no-store',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const path = String(req.url || '').split('?')[0];
+        const shouldNoStore =
+          path.startsWith('/src') ||
+          path.startsWith('/@') ||
+          path === '/' ||
+          path === '/index.html';
+        if (shouldNoStore) {
+          // Vite sets Cache-Control: no-cache on its own (after this hook
+          // runs), so re-assert no-store right before the response is
+          // flushed — res.end is the last safe moment to set a header.
+          const originalEnd = res.end.bind(res);
+          res.end = (...endArgs) => {
+            try {
+              res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+              res.setHeader('Pragma', 'no-cache');
+              res.setHeader('Expires', '0');
+            } catch { /* headers already sent */ }
+            return originalEnd(...endArgs);
+          };
+        }
+        next();
+      });
+    },
+  };
+}
+
 function devSalonFixturePlugin() {
   return {
     name: 'mynaai-dev-salon-fixture',
@@ -196,7 +234,7 @@ function devSalonFixturePlugin() {
 }
 
 export default defineConfig({
-  plugins: [react(), devSalonFixturePlugin()],
+  plugins: [react(), devNoStorePlugin(), devSalonFixturePlugin()],
   server: {
     host: '0.0.0.0',
     allowedHosts: true,
