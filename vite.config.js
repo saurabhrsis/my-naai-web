@@ -158,10 +158,35 @@ const sendJson = (res, payload) => {
 // "module does not provide an export named …" blank page. no-store is the
 // strong directive — no-cache only means "revalidate", which a wedged
 // in-flight reload can skip.
+// A version token per dev-server process. Every module URL the browser is
+// asked to load carries it (?v=…), so a cache layer (browser, preview proxy)
+// that kept an entry from a PREVIOUS server process can never match — the
+// URL itself changed. This is what a deploy's content hash does for the
+// production build; in dev we just regenerate it on every restart.
+const DEV_URL_VERSION = Date.now().toString(36);
+const DEV_MODULE_SPEC = /(["'(])(\/src[^"'()]*?)(\?[^"']*)?(?=["'\`])/g;
+function versionDevSpecifiers(code) {
+  if (!code.includes('/src')) return code;
+  return code.replace(DEV_MODULE_SPEC, (match, open, path, query) => {
+    if (/(^|[?&])v=[a-z0-9]+$/.test(query || '')) return match;
+    return open + path + (query ? `${query}&v=${DEV_URL_VERSION}` : `?v=${DEV_URL_VERSION}`);
+  });
+}
+
 function devNoStorePlugin() {
   return {
     name: 'mynaai-dev-no-store',
     apply: 'serve',
+    // Rewrite every module specifier in the transformed ESM (and in the
+    // final HTML) so the whole dev module graph sits on fresh URLs.
+    transform(code, id) {
+      if (typeof code === 'string' && id && !id.startsWith('\0')) return versionDevSpecifiers(code);
+      return null;
+    },
+    transformIndexHtml: {
+      order: 'post',
+      handler: (html) => versionDevSpecifiers(html),
+    },
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const path = String(req.url || '').split('?')[0];
