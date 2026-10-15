@@ -111,16 +111,20 @@ export function ShopCartScreen({ session, navigate, notify }) {
       <div className="shop-cart-list">
         {lines.map(line => (
           <article className="shop-cart-item" key={line.productId}>
-            <ShopQuantityControl qty={line.qty} onAdd={() => setQty(line, line.qty + 1)} onSet={next => setQty(line, next)} small />
+            <ImageWithFallback src={getFileUrl(line.image)} fallback={PRODUCT_PLACEHOLDER} alt={line.name} className="shop-cart-image" />
             <div className="shop-cart-copy">
               <h3>{line.name}</h3>
-              <p className="shop-cart-price">
-                <strong>{formatCurrency(line.price)}</strong><span> each</span>
-                {line.mrp > 0 && <s>{formatCurrency(line.mrp)}</s>}
-              </p>
-              {line.qty > 1 && <p className="shop-cart-line-total">{formatCurrency(line.price * line.qty)} for {line.qty}</p>}
+              <div className="shop-cart-bottom">
+                <div className="shop-cart-price">
+                  <span className="shop-cart-price-line">
+                    <strong>{formatCurrency(line.price)}</strong>
+                    {line.mrp > 0 && <s>{formatCurrency(line.mrp)}</s>}
+                  </span>
+                  {line.qty > 1 && <span className="shop-cart-line-total">{formatCurrency(line.price * line.qty)} for {line.qty}</span>}
+                </div>
+                <ShopQuantityControl qty={line.qty} onAdd={() => setQty(line, line.qty + 1)} onSet={next => setQty(line, next)} small />
+              </div>
             </div>
-            <ImageWithFallback src={getFileUrl(line.image)} fallback={PRODUCT_PLACEHOLDER} alt={line.name} className="shop-cart-image" />
           </article>
         ))}
       </div>

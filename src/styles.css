@@ -2085,7 +2085,7 @@ img.image-fallback-tile {
 .shop-card:hover { border-color: rgba(46, 204, 113, .45); transform: translateY(-2px); box-shadow: 0 12px 32px rgba(0, 0, 0, .35); }
 .shop-card.out-of-stock { opacity: .62; }
 .shop-off-badge { position: absolute; top: 8px; left: 8px; z-index: 2; padding: 3px 7px; border-radius: 8px; background: var(--shop-green); color: #08130c; font-size: 9.5px; font-weight: 800; letter-spacing: .02em; }
-.shop-off-badge.inline { position: static; display: inline-block; margin-left: 7px; vertical-align: middle; }
+.shop-off-badge.inline { position: static; display: inline-block; margin-left: 0; vertical-align: middle; }
 .shop-card-media { position: relative; display: block; width: 100%; aspect-ratio: 1 / 1; padding: 0; border: 0; background: #101414; cursor: pointer; overflow: hidden; }
 .shop-card-image { width: 100%; height: 100%; object-fit: cover; object-position: center; transition: transform .25s ease; }
 .shop-card:hover .shop-card-image { transform: scale(1.045); }
@@ -2094,9 +2094,12 @@ img.image-fallback-tile {
 .shop-card-body h3 { margin: 0; font-size: 13px; line-height: 1.35; color: var(--white); cursor: pointer; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.7em; }
 .shop-card-body h3:hover { color: var(--shop-green-soft); }
 .shop-card-salon { margin: 0; color: var(--muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.shop-card-price-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; margin-top: 2px; }
-.shop-card-price-row strong { color: var(--white); font-size: 14.5px; }
-.shop-card-price-row s { margin-left: 6px; color: var(--muted); font-size: 11px; }
+/* Wraps as a group on narrow 2-up cards so long INR prices + MRP + the
+   % off badge never push the rating pill out of the card. */
+.shop-card-price-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 4px 6px; margin-top: 2px; flex-wrap: wrap; }
+.shop-card-price-row > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 6px; min-width: 0; }
+.shop-card-price-row strong { color: var(--white); font-size: 14.5px; white-space: nowrap; }
+.shop-card-price-row s { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .shop-rating { display: inline-flex; align-items: center; gap: 3px; padding: 2.5px 6px; border-radius: 7px; background: rgba(46, 204, 113, .14); color: var(--shop-green-soft); font-size: 10px; font-weight: 800; }
 .shop-rating svg { fill: currentColor; }
 .shop-card-action { margin-top: auto; padding-top: 8px; display: flex; }
@@ -2181,14 +2184,15 @@ img.image-fallback-tile {
 .shop-cart-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
 .shop-cart-item { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
 .shop-cart-item .shop-stepper { flex: none; }
-.shop-cart-copy { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
-.shop-cart-copy h3 { margin: 0; font-size: 13px; line-height: 1.35; color: var(--white); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.shop-cart-price { margin: 0; font-size: 12px; color: var(--muted-light); }
-.shop-cart-price strong { color: var(--white); font-size: 13.5px; }
-.shop-cart-price span { margin-left: 4px; font-size: 10.5px; }
-.shop-cart-price s { margin-left: 7px; color: var(--muted); font-size: 10.5px; }
-.shop-cart-line-total { margin: 1px 0 0; color: var(--shop-green-soft); font-size: 11px; font-weight: 700; }
 .shop-cart-image { width: 72px; height: 72px; flex: none; border-radius: 12px; object-fit: cover; object-position: center; background: #101414; }
+.shop-cart-copy { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+.shop-cart-copy h3 { margin: 0; font-size: 13px; line-height: 1.35; color: var(--white); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.shop-cart-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.shop-cart-price { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.shop-cart-price-line { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.shop-cart-price-line strong { color: var(--white); font-size: 13.5px; white-space: nowrap; }
+.shop-cart-price-line s { color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+.shop-cart-line-total { color: var(--shop-green-soft); font-size: 11px; font-weight: 700; white-space: nowrap; }
 
 /* Bill card (cart + checkout + order). */
 .shop-bill-card { margin: 0 0 14px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
