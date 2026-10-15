@@ -8,7 +8,6 @@ import {
   MapPin,
   ShieldCheck,
   ShoppingBag,
-  Trash2,
   Truck,
 } from 'lucide-react';
 import { getFileUrl } from '../lib/api';
@@ -28,7 +27,6 @@ import {
   getOrderStatus,
   placeOrder,
   readCart,
-  removeCartLine,
   setCartQty,
 } from '../lib/shopOrders';
 import {
@@ -61,6 +59,7 @@ export function ShopBillCard({ lines, title = 'Bill details' }) {
           : <span>{totals.deliveryFee === 0 ? '—' : formatCurrency(totals.deliveryFee)}</span>}
       </div>
       <div className="shop-bill-row total"><span>To pay</span><strong>{formatCurrency(totals.total)}</strong></div>
+      {totals.savings > 0 && <p className="shop-bill-saved">You saved {formatCurrency(totals.savings)} on this order</p>}
     </section>
   );
 }
@@ -75,12 +74,9 @@ export function ShopCartScreen({ session, navigate, notify }) {
 
   const totals = cartTotals(lines);
   const gap = freeDeliveryGap(lines);
+  const progress = Math.min(100, Math.round((totals.itemTotal / FREE_DELIVERY_ABOVE) * 100));
 
   const setQty = (line, next) => setLines(setCartQty(ownerId, line.productId, next));
-  const remove = line => {
-    setLines(removeCartLine(ownerId, line.productId));
-    notify?.('info', `${line.name} removed from the cart.`);
-  };
 
   if (lines.length === 0) {
     return (
@@ -99,31 +95,46 @@ export function ShopCartScreen({ session, navigate, notify }) {
   return (
     <div className="screen shop-cart-screen">
       <PageHeader title="Your cart" subtitle={`${cartCount(lines)} item${cartCount(lines) === 1 ? '' : 's'} from the Naai Shop`} onBack={() => navigate('shop')} />
-      {gap > 0 && (
-        <div className="shop-free-delivery-note" role="status">
-          <Truck size={16} />
-          <span>Add items worth <strong>{formatCurrency(gap)}</strong> more to get <strong>FREE delivery</strong> (free above {formatCurrency(FREE_DELIVERY_ABOVE)}).</span>
+      <div className={cx('shop-delivery-note', gap === 0 && 'unlocked')} role="status">
+        <Truck size={17} />
+        <div className="shop-delivery-note-body">
+          {gap > 0 ? (
+            <>
+              <p>Add items worth <strong>{formatCurrency(gap)}</strong> more to unlock <strong>FREE delivery</strong></p>
+              <div className="shop-delivery-progress" aria-hidden="true"><span style={{ width: `${progress}%` }} /></div>
+            </>
+          ) : (
+            <p>You have unlocked <strong>FREE delivery</strong> on this order 🎉</p>
+          )}
         </div>
-      )}
+      </div>
       <div className="shop-cart-list">
         {lines.map(line => (
           <article className="shop-cart-item" key={line.productId}>
-            <ImageWithFallback src={getFileUrl(line.image)} fallback={PRODUCT_PLACEHOLDER} alt={line.name} className="shop-cart-image" />
+            <ShopQuantityControl qty={line.qty} onAdd={() => setQty(line, line.qty + 1)} onSet={next => setQty(line, next)} small />
             <div className="shop-cart-copy">
               <h3>{line.name}</h3>
-              <p><strong>{formatCurrency(line.price)}</strong>{line.mrp > 0 && <s> {formatCurrency(line.mrp)}</s>}</p>
-              <div className="shop-cart-controls">
-                <ShopQuantityControl qty={line.qty} onAdd={() => setQty(line, line.qty + 1)} onSet={next => setQty(line, next)} small />
-                <button type="button" className="shop-cart-remove" onClick={() => remove(line)}><Trash2 size={14} /> Remove</button>
-              </div>
+              <p className="shop-cart-price">
+                <strong>{formatCurrency(line.price)}</strong><span> each</span>
+                {line.mrp > 0 && <s>{formatCurrency(line.mrp)}</s>}
+              </p>
+              {line.qty > 1 && <p className="shop-cart-line-total">{formatCurrency(line.price * line.qty)} for {line.qty}</p>}
             </div>
+            <ImageWithFallback src={getFileUrl(line.image)} fallback={PRODUCT_PLACEHOLDER} alt={line.name} className="shop-cart-image" />
           </article>
         ))}
       </div>
       <ShopBillCard lines={lines} />
-      <Button size="large" onClick={() => navigate('shopCheckout')} className="shop-proceed-button">
-        Proceed to checkout · {formatCurrency(totals.total)} <ChevronRight size={17} />
-      </Button>
+      <div className="shop-cart-footer">
+        <div className="shop-cart-footer-amount">
+          <small>To pay</small>
+          <strong>{formatCurrency(totals.total)}</strong>
+          <span>{cartCount(lines)} item{cartCount(lines) === 1 ? '' : 's'}</span>
+        </div>
+        <Button size="large" onClick={() => navigate('shopCheckout')}>
+          Proceed to checkout <ChevronRight size={17} />
+        </Button>
+      </div>
     </div>
   );
 }

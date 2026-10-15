@@ -229,9 +229,48 @@ describe('ShopCartScreen', () => {
     expect(container.querySelectorAll('.shop-cart-item')).toHaveLength(2);
     expect(container.textContent).toContain('MRP savings');
     expect(container.textContent).toContain('FREE'); // 698 is above the threshold
+    // Blinkit-style footer: to-pay amount + item count + proceed CTA.
+    const footer = container.querySelector('.shop-cart-footer');
+    expect(footer).toBeTruthy();
+    expect(footer.textContent).toContain('To pay');
+    expect(footer.textContent).toContain('₹ 698');
+    expect(footer.textContent).toContain('2 items');
     const proceed = buttonsContaining('Proceed to checkout', container)[0];
     await act(async () => { proceed.click(); });
     expect(navigate).toHaveBeenCalledWith('shopCheckout');
+  });
+
+  it('steppers adjust quantities, show line totals and remove at zero', async () => {
+    addToCart('salon-1', { id: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men' });
+    addToCart('salon-1', { id: 'sp2', name: 'Keratin Shampoo 200ml', price: 499, mrp: 600, image: '', category: 'hair-care', gender: 'unisex' });
+    const { container } = await render(<ShopCartScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+
+    // + on the first line → "₹ 398 for 2".
+    let items = container.querySelectorAll('.shop-cart-item');
+    const [, plus] = items[0].querySelectorAll('.shop-stepper button');
+    await act(async () => { plus.click(); });
+    expect(container.textContent).toContain('₹ 398 for 2');
+    expect(container.querySelector('.shop-cart-footer').textContent).toContain('₹ 897'); // 398 + 499, free delivery
+
+    // The free-delivery note switches to the "unlocked" state (₹1,197 > ₹499).
+    expect(container.querySelector('.shop-delivery-note.unlocked')).toBeTruthy();
+
+    // − on a qty-1 line removes it (Blinkit behaviour — no separate Remove button).
+    items = container.querySelectorAll('.shop-cart-item');
+    const [minus] = items[1].querySelectorAll('.shop-stepper button');
+    await act(async () => { minus.click(); });
+    expect(container.querySelectorAll('.shop-cart-item')).toHaveLength(1);
+    expect(container.querySelector('.shop-cart-footer').textContent).toContain('₹ 447'); // 398 + ₹49 delivery below the threshold
+    expect(container.querySelector('.shop-delivery-note.unlocked')).toBeNull();
+
+    // Stepping the last line (qty 2 → 1 → removed) shows the empty state.
+    const stepDown = async () => {
+      const [minus] = container.querySelector('.shop-cart-item').querySelectorAll('.shop-stepper button');
+      await act(async () => { minus.click(); });
+    };
+    await stepDown();
+    await stepDown();
+    expect(container.textContent).toContain('Your cart is empty');
   });
 
   it('shows the empty state when the cart is empty', async () => {
