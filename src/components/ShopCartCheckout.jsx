@@ -8,6 +8,7 @@ import {
   MapPin,
   ShieldCheck,
   ShoppingBag,
+  Trash2,
   Truck,
 } from 'lucide-react';
 import { getFileUrl } from '../lib/api';
@@ -27,6 +28,7 @@ import {
   getOrderStatus,
   placeOrder,
   readCart,
+  removeCartLine,
   setCartQty,
 } from '../lib/shopOrders';
 import {
@@ -38,6 +40,7 @@ import {
   cx,
   formatCurrency,
 } from './Shared';
+import { useConfirm } from './ConfirmDialog';
 import { ShopQuantityControl, shopOwnerId, shopSalonName } from './ShopScreen';
 
 const PRODUCT_PLACEHOLDER = '/assets/brand/product-placeholder.svg';
@@ -76,7 +79,20 @@ export function ShopCartScreen({ session, navigate, notify }) {
   const gap = freeDeliveryGap(lines);
   const progress = Math.min(100, Math.round((totals.itemTotal / FREE_DELIVERY_ABOVE) * 100));
 
+  const confirm = useConfirm();
   const setQty = (line, next) => setLines(setCartQty(ownerId, line.productId, next));
+  const removeLine = line => setLines(removeCartLine(ownerId, line.productId));
+  const clearAll = async () => {
+    const ok = await confirm({
+      title: 'Clear your cart?',
+      message: 'Every item will be removed from this cart.',
+      confirmLabel: 'Clear cart',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    setLines(clearCart(ownerId));
+    notify?.('info', 'Cart cleared.');
+  };
 
   if (lines.length === 0) {
     return (
@@ -108,22 +124,28 @@ export function ShopCartScreen({ session, navigate, notify }) {
           )}
         </div>
       </div>
+      <div className="shop-cart-list-head">
+        <span>Items in cart · <strong>{cartCount(lines)}</strong></span>
+        <button type="button" className="shop-cart-clear" onClick={clearAll}>Clear cart</button>
+      </div>
       <div className="shop-cart-list">
         {lines.map(line => (
           <article className="shop-cart-item" key={line.productId}>
             <ImageWithFallback src={getFileUrl(line.image)} fallback={PRODUCT_PLACEHOLDER} alt={line.name} className="shop-cart-image" />
             <div className="shop-cart-copy">
               <h3>{line.name}</h3>
-              <div className="shop-cart-bottom">
-                <div className="shop-cart-price">
-                  <span className="shop-cart-price-line">
-                    <strong>{formatCurrency(line.price)}</strong>
-                    {line.mrp > 0 && <s>{formatCurrency(line.mrp)}</s>}
-                  </span>
-                  {line.qty > 1 && <span className="shop-cart-line-total">{formatCurrency(line.price * line.qty)} for {line.qty}</span>}
-                </div>
-                <ShopQuantityControl qty={line.qty} onAdd={() => setQty(line, line.qty + 1)} onSet={next => setQty(line, next)} small />
-              </div>
+              <p className="shop-cart-price-line">
+                <strong>{formatCurrency(line.price)}</strong>
+                <span>each</span>
+                {line.mrp > 0 && <s>MRP {formatCurrency(line.mrp)}</s>}
+              </p>
+              <button type="button" className="shop-cart-remove" onClick={() => removeLine(line)}>
+                <Trash2 size={13} /> Remove
+              </button>
+            </div>
+            <div className="shop-cart-side">
+              <strong className="shop-cart-line-total">{formatCurrency(line.price * line.qty)}</strong>
+              <ShopQuantityControl qty={line.qty} onAdd={() => setQty(line, line.qty + 1)} onSet={next => setQty(line, next)} small />
             </div>
           </article>
         ))}

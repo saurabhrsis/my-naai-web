@@ -270,22 +270,26 @@ describe('ShopCartScreen', () => {
     expect(navigate).toHaveBeenCalledWith('shopCheckout');
   });
 
-  it('steppers adjust quantities, show line totals and remove at zero', async () => {
+  it('steppers adjust quantities, line totals update, and lines can be removed', async () => {
     addToCart('salon-1', { id: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men' });
     addToCart('salon-1', { id: 'sp2', name: 'Keratin Shampoo 200ml', price: 499, mrp: 600, image: '', category: 'hair-care', gender: 'unisex' });
     const { container } = await render(<ShopCartScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
 
-    // + on the first line → "₹ 398 for 2".
+    // Every line shows its running total beside the stepper.
     let items = container.querySelectorAll('.shop-cart-item');
+    expect(items).toHaveLength(2);
+    expect(items[0].querySelector('.shop-cart-line-total').textContent).toBe('₹ 199');
+
+    // + on the first line → line total ₹ 398, footer 398 + 499 (free delivery).
     const [, plus] = items[0].querySelectorAll('.shop-stepper button');
     await act(async () => { plus.click(); });
-    expect(container.textContent).toContain('₹ 398 for 2');
+    expect(container.querySelector('.shop-cart-item .shop-cart-line-total').textContent).toBe('₹ 398');
     expect(container.querySelector('.shop-cart-footer').textContent).toContain('₹ 897'); // 398 + 499, free delivery
 
     // The free-delivery note switches to the "unlocked" state (₹1,197 > ₹499).
     expect(container.querySelector('.shop-delivery-note.unlocked')).toBeTruthy();
 
-    // − on a qty-1 line removes it (Blinkit behaviour — no separate Remove button).
+    // − on a qty-1 line removes it (Blinkit behaviour at zero).
     items = container.querySelectorAll('.shop-cart-item');
     const [minus] = items[1].querySelectorAll('.shop-stepper button');
     await act(async () => { minus.click(); });
@@ -293,13 +297,10 @@ describe('ShopCartScreen', () => {
     expect(container.querySelector('.shop-cart-footer').textContent).toContain('₹ 447'); // 398 + ₹49 delivery below the threshold
     expect(container.querySelector('.shop-delivery-note.unlocked')).toBeNull();
 
-    // Stepping the last line (qty 2 → 1 → removed) shows the empty state.
-    const stepDown = async () => {
-      const [minus] = container.querySelector('.shop-cart-item').querySelectorAll('.shop-stepper button');
-      await act(async () => { minus.click(); });
-    };
-    await stepDown();
-    await stepDown();
+    // The explicit Remove button deletes the remaining line → empty state.
+    const remove = container.querySelector('.shop-cart-item .shop-cart-remove');
+    expect(remove).toBeTruthy();
+    await act(async () => { remove.click(); });
     expect(container.textContent).toContain('Your cart is empty');
   });
 
