@@ -2068,7 +2068,7 @@ img.image-fallback-tile {
 .shop-filter-select > span { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
 .shop-filter-select select { width: 100%; height: 38px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--white); font-size: 11.5px; font-weight: 700; padding: 0 8px; cursor: pointer; transition: border-color .15s; }
 .shop-filter-select select:hover, .shop-filter-select select:focus { border-color: rgba(46, 204, 113, .55); outline: none; }
-.shop-filter-select select option { color: #111; background: var(--card); }
+.shop-filter-select select option { color: #f4f7f6; background: #101414; }
 .shop-header-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 
 .shop-count-line { display: flex; align-items: center; gap: 8px; margin: 8px 2px 12px; color: var(--muted); font-size: 11px; }
@@ -2105,11 +2105,14 @@ img.image-fallback-tile {
 /* The Blinkit ADD button and its − 1 + stepper. */
 .shop-add-button { min-height: 34px; min-width: 78px; padding: 0 18px; border: 1.5px solid var(--shop-green); border-radius: 10px; color: #eafff2; background: rgba(35, 180, 92, .16); font-size: 12px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; transition: background .15s, color .15s; }
 .shop-add-button:hover { background: var(--shop-green); color: #08130c; }
-.shop-stepper { display: inline-flex; align-items: center; border: 1.5px solid var(--shop-green); border-radius: 10px; overflow: hidden; background: rgba(35, 180, 92, .16); }
-.shop-stepper button { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; color: var(--shop-green-soft); background: transparent; }
+/* − and + pin to the card's edges, the count floats in the middle; the
+   34px height matches the ADD button so the card row never jumps. */
+.shop-stepper { display: flex; align-items: stretch; min-height: 34px; border: 1.5px solid var(--shop-green); border-radius: 10px; overflow: hidden; background: rgba(35, 180, 92, .16); }
+.shop-stepper button { flex: 0 0 34px; display: inline-flex; align-items: center; justify-content: center; color: var(--shop-green-soft); background: transparent; }
 .shop-stepper button:hover { background: var(--shop-green); color: #08130c; }
-.shop-stepper span { min-width: 26px; text-align: center; color: var(--white); font-size: 13px; font-weight: 800; }
-.shop-stepper.small button { width: 29px; height: 29px; }
+.shop-stepper span { flex: 1 1 auto; display: inline-flex; align-items: center; justify-content: center; color: var(--white); font-size: 13px; font-weight: 800; }
+.shop-stepper.small { min-height: 29px; }
+.shop-stepper.small button { flex: 0 0 29px; }
 .shop-add-button.small { min-height: 29px; min-width: 64px; font-size: 11px; }
 .shop-stock-chip { padding: 5px 10px; border-radius: 9px; border: 1px dashed var(--line); color: var(--muted); font-size: 10.5px; font-weight: 700; }
 
@@ -2153,8 +2156,9 @@ img.image-fallback-tile {
 .shop-detail-similar-title { margin: 22px 0 12px; color: var(--white); font-size: 15.5px; }
 /* Large quantity control for the details page (Blinkit's in-page ADD is bigger). */
 .shop-add-button.large { min-height: 44px; min-width: 128px; font-size: 13px; }
-.shop-stepper.large button { width: 44px; height: 44px; }
-.shop-stepper.large span { min-width: 32px; font-size: 15px; }
+.shop-stepper.large { min-height: 44px; }
+.shop-stepper.large button { flex: 0 0 44px; }
+.shop-stepper.large span { font-size: 15px; }
 .shop-stock-chip.large { min-height: 44px; display: inline-flex; align-items: center; min-width: 128px; justify-content: center; }
 
 /* ── Cart ── */
