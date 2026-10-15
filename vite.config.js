@@ -188,6 +188,42 @@ function devNoStorePlugin() {
       handler: (html) => versionDevSpecifiers(html),
     },
     configureServer(server) {
+      // Diagnostic: the preview proxy keeps serving stale copies of the old
+      // (unversioned) module URLs. Log every request for a version-less
+      // /src/* path and for / so we can see exactly when the proxy/browser
+      // asks the origin for them, and with which revalidation headers.
+      server.middlewares.use((req, res, next) => {
+        const url = String(req.url || '');
+        const [rawPath, query] = url.split('?');
+        if (rawPath === '/' || (!query && rawPath.startsWith('/src/'))) {
+          const inm = req.headers['if-none-match'];
+          const ims = req.headers['if-modified-since'];
+          console.log(
+            `[mynaai-dev-req] ${req.method} ${url.length > 140 ? url.slice(0, 140) + '…' : url}` +
+              (inm ? ` if-none-match=${String(inm).slice(0, 48)}` : '') +
+              (ims ? ' if-modified-since=yes' : ''),
+          );
+        }
+        next();
+      });
+      // Upgrade trap: the stale cached page still requests the OLD
+      // unversioned module URLs. Whenever one of those requests actually
+      // reaches the origin (proxy revalidation/expiry), answer with a 302
+      // to the current process's versioned URL — so even a stale HTML copy
+      // converges onto the fresh module graph. Versioned, /@ and html-proxy
+      // URLs pass through untouched.
+      server.middlewares.use((req, res, next) => {
+        if (req.method !== 'GET' || req.headers.upgrade) return next();
+        const [rawPath, query] = String(req.url || '').split('?');
+        if (!query && rawPath.startsWith('/src/')) {
+          res.statusCode = 302;
+          res.setHeader('Location', `${rawPath}?v=${DEV_URL_VERSION}`);
+          res.setHeader('Cache-Control', 'no-store');
+          res.end();
+          return;
+        }
+        next();
+      });
       server.middlewares.use((req, res, next) => {
         const path = String(req.url || '').split('?')[0];
         const shouldNoStore =
