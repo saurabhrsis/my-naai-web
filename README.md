@@ -23,7 +23,9 @@ A Vitest (+ jsdom) suite covers the notification routing/buzzer/token logic and 
 
 Salon partners get a **Shop** tab — a Blinkit/Zepto-style store for grooming
 stock supplied by the MyNaai Platform: search, category / gender / price
-filters and price sorting, ADD → quantity stepper, a floating "N items · ₹X →
+filters and price sorting, ADD → quantity stepper, a full **product details
+page** (hero image, price + MRP savings, seller, delivery facts, same-category
+suggestions — add to cart straight from the page), a floating "N items · ₹X →
 View cart" bar, cart with bill details, checkout with **Online (Razorpay) or
 Cash on Delivery**, a **My orders** list with a live 4-step status tracker
 (Placed → Packed → Out for delivery → Delivered), and **cancel order** before

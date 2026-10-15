@@ -79,7 +79,7 @@ import {
   SalonProductsScreen,
   SalonQueueScreen,
 } from './components/SalonScreens';
-import { ShopScreen } from './components/ShopScreen';
+import { ShopProductDetailScreen, ShopScreen } from './components/ShopScreen';
 import { ShopCartScreen, ShopCheckoutScreen } from './components/ShopCartCheckout';
 import { ShopOrderScreen, ShopOrdersScreen } from './components/ShopOrders';
 import { SubscriptionScreen } from './components/SubscriptionScreen';
@@ -146,7 +146,7 @@ function saveSession(session) {
 // falls back to the role's home instead of rendering a screen the shell has
 // no branch for.
 const USER_ROUTE_NAMES = ['home', 'bookings', 'products', 'account', 'detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'privacy', 'contact'];
-const SALON_ROUTE_NAMES = ['queue', 'history', 'shop', 'shopCart', 'shopCheckout', 'shopOrders', 'shopOrder', 'salonProducts', 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
+const SALON_ROUTE_NAMES = ['queue', 'history', 'shop', 'shopProduct', 'shopCart', 'shopCheckout', 'shopOrders', 'shopOrder', 'salonProducts', 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
 // Every route a visitor may open WITHOUT an account — salons are browsable
 // first, login only appears when they try to book (the client's headline
 // ask). The info pages are public too: the site footer links About/FAQ/Terms/
@@ -1447,6 +1447,7 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     if (route.name === 'queue') return <SalonQueueScreen {...props} />;
     if (route.name === 'history') return <SalonHistoryScreen {...props} />;
     if (route.name === 'shop') return <ShopScreen {...props} />;
+    if (route.name === 'shopProduct') return <ShopProductDetailScreen {...props} params={route.params} />;
     if (route.name === 'shopCart') return <ShopCartScreen {...props} />;
     if (route.name === 'shopCheckout') return <ShopCheckoutScreen {...props} />;
     if (route.name === 'shopOrders') return <ShopOrdersScreen {...props} />;

@@ -10,8 +10,9 @@ list with a live status tracker, and **cancel order** before dispatch.
 
 | Piece | File |
 | --- | --- |
-| Shop tab (salon nav, 3rd position) | `src/App.jsx` (`SALON_NAV`, routes `shop`, `shopCart`, `shopCheckout`, `shopOrders`, `shopOrder`) |
+| Shop tab (salon nav, 3rd position) | `src/App.jsx` (`SALON_NAV`, routes `shop`, `shopProduct`, `shopCart`, `shopCheckout`, `shopOrders`, `shopOrder`) |
 | Catalog + filters UI | `src/components/ShopScreen.jsx` |
+| Product details page (tap a card) | `src/components/ShopScreen.jsx` (`ShopProductDetailScreen`, route `shopProduct?productId=`) |
 | Cart + checkout + success | `src/components/ShopCartCheckout.jsx` |
 | My orders + order detail/tracker | `src/components/ShopOrders.jsx` |
 | Category / gender / price / sort rules | `src/lib/shopCatalog.js` |
@@ -24,7 +25,11 @@ list with a live status tracker, and **cancel order** before dispatch.
 
 ```
 Shop tab ── search / category chips / gender chips / price range / sort
-   │  ADD → stepper (per product, persisted to the cart)
+   │  tap a card ──────────────► Product details page ── ADD → stepper
+   │                                        │  hero image, price + MRP + % off, seller,
+   │  ADD → stepper (per product,           │  category/gender/stock tags, delivery facts,
+   │  persisted to the cart)                │  description, "You may also like" (same
+   │                                        │  category), floating cart bar
    ▼
 "3 items · ₹1,240 → View cart" floating bar
    ▼
@@ -75,6 +80,29 @@ facets, so the portal classifies each product:
 
 So the shop is useful on day one with the existing API and becomes exact the
 moment the backend starts persisting the facets.
+
+## Product details page
+
+Tapping a card's image or name opens the **`shopProduct`** route (deep-linkable
+as `shopProduct?productId=`) instead of an inline sheet:
+
+- **Hero image** (contain, 4:3) with the % off badge and an out-of-stock veil;
+- **Tags** — category, gender, in/out of stock — then the product name, the
+  seller line (`Sold by <salon>` when the product is salon-listed, otherwise
+  `Supplied by My Naai`) and the price row with struck-through MRP + rating;
+- **Large ADD control** (the Blinkit-style in-page button, 44 px) above a
+  **Delivery card** (next-day to the salon's city, free above ₹499, COD +
+  online payment, free cancellation until dispatch) and an **About this
+  product** card (description, with a fallback line when the backend sends
+  none);
+- **"You may also like"** — same category, available, self excluded, by rating
+  (max 6), each card tappable to another details page;
+- the floating **"N items · ₹X → View cart"** bar follows you, so a product
+  added from the page lands in the same persistent cart as the grid.
+
+Unknown ids render a graceful "Product not available" state (the catalog can
+shrink under a bookmarked link); out-of-stock products render full details
+with the control replaced by an "Out of stock" chip.
 
 ## Orders: client-side today, backend-ready tomorrow
 

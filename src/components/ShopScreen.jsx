@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Banknote,
   ChevronRight,
   Clock3,
   Minus,
@@ -7,11 +8,11 @@ import {
   Plus,
   RefreshCw,
   Search,
+  ShieldCheck,
   ShoppingBag,
   SlidersHorizontal,
   Star,
   Truck,
-  X,
   Zap,
 } from 'lucide-react';
 import { api, getFileUrl } from '../lib/api';
@@ -25,7 +26,7 @@ import {
   discountPercent,
   normalizeShopProduct,
 } from '../lib/shopCatalog';
-import { addToCart, cartTotals, readCart, setCartQty } from '../lib/shopOrders';
+import { FREE_DELIVERY_ABOVE, addToCart, cartTotals, readCart, setCartQty } from '../lib/shopOrders';
 import {
   Button,
   EmptyState,
@@ -51,13 +52,14 @@ export function shopSalonName(session) {
 }
 
 // ── Quantity control (Blinkit's signature ADD ↔ stepper) ────────────────────
-export function ShopQuantityControl({ qty, onAdd, onSet, disabled = false, small = false }) {
+export function ShopQuantityControl({ qty, onAdd, onSet, disabled = false, small = false, large = false }) {
+  const sizeClass = large ? 'large' : small ? 'small' : '';
   if (disabled) {
-    return <span className={cx('shop-stock-chip', small && 'small')}>Out of stock</span>;
+    return <span className={cx('shop-stock-chip', sizeClass)} >Out of stock</span>;
   }
   if (qty > 0) {
     return (
-      <div className={cx('shop-stepper', small && 'small')} role="group" aria-label="Change quantity">
+      <div className={cx('shop-stepper', sizeClass)} role="group" aria-label="Change quantity">
         <button type="button" aria-label="Decrease quantity" onClick={() => onSet(qty - 1)}>
           <Minus size={15} />
         </button>
@@ -69,7 +71,7 @@ export function ShopQuantityControl({ qty, onAdd, onSet, disabled = false, small
     );
   }
   return (
-    <button type="button" className={cx('shop-add-button', small && 'small')} onClick={onAdd}>
+    <button type="button" className={cx('shop-add-button', sizeClass)} onClick={onAdd}>
       Add
     </button>
   );
@@ -107,20 +109,26 @@ export function ShopProductCard({ product, qty, onAdd, onSetQty, onOpen }) {
   );
 }
 
-// ── The Shop tab ─────────────────────────────────────────────────────────────
-export function ShopScreen({ session, navigate, notify }) {
-  const ownerId = shopOwnerId(session);
+// ── Floating "3 items · ₹1,240 → View cart" bar (shop + product page) ──────
+export function ShopCartBar({ totals, onOpen }) {
+  if (!totals.itemCount) return null;
+  return (
+    <button type="button" className="shop-cart-bar" onClick={onOpen}>
+      <span className="shop-cart-bar-left">
+        <ShoppingBag size={17} />
+        <span><strong>{totals.itemCount} item{totals.itemCount === 1 ? '' : 's'}</strong> · {formatCurrency(totals.total)}</span>
+      </span>
+      <span className="shop-cart-bar-cta">View cart <ChevronRight size={16} /></span>
+    </button>
+  );
+}
+
+// Loads the shop catalog the same way the grid does — the product details
+// page needs the full list anyway (it powers "you may also like").
+export function useShopCatalog(notify) {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [cart, setCart] = useState(() => readCart(ownerId));
-  const [search, setSearch] = useState('');
-  const [category, setCategory] = useState('all');
-  const [gender, setGender] = useState('all');
-  const [priceRange, setPriceRange] = useState('all');
-  const [sort, setSort] = useState('popular');
-  const [detail, setDetail] = useState(null);
-
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -136,8 +144,21 @@ export function ShopScreen({ session, navigate, notify }) {
       setLoading(false);
     }
   }, [notify]);
-
   useEffect(() => { load(); }, [load]);
+  return { products, loading, error, load };
+}
+
+// ── The Shop tab ─────────────────────────────────────────────────────────────
+export function ShopScreen({ session, navigate, notify }) {
+  const ownerId = shopOwnerId(session);
+  const { products, loading, error, load } = useShopCatalog(notify);
+  const [cart, setCart] = useState(() => readCart(ownerId));
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState('all');
+  const [gender, setGender] = useState('all');
+  const [priceRange, setPriceRange] = useState('all');
+  const [sort, setSort] = useState('popular');
+
   // The cart belongs to the signed-in salon account; re-key it when the
   // session changes (a second salon signing in on the same device).
   useEffect(() => { setCart(readCart(ownerId)); }, [ownerId]);
@@ -156,6 +177,9 @@ export function ShopScreen({ session, navigate, notify }) {
   const handleSetQty = (product, next) => {
     setCart(setCartQty(ownerId, product.id, next));
   };
+  // Tapping a product opens its full details page (deep-linkable, back button,
+  // similar products) instead of an inline sheet.
+  const openProduct = product => navigate('shopProduct', { productId: product.id });
 
   const resetFilters = () => {
     setSearch('');
@@ -218,7 +242,7 @@ export function ShopScreen({ session, navigate, notify }) {
           <div className="shop-count-line"><strong>{visible.length}</strong> {visible.length === 1 ? 'product' : 'products'}{(category !== 'all' || gender !== 'all' || priceRange !== 'all' || search) && <button type="button" className="shop-clear-filters" onClick={resetFilters}>Clear filters</button>}</div>
           <div className="shop-grid">
             {visible.map(product => (
-              <ShopProductCard key={product.id} product={product} qty={qtyFor(product.id)} onAdd={handleAdd} onSetQty={handleSetQty} onOpen={setDetail} />
+              <ShopProductCard key={product.id} product={product} qty={qtyFor(product.id)} onAdd={handleAdd} onSetQty={handleSetQty} onOpen={openProduct} />
             ))}
           </div>
         </>
@@ -226,45 +250,122 @@ export function ShopScreen({ session, navigate, notify }) {
         <EmptyState icon={Search} title="No products match" message="Try a different search, category or price range." action={<Button variant="secondary" onClick={resetFilters}>Clear filters</Button>} />
       )}
 
-      {totals.itemCount > 0 && (
-        <button type="button" className="shop-cart-bar" onClick={() => navigate('shopCart')}>
-          <span className="shop-cart-bar-left">
-            <ShoppingBag size={17} />
-            <span><strong>{totals.itemCount} item{totals.itemCount === 1 ? '' : 's'}</strong> · {formatCurrency(totals.total)}</span>
-          </span>
-          <span className="shop-cart-bar-cta">View cart <ChevronRight size={16} /></span>
-        </button>
+      <ShopCartBar totals={totals} onOpen={() => navigate('shopCart')} />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Product details page — the full-page view a product card opens:
+ * hero image, price + savings, seller, category/gender tags, delivery
+ * facts, description, add-to-cart, and same-category suggestions.
+ * ------------------------------------------------------------------ */
+export function ShopProductDetailScreen({ session, params, navigate, notify }) {
+  const ownerId = shopOwnerId(session);
+  const productId = String(params?.productId || '');
+  const { products, loading, error, load } = useShopCatalog(notify);
+  const [cart, setCart] = useState(() => readCart(ownerId));
+
+  useEffect(() => { setCart(readCart(ownerId)); }, [ownerId]);
+
+  const totals = useMemo(() => cartTotals(cart), [cart]);
+  const product = useMemo(() => products.find(value => String(value.id) === productId) || null, [products, productId]);
+  const similar = useMemo(() => (
+    product
+      ? products
+        .filter(value => value.available && value.category === product.category && String(value.id) !== String(product.id))
+        .sort((a, b) => b.rating - a.rating || a.name.localeCompare(b.name))
+        .slice(0, 6)
+      : []
+  ), [products, product]);
+  const qtyFor = id => cart.find(line => line.productId === String(id))?.qty || 0;
+
+  const handleAdd = value => setCart(addToCart(ownerId, value, 1));
+  const handleSetQty = (value, next) => setCart(setCartQty(ownerId, value.id, next));
+  const openProduct = value => navigate('shopProduct', { productId: value.id });
+
+  if (loading) {
+    return (
+      <div className="screen shop-detail-page">
+        <PageHeader title="Product details" onBack={() => navigate('shop')} />
+        <SkeletonCard className="shop-detail-skeleton" />
+        <div className="shop-grid">{[1, 2].map(item => <SkeletonCard key={item} className="shop-skeleton" />)}</div>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="screen shop-detail-page">
+        <PageHeader title="Product details" onBack={() => navigate('shop')} />
+        <EmptyState icon={ShoppingBag} title="The shop is out of reach" message={`${error} Check your connection and try again.`} action={<Button onClick={load}><RefreshCw size={15} /> Retry</Button>} />
+      </div>
+    );
+  }
+  if (!product) {
+    return (
+      <div className="screen shop-detail-page">
+        <PageHeader title="Product details" onBack={() => navigate('shop')} />
+        <EmptyState icon={Package} title="Product not available" message="It may have been removed from the catalog. Browse the shop for something similar." action={<Button onClick={() => navigate('shop')}>Back to shop <ChevronRight size={16} /></Button>} />
+      </div>
+    );
+  }
+
+  const off = discountPercent(product);
+  const genderLabel = SHOP_GENDERS.find(g => g.id === product.gender)?.label || 'Unisex';
+  const city = session?.user?.salon?.city || session?.user?.city || '';
+
+  return (
+    <div className="screen shop-detail-page">
+      <PageHeader title="Product details" onBack={() => navigate('shop')} />
+      <div className="shop-detail-hero">
+        <ImageWithFallback src={getFileUrl(product.image)} fallback={PRODUCT_PLACEHOLDER} alt={product.name} className="shop-detail-hero-image" />
+        {!product.available && <span className="shop-stock-veil">Out of stock</span>}
+        {off > 0 && <span className="shop-off-badge shop-off-badge-hero">{off}% off</span>}
+      </div>
+
+      <div className="shop-detail-tags">
+        <span className="shop-detail-tag">{categoryLabel(product.category)}</span>
+        <span className="shop-detail-tag">{genderLabel}</span>
+        {product.available ? <span className="shop-detail-tag in-stock">In stock</span> : <span className="shop-detail-tag out-stock">Out of stock</span>}
+      </div>
+      <h2 className="shop-detail-name">{product.name}</h2>
+      <p className="shop-detail-seller">{product.salonName ? `Sold by ${product.salonName}` : 'Supplied by My Naai'}</p>
+
+      <div className="shop-detail-price-row">
+        <div>
+          <strong>{formatCurrency(product.price)}</strong>
+          {product.mrp > 0 && <s>{formatCurrency(product.mrp)}</s>}
+        </div>
+        {product.rating > 0 && <span className="shop-rating"><Star size={13} /> {Number(product.rating).toFixed(1)}</span>}
+      </div>
+      <div className="shop-detail-action">
+        <ShopQuantityControl qty={qtyFor(product.id)} onAdd={() => handleAdd(product)} onSet={next => handleSetQty(product, next)} disabled={!product.available} large />
+      </div>
+
+      <section className="shop-detail-card">
+        <h3><Truck size={15} /> Delivery</h3>
+        <p><Zap size={13} /> Next-day delivery{city ? ` to ${city}` : ' to your salon'}{product.price >= FREE_DELIVERY_ABOVE ? ' · FREE on this item' : ` · free above ${formatCurrency(FREE_DELIVERY_ABOVE)}`}</p>
+        <p><Banknote size={13} /> Cash on delivery available · online payment via UPI, cards &amp; netbanking</p>
+        <p><ShieldCheck size={13} /> Free cancellation until the order goes out for delivery</p>
+      </section>
+
+      <section className="shop-detail-card">
+        <h3>About this product</h3>
+        <p>{product.description || `${categoryLabel(product.category)} pick${product.salonName ? ` from ${product.salonName}` : ' from the Naai Shop catalog'} — delivered to your salon in 1–2 days.`}</p>
+      </section>
+
+      {similar.length > 0 && (
+        <section>
+          <h2 className="shop-detail-similar-title">You may also like</h2>
+          <div className="shop-grid">
+            {similar.map(value => (
+              <ShopProductCard key={value.id} product={value} qty={qtyFor(value.id)} onAdd={handleAdd} onSetQty={handleSetQty} onOpen={openProduct} />
+            ))}
+          </div>
+        </section>
       )}
 
-      {detail && (
-        <div className="shop-detail-backdrop" onClick={() => setDetail(null)} role="dialog" aria-modal="true" aria-label={detail.name}>
-          <div className="shop-detail-sheet" onClick={event => event.stopPropagation()}>
-            <div className="shop-detail-sheet-head">
-              <h2>{detail.name}</h2>
-              <button type="button" className="shop-detail-close" onClick={() => setDetail(null)} aria-label="Close product details">
-                <X size={18} />
-              </button>
-            </div>
-            <div className="shop-detail-media">
-              <ImageWithFallback src={getFileUrl(detail.image)} fallback={PRODUCT_PLACEHOLDER} alt={detail.name} />
-            </div>
-            <div className="shop-detail-body">
-              <div className="shop-card-price-row">
-                <div>
-                  <strong>{formatCurrency(detail.price)}</strong>
-                  {detail.mrp > 0 && <s>{formatCurrency(detail.mrp)}</s>}
-                  {discountPercent(detail) > 0 && <em className="shop-off-badge inline">{discountPercent(detail)}% off</em>}
-                </div>
-                {detail.rating > 0 && <span className="shop-rating"><Star size={12} /> {Number(detail.rating).toFixed(1)}</span>}
-              </div>
-              <p className="shop-detail-meta">{categoryLabel(detail.category)} · {SHOP_GENDERS.find(g => g.id === detail.gender)?.label || 'Unisex'}{detail.salonName ? ` · sold by ${detail.salonName}` : ' · supplied by My Naai'}</p>
-              {detail.description && <p className="shop-detail-desc">{detail.description}</p>}
-              <p className="shop-detail-note"><Truck size={14} /> {detail.price >= 499 ? 'Free delivery on this item' : `Add ${formatCurrency(Math.max(0, 499 - detail.price))} more for free delivery`}</p>
-              <ShopQuantityControl qty={qtyFor(detail.id)} onAdd={() => handleAdd(detail)} onSet={next => handleSetQty(detail, next)} disabled={!detail.available} />
-            </div>
-          </div>
-        </div>
-      )}
+      <ShopCartBar totals={totals} onOpen={() => navigate('shopCart')} />
     </div>
   );
 }
