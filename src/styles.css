@@ -332,7 +332,11 @@ img { display: block; max-width: 100%; }
 .home-screen { position: relative; }
 .home-band { margin-bottom: 16px; padding: 16px 14px; border: 1px solid var(--line); border-radius: 22px; }
 .home-hero-band { background: radial-gradient(130% 150% at 100% 0%, rgba(232, 185, 126, .09), transparent 55%), linear-gradient(180deg, #151b1a, #101514); }
-.home-hero-band .ad-carousel-wrap { margin-bottom: 2px; }
+/* Stacked (phone/tablet) order is greeting → banner → search row: the banner
+   is the page's visual anchor and the search row is the band's last element.
+   The split laptop grid (>=1024/>=1200) overrides the margins below. */
+.home-hero-band .ad-carousel-wrap { margin: 2px auto 16px; }
+.home-hero-band.has-ads .home-search-row { margin-bottom: 0; }
 .home-salons-band { background: #0f1313; }
 .home-salons-band .inline-notice { margin-top: -3px; }
 /* The alerts + location prompts share one wrapper so wide screens can set
@@ -363,22 +367,32 @@ img { display: block; max-width: 100%; }
 .search-field input { min-width: 0; flex: 1; height: 44px; border: 0; outline: 0; color: var(--white); background: transparent; font-size: 13px; }
 .search-field input::placeholder { color: #707a79; }
 .search-field button { display: flex; padding: 2px; color: var(--muted); background: transparent; }
-.ad-carousel-wrap { margin-bottom: 22px; }
+/* The frame takes the artwork's OWN shape: `--ad-ratio` is measured from the
+   image once it loads (clamped to a sane banner range). So the height budget
+   is enforced by capping the WIDTH at (budget × ratio) — never by capping the
+   height, which is what used to warp the frame wider than the art and force
+   letterbox bands or crops. At `contain` the artwork then fills the frame
+   100%: full image, zero crop, no dark space, on every device. The per-device
+   height budget is set in the media queries below. */
+.ad-carousel-wrap {
+  --ad-max-height: 280px;
+  width: min(100%, calc(var(--ad-max-height) * var(--ad-ratio, 1.5)));
+  margin: 0 auto 22px;
+}
 .ad-carousel { position: relative; overflow: hidden; border-radius: 16px; background: #1e2625; touch-action: pan-y; cursor: grab; }
 .ad-carousel:active { cursor: grabbing; }
 .ad-track { display: flex; transition: transform .35s ease; }
-/* The ad frame takes the artwork's OWN shape: `--ad-ratio` is measured from the
-   image once it loads (clamped to a sane banner range), so a fixed strip no
-   longer crops the creative. Because the frame follows the art, `cover` is
-   safe: it fills the frame edge to edge on EVERY screen, so whenever the
-   height cap or a mixed-shape slide set makes the frame a shade wider or
-   taller than one particular artwork, we crop a sliver instead of showing the
-   black letterbox bands above/below the image — which read as a broken banner
-   on phones AND laptops. The blurred backdrop is now only visible while the
-   image is still loading. */
-.ad-slide { position: relative; min-width: 100%; height: auto; aspect-ratio: var(--ad-ratio, 3 / 2); min-height: 150px; max-height: var(--ad-max-height, 240px); overflow: hidden; background: #1e2625; }
-.ad-backdrop { position: absolute; inset: -8%; background-position: center; background-size: cover; filter: blur(26px) saturate(1.15); opacity: .85; }
-.ad-image { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: cover; }
+/* Slide: frame = the artwork's own ratio (min across the slide set, so the
+   page never jumps between slides). No max-height here — the wrap's width cap
+   (above) already keeps the height inside the device budget while preserving
+   the ratio, and that is what keeps the image whole instead of cropped. */
+.ad-slide { position: relative; min-width: 100%; height: auto; aspect-ratio: var(--ad-ratio, 1.5); min-height: 120px; overflow: hidden; background: #1e2625; }
+.ad-backdrop { position: absolute; inset: -8%; background-position: center; background-size: cover; filter: blur(26px) saturate(1.15); opacity: .95; }
+/* `contain`: the FULL artwork is always visible. Because the frame matches
+   the art's ratio, it fills the frame exactly; only a mixed-shape slide set
+   (one ad shaped differently from the others) leaves a sliver, and the
+   blurred backdrop tones it in instead of showing black. */
+.ad-image { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: contain; }
 .carousel-dots { display: flex; justify-content: center; gap: 6px; margin-top: 10px; }
 .carousel-dot { width: 7px; height: 7px; padding: 0; border-radius: 7px; background: #555; }
 .carousel-dot.active { width: 18px; background: var(--gold); }
@@ -1555,7 +1569,9 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .home-topline { margin-bottom: 23px; }
   .home-search-row { max-width: 760px; }
   .home-band { padding: 22px; border-radius: 26px; margin-bottom: 22px; }
-  .ad-carousel-wrap { --ad-max-height: min(420px, 50vh); }
+  /* Tablet (still stacked): a taller banner budget than phones; the width
+     cap keeps the ratio intact, so the art scales down instead of cropping. */
+  .ad-carousel-wrap { --ad-max-height: min(340px, 45vh); }
   .salon-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
   .product-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
   .detail-hero { flex-direction: row; }
@@ -1660,7 +1676,7 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
      rail so a 1366px laptop does not read like a stretched phone. */
   .section-heading h2 { font-size: 24px; }
   .home-band { padding: 24px 26px; margin-bottom: 18px; }
-  .ad-carousel-wrap { --ad-max-height: min(380px, 44vh); }
+  .ad-carousel-wrap { --ad-max-height: min(420px, 46vh); }
   /* Laptop layout for the hero band: the greeting keeps the full width and the
      promo moves BESIDE the search row, so the screen is used horizontally
      instead of stacking a full-width strip under the filters — which is what
@@ -1674,8 +1690,10 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
      the promo), so the filter and the ad read as one row. Centered vertically:
      the promo is ~400px tall, and a top-anchored 48px filter left a big empty
      box under it that read as a layout bug on laptops. */
-  .guest-shell .home-hero-band.has-ads .home-search-row { max-width: 100%; margin-bottom: 0; align-self: center; }
-  .guest-shell .home-hero-band.has-ads .ad-carousel-wrap { margin-bottom: 0; }
+  /* Explicit columns: the DOM order serves the stacked phone layout
+     (banner above the search row), so the split grid pins each item itself. */
+  .guest-shell .home-hero-band.has-ads .home-search-row { grid-column: 1; max-width: 100%; margin-bottom: 0; align-self: center; }
+  .guest-shell .home-hero-band.has-ads .ad-carousel-wrap { grid-column: 2; margin-bottom: 0; }
   .home-topline h1 { font-size: 40px; }
   .home-topline { margin-bottom: 18px; }
 }
@@ -1683,8 +1701,10 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
 @media (min-width: 1200px) {
   .app-shell .home-hero-band.has-ads { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, clamp(340px, 38%, 520px)); column-gap: 24px; align-items: start; }
   .app-shell .home-hero-band.has-ads .home-topline { grid-column: 1 / -1; margin-bottom: 16px; }
-  .app-shell .home-hero-band.has-ads .home-search-row { max-width: 100%; margin-bottom: 0; align-self: center; }
-  .app-shell .home-hero-band.has-ads .ad-carousel-wrap { margin-bottom: 0; }
+  /* Explicit columns again (see the guest block) — the DOM order belongs to
+     the stacked layout. */
+  .app-shell .home-hero-band.has-ads .home-search-row { grid-column: 1; max-width: 100%; margin-bottom: 0; align-self: center; }
+  .app-shell .home-hero-band.has-ads .ad-carousel-wrap { grid-column: 2; margin-bottom: 0; }
   /* A wider laptop gets a slightly taller promo, still measured from the
      artwork so nothing is cropped. */
   .ad-carousel-wrap { --ad-max-height: min(400px, 44vh); }

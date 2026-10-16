@@ -299,12 +299,12 @@ function AdCarousel({ ads }) {
         <div className="ad-track" style={{ transform: `translateX(-${active * 100}%)` }}>
           {slides.map((src, index) => (
             <div className="ad-slide" key={`${src}-${index}`}>
-              {/* `cover` fills the frame completely: since the frame is measured
-                  from the artwork itself, matching slides are shown uncropped,
-                  and only an unusual mixed-shape set or the height cap trims a
-                  sliver — never the black letterbox bands the old `contain`
-                  left above and below the image. The blurred backdrop shows
-                  only while the image loads. */}
+              {/* `contain` always shows the FULL artwork. The wrap's width is
+                  capped at (device height budget × the artwork's measured
+                  ratio), so the frame matches the art's ratio and fills it
+                  exactly — no crop, no dark letterbox bands. Only a
+                  mixed-shape slide set leaves a sliver, which the blurred
+                  backdrop tones in. */}
               <span className="ad-backdrop" style={{ backgroundImage: `url("${src}")` }} aria-hidden="true" />
               <ImageWithFallback src={src} fallback="" alt="" className="ad-image" loading="eager" ref={slideRef(`${src}-${index}`)} onLoad={readRatio(`${src}-${index}`)} />
             </div>
@@ -750,13 +750,15 @@ export function HomeScreen({ session, navigate, notify }) {
 
   return (
     <div className="screen home-screen">
-      {/* Section 1 — the discovery band: greeting, search and the male/female
-          filter (which replaced the old dead-end "For you" button), with the
-          ad carousel as its visual anchor. */}
+      {/* Section 1 — the discovery band. The ad banner leads the page on
+          phones/tablets (above the search + male/female filter row); at the
+          laptop breakpoints the CSS grid moves it back BESIDE the search row
+          (explicit grid-column placement — the DOM order serves the stacked
+          layout). */}
       <section className={cx('home-band', 'home-hero-band', ads.length > 0 && 'has-ads')} aria-label="Find a salon">
         <div className="home-topline"><div><span className="eyebrow">{isGuest ? 'SALON BOOKINGS, SIMPLIFIED' : 'NEARBY GROOMING'}</span><h1>{isGuest ? 'Find your salon' : `Hi ${firstName(userName)}`}</h1><p className="muted-line"><LocateFixed size={14} /> {location ? 'Using your current location' : isGuest ? 'Browse trusted salons around you — login only when you book' : 'Discover trusted specialists around you'}</p></div></div>
-        <div className="home-search-row"><label className="search-field"><Search size={18} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Find salon, specialist..." aria-label="Search salons" />{search && <button onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label><GenderToggle value={gender} onChange={setGender} /></div>
         <AdCarousel ads={ads} />
+        <div className="home-search-row"><label className="search-field"><Search size={18} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Find salon, specialist..." aria-label="Search salons" />{search && <button onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label><GenderToggle value={gender} onChange={setGender} /></div>
       </section>
       {/* Section 2 — the salon listings, on its own panel so the page reads as
           distinct website sections instead of one long app feed. */}
