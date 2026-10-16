@@ -761,20 +761,22 @@ export function HomeScreen({ session, navigate, notify }) {
       <section className="home-band home-salons-band" aria-label="Salons near you">
         <div className="section-heading"><div><span className="eyebrow">CURATED FOR YOU</span><h2>Salons near you</h2></div><span className="result-count">{loading ? 'Updating…' : `${visibleSalons.length}${totalSalons && totalSalons > visibleSalons.length ? ` of ${totalSalons}` : ''} places`}</span></div>
         {loadError && <div className="inline-notice"><CircleAlert size={16} /> {loadError} <button onClick={() => loadData()}>Try again</button></div>}
-        {!loading && alertsInviteVisible && (
-          <div className="inline-notice alerts-invite-notice">
-            <BellRing size={16} />
-            <span className="location-fallback-copy">
-              <span>{alertsState === 'default'
-                ? 'Turn on booking alerts to hear about confirmations, delays and reminders — your browser will ask once.'
-                : 'Booking alerts are off. Turn them on so bookings, delays and reminders reach this phone.'}</span>
-              {alertsNote && <small className="location-request-note" role="status">{alertsNote}</small>}
-            </span>
-            <button onClick={enableAlerts} disabled={alertsBusy}>{alertsBusy ? 'Asking…' : alertsState === 'default' ? 'Turn on' : 'How to allow'}</button>
-            <button className="notice-dismiss" onClick={dismissAlertsInvite} aria-label="Not now">Not now</button>
-          </div>
-        )}
-        {!loading && !location && <div className="inline-notice location-fallback-notice"><MapPin size={16} /> <span className="location-fallback-copy"><span>Location is off, so this list is not sorted by distance — optional, and browsing works without it.</span>{locationRequestNote && <small className="location-request-note" role="status">{locationRequestNote}</small>}</span><button onClick={enableLocation} disabled={locationBusy}>{locationBusy ? 'Checking…' : 'Use my location'}</button></div>}
+        <div className="home-notices">
+          {!loading && alertsInviteVisible && (
+            <div className="inline-notice alerts-invite-notice">
+              <BellRing size={16} />
+              <span className="location-fallback-copy">
+                <span>{alertsState === 'default'
+                  ? 'Turn on booking alerts to hear about confirmations, delays and reminders — your browser will ask once.'
+                  : 'Booking alerts are off. Turn them on so bookings, delays and reminders reach this phone.'}</span>
+                {alertsNote && <small className="location-request-note" role="status">{alertsNote}</small>}
+              </span>
+              <button onClick={enableAlerts} disabled={alertsBusy}>{alertsBusy ? 'Asking…' : alertsState === 'default' ? 'Turn on' : 'How to allow'}</button>
+              <button className="notice-dismiss" onClick={dismissAlertsInvite} aria-label="Not now">Not now</button>
+            </div>
+          )}
+          {!loading && !location && <div className="inline-notice location-fallback-notice"><MapPin size={16} /> <span className="location-fallback-copy"><span>Location is off, so this list is not sorted by distance — optional, and browsing works without it.</span>{locationRequestNote && <small className="location-request-note" role="status">{locationRequestNote}</small>}</span><button onClick={enableLocation} disabled={locationBusy}>{locationBusy ? 'Checking…' : 'Use my location'}</button></div>}
+        </div>
         {loading ? <div className="salon-grid">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} />)}</div> : visibleSalons.length ? <>
           <div className="salon-grid">{visibleSalons.map(salon => <SalonCard key={salon.id} salon={salon} saved={savedId === salon.id || salon.isSaved} onSelect={openSalon} onBook={bookSalon} onShare={item => shareSalon(item, notify)} onBookmark={bookmark} userLocation={location} />)}</div>
           {/* Paging footer: a full-width tap target on phones, an automatic

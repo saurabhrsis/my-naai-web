@@ -335,6 +335,18 @@ img { display: block; max-width: 100%; }
 .home-hero-band .ad-carousel-wrap { margin-bottom: 2px; }
 .home-salons-band { background: #0f1313; }
 .home-salons-band .inline-notice { margin-top: -3px; }
+/* The alerts + location prompts share one wrapper so wide screens can set
+   them SIDE BY SIDE as two even cards — a full-width bar with a hole in the
+   middle reads as broken on a laptop. Phones keep them stacked (and compact,
+   see the <=559px block below). */
+.home-notices { display: grid; gap: 8px; margin: -3px 0 15px; }
+.home-notices .inline-notice { margin: 0; }
+@media (min-width: 900px) {
+  .home-notices { grid-template-columns: 1fr 1fr; align-items: stretch; }
+  /* The alert copy is a long sentence: in the half-width card it must wrap
+     inside its span (min-width: 0) rather than push the buttons off the card. */
+  .home-notices .location-fallback-copy { flex: 1 1 auto; min-width: 0; }
+}
 .home-topline { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 17px; }
 .home-topline > div:first-child { min-width: 0; }
 .home-topline h1 { margin: 7px 0 5px; font-size: clamp(28px, 7vw, 43px); letter-spacing: -.055em; line-height: 1; }
@@ -1655,8 +1667,10 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .guest-shell .home-hero-band.has-ads { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, clamp(340px, 38%, 520px)); column-gap: 24px; align-items: start; }
   .guest-shell .home-hero-band.has-ads .home-topline { grid-column: 1 / -1; margin-bottom: 16px; }
   /* The search row fills its column (its own 760px cap would leave a gap before
-     the promo), so the filter and the ad read as one row. */
-  .guest-shell .home-hero-band.has-ads .home-search-row { max-width: 100%; margin-bottom: 0; }
+     the promo), so the filter and the ad read as one row. Centered vertically:
+     the promo is ~400px tall, and a top-anchored 48px filter left a big empty
+     box under it that read as a layout bug on laptops. */
+  .guest-shell .home-hero-band.has-ads .home-search-row { max-width: 100%; margin-bottom: 0; align-self: center; }
   .guest-shell .home-hero-band.has-ads .ad-carousel-wrap { margin-bottom: 0; }
   .home-topline h1 { font-size: 40px; }
   .home-topline { margin-bottom: 18px; }
@@ -1665,7 +1679,7 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
 @media (min-width: 1200px) {
   .app-shell .home-hero-band.has-ads { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, clamp(340px, 38%, 520px)); column-gap: 24px; align-items: start; }
   .app-shell .home-hero-band.has-ads .home-topline { grid-column: 1 / -1; margin-bottom: 16px; }
-  .app-shell .home-hero-band.has-ads .home-search-row { max-width: 100%; margin-bottom: 0; }
+  .app-shell .home-hero-band.has-ads .home-search-row { max-width: 100%; margin-bottom: 0; align-self: center; }
   .app-shell .home-hero-band.has-ads .ad-carousel-wrap { margin-bottom: 0; }
   /* A wider laptop gets a slightly taller promo, still measured from the
      artwork so nothing is cropped. */
