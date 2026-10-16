@@ -368,12 +368,11 @@ img { display: block; max-width: 100%; }
 .search-field input::placeholder { color: #707a79; }
 .search-field button { display: flex; padding: 2px; color: var(--muted); background: transparent; }
 /* The banner is a FULL-WIDTH strip on every device: on phones the strip is
-   exactly the artwork's shape; on tablet/laptop the device's height budget
-   caps the strip and `contain` keeps the WHOLE artwork visible, centered.
-   When the cap leaves room on the sides, the blurred copy of the same
-   artwork (`.ad-backdrop`) extends it there — the strip reads as one piece,
-   never a small image floating on black. Per-device height budgets in the
-   media queries below. */
+   exactly the artwork's shape; the device's height budget caps taller
+   strips. Below 1024px the whole artwork stays visible and any leftover
+   sides get the blurred copy of it (`.ad-backdrop`); on laptop and larger
+   the image itself fills the strip (cover — see .ad-image). Per-device
+   height budgets in the media queries below. */
 .ad-carousel-wrap {
   --ad-max-height: 280px;
   width: 100%;
@@ -389,7 +388,14 @@ img { display: block; max-width: 100%; }
    sides — full image, no crop, no black. */
 .ad-slide { position: relative; min-width: 100%; height: auto; aspect-ratio: var(--ad-ratio, 1.5); min-height: 120px; max-height: var(--ad-max-height, 280px); overflow: hidden; background: #1e2625; }
 .ad-backdrop { position: absolute; inset: -8%; background-position: center; background-size: cover; filter: blur(26px) saturate(1.15); opacity: .95; }
+/* Phones/tablets keep the artwork's exact shape (contain = whole image, no
+   crop). On LAPTOP AND LARGER the image itself fills the full-width strip —
+   the centered crop trims only the top/bottom edges (the creatives carry
+   their message in the middle), so there are never dead side panels. */
 .ad-image { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: contain; }
+@media (min-width: 1024px) {
+  .ad-image { object-fit: cover; object-position: center; }
+}
 .carousel-dots { display: flex; justify-content: center; gap: 6px; margin-top: 10px; }
 .carousel-dot { width: 7px; height: 7px; padding: 0; border-radius: 7px; background: #555; }
 .carousel-dot.active { width: 18px; background: var(--gold); }

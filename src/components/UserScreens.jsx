@@ -299,11 +299,10 @@ function AdCarousel({ ads }) {
         <div className="ad-track" style={{ transform: `translateX(-${active * 100}%)` }}>
           {slides.map((src, index) => (
             <div className="ad-slide" key={`${src}-${index}`}>
-              {/* `contain` always shows the FULL artwork. The strip is
-                  full-width; on wide screens the device height budget caps
-                  it, the art stays whole and centered, and the blurred copy
-                  below extends it into the leftover sides — no crop, no
-                  black. */}
+              {/* Phones/tablets: `contain` in an exact-ratio strip — the FULL
+                  artwork, never cropped. Laptop and up (media query in
+                  styles.css): the image fills the full-width strip with a
+                  centered crop, so no dead side panels on large screens. */}
               <span className="ad-backdrop" style={{ backgroundImage: `url("${src}")` }} aria-hidden="true" />
               <ImageWithFallback src={src} fallback="" alt="" className="ad-image" loading="eager" ref={slideRef(`${src}-${index}`)} onLoad={readRatio(`${src}-${index}`)} />
             </div>
