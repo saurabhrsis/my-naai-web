@@ -3,11 +3,22 @@ const { DataTypes } = require('sequelize');
 /**
  * Naai Shop order (B2B — a salon buying stock for its shop).
  *
- * The web portal's shop currently keeps its cart and orders in localStorage
- * and pays order-less through Razorpay Checkout. This model is the durable
- * record: the client snapshots the exact same shape it stores locally
- * (`src/lib/shopOrders.js` on the frontend) and the backend recomputes the
- * bill server-side so the amounts can never be faked from the client.
+ * The client (web portal and mobile app) snapshots the same shape it stores
+ * locally (`my-naai-web/src/lib/shopOrders.js`) and the backend recomputes
+ * the bill server-side so the amounts can never be faked from the client.
+ *
+ * TWO STATUS TRACKS — the same order, two audiences:
+ *   `status`         INTERNAL track — what the company ADMIN and the
+ *                    distributor see: who picks the parcel up and how far
+ *                    it has physically come.
+ *                        PENDING_ASSIGNMENT -> ASSIGNED -> PICKED ->
+ *                        SHIPPED -> DELIVERED   (CANCELLED is terminal)
+ *   `customerStatus` SALON track — what the buying salon (customer) sees:
+ *                        PENDING -> CONFIRMED -> PROCESSING -> SHIPPED ->
+ *                        DELIVERED   (CANCELLED is terminal)
+ * The admin moves the internal track; the customer track is derived from it
+ * (see shopOrder.service.INTERNAL_TO_CUSTOMER_STATUS) so the salon never
+ * sees warehouse internals.
  *
  * `payment` is a snapshot object, not a table:
  *   { method: 'ONLINE' | 'COD', status: 'PENDING' | 'PAID' | 'FAILED' | 'REFUND_REQUESTED' | 'REFUNDED', paymentId, amount }
@@ -22,8 +33,9 @@ module.exports = (sequelize) => {
             primaryKey: true
         },
 
-        // Human-facing order id, same format the frontend generates:
-        // 'MN' + base36 timestamp + 4 unambiguous random chars.
+        // Human-facing order id. The client may send its own id (the web
+        // shop generates one before paying so its local record and this
+        // record match); otherwise the backend generates the same format.
         orderId: {
             type: DataTypes.STRING(32),
             allowNull: false,
@@ -31,8 +43,8 @@ module.exports = (sequelize) => {
             field: 'order_id'
         },
 
-        // The buying salon (salon token in the JWT). Sellers are per-line in
-        // `items[].productId` / `items[].salonName`.
+        // The buying salon (salon token in the JWT). Sellers are the
+        // company's own stock (shop_products) — no selling salon per line.
         salonId: {
             type: DataTypes.UUID,
             allowNull: false,
@@ -67,14 +79,28 @@ module.exports = (sequelize) => {
             field: 'amounts'
         },
 
-        // PENDING (placed, COD or online-unconfirmed) -> CONFIRMED (payment
-        // captured / order accepted) -> PROCESSING -> SHIPPED -> DELIVERED.
-        // CANCELLED is terminal (buyer self-service or admin).
+        // INTERNAL track (admin + distributor): has the order been handed
+        // to a delivery partner and where is the parcel now?
         status: {
+            type: DataTypes.ENUM('PENDING_ASSIGNMENT', 'ASSIGNED', 'PICKED', 'SHIPPED', 'DELIVERED', 'CANCELLED'),
+            allowNull: false,
+            defaultValue: 'PENDING_ASSIGNMENT',
+            field: 'status'
+        },
+
+        // SALON track (customer view), derived from the internal track.
+        customerStatus: {
             type: DataTypes.ENUM('PENDING', 'CONFIRMED', 'PROCESSING', 'SHIPPED', 'DELIVERED', 'CANCELLED'),
             allowNull: false,
             defaultValue: 'PENDING',
-            field: 'status'
+            field: 'customer_status'
+        },
+
+        // The delivery partner the admin assigned (distributors table).
+        distributorId: {
+            type: DataTypes.UUID,
+            allowNull: true,
+            field: 'distributor_id'
         },
 
         cancelledAt: {
@@ -104,6 +130,10 @@ module.exports = (sequelize) => {
         ShopOrder.belongsTo(models.Salon, {
             foreignKey: 'salonId',
             as: 'salon'
+        });
+        ShopOrder.belongsTo(models.Distributor, {
+            foreignKey: 'distributorId',
+            as: 'distributor'
         });
     };
 

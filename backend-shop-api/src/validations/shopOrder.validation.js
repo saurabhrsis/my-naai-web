@@ -14,7 +14,10 @@ const shopOrderLineSchema = Joi.object({
     qty: Joi.number().integer().min(1).max(99).default(1)
 });
 
+// The client may send its own order id (the web shop records the order
+// locally before registering it, so both ends share the id).
 const createShopOrderSchema = Joi.object({
+    orderId: Joi.string().max(32).optional().allow(null, ''),
     items: Joi.array().min(1).max(50).items(shopOrderLineSchema).required(),
     address: Joi.object({
         name: Joi.string().max(150).required(),
@@ -42,9 +45,17 @@ const cancelShopOrderSchema = Joi.object({
     reason: Joi.string().max(500).allow(null, '').optional()
 });
 
+// Admin moves the INTERNAL track (fulfilment); the customer-facing status is
+// derived from it. See shopOrder.service.INTERNAL_STATUSES.
 const adminUpdateShopOrderStatusSchema = Joi.object({
     orderId: Joi.string().max(64).required(),
-    status: Joi.string().valid('PENDING', 'CONFIRMED', 'PROCESSING', 'SHIPPED', 'DELIVERED', 'CANCELLED').required(),
+    status: Joi.string().valid('PENDING_ASSIGNMENT', 'ASSIGNED', 'PICKED', 'SHIPPED', 'DELIVERED', 'CANCELLED').required(),
+    notes: Joi.string().max(1000).allow(null, '').optional()
+});
+
+const adminAssignDistributorSchema = Joi.object({
+    orderId: Joi.string().max(64).required(),
+    distributorId: Joi.string().uuid().required(),
     notes: Joi.string().max(1000).allow(null, '').optional()
 });
 
@@ -52,5 +63,6 @@ module.exports = {
     createShopOrderSchema,
     getShopOrderSchema,
     cancelShopOrderSchema,
-    adminUpdateShopOrderStatusSchema
+    adminUpdateShopOrderStatusSchema,
+    adminAssignDistributorSchema
 };

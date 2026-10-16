@@ -17,6 +17,7 @@ list with a live status tracker, and **cancel order** before dispatch.
 | My orders + order detail/tracker | `src/components/ShopOrders.jsx` |
 | Category / gender / price / sort rules | `src/lib/shopCatalog.js` |
 | Cart, bill math, order lifecycle, timeline | `src/lib/shopOrders.js` |
+| Server sync (cart + orders per account) | `src/lib/shopServerSync.js` |
 | Order-less Razorpay checkout | `src/lib/razorpay.js` (`openRazorpayOrderlessCheckout`, `getRazorpayKeyId`) |
 | Design tokens + all `.shop-*` styles | `src/styles.css` (bottom section) |
 | Product editor (category/gender + **multiple image uploads**) | `src/components/SalonScreens.jsx` (`SalonProductsScreen`) |
@@ -52,14 +53,17 @@ Order detail ── 4-step tracker (Placed → Packed → Out for delivery → D
                 items, address, payment (id, refund state), Cancel order
 ```
 
-- **Delivery fee:** ₹49, FREE above ₹499 (constants in `shopOrders.js`).
-- **Timeline:** deterministic from `placedAt` — packed after 30 min, out for
-  delivery after 3 h, delivered/ETA at 26 h. The tracker re-renders every
-  30 s while open, the same wall-clock approach the booking queue uses.
-- **Cancellation:** allowed while *placed* or *packed*; once *out for
-  delivery* only support remains. A paid order that is cancelled flips its
-  payment to **Refund requested** (refund to source in 5–7 working days, per
-  the copy shown).
+- **Delivery fee:** ₹49, FREE above ₹499 (constants in `shopOrders.js`;
+  the backend recomputes the bill with the same thresholds).
+- **Timeline:** server-tracked orders follow the salon status track (see
+  below); local-only orders fall back to a deterministic timeline from
+  `placedAt` — packed after 30 min, out for delivery after 3 h, delivered/ETA
+  at 26 h. The tracker re-renders every 30 s while open.
+- **Cancellation:** server-tracked orders cancel while the salon track is
+  `PENDING` / `CONFIRMED` / `PROCESSING` (parcel not yet out for delivery);
+  local-only orders while *placed* or *packed*. A paid order that is
+  cancelled flips its payment to **Refund requested** (refund to source in
+  5–7 working days, per the copy shown).
 
 ## Filters
 
@@ -82,15 +86,16 @@ details-page delivery card still state the fee/free rule.
 
 All filtering is client-side over the catalog (`applyShopFilters` in
 `shopCatalog.js` — pure, fully unit-tested). The catalog endpoint
-(`POST /api/products/get-all-salons-products-list`) does not accept these
+(`POST /api/shop-products/list`) does not accept these
 facets, so the portal classifies each product:
 
 1. an explicit `category` / `gender` field on the product record, if the
-   backend sends one — the salon product editor already offers both fields
-   ("Shop category", "Shop gender") and sends them on create/update;
+   company admin set one when creating the shop product
+   (`POST /api/shop-products/admin-create`);
 2. otherwise keyword inference from the product name (ordered rules, e.g.
    "beard" → beard-grooming, "clipper/razor" → tools & equipment);
-3. otherwise the seller salon's `genderType` for gender; default unisex.
+3. otherwise unisex (there is no selling salon to borrow a gender from —
+   the catalog is company-wide).
 
 So the shop is useful on day one with the existing API and becomes exact the
 moment the backend starts persisting the facets.
@@ -124,27 +129,68 @@ Unknown ids render a graceful "Product not available" state (the catalog can
 shrink under a bookmarked link); out-of-stock products render full details
 with the control replaced by an "Out of stock" chip.
 
-## Orders: client-side today, backend-ready tomorrow
+## Cart & orders: server-side, per account
 
-The MyNaai backend exposes the product catalog but **no order endpoints yet**,
-so the shop owns its orders in `src/lib/shopOrders.js`, persisted per salon
-account in localStorage (`mynaaiShopCart:<salonId>`,
-`mynaaiShopOrders:<salonId>`). This is deliberate, not a shortcut:
+The shop's cart and order history live **in the backend, keyed to the salon
+account** (`shop_carts` / `shop_orders` tables — see the Naai Shop section of
+the `my_naai_backend` README), so an item added on the web shows up when the
+same salon logs into the mobile app, and the order history follows the
+account, not the browser.
 
-- every read/write funnels through the small storage functions at the bottom
-  of that module, so wiring a real `/api/orders` controller later means
-  replacing those functions — screens, cart and tracker do not change;
-- online payments are real: Checkout opens **order-less** (key + amount, no
-  backend Razorpay order) and the returned `razorpay_payment_id` is stored on
-  the order for support/refunds;
-- the deterministic timeline keeps "check order status" honest even without a
-  warehouse system: the status is a function of `placedAt`, never of server
-  state the portal cannot see.
+**Two separate product tables on the backend.** The salons' customer-facing
+products (`products`, edited by each salon, browsed by the app's customers
+under `/api/products/*`) are NOT the shop catalog. The shop browses the
+**company's** `shop_products` table via `POST /api/shop-products/list`
+(`api.shopProductList`) — no `salonId` anywhere in it.
 
-When order endpoints land, the mapping is: `placeOrder` → `POST /api/orders`,
-`readOrders`/`findOrder` → the list/detail endpoints, `getOrderStatus` →
-server status (the timeline becomes the fallback for a missing status), and
-`cancelOrder` → the cancel endpoint.
+**How the client stays in sync** (`src/lib/shopServerSync.js`):
+
+- the localStorage copy (`mynaaiShopCart:<salonId>`,
+  `mynaaiShopOrders:<salonId>`) is the in-session + offline + guest cache and
+  updates instantly on every action;
+- on mount, a signed-in account **pulls** the server cart (and order list) —
+  the server copy wins and is persisted back into the local cache;
+- every add / set-qty / remove / clear is pushed **fire-and-forget** at
+  `POST /api/shop-cart/*` — a failed push never breaks the session (the local
+  copy survives, the next mount re-syncs);
+- at checkout the order is written locally first (`placeOrder` generates the
+  `MN…` id), the success card renders instantly, and then the same id is
+  **registered** on the server (`POST /api/shop-orders/create`) — the local
+  and server records share one identity; a successful registration clears the
+  server cart;
+- guests (no session token) never touch the network and keep the pure
+  localStorage behaviour; online payments stay order-less (Razorpay Checkout
+  key + amount), and the `razorpay_payment_id` the client stores on the order
+  is what the backend's signed webhook flips to PAID.
+
+**Two status tracks.** The order carries an INTERNAL track (what the company
+admin and the assigned **distributor** see: `PENDING_ASSIGNMENT → ASSIGNED →
+PICKED → SHIPPED → DELIVERED`, moved through `admin-assign-distributor` and
+`admin-update-status`) and a SALON track (what the buying salon sees). The
+salon responses only ever carry the salon track as `status`; the internal
+track and the distributor never cross to the client. The 4-step tracker maps
+the salon track onto it:
+
+| salon track  | tracker step        |
+| ------------ | ------------------- |
+| `PENDING`    | Order placed        |
+| `CONFIRMED`  | Packing your order  |
+| `PROCESSING` | Out for delivery    |
+| `SHIPPED`    | Out for delivery    |
+| `DELIVERED`  | Delivered           |
+| `CANCELLED`  | Cancelled           |
+
+An order fetched from the server carries its raw value as
+`order.serverStatus`; the tracker and the cancel gate use it when present,
+and fall back to the deterministic `placedAt` timeline for local-only orders
+(offline placements, guests).
+
+**Cancellation** is server-authoritative for server-tracked orders
+(`POST /api/shop-orders/cancel` — free while the parcel has not left the
+depot, i.e. until the salon track passes `PROCESSING`); the local timeline
+gate applies to local-only orders. A paid order that is cancelled is flagged
+**Refund requested** (refund to source in 5–7 working days, per the copy
+shown).
 
 ## Previewing offline
 

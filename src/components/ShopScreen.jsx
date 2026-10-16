@@ -23,7 +23,8 @@ import {
   discountPercent,
   normalizeShopProduct,
 } from '../lib/shopCatalog';
-import { FREE_DELIVERY_ABOVE, addToCart, cartTotals, readCart, setCartQty } from '../lib/shopOrders';
+import { FREE_DELIVERY_ABOVE, addToCart, cartTotals, readCart, removeCartLine, saveCart, setCartQty } from '../lib/shopOrders';
+import { fetchServerCart, pushCartAdd, pushCartRemove, pushCartSetQty } from '../lib/shopServerSync';
 import {
   Button,
   EmptyState,
@@ -131,7 +132,9 @@ export function useShopCatalog(notify) {
     setLoading(true);
     setError('');
     try {
-      const response = await api.userProductList({ page: 1, searchString: '' });
+      // The shop browses the COMPANY catalog (shop_products) — separate from
+      // the salons' customer-facing products the app lists under /api/products.
+      const response = await api.shopProductList({ page: 1, searchString: '' });
       const list = response?.data?.products || (Array.isArray(response?.data) ? response.data : []);
       setProducts(list.map(normalizeShopProduct));
     } catch (err) {
@@ -146,19 +149,60 @@ export function useShopCatalog(notify) {
   return { products, loading, error, load };
 }
 
+// Cart that stays with the ACCOUNT, not the browser. The local copy (and the
+// in-session UI) updates instantly — the shop keeps working offline and for
+// guests — but for a signed-in salon the backend (shop_carts) is the
+// durable truth: on mount the server copy wins, and every mutation is
+// pushed fire-and-forget so the same cart (and orders) follow the account
+// across the web portal and the mobile app.
+export function useSyncedCart(ownerId) {
+  const [cart, setCartState] = useState(() => readCart(ownerId));
+
+  useEffect(() => {
+    setCartState(readCart(ownerId));
+    let cancelled = false;
+    fetchServerCart().then(lines => {
+      if (cancelled || lines === null) return; // guest / offline: keep local
+      saveCart(ownerId, lines);
+      setCartState(lines);
+    });
+    return () => { cancelled = true; };
+  }, [ownerId]);
+
+  const add = useCallback((product, qty = 1) => {
+    const next = addToCart(ownerId, product, qty);
+    setCartState(next);
+    pushCartAdd(String(product?.id || product?.productId || ''), qty);
+  }, [ownerId]);
+
+  const setQty = useCallback((productId, next) => {
+    const lines = setCartQty(ownerId, productId, next);
+    setCartState(lines);
+    // qty <= 0 is a remove in the local model too — mirror it as such.
+    if (next <= 0) pushCartRemove(String(productId));
+    else pushCartSetQty(String(productId), next);
+  }, [ownerId]);
+
+  // Accepts a productId or a whole cart line (the cart screen passes lines).
+  const removeLine = useCallback(target => {
+    const productId = String(target?.productId || target || '');
+    const lines = removeCartLine(ownerId, productId);
+    setCartState(lines);
+    pushCartRemove(productId);
+  }, [ownerId]);
+
+  return { cart, add, setQty, removeLine };
+}
+
 // ── The Shop tab ─────────────────────────────────────────────────────────────
 export function ShopScreen({ session, navigate, notify }) {
   const ownerId = shopOwnerId(session);
   const { products, loading, error, load } = useShopCatalog(notify);
-  const [cart, setCart] = useState(() => readCart(ownerId));
+  const { cart, add, setQty } = useSyncedCart(ownerId);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('all');
   const [gender, setGender] = useState('all');
   const [priceRange, setPriceRange] = useState('all');
-
-  // The cart belongs to the signed-in salon account; re-key it when the
-  // session changes (a second salon signing in on the same device).
-  useEffect(() => { setCart(readCart(ownerId)); }, [ownerId]);
 
   const categories = useMemo(() => categoryChipsFor(products), [products]);
   const visible = useMemo(
@@ -168,12 +212,8 @@ export function ShopScreen({ session, navigate, notify }) {
   const totals = useMemo(() => cartTotals(cart), [cart]);
   const qtyFor = id => cart.find(line => line.productId === String(id))?.qty || 0;
 
-  const handleAdd = product => {
-    setCart(addToCart(ownerId, product, 1));
-  };
-  const handleSetQty = (product, next) => {
-    setCart(setCartQty(ownerId, product.id, next));
-  };
+  const handleAdd = product => add(product, 1);
+  const handleSetQty = (product, next) => setQty(product.id, next);
   // Tapping a product opens its full details page (deep-linkable, back button,
   // similar products) instead of an inline sheet.
   const openProduct = product => navigate('shopProduct', { productId: product.id });
@@ -262,9 +302,8 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
   const ownerId = shopOwnerId(session);
   const productId = String(params?.productId || '');
   const { products, loading, error, load } = useShopCatalog(notify);
-  const [cart, setCart] = useState(() => readCart(ownerId));
+  const { cart, add, setQty } = useSyncedCart(ownerId);
 
-  useEffect(() => { setCart(readCart(ownerId)); }, [ownerId]);
   // A different product resets the gallery to its cover photo.
   useEffect(() => { setActiveImage(0); }, [productId]);
 
@@ -282,8 +321,8 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
   ), [products, product]);
   const qtyFor = id => cart.find(line => line.productId === String(id))?.qty || 0;
 
-  const handleAdd = value => setCart(addToCart(ownerId, value, 1));
-  const handleSetQty = (value, next) => setCart(setCartQty(ownerId, value.id, next));
+  const handleAdd = value => add(value, 1);
+  const handleSetQty = (value, next) => setQty(value.id, next);
   const openProduct = value => navigate('shopProduct', { productId: value.id });
 
   if (loading) {

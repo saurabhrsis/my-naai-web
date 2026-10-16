@@ -19,6 +19,7 @@ import {
   readOrders,
   removeCartLine,
   setCartQty,
+  upsertLocalOrder,
 } from './shopOrders';
 
 const NOW = Date.parse('2026-10-15T10:00:00Z');
@@ -144,6 +145,61 @@ describe('order lifecycle', () => {
     const cancelled = cancelOrder('salon-1', order.id, { now: NOW });
     expect(cancelled.payment.status).toBe('PENDING');
     expect(getOrderStatus(cancelled, NOW).key).toBe('cancelled');
+  });
+
+  it('lets the server status track override the clock on the tracker', () => {
+    // 200 minutes old: the clock alone would already say "shipped".
+    const late = NOW + 200 * 60000;
+    const base = place();
+
+    expect(getOrderStatus({ ...base, serverStatus: 'PENDING' }, late).key).toBe('placed');
+    expect(getOrderStatus({ ...base, serverStatus: 'CONFIRMED' }, late).key).toBe('packed');
+    expect(getOrderStatus({ ...base, serverStatus: 'PROCESSING' }, late).key).toBe('shipped');
+    expect(getOrderStatus({ ...base, serverStatus: 'SHIPPED' }, late).key).toBe('shipped');
+    expect(getOrderStatus({ ...base, serverStatus: 'DELIVERED' }, late).key).toBe('delivered');
+    expect(getOrderStatus({ ...base, serverStatus: 'DELIVERED' }, late).stepIndex).toBe(3);
+    expect(getOrderStatus({ ...base, serverStatus: 'CANCELLED' }, late).key).toBe('cancelled');
+    // Unknown / missing server status falls back to the timeline.
+    expect(getOrderStatus({ ...base, serverStatus: 'SOMETHING' }, late).key).toBe('shipped');
+    expect(getOrderStatus(base, late).key).toBe('shipped');
+  });
+
+  it('gates cancellation on the server track for server-tracked orders', () => {
+    const late = NOW + 200 * 60000; // clock says "shipped" (not cancellable)
+    const base = place();
+
+    // Purely local record: the clock rules (shipped → not cancellable).
+    expect(canCancelOrder(base, late)).toBe(false);
+    expect(cancelOrder('salon-1', base.id, { now: late }).cancelledAt).toBeNull();
+
+    // Server track still "processing" — the parcel has not left the depot,
+    // so it stays cancellable despite the clock.
+    expect(canCancelOrder({ ...base, serverStatus: 'PROCESSING' }, late)).toBe(true);
+    upsertLocalOrder('salon-1', { ...base, serverStatus: 'PROCESSING' });
+    const serverCancelled = cancelOrder('salon-1', base.id, { now: late, reason: 'x' });
+    expect(serverCancelled.cancelledAt).toBeTruthy();
+
+    // Out for delivery on the server track — no more cancellations.
+    upsertLocalOrder('salon-1', { ...base, serverStatus: 'SHIPPED', cancelledAt: null });
+    expect(canCancelOrder({ ...base, serverStatus: 'SHIPPED' }, late)).toBe(false);
+    expect(cancelOrder('salon-1', base.id, { now: late }).cancelledAt).toBeNull();
+
+    // Cancellable server statuses.
+    expect(canCancelOrder({ ...base, serverStatus: 'PENDING' }, late)).toBe(true);
+    expect(canCancelOrder({ ...base, serverStatus: 'CONFIRMED' }, late)).toBe(true);
+    expect(canCancelOrder({ ...base, serverStatus: 'CANCELLED' }, late)).toBe(false);
+  });
+
+  it('upserts server-fetched orders into the local history (server wins)', () => {
+    const local = place();
+    const serverCopy = { ...local, serverStatus: 'SHIPPED' };
+    expect(upsertLocalOrder('salon-1', serverCopy).id).toBe(local.id);
+    expect(readOrders('salon-1')).toHaveLength(1);
+    expect(readOrders('salon-1')[0].serverStatus).toBe('SHIPPED');
+
+    // A different order is added, not duplicated.
+    upsertLocalOrder('salon-1', { ...local, id: 'MNOFFLINE1', serverStatus: 'PENDING' });
+    expect(readOrders('salon-1')).toHaveLength(2);
   });
 
   it('is isolated per salon account', () => {

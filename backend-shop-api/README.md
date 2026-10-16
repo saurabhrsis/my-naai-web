@@ -1,54 +1,103 @@
 # my_naai_backend
 ## Naai Shop e-commerce API
 
-B2B shop: a salon buys stock from the shared product catalog (the same
-`products` table the existing salon product flow writes to). The web portal
-(`my-naai-web`) keeps its cart in the browser and pays **order-less** through
-Razorpay Checkout; the endpoints below are the durable order record. All
-routes are `POST` and answer `{ status, message, data }`.
+B2B shop: a salon buys stock for its own shop. The web portal (`my-naai-web`)
+and the mobile app share the same **server-side** cart and orders, so an item
+added on the web shows up when the same salon logs into the app — and the
+order history follows the account, not the browser. All routes are `POST`
+and answer `{ status, message, data }`.
 
-### Product shop fields (existing product API, extended)
+### Two separate product tables
 
-`POST /api/products/create` and `POST /api/products/update` accept four
-optional shop fields (existing payloads keep working unchanged):
+| Table          | Owner        | Shown to                          | API root                     |
+| -------------- | ------------ | --------------------------------- | ---------------------------- |
+| `products`     | each salon   | **customers** booking that salon  | `/api/products/*` (unchanged) |
+| `shop_products`| the company  | **salons**, to buy stock          | `/api/shop-products/*`       |
 
-| Field         | Type             | Notes                                                        |
-| ------------- | ---------------- | ------------------------------------------------------------ |
-| `mrp`         | number ≥ 0       | Max retail price — drives the "% off" badge in the shop UI   |
-| `category`    | string           | One of the shop category ids; blank = inferred from the name |
-| `gender`      | `MALE\|FEMALE\|UNISEX` | Blank = `UNISEX`                                        |
-| `description` | string ≤ 2000    | Product detail copy                                          |
+`shop_products` has **no `salonId`** — the catalog is company-wide. It
+carries the shop fields: `mrp` (drives the "% off" badge), `category`,
+`gender` (`MALE|FEMALE|UNISEX` or NULL), `description`, `rating`,
+`isAvailable` + `stockStatus`, soft-delete (`deletedAt`).
 
-Both `POST /api/products/list` and `POST /api/products/get-all-salons-products-list`
-return these fields on every product.
+### Shop catalog — `/api/shop-products`
 
-### Product APIs — authentication
+| Route | Token | Body | Result |
+| ----- | ----- | ---- | ------ |
+| `/list` | **user OR salon** (`authUserOrSalon`) — the mobile app browses as a user, the web shop as a salon | `{ page?, searchString? }` | The buyable catalog (soft-deleted rows excluded), newest first |
+| `/admin-list` | admin | `{ page?, searchString? }` | Same catalog, for the admin panel |
+| `/admin-create` | admin | `{ productName, price, rating?, isAvailable?, productImage?, mrp?, category?, gender?, description? }` | Adds a company product. `gender` `''`/absent = NULL (the UI infers from the name); no `salonId` anywhere |
+| `/admin-update` | admin | `{ productId, …any of the above }` | Partial update; sending `isAvailable` also syncs `stockStatus` |
+| `/admin-delete` | admin | `{ productId }` | Soft delete — cart lines are dropped at read time, placed orders keep their snapshot |
 
-| Route | Token |
-| ----- | ----- |
-| `/api/products/get-all-salons-products-list` (marketplace catalog) | **user OR salon** — `authenticateUserOrSalon` accepts either claim: the mobile app browses as a customer, the web shop as a salon. The salon include also returns `genderType` so the shop can fall back to the *selling* salon's gender for products without an explicit one. |
-| `/api/products/create`, `/update`, `/list`, `/delete` | salon (own catalog only) |
-| `/api/products/admin-list` | admin — every salon's products; filters `salonId`, `isAvailable`, `searchString` (name or salon name), `page` |
-| `/api/products/admin-create` | admin — `salonId` is required and must be an existing salon; full shop fields supported |
-| `/api/products/admin-update` | admin — partial update of ANY salon's product; `isAvailable` also syncs `stockStatus` |
-| `/api/products/admin-delete` | admin — delete ANY salon's product |
+### Server cart — `/api/shop-cart` (salon token)
 
-### Shop orders — salon token (`Authorization: Bearer <salon jwt>`)
+The cart belongs to the **buying salon's account** (table `shop_carts`,
+one row per `salonId + productId`, qty 1–99). Only the qty is stored —
+name/price/image are read live from `shop_products`, so an admin price
+change updates the bill. Lines whose product was deleted are dropped; lines
+whose product went unavailable are kept and flagged `available: false`.
+Totals count available lines only.
 
-| Route                        | Body                                                                                          | Result                                                        |
-| ---------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `/api/shop-orders/create`    | `{ items[], address{}, payment{ method, status, paymentId }, notes? }`                         | Order created. Bill (`itemTotal`, `savings`, `deliveryFee`, `total`) is **recomputed server-side** from `items` — the client amounts are ignored. `items` is the exact cart snapshot the frontend sends (`productId, name, price, mrp, image, category, gender, salonName, qty`). `address` = `{ name, phone(10 digits), line1, city, state?, pincode(6 digits) }`. Paid-online orders start `CONFIRMED`, everything else `PENDING`. |
-| `/api/shop-orders/list`      | `{ page? }`                                                                                    | The calling salon's own orders, newest first, paginated       |
-| `/api/shop-orders/get-by-id` | `{ orderId }` (uuid `id` also works)                                                           | One own order — 404 for other salons' orders                  |
-| `/api/shop-orders/cancel`    | `{ orderId, reason? }`                                                                         | Free cancellation while `PENDING`/`CONFIRMED`; a paid online order is flagged `REFUND_REQUESTED` |
+| Route | Body | Result |
+| ----- | ---- | ------ |
+| `/get` | `{}` | `{ lines[], totals }` — `totals` = `{ itemCount, itemTotal, savings, deliveryFee, total, freeDeliveryAbove }`, recomputed server-side |
+| `/add` | `{ productId, qty? }` | Adds or tops up a line (product must exist + be available); returns the fresh cart |
+| `/set-qty` | `{ productId, qty }` | Absolute qty (the stepper); `0` removes the line; max 99 |
+| `/remove` | `{ productId }` | Removes one line |
+| `/clear` | `{}` | Empties the cart — called by the client after a successful order placement |
 
-### Shop orders — admin token
+### Distributors — `/api/distributors` (admin token)
 
-| Route                            | Body                                              | Result                                        |
-| -------------------------------- | ------------------------------------------------- | --------------------------------------------- |
-| `/api/shop-orders/admin-list`    | `{ page?, status?, salonId?, searchString? }`     | Every salon's orders, newest first            |
-| `/api/shop-orders/admin-get-by-id` | `{ orderId }`                                    | Any order                                     |
-| `/api/shop-orders/admin-update-status` | `{ orderId, status, notes? }`               | Moves the order through `PENDING → CONFIRMED → PROCESSING → SHIPPED → DELIVERED` or `CANCELLED` (cancelling a paid order flags a refund) |
+Delivery partners a shop order can be assigned to (table `distributors`:
+`name`, `phone`, `email`, `area`, `address`, `isActive`).
+
+| Route | Body | Result |
+| ----- | ---- | ------ |
+| `/list` | `{ page?, searchString? }` | Partners, searchable by name/phone/area |
+| `/create` | `{ name, phone?, email?, area?, address?, isActive? }` | Add a partner |
+| `/update` | `{ distributorId, …any of the above }` | Partial update |
+
+### Shop orders — the two status tracks
+
+Table `shop_orders` carries **two status columns** for the same order:
+
+- **`status` — INTERNAL track** (what the company admin and the distributor
+  see): `PENDING_ASSIGNMENT → ASSIGNED → PICKED → SHIPPED → DELIVERED`
+  (`CANCELLED` terminal).
+- **`customerStatus` — SALON track** (what the buying salon sees, derived):
+  `PENDING → CONFIRMED → PROCESSING → SHIPPED → DELIVERED` (`CANCELLED`
+  terminal).
+
+| internal | customer |
+| -------- | -------- |
+| `PENDING_ASSIGNMENT` | `PENDING` |
+| `ASSIGNED`           | `CONFIRMED` |
+| `PICKED`             | `PROCESSING` |
+| `SHIPPED`            | `SHIPPED` |
+| `DELIVERED`          | `DELIVERED` |
+| `CANCELLED`          | `CANCELLED` |
+
+Salon-side responses expose `status` = the **customer** track and never
+include `distributorId`/`distributor`; admin-side responses include both
+tracks plus the assigned distributor.
+
+#### Salon token
+
+| Route | Body | Result |
+| ----- | ---- | ------ |
+| `/api/shop-orders/create` | `{ orderId?, items[], address{}, payment{ method, status, paymentId }, notes? }` | Order created. `orderId` is honoured when supplied (the web/app records the order locally first, so both ends share the id); a duplicate gets 409. Bill is **recomputed server-side** from `items`. New orders start `PENDING_ASSIGNMENT`; the customer track is `CONFIRMED` when the online payment is already `PAID`, else `PENDING`. |
+| `/api/shop-orders/list` | `{ page? }` | The calling salon's own order history (customer track), newest first |
+| `/api/shop-orders/get-by-id` | `{ orderId }` (uuid `id` also works) | One own order — 404 for other salons' orders |
+| `/api/shop-orders/cancel` | `{ orderId, reason? }` | Free while the parcel has not left the depot (internal `PENDING_ASSIGNMENT`/`ASSIGNED`/`PICKED`); both tracks go `CANCELLED`, a paid online order is flagged `REFUND_REQUESTED` |
+
+#### Admin token
+
+| Route | Body | Result |
+| ----- | ---- | ------ |
+| `/api/shop-orders/admin-list` | `{ page?, status?, customerStatus?, salonId?, distributorId?, searchString? }` | Every salon's orders, both tracks + distributor; `distributorId` is the admin/distributor view |
+| `/api/shop-orders/admin-get-by-id` | `{ orderId }` | Any order |
+| `/api/shop-orders/admin-assign-distributor` | `{ orderId, distributorId, notes? }` | Hands the order to a delivery partner (must be active); a new order moves `PENDING_ASSIGNMENT → ASSIGNED` (salon sees `CONFIRMED`); re-assignment swaps the partner |
+| `/api/shop-orders/admin-update-status` | `{ orderId, status, notes? }` | Moves the INTERNAL track; the customer track follows the mapping above. Terminal states cannot be reopened (except re-confirming `DELIVERED`) |
 
 ### Razorpay webhook
 
@@ -57,8 +106,9 @@ over the raw body with `RAZORPAY_WEBHOOK_SECRET` (set in the Razorpay
 dashboard → Webhooks, and in the server env) compared against the
 `x-razorpay-signature` header.
 
-- `payment.captured` → the shop order carrying that `razorpay_payment_id`
-  is marked `PAID` and `CONFIRMED`
+- `payment.captured` → the shop order carrying that payment id is marked
+  `PAID` and its **customer** track moves `PENDING → CONFIRMED` (the
+  internal track still waits for a delivery partner)
 - `payment.failed` / `payment.refunded` → the order's payment is flagged
 - Anything else is acknowledged with 200 so Razorpay stops retrying
 

@@ -50,25 +50,6 @@ const updateProduct = async (productId, salonId, updateData) => {
 };
 
 /**
- * Update product in ANY salon's catalog (admin routes only — the
- * salon-scoped updateProduct above always filters by the caller's salon).
- */
-const updateProductAny = async (productId, updateData) => {
-  try {
-    const product = await db.Product.findByPk(productId);
-
-    if (!product) {
-      return null;
-    }
-
-    await product.update(updateData);
-    return product;
-  } catch (error) {
-    throw error;
-  }
-};
-
-/**
  * Delete product
  */
 const deleteProduct = async (productId) => {
@@ -112,10 +93,6 @@ const listProducts = async ({salonId, page = 1, searchString = '' }) => {
         'productName',
         'productImage',
         'price',
-        'mrp',
-        'category',
-        'gender',
-        'description',
         'rating',
         'isAvailable',
         'stockStatus'
@@ -172,10 +149,6 @@ const allSalonsProductsList = async ({ page = 1, searchString = '' }) => {
         'productImage',
         'productName',
         'price',
-        'mrp',
-        'category',
-        'gender',
-        'description',
         'rating',
         'isAvailable',
         'stockStatus'
@@ -184,9 +157,7 @@ const allSalonsProductsList = async ({ page = 1, searchString = '' }) => {
         {
           model: db.Salon,
           as: 'salon',
-          // genderType lets the shop fall back to the SELLING salon's type
-          // for products with no explicit gender (legacy salon products).
-          attributes: ['salonId', 'salonName', 'genderType']
+          attributes: ['salonId', 'salonName']
         }
       ],
       order: [['createdAt', 'DESC']],
@@ -213,81 +184,11 @@ const allSalonsProductsList = async ({ page = 1, searchString = '' }) => {
 };
 
 
-/**
- * Admin: products across every salon, newest first.
- * Filters: salonId, isAvailable (boolean), searchString (product name or
- * salon name).
- */
-const adminListProducts = async ({ page = 1, salonId, isAvailable, searchString = '' } = {}) => {
-  try {
-    const limit = DEFAULT_LIMIT;
-    const safePage = parseInt(page, 10) > 0 ? parseInt(page, 10) : 1;
-    const offset = (safePage - 1) * limit;
-
-    const where = {};
-    if (salonId) where.salonId = salonId;
-    if (typeof isAvailable === 'boolean') where.isAvailable = isAvailable;
-
-    const trimmedSearch = searchString?.trim();
-    if (trimmedSearch) {
-      const like = `%${trimmedSearch}%`;
-      where[Op.or] = [
-        { productName: { [Op.iLike]: like } },
-        { '$salon.salon_name$': { [Op.iLike]: like } }
-      ];
-    }
-
-    const { count: totalProducts, rows: products } = await db.Product.findAndCountAll({
-      where,
-      attributes: [
-        'productId',
-        'productName',
-        'productImage',
-        'price',
-        'mrp',
-        'category',
-        'gender',
-        'description',
-        'rating',
-        'isAvailable',
-        'stockStatus'
-      ],
-      include: [
-        {
-          model: db.Salon,
-          as: 'salon',
-          attributes: ['salonId', 'salonName', 'genderType']
-        }
-      ],
-      order: [['createdAt', 'DESC']],
-      limit,
-      offset
-    });
-
-    const totalPages = Math.ceil(totalProducts / limit) || 0;
-
-    return {
-      products,
-      pagination: {
-        page: safePage,
-        limit,
-        totalProducts,
-        totalPages
-      }
-    };
-  } catch (error) {
-    console.error(error);
-    throw error;
-  }
-};
-
 module.exports = {
   createProduct,
   getProductById,
   updateProduct,
-  updateProductAny,
   deleteProduct,
   listProducts,
-  allSalonsProductsList,
-  adminListProducts
+  allSalonsProductsList
 };

@@ -8,18 +8,21 @@ const cancelShopOrder = require('../controller/shopOrder/cancelShopOrder');
 const adminListShopOrders = require('../controller/shopOrder/adminListShopOrders');
 const adminGetShopOrderById = require('../controller/shopOrder/adminGetShopOrderById');
 const adminUpdateShopOrderStatus = require('../controller/shopOrder/adminUpdateShopOrderStatus');
+const adminAssignDistributor = require('../controller/shopOrder/adminAssignDistributor');
 
 const shopOrderRouter = express.Router();
 
-// Buying salon — its own orders
+// Buying salon — its own orders (the SALON status track is what it sees).
 shopOrderRouter.post('/create', authenticateSalon, createShopOrder);
 shopOrderRouter.post('/list', authenticateSalon, listShopOrders);
 shopOrderRouter.post('/get-by-id', authenticateSalon, getShopOrderById);
 shopOrderRouter.post('/cancel', authenticateSalon, cancelShopOrder);
 
-// Company admin — every salon's orders
+// Company admin — every salon's orders, both status tracks, distributor
+// assignment. The admin/distributor view filters by distributorId.
 shopOrderRouter.post('/admin-list', authenticateAdmin, adminListShopOrders);
 shopOrderRouter.post('/admin-get-by-id', authenticateAdmin, adminGetShopOrderById);
 shopOrderRouter.post('/admin-update-status', authenticateAdmin, adminUpdateShopOrderStatus);
+shopOrderRouter.post('/admin-assign-distributor', authenticateAdmin, adminAssignDistributor);
 
 module.exports = shopOrderRouter;

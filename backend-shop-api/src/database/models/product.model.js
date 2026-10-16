@@ -28,34 +28,6 @@ module.exports = (sequelize) => {
             allowNull: false
         },
 
-        // Shop flow (web catalog editor): MRP drives the "% off" badge.
-        mrp: {
-            type: DataTypes.DECIMAL(10, 2),
-            allowNull: true
-        },
-
-        // Shop flow: category + gender skip the frontend's name-based
-        // inference when set (see my-naai-web/src/lib/shopCatalog.js).
-        category: {
-            type: DataTypes.STRING(60),
-            allowNull: true,
-            defaultValue: ''
-        },
-
-        // NULL (not 'UNISEX') for products without an explicit gender: the
-        // shop UI falls back to the SELLING salon's genderType for legacy
-        // salon products. A default would make every pre-shop row read as
-        // explicitly unisex and skip that fallback.
-        gender: {
-            type: DataTypes.ENUM('MALE', 'FEMALE', 'UNISEX'),
-            allowNull: true
-        },
-
-        description: {
-            type: DataTypes.TEXT,
-            allowNull: true
-        },
-
         rating: {
             type: DataTypes.FLOAT,
             allowNull: false,

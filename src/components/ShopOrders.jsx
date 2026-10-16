@@ -22,10 +22,24 @@ import {
   formatEta,
   getOrderStatus,
   readOrders,
+  saveOrders,
+  upsertLocalOrder,
 } from '../lib/shopOrders';
+import { cancelServerOrder, fetchAllServerOrders, fetchServerOrderById } from '../lib/shopServerSync';
 import { Button, EmptyState, ImageWithFallback, PageHeader, StatusPill, cx, formatCurrency, formatDate, getErrorMessage } from './Shared';
 import { shopOwnerId } from './ShopScreen';
 import { useConfirm } from './ConfirmDialog';
+
+// Server history wins over the local copy on a shared id (the backend is the
+// account-level truth); local-only orders (placed offline / before sign-in)
+// are kept so nothing the salon can see disappears. Sorted newest first, the
+// same way readOrders orders them.
+function mergeOrders(localOrders, serverOrders) {
+  const byId = new Map();
+  (localOrders || []).forEach(order => { if (order?.id) byId.set(order.id, order); });
+  (serverOrders || []).forEach(order => { if (order?.id) byId.set(order.id, order); });
+  return [...byId.values()].sort((a, b) => String(b.placedAt).localeCompare(String(a.placedAt)));
+}
 
 const PRODUCT_PLACEHOLDER = '/assets/brand/product-placeholder.svg';
 const SUPPORT_PHONE = '8380017393';
@@ -58,7 +72,20 @@ export function ShopOrdersScreen({ session, navigate, notify }) {
   const [orders, setOrders] = useState(() => readOrders(ownerId));
   const [filter, setFilter] = useState('active');
 
-  const load = useCallback(() => setOrders(readOrders(ownerId)), [ownerId]);
+  // Local copy first (instant + offline), then the account-level server
+  // history merged over it and persisted, so the local cache carries the
+  // live server status for offline visits and the detail screen. A fetch
+  // failure leaves the local copy as-is.
+  const load = useCallback(() => {
+    const local = readOrders(ownerId);
+    setOrders(local);
+    fetchAllServerOrders().then(server => {
+      if (!server) return; // guest or offline — local already shown
+      const merged = mergeOrders(local, server);
+      saveOrders(ownerId, merged);
+      setOrders(merged);
+    });
+  }, [ownerId]);
   useEffect(() => { load(); }, [load]);
 
   const buckets = useMemo(() => ({
@@ -119,7 +146,18 @@ export function ShopOrderScreen({ session, params, navigate, notify }) {
   const [order, setOrder] = useState(() => findOrder(ownerId, orderId));
   const [cancelling, setCancelling] = useState(false);
 
-  const load = useCallback(() => setOrder(findOrder(ownerId, orderId)), [ownerId, orderId]);
+  // Local record first (instant), then the server copy — it carries the live
+  // salon-facing status and is persisted back into the local history so the
+  // order stays findable (and cancellable) offline.
+  const load = useCallback(() => {
+    const local = findOrder(ownerId, orderId);
+    setOrder(local);
+    fetchServerOrderById(orderId).then(server => {
+      if (!server) return;
+      const persisted = upsertLocalOrder(ownerId, server);
+      setOrder(persisted || server);
+    });
+  }, [ownerId, orderId]);
   useEffect(() => { load(); }, [load]);
 
   if (!order) {
@@ -149,12 +187,30 @@ export function ShopOrderScreen({ session, params, navigate, notify }) {
     if (!confirmed) return;
     setCancelling(true);
     try {
-      const updated = cancelOrder(ownerId, order.id, { now, reason: 'Cancelled by the salon from the portal' });
-      if (updated?.cancelledAt) {
-        setOrder(updated);
-        notify?.('success', 'Order cancelled.');
+      if (order.serverStatus) {
+        // The backend is the authority on whether the parcel has left the
+        // depot — ask it first, then mirror the outcome locally.
+        const accepted = await cancelServerOrder(order.id, 'Cancelled by the salon from the portal');
+        if (accepted) {
+          const updated = cancelOrder(ownerId, order.id, { now, reason: 'Cancelled by the salon from the portal' });
+          const final = updated?.cancelledAt
+            ? upsertLocalOrder(ownerId, { ...updated, serverStatus: 'CANCELLED' })
+            : null;
+          setOrder(final || updated);
+          notify?.('success', 'Order cancelled.');
+        } else {
+          // Status moved to "out for delivery" between load and click.
+          load();
+          notify?.('error', 'This order can no longer be cancelled — it has already gone out for delivery. Call support if something is wrong.');
+        }
       } else {
-        notify?.('error', 'This order has already been dispatched and can no longer be cancelled. Call support if something is wrong.');
+        const updated = cancelOrder(ownerId, order.id, { now, reason: 'Cancelled by the salon from the portal' });
+        if (updated?.cancelledAt) {
+          setOrder(updated);
+          notify?.('success', 'Order cancelled.');
+        } else {
+          notify?.('error', 'This order has already been dispatched and can no longer be cancelled. Call support if something is wrong.');
+        }
       }
     } catch (error) {
       notify?.('error', getErrorMessage(error, 'Could not cancel this order.'));

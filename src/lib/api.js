@@ -316,6 +316,22 @@ export const api = {
   saveSalon: payload => post('/api/users/save-salon', payload),
   removeSalon: payload => post('/api/users/remove-salon', payload),
   userProductList: payload => post('/api/products/get-all-salons-products-list', payload),
+  // Naai Shop (salons buying company stock) — server-side catalog, cart and
+  // order record. The catalog is company-wide (table `shop_products`, no
+  // salonId); the cart and orders belong to the calling account, so the same
+  // salon sees the same cart and history on the web and in the app. The
+  // response's `status` on shop orders is the SALON-facing track (the
+  // internal fulfilment track + distributor never cross to the client).
+  shopProductList: payload => post('/api/shop-products/list', payload),
+  shopCartGet: () => post('/api/shop-cart/get', {}),
+  shopCartAdd: payload => post('/api/shop-cart/add', payload),
+  shopCartSetQty: payload => post('/api/shop-cart/set-qty', payload),
+  shopCartRemove: payload => post('/api/shop-cart/remove', payload),
+  shopCartClear: () => post('/api/shop-cart/clear', {}),
+  shopOrderCreate: payload => post('/api/shop-orders/create', payload),
+  shopOrderList: payload => post('/api/shop-orders/list', payload),
+  shopOrderGetById: payload => post('/api/shop-orders/get-by-id', payload),
+  shopOrderCancel: payload => post('/api/shop-orders/cancel', payload),
   // Legacy mobile helpers choose the endpoint from the authenticated role.
   // Keep the explicit customer alias below for screens that must not depend on
   // ambient storage (this is also present in communication.js).

@@ -8,6 +8,9 @@ const salonRequestRouter = require('./salonrequest.routes');
 const ImageRoutes = require('./upload.routes');
 const advertisementRouter = require('./advertisement.routes');
 const productRouter = require('./product.routes');
+const shopProductRouter = require('./shopProduct.routes');
+const shopCartRouter = require('./shopCart.routes');
+const distributorRouter = require('./distributor.routes');
 const shopOrderRouter = require('./shopOrder.routes');
 const razorpayWebhook = require('../controller/razorpay/razorpayWebhook');
 const notificationRouter = require('./notification.routes');
@@ -29,6 +32,12 @@ routes.use('/booking', bookingRouter);
 routes.use('/salonrequest', salonRequestRouter);
 routes.use('/advertisement', advertisementRouter);
 routes.use('/products', productRouter);
+// The shop (salons buying company stock) lives on its OWN tables:
+// /shop-products (the company catalog), /shop-cart (per-salon server cart),
+// /distributors (delivery partners) and /shop-orders (two status tracks).
+routes.use('/shop-products', shopProductRouter);
+routes.use('/shop-cart', shopCartRouter);
+routes.use('/distributors', distributorRouter);
 routes.use('/shop-orders', shopOrderRouter);
 
 // Razorpay webhook — public, but signature-verified (raw body HMAC-SHA256).

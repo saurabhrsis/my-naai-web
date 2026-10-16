@@ -1,19 +1,21 @@
 // The Naai Shop commerce engine — cart, checkout math, order lifecycle and
-// the time-based status tracker, in one framework-free module.
+// the status tracker, in one framework-free module.
 //
-// Why client-side? The MyNaai backend exposes the product catalog but no
-// order endpoints yet (there is no /api/orders controller to call). The shop
-// therefore owns its orders in this module, persisted per salon account in
-// localStorage, exactly the way the mobile session store mirrors itself when
-// storage is available. Every read/write funnels through the small storage
-// functions at the bottom of this file, so wiring a real backend later means
-// replacing those functions — the screens, the cart and the tracker do not
-// change.
+// localStorage keeps the in-session copy (offline + guests); the DURABLE,
+// account-level copy lives in the backend (`shop_carts` / `shop_orders`) and
+// is kept in step by src/lib/shopServerSync.js, so the same salon sees the
+// same cart and order history on the web and in the mobile app.
 //
 // Status model: an order walks a deterministic timeline from `placedAt`
 // (placed → packed → shipped → delivered), the same trick the booking queue
-// uses for "due now / overdue" chips. `getOrderStatus(order, now)` is pure —
-// the screens pass `now` (default Date.now()) so tests are exact.
+// uses for "due now / overdue" chips. When the order carries a `serverStatus`
+// (the salon-facing track the backend sends — PENDING / CONFIRMED /
+// PROCESSING / SHIPPED / DELIVERED / CANCELLED), that value wins over the
+// clock: the tracker maps it onto the timeline (see
+// customerStatusToTrackerKey in shopServerSync) and the cancel gate mirrors
+// the server's rule (cancellable until the parcel leaves the depot).
+// `getOrderStatus(order, now)` stays pure — the screens pass `now`
+// (default Date.now()) so tests are exact.
 
 const CART_PREFIX = 'mynaaiShopCart:';
 const ORDERS_PREFIX = 'mynaaiShopOrders:';
@@ -194,6 +196,26 @@ export function findOrder(salonId, orderId) {
   return readOrders(salonId).find(order => order.id === orderId) || null;
 }
 
+// Persist a whole (already merged/sorted) history — used after the server
+// merge so offline visits and the detail screen see the server-tracked
+// status without a round-trip.
+export function saveOrders(salonId, orders) {
+  writeJson(orderKey(salonId), (orders || []).filter(order => order?.id && order?.items?.length));
+}
+
+// Merge a server-fetched order into the local history (server copy wins on
+// the same id) so an order seen through the backend is also found by the
+// purely local reads — offline visits, the cancel gate, the detail screen.
+export function upsertLocalOrder(salonId, order) {
+  if (!order?.id) return null;
+  const orders = readOrders(salonId);
+  const index = orders.findIndex(value => value.id === order.id);
+  if (index >= 0) orders[index] = { ...order };
+  else orders.unshift({ ...order });
+  writeJson(orderKey(salonId), orders);
+  return { ...order };
+}
+
 // The address snapshot is the only delivery record the shop keeps, so it is
 // validated here — the forms validate too, but a hand-edited storage entry
 // must not break the tracker.
@@ -239,34 +261,79 @@ export function placeOrder(salonId, { items, address, payment, amounts, salonNam
   return order;
 }
 
-// Status progression: the last timeline step whose time has been reached.
-// `now` is a timestamp so the tracker (and its tests) move on demand.
+// The salon-facing order track the backend sends (as `status`) mapped onto
+// this 4-step timeline. Kept here — the commerce core — so the tracker and
+// shopServerSync share one table. The mapping is monotonic with the admin's
+// internal track: PENDING (awaiting a delivery partner) → placed, CONFIRMED
+// (assigned) → packed, PROCESSING (picked up at the depot) / SHIPPED (on the
+// road) → shipped, DELIVERED → delivered.
+export const SERVER_STATUS_TO_STEP_INDEX = {
+  PENDING: 0,
+  CONFIRMED: 1,
+  PROCESSING: 2,
+  SHIPPED: 2,
+  DELIVERED: 3,
+  CANCELLED: -1,
+};
+
+export function customerStatusToTrackerKey(status) {
+  const index = SERVER_STATUS_TO_STEP_INDEX[String(status || '').toUpperCase()];
+  if (index === undefined) return null;
+  return index === -1 ? 'cancelled' : STATUS_TIMELINE[index].key;
+}
+
+// Status progression: when the order carries a `serverStatus` (it came from
+// the backend and its fulfilment is managed server-side) that value wins
+// over the clock; otherwise the order walks the deterministic timeline from
+// `placedAt`. `now` is a timestamp so the tracker (and its tests) move on
+// demand.
 export function getOrderStatus(order, now = Date.now()) {
   if (!order) return { key: 'placed', label: 'Order placed', stepIndex: 0, progress: 0, eta: null };
-  if (order.cancelledAt) {
+  if (order.cancelledAt || String(order.serverStatus || '').toUpperCase() === 'CANCELLED') {
     return { key: 'cancelled', label: 'Cancelled', stepIndex: -1, progress: 0, eta: null };
   }
+
+  const serverKey = customerStatusToTrackerKey(order.serverStatus);
   const placedAt = new Date(order.placedAt).getTime() || 0;
+  const eta = new Date(placedAt + DELIVERY_AT_MINUTES * 60000);
+
+  if (serverKey) {
+    const stepIndex = STATUS_TIMELINE.findIndex(step => step.key === serverKey);
+    return {
+      key: serverKey,
+      label: STATUS_TIMELINE[stepIndex].label,
+      stepIndex,
+      progress: Math.round((stepIndex / (STATUS_TIMELINE.length - 1)) * 100),
+      eta,
+    };
+  }
+
   const elapsedMinutes = Math.max(0, (Number(now) - placedAt) / 60000);
   let stepIndex = 0;
   STATUS_TIMELINE.forEach((step, index) => {
     if (elapsedMinutes >= step.atMinutes) stepIndex = index;
   });
-  const eta = placedAt + DELIVERY_AT_MINUTES * 60000;
   return {
     key: STATUS_TIMELINE[stepIndex].key,
     label: STATUS_TIMELINE[stepIndex].label,
     stepIndex,
     progress: Math.min(100, Math.round((elapsedMinutes / DELIVERY_AT_MINUTES) * 100)),
-    eta: new Date(eta),
+    eta,
   };
 }
 
 export const ACTIVE_ORDER_STATUSES = ['placed', 'packed', 'shipped'];
 
-// An order is cancellable while it has not left the warehouse: placed or
-// packed. Once "out for delivery" the only route left is support.
+// An order is cancellable while it has not left the warehouse. For a
+// server-tracked order the backend is the authority (cancellable until the
+// parcel leaves the depot — the customer track PENDING/CONFIRMED/PROCESSING);
+// a local-only order falls back to the clock (placed or packed).
 export function canCancelOrder(order, now = Date.now()) {
+  if (!order || order.cancelledAt) return false;
+  const serverStatus = String(order.serverStatus || '').toUpperCase();
+  if (serverStatus) {
+    return ['PENDING', 'CONFIRMED', 'PROCESSING'].includes(serverStatus);
+  }
   const status = getOrderStatus(order, now);
   return status.key === 'placed' || status.key === 'packed';
 }
@@ -276,8 +343,7 @@ export function cancelOrder(salonId, orderId, { now = Date.now(), reason = '' } 
   const order = orders.find(value => value.id === orderId);
   if (!order) return null;
   if (order.cancelledAt) return order;
-  const status = getOrderStatus(order, now);
-  if (!(status.key === 'placed' || status.key === 'packed')) return order; // not cancellable
+  if (!canCancelOrder(order, now)) return order; // not cancellable (clock or server gate)
   order.cancelledAt = new Date(now).toISOString();
   order.cancelReason = String(reason || '').trim();
   if (order.payment?.method === 'ONLINE' && order.payment?.status === 'PAID') {

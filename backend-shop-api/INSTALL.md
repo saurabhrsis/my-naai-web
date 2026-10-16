@@ -1,9 +1,9 @@
 # Naai Shop e-commerce API — install these files into the backend repo
 
-This folder contains **exactly the 27 files** that the shop-API work changed
-in `rightserveinfotechsystems/my_naai_backend` (branch
-`feature/naai-shop-ecommerce-api`, commits `487f55e`, `65f2529`, `119b492`
-on top of `0825e96`).
+This folder contains the **complete file set** the Naai Shop work changed in
+`rightserveinfotechsystems/my_naai_backend` (relative to base commit
+`0825e96`). It **replaces** the previous 27-file bundle: the shop now runs on
+its own tables and the legacy product API is back to its original shape.
 
 > **Why the files are here:** the backend repo could not be pushed from the
 > Arena sandbox (the sandbox GitHub login can only write to *this* frontend
@@ -15,19 +15,42 @@ on top of `0825e96`).
 > NOT included here — this frontend repo's security rules block them. They
 > already exist in your backend clone, so nothing is missing.
 
-The files keep their backend-repo paths (e.g. `src/routes/shopOrder.routes.js`
-goes to `my_naai_backend/src/routes/shopOrder.routes.js`).
+## What this bundle does (request 24)
+
+- **Two separate product tables.** The salons' customer-facing products
+  (`products`) are untouched again — the 7 legacy product files in this
+  folder are byte-identical to base `0825e96` and exist only to overwrite
+  the copies from the previous bundle, if you applied it. The shop catalog
+  is the new company-owned `shop_products` table (no `salonId`).
+- **Server-side cart per buying salon** (`shop_carts`) — the same account
+  sees the same cart on the web and the mobile app.
+- **Distributors** (`distributors`) — delivery partners the company admin
+  assigns orders to (`/api/shop-orders/admin-assign-distributor`).
+- **Two status tracks on `shop_orders`** — an INTERNAL track for
+  admin/distributor (`PENDING_ASSIGNMENT → ASSIGNED → PICKED → SHIPPED →
+  DELIVERED`) and a SALON track (`customerStatus`: `PENDING → CONFIRMED →
+  PROCESSING → SHIPPED → DELIVERED`); salon responses only ever carry the
+  salon track, never the distributor.
+- **Razorpay webhook** confirms the payment on the salon track only.
+- **Deletes** the four admin product controllers the previous bundle added
+  (they managed the merged table that no longer exists).
 
 ## Method A — one command in your terminal (fastest)
 
-In a folder next to your `my_naai_backend` clone:
+In your `my_naai_backend` clone:
 
 ```bash
 cd my_naai_backend
 git fetch https://github.com/saurabhrsis/my-naai-web.git naai-backend/shop-ecommerce-api-files
 git checkout FETCH_HEAD -- .
+# The new design removes the admin product controllers from the previous bundle:
+git rm -f --ignore-unmatch \
+  src/controller/product/adminCreateProduct.js \
+  src/controller/product/adminDeleteProduct.js \
+  src/controller/product/adminListProducts.js \
+  src/controller/product/adminUpdateProduct.js
 git add -A
-git commit -m "Naai Shop e-commerce API: shop orders, dual-auth marketplace catalog, admin product management"
+git commit -m "Naai Shop e-commerce API: separate shop_products table, server cart, distributors, two status tracks"
 git push origin HEAD:feature/naai-shop-ecommerce-api
 ```
 
@@ -38,24 +61,22 @@ backend repo and you can open the PR from there.
 
 1. In this repo on GitHub, open branch `arena/b1135ded-my-naai-web` →
    **Code → Download ZIP** (or use the zip of branch
-   `naai-backend/shop-ecommerce-api-files`, which contains ONLY these 27
-   files).
-2. Unzip it.
-3. Copy everything inside `backend-shop-api/` (except this `INSTALL.md` and
-   `copy-to-backend.sh`) into your `my_naai_backend` folder, keeping the
-   same folder structure — i.e. `src/...` on top of `src/...`.
-   (Or run `sh copy-to-backend.sh /path/to/my_naai_backend` from this
-   folder — it does the copy for you.)
-4. In your backend repo: stage the changes, commit with the message above,
-   push branch `feature/naai-shop-ecommerce-api`, then open the PR.
+   `naai-backend/shop-ecommerce-api-files`, which contains only these files).
+2. Copy the `backend-shop-api/` folder's contents (keeping the
+   `src/...` structure, plus `index.js` and `README.md`) into your
+   `my_naai_backend` clone, overwriting the old files.
+3. Delete the four admin product controllers listed above (if present).
+4. In your backend clone: `git add -A`, commit, and push to
+   `feature/naai-shop-ecommerce-api`.
 
-## What the API adds (quick reference)
+## Environment notes
 
-- **Shop orders**: create / list / get / cancel customer orders + admin
-  list / get / update-status (`/api/shop-order/*`)
-- **Razorpay webhook** for order payment capture
-- **Dual-auth marketplace catalog**: public users *and* salon owners can
-  list products (`authUserOrSalon` middleware)
-- **Admin product management**: create / list / update / delete products
-- **Compatibility**: existing salon-added products keep working; `gender`
-  is nullable (no UNISEX default)
+- The new tables (`shop_products`, `shop_carts`, `distributors`,
+  `shop_orders` incl. the new `customer_status` / `distributor_id` columns)
+  are created by the existing `GET /test-db` table sync, same as every other
+  model — nothing to run by hand.
+- `RAZORPAY_WEBHOOK_SECRET` (webhook signature) must match the secret
+  configured in the Razorpay dashboard → Webhooks.
+- Optional env: `SHOP_DELIVERY_FEE` (default 49), `SHOP_FREE_DELIVERY_ABOVE`
+  (default 499), `PAGE_LIMIT` (default 20) — same thresholds the shop UI
+  already uses.

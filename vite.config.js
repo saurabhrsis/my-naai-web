@@ -261,7 +261,12 @@ function devSalonFixturePlugin() {
         const path = String(req.url || '').split('?')[0];
         const isList = path === '/api/salons/salon-list' || path === '/api/salons/salon-list-public';
         const isDetail = path === '/api/salons/get-salon-by-id';
-        const isShopProducts = path === '/api/products/get-all-salons-products-list';
+        // The shop browses the company catalog (shop_products); the legacy
+        // endpoint still answers the app's customer marketplace. The server
+        // cart/order endpoints are intentionally NOT mocked: the sync layer
+        // degrades to the local copy (exactly as it would offline).
+        const isShopProducts = path === '/api/shop-products/list'
+          || path === '/api/products/get-all-salons-products-list';
         if (isShopProducts) return sendJson(res, { status: 'SUCCESS', data: { products: SHOP_PRODUCT_FIXTURES } });
         const mock = DEV_MOCK_ENDPOINTS[path];
         if (mock) {

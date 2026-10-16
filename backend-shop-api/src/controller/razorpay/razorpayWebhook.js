@@ -35,8 +35,10 @@ const applyPaymentOutcome = async (paymentId, outcome) => {
     return null;
   }
   order.payment = { ...order.payment, status: outcome };
-  if (outcome === 'PAID' && order.status === 'PENDING') {
-    order.status = 'CONFIRMED';
+  // A captured payment confirms the order on the SALON track only; the
+  // INTERNAL track still waits for a delivery partner (PENDING_ASSIGNMENT).
+  if (outcome === 'PAID' && order.customerStatus === 'PENDING') {
+    order.customerStatus = 'CONFIRMED';
   }
   await order.save();
   return order;

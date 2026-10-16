@@ -8,11 +8,13 @@ import { ShopCartScreen, ShopCheckoutScreen } from './ShopCartCheckout';
 import { ShopOrderScreen, ShopOrdersScreen } from './ShopOrders';
 import { addToCart, clearShopStorage, findOrder, placeOrder, readCart, readOrders } from '../lib/shopOrders';
 
-const { userProductList } = vi.hoisted(() => ({ userProductList: vi.fn() }));
+const { shopProductList } = vi.hoisted(() => ({ shopProductList: vi.fn() }));
 
 vi.mock('../lib/api', async () => {
   const actual = await vi.importActual('../lib/api');
-  return { ...actual, api: { ...actual.api, userProductList } };
+  // The shop now browses the company catalog (shop_products) — the mock
+  // answers the new endpoint; the old marketplace one is left as-is.
+  return { ...actual, api: { ...actual.api, shopProductList } };
 });
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -70,8 +72,8 @@ function buttonsContaining(text, root = document.body) {
 
 beforeEach(() => {
   localStorage.clear();
-  userProductList.mockReset();
-  userProductList.mockResolvedValue({ status: 'SUCCESS', data: { products: PRODUCT_FIXTURES } });
+  shopProductList.mockReset();
+  shopProductList.mockResolvedValue({ status: 'SUCCESS', data: { products: PRODUCT_FIXTURES } });
   document.body.innerHTML = '';
 });
 

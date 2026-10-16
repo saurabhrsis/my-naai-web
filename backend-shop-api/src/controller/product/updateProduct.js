@@ -11,10 +11,10 @@ const updateProduct = async (request, response) => {
             });
         }
 
-        const { productId, productImage, productName, price, rating, isAvailable, mrp, category, gender, description } = request.body || {};
+        const { productId, productImage, productName, price, rating, isAvailable } = request.body || {};
 
         const validationResult = updateProductSchema.validate(
-            { productId, productImage, productName, price, rating, isAvailable, mrp, category, gender, description },
+            { productId, productImage, productName, price, rating, isAvailable },
             { abortEarly: true }
         );
 
@@ -31,13 +31,6 @@ const updateProduct = async (request, response) => {
             price,
             rating
         };
-
-        // Shop fields — only touch what the client actually sent, so a
-        // partial update (e.g. price only) never clears them.
-        if (mrp !== undefined) dataToUpdate.mrp = mrp ?? null;
-        if (category !== undefined) dataToUpdate.category = category || '';
-        if (gender !== undefined) dataToUpdate.gender = gender || null;
-        if (description !== undefined) dataToUpdate.description = description || null;
 
         if (typeof isAvailable === 'boolean') {
             dataToUpdate.isAvailable = isAvailable;
@@ -60,14 +53,10 @@ const updateProduct = async (request, response) => {
         return response.status(200).json({
             status: 'SUCCESS',
             message: 'Product updated successfully',
-                data: {
+            data: {
                 productId: result.productId,
                 productName: result.productName,
                 price: result.price,
-                mrp: result.mrp,
-                category: result.category,
-                gender: result.gender,
-                description: result.description,
                 rating: result.rating,
                 isAvailable: result.isAvailable,
                 stockStatus: result.stockStatus,

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Banknote,
   CheckCircle2,
@@ -28,9 +28,8 @@ import {
   getOrderStatus,
   placeOrder,
   readCart,
-  removeCartLine,
-  setCartQty,
 } from '../lib/shopOrders';
+import { clearServerCart, registerServerOrder } from '../lib/shopServerSync';
 import {
   Button,
   EmptyState,
@@ -41,7 +40,7 @@ import {
   formatCurrency,
 } from './Shared';
 import { useConfirm } from './ConfirmDialog';
-import { ShopQuantityControl, shopOwnerId, shopSalonName } from './ShopScreen';
+import { ShopQuantityControl, shopOwnerId, shopSalonName, useSyncedCart } from './ShopScreen';
 
 const PRODUCT_PLACEHOLDER = '/assets/brand/product-placeholder.svg';
 
@@ -72,16 +71,13 @@ export function ShopBillCard({ lines, title = 'Bill details' }) {
  * ------------------------------------------------------------------ */
 export function ShopCartScreen({ session, navigate, notify }) {
   const ownerId = shopOwnerId(session);
-  const [lines, setLines] = useState(() => readCart(ownerId));
-  useEffect(() => { setLines(readCart(ownerId)); }, [ownerId]);
+  const { cart: lines, setQty, removeLine } = useSyncedCart(ownerId);
 
   const totals = cartTotals(lines);
   const gap = freeDeliveryGap(lines);
   const progress = Math.min(100, Math.round((totals.itemTotal / FREE_DELIVERY_ABOVE) * 100));
 
   const confirm = useConfirm();
-  const setQty = (line, next) => setLines(setCartQty(ownerId, line.productId, next));
-  const removeLine = line => setLines(removeCartLine(ownerId, line.productId));
   const clearAll = async () => {
     const ok = await confirm({
       title: 'Clear your cart?',
@@ -90,7 +86,9 @@ export function ShopCartScreen({ session, navigate, notify }) {
       tone: 'danger',
     });
     if (!ok) return;
-    setLines(clearCart(ownerId));
+    // Clear every line locally (instant) and on the server (durable).
+    lines.forEach(line => removeLine(line.productId));
+    clearServerCart();
     notify?.('info', 'Cart cleared.');
   };
 
@@ -145,7 +143,7 @@ export function ShopCartScreen({ session, navigate, notify }) {
             </div>
             <div className="shop-cart-side">
               <strong className="shop-cart-line-total">{formatCurrency(line.price * line.qty)}</strong>
-              <ShopQuantityControl qty={line.qty} onAdd={() => setQty(line, line.qty + 1)} onSet={next => setQty(line, next)} small />
+              <ShopQuantityControl qty={line.qty} onAdd={() => setQty(line.productId, line.qty + 1)} onSet={next => setQty(line.productId, next)} small />
             </div>
           </article>
         ))}
@@ -208,6 +206,9 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
   };
 
   const finalizeOrder = (paymentInfo) => {
+    // The local record is written first (same id the server will keep), so
+    // the success view and "My orders" render instantly; the server copy
+    // then makes the order part of the account's history on every device.
     const order = placeOrder(ownerId, {
       items: lines,
       address,
@@ -219,6 +220,11 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     setPlaced(order);
     setPayState('idle');
     notify?.('success', `Order ${order.id} placed.`);
+    registerServerOrder(order).then(registered => {
+      // The placed cart is done for — clear it on the server too so another
+      // device cannot buy it again. (Local copy was already cleared.)
+      if (registered) clearServerCart();
+    });
     return order;
   };
 

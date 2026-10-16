@@ -1,6 +1,7 @@
 #!/bin/sh
 # Copies the backend shop-API files from this folder into your
-# my_naai_backend clone, keeping the backend-repo paths.
+# my_naai_backend clone, keeping the backend-repo paths, and removes the
+# admin product controllers the previous bundle had added.
 #
 # Usage:  sh copy-to-backend.sh /path/to/my_naai_backend
 set -e
@@ -29,10 +30,20 @@ for entry in *; do
   COPIED=$((COPIED + 1))
 done
 
+# The new design (separate shop_products table) removes the admin product
+# controllers from the previous bundle. --ignore-unmatch keeps this a no-op
+# when they were never applied.
+cd "$BACKEND_DIR"
+git rm -f --ignore-unmatch \
+  src/controller/product/adminCreateProduct.js \
+  src/controller/product/adminDeleteProduct.js \
+  src/controller/product/adminListProducts.js \
+  src/controller/product/adminUpdateProduct.js || true
+
 echo "Copied $COPIED top-level items into: $BACKEND_DIR"
 echo ""
 echo "Next, in your backend repo:"
 echo "  cd $BACKEND_DIR"
 echo "  git add -A"
-echo "  git commit -m \"Naai Shop e-commerce API: shop orders, dual-auth marketplace catalog, admin product management\""
+echo "  git commit -m \"Naai Shop e-commerce API: separate shop_products table, server cart, distributors, two status tracks\""
 echo "  git push origin HEAD:feature/naai-shop-ecommerce-api"
