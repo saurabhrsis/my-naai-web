@@ -299,12 +299,11 @@ function AdCarousel({ ads }) {
         <div className="ad-track" style={{ transform: `translateX(-${active * 100}%)` }}>
           {slides.map((src, index) => (
             <div className="ad-slide" key={`${src}-${index}`}>
-              {/* `contain` always shows the FULL artwork. The wrap's width is
-                  capped at (device height budget × the artwork's measured
-                  ratio), so the frame matches the art's ratio and fills it
-                  exactly — no crop, no dark letterbox bands. Only a
-                  mixed-shape slide set leaves a sliver, which the blurred
-                  backdrop tones in. */}
+              {/* `contain` always shows the FULL artwork. The strip is
+                  full-width; on wide screens the device height budget caps
+                  it, the art stays whole and centered, and the blurred copy
+                  below extends it into the leftover sides — no crop, no
+                  black. */}
               <span className="ad-backdrop" style={{ backgroundImage: `url("${src}")` }} aria-hidden="true" />
               <ImageWithFallback src={src} fallback="" alt="" className="ad-image" loading="eager" ref={slideRef(`${src}-${index}`)} onLoad={readRatio(`${src}-${index}`)} />
             </div>
@@ -750,11 +749,10 @@ export function HomeScreen({ session, navigate, notify }) {
 
   return (
     <div className="screen home-screen">
-      {/* Section 1 — the discovery band. The ad banner leads the page on
-          phones/tablets (above the search + male/female filter row); at the
-          laptop breakpoints the CSS grid moves it back BESIDE the search row
-          (explicit grid-column placement — the DOM order serves the stacked
-          layout). */}
+      {/* Section 1 — the discovery band. The same stacked order at every
+          width: greeting, then the FULL-WIDTH ad banner (its height budget
+          per device lives in the CSS), then the search + male/female filter
+          row. */}
       <section className={cx('home-band', 'home-hero-band', ads.length > 0 && 'has-ads')} aria-label="Find a salon">
         <div className="home-topline"><div><span className="eyebrow">{isGuest ? 'SALON BOOKINGS, SIMPLIFIED' : 'NEARBY GROOMING'}</span><h1>{isGuest ? 'Find your salon' : `Hi ${firstName(userName)}`}</h1><p className="muted-line"><LocateFixed size={14} /> {location ? 'Using your current location' : isGuest ? 'Browse trusted salons around you — login only when you book' : 'Discover trusted specialists around you'}</p></div></div>
         <AdCarousel ads={ads} />

@@ -332,10 +332,10 @@ img { display: block; max-width: 100%; }
 .home-screen { position: relative; }
 .home-band { margin-bottom: 16px; padding: 16px 14px; border: 1px solid var(--line); border-radius: 22px; }
 .home-hero-band { background: radial-gradient(130% 150% at 100% 0%, rgba(232, 185, 126, .09), transparent 55%), linear-gradient(180deg, #151b1a, #101514); }
-/* Stacked (phone/tablet) order is greeting → banner → search row: the banner
-   is the page's visual anchor and the search row is the band's last element.
-   The split laptop grid (>=1024/>=1200) overrides the margins below. */
-.home-hero-band .ad-carousel-wrap { margin: 2px auto 16px; }
+/* The hero is STACKED at every width — greeting → banner → search row — so
+   the DOM order below is the visual order on phones, tablets AND laptops.
+   The banner is the band's middle element, the search row its last. */
+.home-hero-band .ad-carousel-wrap { margin: 2px 0 16px; }
 .home-hero-band.has-ads .home-search-row { margin-bottom: 0; }
 .home-salons-band { background: #0f1313; }
 .home-salons-band .inline-notice { margin-top: -3px; }
@@ -367,31 +367,28 @@ img { display: block; max-width: 100%; }
 .search-field input { min-width: 0; flex: 1; height: 44px; border: 0; outline: 0; color: var(--white); background: transparent; font-size: 13px; }
 .search-field input::placeholder { color: #707a79; }
 .search-field button { display: flex; padding: 2px; color: var(--muted); background: transparent; }
-/* The frame takes the artwork's OWN shape: `--ad-ratio` is measured from the
-   image once it loads (clamped to a sane banner range). So the height budget
-   is enforced by capping the WIDTH at (budget × ratio) — never by capping the
-   height, which is what used to warp the frame wider than the art and force
-   letterbox bands or crops. At `contain` the artwork then fills the frame
-   100%: full image, zero crop, no dark space, on every device. The per-device
-   height budget is set in the media queries below. */
+/* The banner is a FULL-WIDTH strip on every device: on phones the strip is
+   exactly the artwork's shape; on tablet/laptop the device's height budget
+   caps the strip and `contain` keeps the WHOLE artwork visible, centered.
+   When the cap leaves room on the sides, the blurred copy of the same
+   artwork (`.ad-backdrop`) extends it there — the strip reads as one piece,
+   never a small image floating on black. Per-device height budgets in the
+   media queries below. */
 .ad-carousel-wrap {
   --ad-max-height: 280px;
-  width: min(100%, calc(var(--ad-max-height) * var(--ad-ratio, 1.5)));
-  margin: 0 auto 22px;
+  width: 100%;
+  margin: 0 0 22px;
 }
 .ad-carousel { position: relative; overflow: hidden; border-radius: 16px; background: #1e2625; touch-action: pan-y; cursor: grab; }
 .ad-carousel:active { cursor: grabbing; }
 .ad-track { display: flex; transition: transform .35s ease; }
-/* Slide: frame = the artwork's own ratio (min across the slide set, so the
-   page never jumps between slides). No max-height here — the wrap's width cap
-   (above) already keeps the height inside the device budget while preserving
-   the ratio, and that is what keeps the image whole instead of cropped. */
-.ad-slide { position: relative; min-width: 100%; height: auto; aspect-ratio: var(--ad-ratio, 1.5); min-height: 120px; overflow: hidden; background: #1e2625; }
+/* Slide: the strip takes the artwork's own ratio (measured, clamped; min
+   across the slide set so the page never jumps between slides) up to the
+   device's height budget. When the budget caps a wide strip, `contain` shows
+   the complete artwork centered and the blurred backdrop fills the leftover
+   sides — full image, no crop, no black. */
+.ad-slide { position: relative; min-width: 100%; height: auto; aspect-ratio: var(--ad-ratio, 1.5); min-height: 120px; max-height: var(--ad-max-height, 280px); overflow: hidden; background: #1e2625; }
 .ad-backdrop { position: absolute; inset: -8%; background-position: center; background-size: cover; filter: blur(26px) saturate(1.15); opacity: .95; }
-/* `contain`: the FULL artwork is always visible. Because the frame matches
-   the art's ratio, it fills the frame exactly; only a mixed-shape slide set
-   (one ad shaped differently from the others) leaves a sliver, and the
-   blurred backdrop tones it in instead of showing black. */
 .ad-image { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: contain; }
 .carousel-dots { display: flex; justify-content: center; gap: 6px; margin-top: 10px; }
 .carousel-dot { width: 7px; height: 7px; padding: 0; border-radius: 7px; background: #555; }
@@ -1676,42 +1673,20 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
      rail so a 1366px laptop does not read like a stretched phone. */
   .section-heading h2 { font-size: 24px; }
   .home-band { padding: 24px 26px; margin-bottom: 18px; }
+  /* Laptop hero = the SAME stacked order as phones, at laptop scale:
+     greeting -> FULL-WIDTH banner -> search + gender row. (The old split
+     layout — banner in a right column beside the filters — left the banner
+     small and the left side empty, so it was retired.) The height budget
+     keeps the strip from swallowing the page; the whole artwork stays
+     visible and its blurred copy fills any leftover sides. */
   .ad-carousel-wrap { --ad-max-height: min(420px, 46vh); }
-  /* Laptop layout for the hero band: the greeting keeps the full width and the
-     promo moves BESIDE the search row, so the screen is used horizontally
-     instead of stacking a full-width strip under the filters — which is what
-     pushed the salon list so far down the page (and cropped every ad).
-     The guest shell has no sidebar, so it can split from 1024px; the signed-in
-     shell waits for 1200px in its own block below, where the sidebar has left
-     enough room. Either way the width on offer decides, not the window. */
-  .guest-shell .home-hero-band.has-ads { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, clamp(340px, 38%, 520px)); column-gap: 24px; align-items: start; }
-  /* Explicit ROW + column for all three items. The DOM order serves the
-     stacked phone layout (banner above the search), and in that order the
-     grid's auto-placement cursor — advanced past row 2 by the full-width
-     greeting — drops the search into a THIRD row: empty left column beside
-     the banner, search stranded at the bottom (the "blank space before the
-     image" the laptop screenshot showed). Pinning the rows makes the hero
-     exactly two rows: greeting, then search + banner side by side. */
-  .guest-shell .home-hero-band.has-ads .home-topline { grid-row: 1; grid-column: 1 / -1; margin-bottom: 16px; }
-  .guest-shell .home-hero-band.has-ads .ad-carousel-wrap { grid-row: 2; grid-column: 2; margin-bottom: 0; }
-  /* The search row fills its column (its own 760px cap would leave a gap
-     before the promo) and is centered vertically in the row: the banner is
-     ~300-420px tall, and a top-anchored 48px filter read as a layout bug. */
-  .guest-shell .home-hero-band.has-ads .home-search-row { grid-row: 2; grid-column: 1; max-width: 100%; margin-bottom: 0; align-self: center; }
   .home-topline h1 { font-size: 40px; }
   .home-topline { margin-bottom: 18px; }
 }
 
 @media (min-width: 1200px) {
-  .app-shell .home-hero-band.has-ads { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, clamp(340px, 38%, 520px)); column-gap: 24px; align-items: start; }
-  /* Same explicit rows as the guest block — with the DOM order serving the
-     stacked layout, auto-placement alone cannot be trusted here. */
-  .app-shell .home-hero-band.has-ads .home-topline { grid-row: 1; grid-column: 1 / -1; margin-bottom: 16px; }
-  .app-shell .home-hero-band.has-ads .ad-carousel-wrap { grid-row: 2; grid-column: 2; margin-bottom: 0; }
-  .app-shell .home-hero-band.has-ads .home-search-row { grid-row: 2; grid-column: 1; max-width: 100%; margin-bottom: 0; align-self: center; }
-  /* A wider laptop gets a slightly taller promo, still measured from the
-     artwork so nothing is cropped. */
-  .ad-carousel-wrap { --ad-max-height: min(400px, 44vh); }
+  /* The signed-in shell uses the same stacked full-width hero as the guest
+     shell (the >=1024 block above) — no separate split layout. */
   .sidebar { width: 274px; }
   .workspace { width: calc(100% - 274px); }
   .workspace-content { padding-right: 6%; padding-left: 6%; }
