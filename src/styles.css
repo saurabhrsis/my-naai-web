@@ -1685,26 +1685,30 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
      shell waits for 1200px in its own block below, where the sidebar has left
      enough room. Either way the width on offer decides, not the window. */
   .guest-shell .home-hero-band.has-ads { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, clamp(340px, 38%, 520px)); column-gap: 24px; align-items: start; }
-  .guest-shell .home-hero-band.has-ads .home-topline { grid-column: 1 / -1; margin-bottom: 16px; }
-  /* The search row fills its column (its own 760px cap would leave a gap before
-     the promo), so the filter and the ad read as one row. Centered vertically:
-     the promo is ~400px tall, and a top-anchored 48px filter left a big empty
-     box under it that read as a layout bug on laptops. */
-  /* Explicit columns: the DOM order serves the stacked phone layout
-     (banner above the search row), so the split grid pins each item itself. */
-  .guest-shell .home-hero-band.has-ads .home-search-row { grid-column: 1; max-width: 100%; margin-bottom: 0; align-self: center; }
-  .guest-shell .home-hero-band.has-ads .ad-carousel-wrap { grid-column: 2; margin-bottom: 0; }
+  /* Explicit ROW + column for all three items. The DOM order serves the
+     stacked phone layout (banner above the search), and in that order the
+     grid's auto-placement cursor — advanced past row 2 by the full-width
+     greeting — drops the search into a THIRD row: empty left column beside
+     the banner, search stranded at the bottom (the "blank space before the
+     image" the laptop screenshot showed). Pinning the rows makes the hero
+     exactly two rows: greeting, then search + banner side by side. */
+  .guest-shell .home-hero-band.has-ads .home-topline { grid-row: 1; grid-column: 1 / -1; margin-bottom: 16px; }
+  .guest-shell .home-hero-band.has-ads .ad-carousel-wrap { grid-row: 2; grid-column: 2; margin-bottom: 0; }
+  /* The search row fills its column (its own 760px cap would leave a gap
+     before the promo) and is centered vertically in the row: the banner is
+     ~300-420px tall, and a top-anchored 48px filter read as a layout bug. */
+  .guest-shell .home-hero-band.has-ads .home-search-row { grid-row: 2; grid-column: 1; max-width: 100%; margin-bottom: 0; align-self: center; }
   .home-topline h1 { font-size: 40px; }
   .home-topline { margin-bottom: 18px; }
 }
 
 @media (min-width: 1200px) {
   .app-shell .home-hero-band.has-ads { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, clamp(340px, 38%, 520px)); column-gap: 24px; align-items: start; }
-  .app-shell .home-hero-band.has-ads .home-topline { grid-column: 1 / -1; margin-bottom: 16px; }
-  /* Explicit columns again (see the guest block) — the DOM order belongs to
-     the stacked layout. */
-  .app-shell .home-hero-band.has-ads .home-search-row { grid-column: 1; max-width: 100%; margin-bottom: 0; align-self: center; }
-  .app-shell .home-hero-band.has-ads .ad-carousel-wrap { grid-column: 2; margin-bottom: 0; }
+  /* Same explicit rows as the guest block — with the DOM order serving the
+     stacked layout, auto-placement alone cannot be trusted here. */
+  .app-shell .home-hero-band.has-ads .home-topline { grid-row: 1; grid-column: 1 / -1; margin-bottom: 16px; }
+  .app-shell .home-hero-band.has-ads .ad-carousel-wrap { grid-row: 2; grid-column: 2; margin-bottom: 0; }
+  .app-shell .home-hero-band.has-ads .home-search-row { grid-row: 2; grid-column: 1; max-width: 100%; margin-bottom: 0; align-self: center; }
   /* A wider laptop gets a slightly taller promo, still measured from the
      artwork so nothing is cropped. */
   .ad-carousel-wrap { --ad-max-height: min(400px, 44vh); }
