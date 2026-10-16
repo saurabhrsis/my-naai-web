@@ -1061,6 +1061,22 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .site-footer-col a { font-size: 11px; }
   .site-footer-bottom { flex-wrap: wrap; }
 }
+/* Phone home: keep it lean. The alerts/location prompts shrink to a slim
+   icon + button row (the long copy only appears inside the sheet when
+   something actually fails), the trust strip goes away, and the review
+   wall folds behind one "Read what people say" button until tapped. */
+@media (max-width: 559px) {
+  .inline-notice.alerts-invite-notice,
+  .inline-notice.location-fallback-notice { gap: 8px; padding: 7px 10px; margin-bottom: 8px; }
+  .inline-notice.alerts-invite-notice .location-fallback-copy,
+  .inline-notice.location-fallback-notice .location-fallback-copy { display: none; }
+  .inline-notice.alerts-invite-notice button,
+  .inline-notice.location-fallback-notice button { font-size: 12px; }
+  .inline-notice.alerts-invite-notice .notice-dismiss { color: var(--muted-light); font-weight: 600; }
+  .home-trust-row { display: none; }
+  .testimonial-toggle { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--muted-light); font-size: 12.5px; font-weight: 700; }
+  .testimonial-toggle:hover { color: var(--gold); border-color: rgba(232, 185, 126, .4); }
+}
 @media (min-width: 900px) {
   .site-footer-grid { grid-template-columns: 1.6fr 1fr 1fr 1fr; }
   .site-info-hero { padding: 34px 30px; }

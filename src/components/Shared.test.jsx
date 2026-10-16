@@ -2,7 +2,7 @@ import React from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, expect, it } from 'vitest';
-import { ImageWithFallback, formatDistanceInKm, getDistanceInKm, normalizeDistanceInKm } from './Shared';
+import { ImageWithFallback, formatDistanceInKm, getDistanceInKm, getSalonStatus, normalizeDistanceInKm } from './Shared';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -53,5 +53,54 @@ describe('ImageWithFallback', () => {
   it('loads images lazily but lets a caller opt out', () => {
     expect(renderImage({ src: 'a.jpg' }).getAttribute('loading')).toBe('lazy');
     expect(renderImage({ src: 'a.jpg', loading: 'eager' }).getAttribute('loading')).toBe('eager');
+  });
+});
+
+describe('getSalonStatus (Indian-time open/closed)', () => {
+  const hours = (openingTime, closingTime, holidayDays = []) => [{ openingTime, closingTime, holidayDays }];
+  // 2026-10-16 is a Friday. These UTC instants are picked for their IST wall-clock.
+  const ist = {
+    justBeforeOpen: new Date('2026-10-16T04:29:59Z'), // 09:59 IST Fri
+    atOpen: new Date('2026-10-16T04:30:00Z'),         // 10:00 IST Fri
+    midDay: new Date('2026-10-16T09:00:00Z'),         // 14:30 IST Fri
+    atClose: new Date('2026-10-16T15:30:00Z'),        // 21:00 IST Fri
+    afterMidnight: new Date('2026-10-16T19:00:00Z'),  // 00:30 IST Sat
+  };
+
+  it('follows the Indian clock, not the device clock, for in-hours times', () => {
+    const status = getSalonStatus(hours('10:00:00', '21:00:00'), undefined, ist.midDay);
+    expect(status.isOpen).toBe(true);
+    expect(status.text).toBe('OPEN NOW');
+  });
+
+  it('is closed just before opening and exactly at closing', () => {
+    expect(getSalonStatus(hours('10:00:00', '21:00:00'), undefined, ist.justBeforeOpen).isOpen).toBe(false);
+    expect(getSalonStatus(hours('10:00:00', '21:00:00'), undefined, ist.atOpen).isOpen).toBe(true);
+    expect(getSalonStatus(hours('10:00:00', '21:00:00'), undefined, ist.atClose).isOpen).toBe(false);
+  });
+
+  it('ignores the stale API flag for salons WITH timings (the false-by-default is_open used to close every card)', () => {
+    expect(getSalonStatus(hours('10:00:00', '21:00:00'), false, ist.midDay).isOpen).toBe(true);
+    expect(getSalonStatus(hours('10:00:00', '21:00:00'), true, ist.atClose).isOpen).toBe(false);
+  });
+
+  it('falls back to the manual flag only when no timings are published', () => {
+    expect(getSalonStatus([], true).isOpen).toBe(true);
+    expect(getSalonStatus([], false).isOpen).toBe(false);
+    expect(getSalonStatus([]).isOpen).toBe(false);
+    // Incomplete timings (opening without a closing time) count as unpublished:
+    expect(getSalonStatus([{ openingTime: '10:00:00' }], true).isOpen).toBe(true);
+    expect(getSalonStatus([{ openingTime: '10:00:00' }], false).isOpen).toBe(false);
+  });
+
+  it('respects holiday days on the Indian weekday', () => {
+    const status = getSalonStatus(hours('10:00:00', '21:00:00', ['Friday']), undefined, ist.midDay);
+    expect(status.isOpen).toBe(false);
+    expect(status.text).toBe('CLOSED · HOLIDAY');
+  });
+
+  it('handles schedules that cross midnight', () => {
+    expect(getSalonStatus(hours('20:00:00', '02:00:00'), undefined, ist.afterMidnight).isOpen).toBe(true);
+    expect(getSalonStatus(hours('20:00:00', '02:00:00'), undefined, new Date('2026-10-16T20:30:00Z')).isOpen).toBe(false); // 02:00 IST
   });
 });

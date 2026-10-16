@@ -1667,6 +1667,19 @@ export function TestimonialSection() {
   const [index, setIndex] = useState(0);
   const count = TESTIMONIALS.length;
 
+  // Phones get a leaner home: the review wall folds behind one button
+  // ("Read what customers & salon owners say") until it is tapped open.
+  // Desktop keeps the full section and never sees the toggle.
+  const [isCompact, setIsCompact] = useState(() => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 559px)').matches);
+  const [compactOpen, setCompactOpen] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const mq = window.matchMedia('(max-width: 559px)');
+    const onChange = event => setIsCompact(event.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
   // One card plus one gap. Measured, not assumed: the card width changes the
   // moment the one-per-screen phone rule or the three-up desktop rule applies.
   const stepSize = useCallback(() => {
@@ -1738,8 +1751,16 @@ export function TestimonialSection() {
   };
   const stopAuto = () => { userDroveRef.current = true; };
   if (isApp) return null;
+  const testimonialsShown = !isCompact || compactOpen;
   return (
-    <section className="testimonial-section" aria-label="What people say about My Naai" onPointerDown={stopAuto}>
+    <section className={cx('testimonial-section', isCompact && !compactOpen && 'testimonial-collapsed')} aria-label="What people say about My Naai" onPointerDown={stopAuto}>
+      {isCompact && (
+        <button type="button" className="testimonial-toggle" onClick={() => setCompactOpen(open => !open)} aria-expanded={compactOpen}>
+          <Quote size={15} aria-hidden="true" /> {compactOpen ? 'Hide reviews' : 'Read what customers & salon owners say'}
+        </button>
+      )}
+      {testimonialsShown && (
+      <>
       <div className="section-heading">
         <div><span className="eyebrow">REAL STORIES</span><h2>What customers & salon owners say</h2></div>
         <div className="testimonial-nav">
@@ -1770,6 +1791,8 @@ export function TestimonialSection() {
             <button key={`testimonial-dot-${item.name}`} type="button" aria-label={`Show review ${dotIndex + 1} of ${count}`} className={cx('carousel-dot', dotIndex === index && 'active')} onClick={() => { stopAuto(); goTo(dotIndex); }} />
           ))}
         </div>
+      )}
+      </>
       )}
     </section>
   );
