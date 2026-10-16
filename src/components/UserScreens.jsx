@@ -299,10 +299,12 @@ function AdCarousel({ ads }) {
         <div className="ad-track" style={{ transform: `translateX(-${active * 100}%)` }}>
           {slides.map((src, index) => (
             <div className="ad-slide" key={`${src}-${index}`}>
-              {/* The frame is a wide band on a laptop and a phone-shaped box on
-                  mobile, so `cover` used to crop a third of the artwork away on
-                  desktop. The blurred backdrop (the same image, scaled up)
-                  fills the frame while the artwork itself is shown whole. */}
+              {/* `cover` fills the frame completely: since the frame is measured
+                  from the artwork itself, matching slides are shown uncropped,
+                  and only an unusual mixed-shape set or the height cap trims a
+                  sliver — never the black letterbox bands the old `contain`
+                  left above and below the image. The blurred backdrop shows
+                  only while the image loads. */}
               <span className="ad-backdrop" style={{ backgroundImage: `url("${src}")` }} aria-hidden="true" />
               <ImageWithFallback src={src} fallback="" alt="" className="ad-image" loading="eager" ref={slideRef(`${src}-${index}`)} onLoad={readRatio(`${src}-${index}`)} />
             </div>
