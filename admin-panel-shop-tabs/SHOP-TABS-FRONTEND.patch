@@ -1,0 +1,2154 @@
+From fbeeb5f66a7bac8338564410d545ec433c4ce78f Mon Sep 17 00:00:00 2001
+From: Arena Agent <agent@arena.ai>
+Date: Sat, 17 Oct 2026 08:56:12 +0000
+Subject: [PATCH] feat: shop products, distributors, shop orders tabs +
+ distributor portal
+
+---
+ src/App.jsx                             |  50 ++++
+ src/components/DistributorModal.jsx     | 152 ++++++++++
+ src/components/Layout.jsx               |   6 +-
+ src/components/ShopOrderDetailModal.jsx | 383 ++++++++++++++++++++++++
+ src/components/ShopProductModal.jsx     | 182 +++++++++++
+ src/contexts/UserContext.jsx            |   6 +
+ src/pages/DistributorPortal.jsx         | 277 +++++++++++++++++
+ src/pages/Distributors.jsx              | 193 ++++++++++++
+ src/pages/Login.jsx                     |  88 +++++-
+ src/pages/ShopOrders.jsx                | 244 +++++++++++++++
+ src/pages/ShopProducts.jsx              | 204 +++++++++++++
+ src/services/communication.jsx          | 145 ++++++++-
+ src/utils/TabArray.js                   |  15 +
+ vite.config.js                          |   2 +
+ 14 files changed, 1933 insertions(+), 14 deletions(-)
+ create mode 100644 src/components/DistributorModal.jsx
+ create mode 100644 src/components/ShopOrderDetailModal.jsx
+ create mode 100644 src/components/ShopProductModal.jsx
+ create mode 100644 src/pages/DistributorPortal.jsx
+ create mode 100644 src/pages/Distributors.jsx
+ create mode 100644 src/pages/ShopOrders.jsx
+ create mode 100644 src/pages/ShopProducts.jsx
+
+diff --git a/src/App.jsx b/src/App.jsx
+index 830b0a2..0e266eb 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -22,15 +22,33 @@ import RoleManagement from "./pages/RoleManagement.jsx";
+ import { TabArray } from "./utils/TabArray.js";
+ import AgentSalons from "./pages/AgentSalons.jsx";
+ import Notifications from "./pages/PushNotifications.jsx";
++import ShopProducts from "./pages/ShopProducts.jsx";
++import Distributors from "./pages/Distributors.jsx";
++import ShopOrders from "./pages/ShopOrders.jsx";
++import DistributorPortal from "./pages/DistributorPortal.jsx";
+ 
+ const ProtectedRoute = ({ children }) => {
+   const token = localStorage.getItem("token");
+   return token ? children : <Navigate to="/login" replace />;
+ };
+ 
++// Distributors log in with their own token (role: 'distributor'). They must
++// not see admin tabs, and admins must not land in the distributor portal.
++const DistributorOnlyRoute = ({ children }) => {
++  const token = localStorage.getItem("token");
++  const role = localStorage.getItem("role");
++  if (!token) return <Navigate to="/login" replace />;
++  if (role !== "distributor") return <Navigate to="/" replace />;
++  return children;
++};
++
+ const PublicRoute = ({ children }) => {
+   const token = localStorage.getItem("token");
+   const accessTabs = localStorage.getItem("accessTabs");
++  // A logged-in distributor goes to their portal, not the login screen.
++  if (token && localStorage.getItem("role") === "distributor") {
++    return <Navigate to="/distributor" replace />;
++  }
+   const firstTab = TabArray?.find(tab =>
+     accessTabs?.includes(tab.key)
+   )
+@@ -141,6 +159,38 @@ const router = createBrowserRouter(
+         </ProtectedRoute>
+       ),
+     },
++    {
++      path: "/shop-products",
++      element: (
++        <ProtectedRoute>
++          <ShopProducts />
++        </ProtectedRoute>
++      ),
++    },
++    {
++      path: "/distributors",
++      element: (
++        <ProtectedRoute>
++          <Distributors />
++        </ProtectedRoute>
++      ),
++    },
++    {
++      path: "/shop-orders",
++      element: (
++        <ProtectedRoute>
++          <ShopOrders />
++        </ProtectedRoute>
++      ),
++    },
++    {
++      path: "/distributor",
++      element: (
++        <DistributorOnlyRoute>
++          <DistributorPortal />
++        </DistributorOnlyRoute>
++      ),
++    },
+     {
+       path: "*",
+       element: (
+diff --git a/src/components/DistributorModal.jsx b/src/components/DistributorModal.jsx
+new file mode 100644
+index 0000000..322082f
+--- /dev/null
++++ b/src/components/DistributorModal.jsx
+@@ -0,0 +1,152 @@
++import { useState, useEffect } from "react";
++import { Modal, Form, Button } from "react-bootstrap";
++import { distributorAPI } from "../services/communication";
++import { toast } from "react-toastify";
++
++const DistributorModal = ({ showModal, setShowModal, initialDistributor = null, onSuccess }) => {
++  const isEdit = Boolean(initialDistributor);
++  const [isLoading, setIsLoading] = useState(false);
++  const [formData, setFormData] = useState({
++    name: "",
++    phone: "",
++    email: "",
++    area: "",
++    deliveryCapability: "",
++    address: "",
++    password: ""
++  });
++
++  useEffect(() => {
++    if (showModal) {
++      if (initialDistributor) {
++        setFormData({
++          name: initialDistributor.name || "",
++          phone: initialDistributor.phone || "",
++          email: initialDistributor.email || "",
++          area: initialDistributor.area || "",
++          deliveryCapability: initialDistributor.deliveryCapability || "",
++          address: initialDistributor.address || "",
++          password: ""
++        });
++      } else {
++        setFormData({ name: "", phone: "", email: "", area: "", deliveryCapability: "", address: "", password: "" });
++      }
++    }
++  }, [showModal, initialDistributor]);
++
++  const handleChange = (e) => {
++    const { name, value } = e.target;
++    setFormData((prev) => ({ ...prev, [name]: value }));
++  };
++
++  const handleModalClose = () => setShowModal(false);
++
++  const handleSubmit = async (e) => {
++    e.preventDefault();
++    const payload = {
++      name: formData.name.trim(),
++      phone: formData.phone.trim(),
++      email: formData.email.trim() || null,
++      area: formData.area.trim() || null,
++      deliveryCapability: formData.deliveryCapability.trim() || null,
++      address: formData.address.trim() || null
++    };
++    if (!payload.name) { toast.error("Distributor name is required"); return; }
++    if (!payload.phone) { toast.error("Phone number is required (distributors log in with it)"); return; }
++
++    if (isEdit) {
++      // Send password only when the admin typed a new one; '' clears the stored password.
++      payload.password = formData.password;
++    } else {
++      if (!formData.password) { toast.error("Set a login password (min 6 characters)"); return; }
++      if (formData.password.length < 6) { toast.error("Password must be at least 6 characters"); return; }
++      payload.password = formData.password;
++    }
++
++    setIsLoading(true);
++    try {
++      const result = isEdit
++        ? await distributorAPI.update({ distributorId: initialDistributor.distributorId, ...payload })
++        : await distributorAPI.create(payload);
++      if (result.success) {
++        toast.success(isEdit ? "Distributor updated" : "Distributor added");
++        onSuccess?.();
++      } else {
++        toast.error(result.message || "Failed to save distributor");
++      }
++    } catch {
++      toast.error("Failed to save distributor");
++    } finally {
++      setIsLoading(false);
++    }
++  };
++
++  if (!showModal) return null;
++
++  return (
++    <Modal show={showModal} onHide={handleModalClose} centered size="lg">
++      <Modal.Header closeButton>
++        <Modal.Title className="fw-bold">
++          {isEdit ? "Edit Distributor" : "Add Distributor"}
++        </Modal.Title>
++      </Modal.Header>
++      <Form onSubmit={handleSubmit}>
++        <Modal.Body>
++          <div className="row g-3">
++            <div className="col-md-6">
++              <Form.Label className="fw-semibold small">Name *</Form.Label>
++              <Form.Control type="text" name="name" value={formData.name} onChange={handleChange} placeholder="e.g. Ravi Gupta" required />
++            </div>
++            <div className="col-md-6">
++              <Form.Label className="fw-semibold small">Phone *</Form.Label>
++              <Form.Control type="tel" name="phone" value={formData.phone} onChange={handleChange} placeholder="10-digit mobile number" required />
++            </div>
++            <div className="col-md-6">
++              <Form.Label className="fw-semibold small">Email (used as an alternate login ID)</Form.Label>
++              <Form.Control type="email" name="email" value={formData.email} onChange={handleChange} placeholder="optional" />
++            </div>
++            <div className="col-md-6">
++              <Form.Label className="fw-semibold small">Area / City</Form.Label>
++              <Form.Control type="text" name="area" value={formData.area} onChange={handleChange} placeholder="e.g. Nagpur, Maharashtra" />
++            </div>
++            <div className="col-md-6">
++              <Form.Label className="fw-semibold small">Delivery Capability</Form.Label>
++              <Form.Control type="text" name="deliveryCapability" value={formData.deliveryCapability} onChange={handleChange} placeholder="e.g. Same-day within 20km, 2-wheelers x2" />
++            </div>
++            <div className="col-md-6">
++              <Form.Label className="fw-semibold small">
++                {isEdit ? "New Password (leave blank to keep the old one)" : "Login Password *"}
++              </Form.Label>
++              <Form.Control
++                type="password"
++                name="password"
++                value={formData.password}
++                onChange={handleChange}
++                placeholder={isEdit ? "min 6 characters" : "min 6 characters"}
++                autoComplete="new-password"
++              />
++            </div>
++            <div className="col-12">
++              <Form.Label className="fw-semibold small">Address</Form.Label>
++              <Form.Control as="textarea" rows={2} name="address" value={formData.address} onChange={handleChange} placeholder="Warehouse / pickup address" />
++            </div>
++            <div className="col-12">
++              <div className="alert alert-light border small mb-0">
++                This distributor will log in to the Distributor Portal with their <strong>phone or email</strong> and this
++                password. Their portal only shows orders that you assign to them.
++              </div>
++            </div>
++          </div>
++        </Modal.Body>
++        <Modal.Footer>
++          <Button variant="outline-secondary" onClick={handleModalClose} disabled={isLoading}>Cancel</Button>
++          <Button variant="success" type="submit" disabled={isLoading}>
++            {isLoading ? "Saving..." : isEdit ? "Update Distributor" : "Add Distributor"}
++          </Button>
++        </Modal.Footer>
++      </Form>
++    </Modal>
++  );
++};
++
++export default DistributorModal;
+diff --git a/src/components/Layout.jsx b/src/components/Layout.jsx
+index edcdd10..13b4fe6 100644
+--- a/src/components/Layout.jsx
++++ b/src/components/Layout.jsx
+@@ -3,7 +3,7 @@ import { NavLink, Link, useNavigate } from "react-router-dom";
+ import ProfileDropdown from "./ProfileDropdown.jsx";
+ import ChangePasswordModal from "./ChangePasswordModal.jsx";
+ import { useUser } from "../contexts/UserContext.jsx";
+-import { ClipboardList, Store, CalendarCheck, User, Users } from "lucide-react";
++import { ClipboardList, Store, CalendarCheck, User, Users, Package, Truck, ShoppingBag } from "lucide-react";
+ import { salonRequestAPI } from "../services/communication.jsx";
+ // Icons definitions (SVG)
+ const Icons = {
+@@ -49,7 +49,9 @@ const navItems = [
+   // { path: "/salonrequest", key: "salonRequest", label: "Salon Request", icon: <ClipboardList size={20} /> },
+   { path: "/advertisement", key: "advertisement", label: "Advertisement", icon: <Icons.Advertisement /> },
+   { path: "/notifications", key: "notifications", label: "Push Notifications", icon: <Icons.Notification /> },
+-
++  { path: "/shop-products", key: "shopProducts", label: "Shop Products", icon: <Package size={20} /> },
++  { path: "/distributors", key: "distributors", label: "Distributors", icon: <Truck size={20} /> },
++  { path: "/shop-orders", key: "shopOrders", label: "Shop Orders", icon: <ShoppingBag size={20} /> },
+ ];
+ 
+ const Layout = ({ children }) => {
+diff --git a/src/components/ShopOrderDetailModal.jsx b/src/components/ShopOrderDetailModal.jsx
+new file mode 100644
+index 0000000..84fe7c9
+--- /dev/null
++++ b/src/components/ShopOrderDetailModal.jsx
+@@ -0,0 +1,383 @@
++import { useState, useEffect } from "react";
++import { Modal, Button, Spinner } from "react-bootstrap";
++import { shopOrderAPI, distributorAPI } from "../services/communication";
++import { toast } from "react-toastify";
++import { Plus, CreditCard, UserPlus, CheckCircle2, XCircle, Truck, Ban, Store } from "lucide-react";
++import { INTERNAL_STATUS_META } from "../pages/ShopOrders.jsx";
++
++const money = (value) => {
++  const num = Number(value);
++  if (!Number.isFinite(num)) return "—";
++  return `₹${num.toLocaleString("en-IN")}`;
++};
++
++const dateTime = (value) => {
++  if (!value) return "";
++  const d = new Date(value);
++  return d.toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
++};
++
++const EVENT_META = {
++  ORDER_PLACED: { icon: Plus, color: "#0d6efd", label: "Order placed" },
++  PAYMENT_CONFIRMED: { icon: CreditCard, color: "#1e7e34", label: "Payment confirmed" },
++  ASSIGNED: { icon: UserPlus, color: "#6f42c1", label: "Distributor requested" },
++  ACCEPTED: { icon: CheckCircle2, color: "#1e7e34", label: "Distributor accepted" },
++  REJECTED: { icon: XCircle, color: "#dc3545", label: "Distributor rejected" },
++  STATUS_CHANGED: { icon: Truck, color: "#0d6efd", label: "Status changed" },
++  CANCELLED: { icon: Ban, color: "#dc3545", label: "Order cancelled" }
++};
++
++const ACTOR_LABELS = {
++  ADMIN: "MyNaai Admin",
++  DISTRIBUTOR: "Distributor",
++  SALON: "Salon",
++  SYSTEM: "System"
++};
++
++const actorName = (ev) => {
++  if (!ev.actor) return ACTOR_LABELS[ev.actorType] || "System";
++  const name = ev.actor.name || ev.actor.phone || ev.actor.email;
++  return name ? name : ACTOR_LABELS[ev.actorType] || "System";
++};
++
++const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onRecordDecision }) => {
++  const [showAssign, setShowAssign] = useState(false);
++  const [distributors, setDistributors] = useState([]);
++  const [distributorLoading, setDistributorLoading] = useState(false);
++  const [selectedDistributor, setSelectedDistributor] = useState("");
++  const [assigning, setAssigning] = useState(false);
++  const [showReject, setShowReject] = useState(false);
++  const [rejectReason, setRejectReason] = useState("");
++  const [busy, setBusy] = useState(false);
++
++  useEffect(() => {
++    setShowAssign(false);
++    setShowReject(false);
++    setRejectReason("");
++    setSelectedDistributor("");
++  }, [order]);
++
++  if (!order) return null;
++
++  const meta = INTERNAL_STATUS_META[order.status] || { label: order.status, badge: "bg-secondary-subtle text-secondary" };
++  const items = order.items || [];
++  const events = [...(order.events || [])].reverse(); // newest first
++
++  const loadDistributors = async () => {
++    setDistributorLoading(true);
++    try {
++      // Server page size is fixed (10), so pull a few pages for the picker.
++      const first = await distributorAPI.list({ page: 1 });
++      if (!first.success) {
++        toast.error(first.message || "Failed to load distributors");
++        return;
++      }
++      let rows = first.data?.distributors || [];
++      const totalPages = first.data?.pagination?.totalPages || 1;
++      const extra = Math.min(totalPages, 5) - 1;
++      if (extra > 0) {
++        const pages = await Promise.all(
++          Array.from({ length: extra }, (_, i) => distributorAPI.list({ page: i + 2 }))
++        );
++        rows = rows.concat(...pages.filter((p) => p.success).map((p) => p.data?.distributors || []));
++      }
++      setDistributors(rows);
++    } catch {
++      toast.error("Failed to load distributors");
++    } finally {
++      setDistributorLoading(false);
++    }
++  };
++
++  const openAssign = () => {
++    setShowAssign(true);
++    if (distributors.length === 0) loadDistributors();
++  };
++
++  const confirmAssign = async () => {
++    if (!selectedDistributor) { toast.error("Choose a distributor"); return; }
++    setAssigning(true);
++    try {
++      await onAssign(order.orderId, selectedDistributor);
++    } finally {
++      setAssigning(false);
++    }
++  };
++
++  const recordAccept = async () => {
++    setBusy(true);
++    try { await onRecordDecision(order.orderId, "accept"); }
++    finally { setBusy(false); }
++  };
++
++  const recordReject = async () => {
++    if (rejectReason.trim().length < 3) { toast.error("A rejection reason is required (min 3 characters)"); return; }
++    setBusy(true);
++    try { await onRecordDecision(order.orderId, "reject", rejectReason.trim()); }
++    finally { setBusy(false); }
++  };
++
++  const changeStatus = (status) => {
++    if (status === "CANCELLED" && !window.confirm("Cancel this order? The salon customer will see it as cancelled.")) return;
++    setBusy(true);
++    onStatusChange(order.orderId, status);
++  };
++
++  const statusActionButtons = () => {
++    const s = order.status;
++    const btns = [];
++    if (s === "PENDING_ASSIGNMENT") {
++      btns.push(<Button key="assign" variant="success" size="sm" onClick={openAssign} disabled={busy}><UserPlus size={14} className="me-1" />Assign Distributor</Button>);
++    }
++    if (s === "AWAITING_ACCEPTANCE") {
++      btns.push(<Button key="acc" variant="success" size="sm" onClick={recordAccept} disabled={busy}><CheckCircle2 size={14} className="me-1" />Record Accept</Button>);
++      btns.push(
++        <Button key="rej" variant="outline-danger" size="sm" onClick={() => setShowReject((v) => !v)} disabled={busy}>
++          <XCircle size={14} className="me-1" />Record Reject
++        </Button>
++      );
++    }
++    if (s === "ASSIGNED") {
++      btns.push(<Button key="pick" variant="primary" size="sm" onClick={() => changeStatus("PICKED")} disabled={busy}><Truck size={14} className="me-1" />Mark Picked Up</Button>);
++    }
++    if (s === "PICKED") {
++      btns.push(<Button key="ship" variant="primary" size="sm" onClick={() => changeStatus("SHIPPED")} disabled={busy}><Truck size={14} className="me-1" />Mark Shipped</Button>);
++    }
++    if (s === "SHIPPED") {
++      btns.push(<Button key="del" variant="success" size="sm" onClick={() => changeStatus("DELIVERED")} disabled={busy}><CheckCircle2 size={14} className="me-1" />Mark Delivered</Button>);
++    }
++    if (s !== "CANCELLED" && s !== "DELIVERED") {
++      btns.push(<Button key="cancel" variant="outline-danger" size="sm" onClick={() => changeStatus("CANCELLED")} disabled={busy}><Ban size={14} className="me-1" />Cancel</Button>);
++    }
++    return btns;
++  };
++
++  return (
++    <Modal show={Boolean(order)} onHide={onClose} centered size="xl" backdrop="static">
++      <Modal.Header closeButton>
++        <Modal.Title className="fw-bold d-flex align-items-center gap-2">
++          <Store size={18} />
++          Order #{order.orderId?.slice(0, 8)}
++          <span className={`badge ${meta.badge}`}>{meta.label}</span>
++        </Modal.Title>
++      </Modal.Header>
++      <Modal.Body>
++        <div className="row g-4">
++          {/* Left column: details + timeline */}
++          <div className="col-lg-7">
++            <div className="row g-3 mb-3">
++              <div className="col-sm-6">
++                <div className="small text-muted mb-1">Ordered By (Salon)</div>
++                <div className="fw-semibold">{order.salon?.salonName || "—"}</div>
++                <div className="text-muted small">{order.salon?.phoneNumber || ""}</div>
++              </div>
++              <div className="col-sm-6">
++                <div className="small text-muted mb-1">Delivery Contact</div>
++                <div className="fw-semibold">{order.address?.name || "—"}</div>
++                <div className="text-muted small">{order.address?.phone || ""}</div>
++              </div>
++            </div>
++
++            {order.address && (
++              <div className="mb-3">
++                <div className="small text-muted mb-1">Delivery Address</div>
++                <div className="small text-muted">
++                  {order.address.line1}{order.address.city ? `, ${order.address.city}` : ""}{order.address.state ? `, ${order.address.state}` : ""} – {order.address.pincode || ""}
++                </div>
++              </div>
++            )}
++
++            <div className="border rounded-2 p-2 mb-3" style={{ backgroundColor: "#fafaf8" }}>
++              <div className="small text-muted mb-2">Items ({order.amounts?.itemCount ?? items.length})</div>
++              <table className="table table-sm mb-0 align-middle" style={{ fontSize: "0.87rem" }}>
++                <thead>
++                  <tr className="text-muted small">
++                    <th>Item</th>
++                    <th className="text-center">Qty</th>
++                    <th className="text-end">Price</th>
++                    <th className="text-end">Line Total</th>
++                  </tr>
++                </thead>
++                <tbody>
++                  {items.map((it, idx) => {
++                    const qty = Number(it.qty || 1);
++                    const price = Number(it.price || 0);
++                    return (
++                      <tr key={it.productId || idx}>
++                        <td className="pe-2" style={{ maxWidth: 260 }}>
++                          {it.image && <img src={it.image} alt="" style={{ width: 32, height: 32, objectFit: "cover", borderRadius: 6, marginRight: 8, verticalAlign: "middle" }} />}
++                          {it.name}
++                        </td>
++                        <td className="text-center">{qty}</td>
++                        <td className="text-end">{money(it.price)}</td>
++                        <td className="text-end fw-semibold">{money(price * qty)}</td>
++                      </tr>
++                    );
++                  })}
++                </tbody>
++              </table>
++            </div>
++
++            <div className="d-flex flex-wrap gap-4 small mb-3">
++              <div>
++                <span className="text-muted">Items: </span><span className="fw-semibold">{money(order.amounts?.itemTotal)}</span>
++              </div>
++              <div>
++                <span className="text-muted">Delivery: </span>
++                <span className="fw-semibold">{Number(order.amounts?.deliveryFee) === 0 ? "Free" : money(order.amounts?.deliveryFee)}</span>
++              </div>
++              <div>
++                <span className="text-muted">Total: </span><span className="fw-semibold">{money(order.amounts?.total)}</span>
++              </div>
++              {Number(order.amounts?.savings) > 0 && (
++                <div>
++                  <span className="text-muted">Salon saved: </span><span className="text-success fw-semibold">{money(order.amounts?.savings)}</span>
++                </div>
++              )}
++              <div>
++                <span className="text-muted">Payment: </span>
++                {order.payment?.status === "PAID"
++                  ? <span className="badge bg-success-subtle text-success">{order.payment.method} • Paid{order.payment.paymentId ? " (Razorpay)" : ""}</span>
++                  : <span className="badge bg-secondary-subtle text-secondary">{order.payment?.method} • Unpaid</span>}
++              </div>
++              <div>
++                <span className="text-muted">Placed: </span><span>{dateTime(order.createdAt)}</span>
++              </div>
++            </div>
++
++            {/* Timeline */}
++            <div className="small text-muted mb-2 fw-semibold" style={{ textTransform: "uppercase", letterSpacing: "0.4px" }}>Full Order History</div>
++            <div className="d-flex flex-column gap-0">
++              {events.map((ev, idx) => {
++                const evMeta = EVENT_META[ev.action] || { icon: Truck, color: "#6c757d", label: ev.action };
++                const Icon = evMeta.icon;
++                return (
++                  <div key={ev.id || idx} className="d-flex gap-3" style={{ position: "relative" }}>
++                    <div className="d-flex flex-column align-items-center">
++                      <div
++                        style={{
++                          width: 30, height: 30, borderRadius: "50%", backgroundColor: `${evMeta.color}1a`,
++                          color: evMeta.color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0
++                        }}
++                      >
++                        <Icon size={15} />
++                      </div>
++                      {idx < events.length - 1 && <div style={{ width: 2, flex: 1, minHeight: 18, backgroundColor: "#e3e6e3" }} />}
++                    </div>
++                    <div style={{ paddingBottom: 14 }}>
++                      <div className="fw-semibold">{evMeta.label}</div>
++                      <div className="text-muted">
++                        {actorName(ev)} • {dateTime(ev.createdAt)}
++                        {ev.fromStatus && ev.toStatus && (
++                          <> <span className="text-muted">•</span> {INTERNAL_STATUS_META[ev.fromStatus]?.label || ev.fromStatus} → {INTERNAL_STATUS_META[ev.toStatus]?.label || ev.toStatus}</>
++                        )}
++                      </div>
++                      {ev.note && (
++                        <div className={`small mt-1 p-2 rounded-2 ${ev.action === "REJECTED" ? "bg-danger-subtle text-danger-emphasis" : "bg-light border"}`}>
++                          “{ev.note}”
++                        </div>
++                      )}
++                    </div>
++                  </div>
++                );
++              })}
++              {events.length === 0 && <div className="text-muted small">No events recorded yet.</div>}
++            </div>
++          </div>
++
++          {/* Right column: actions */}
++          <div className="col-lg-5">
++            <div className="border rounded-3 p-3 mb-3" style={{ backgroundColor: "#fafaf8" }}>
++              <div className="small text-muted mb-1">Distributor</div>
++              {order.distributor ? (
++                <>
++                  <div className="fw-semibold">{order.distributor.name}</div>
++                  <div className="small text-muted">{order.distributor.phone}{order.distributor.area ? ` • ${order.distributor.area}` : ""}</div>
++                  {order.distributor.deliveryCapability && <div className="small text-muted mt-1">Capability: {order.distributor.deliveryCapability}</div>}
++                </>
++              ) : (
++                <div className="text-muted">Not assigned yet</div>
++              )}
++              <div className="mt-3">
++                <Button variant="success" size="sm" onClick={openAssign} disabled={busy} className="w-100">
++                  <UserPlus size={14} className="me-1" />
++                  {order.distributor ? "Re-assign / Request Another" : "Assign Distributor"}
++                </Button>
++              </div>
++            </div>
++
++            <div className="small text-muted mb-2 fw-semibold" style={{ textTransform: "uppercase", letterSpacing: "0.4px" }}>Actions</div>
++            <div className="d-flex flex-wrap gap-2">
++              {statusActionButtons()}
++            </div>
++
++            {showReject && (
++              <div className="mt-3 border rounded-3 p-3 bg-danger-subtle" style={{ borderColor: "#f1c1c6" }}>
++                <div className="small fw-semibold mb-2">Rejection Reason (recorded on the order history)</div>
++                <textarea
++                  className="form-control form-control-sm mb-2"
++                  rows={3}
++                  value={rejectReason}
++                  onChange={(e) => setRejectReason(e.target.value)}
++                  placeholder="e.g. Out of stock of Herbal Oil, cannot deliver to this pincode..."
++                />
++                <div className="d-flex gap-2">
++                  <Button variant="danger" size="sm" onClick={recordReject} disabled={busy}>{busy ? "Saving..." : "Confirm Rejection"}</Button>
++                  <Button variant="outline-secondary" size="sm" onClick={() => { setShowReject(false); setRejectReason(""); }} disabled={busy}>Cancel</Button>
++                </div>
++              </div>
++            )}
++
++            <div className="alert small mb-0 mt-3" style={{ backgroundColor: "#f6f8f6", borderColor: "#e3e8e3" }}>
++              <strong>How the flow works:</strong> assign a distributor → it waits in <em>Awaiting Distributor</em> while they check
++              the order in the Distributor Portal. They Accept (→ Assigned) or Reject (back to To Assign with their reason).
++              You can also record their decision here if they told you on the phone.
++            </div>
++          </div>
++        </div>
++
++        {/* Assign distributor inline section */}
++        {showAssign && (
++          <div className="mt-4 border-top pt-3">
++            <div className="d-flex align-items-center justify-content-between mb-2">
++              <div className="fw-semibold">Choose a distributor</div>
++              <Button variant="link" size="sm" className="p-0" onClick={() => setShowAssign(false)}>Close</Button>
++            </div>
++            {distributorLoading ? (
++              <div className="text-center py-3"><Spinner size="sm" /></div>
++            ) : distributors.length === 0 ? (
++              <div className="text-muted small py-2">No active distributors yet — add some in the Distributors tab first.</div>
++            ) : (
++              <div className="row g-2" style={{ maxHeight: 240, overflowY: "auto" }}>
++                {distributors.map((d) => (
++                  <div className="col-md-6" key={d.distributorId}>
++                    <button
++                      className="w-100 text-start border rounded-3 p-2 small"
++                      style={{
++                        backgroundColor: selectedDistributor === d.distributorId ? "#eaf7ee" : "#ffffff",
++                        borderColor: selectedDistributor === d.distributorId ? "#1e7e34" : "#e3e6e3"
++                      }}
++                      onClick={() => setSelectedDistributor(d.distributorId)}
++                    >
++                      <div className="fw-semibold">{d.name}</div>
++                      <div className="text-muted">{d.phone} • {d.area || "no area set"}</div>
++                      {d.deliveryCapability && <div className="text-muted" style={{ fontSize: "0.78rem" }}>{d.deliveryCapability}</div>}
++                      {!d.isActive && <div className="text-danger" style={{ fontSize: "0.78rem" }}>Disabled — cannot log in</div>}
++                    </button>
++                  </div>
++                ))}
++              </div>
++            )}
++            <div className="mt-3 d-flex gap-2">
++              <Button variant="success" size="sm" onClick={confirmAssign} disabled={assigning || !selectedDistributor}>
++                {assigning ? "Requesting..." : "Send to Distributor (Awaiting Accept/Reject)"}
++              </Button>
++            </div>
++          </div>
++        )}
++      </Modal.Body>
++    </Modal>
++  );
++};
++
++export default ShopOrderDetailModal;
+diff --git a/src/components/ShopProductModal.jsx b/src/components/ShopProductModal.jsx
+new file mode 100644
+index 0000000..7f15056
+--- /dev/null
++++ b/src/components/ShopProductModal.jsx
+@@ -0,0 +1,182 @@
++import { useState, useEffect } from "react";
++import { Modal, Form, Button } from "react-bootstrap";
++import { shopProductAPI } from "../services/communication";
++import { toast } from "react-toastify";
++
++const ShopProductModal = ({ showModal, setShowModal, initialProduct = null, onSuccess }) => {
++  const isEdit = Boolean(initialProduct);
++  const [isLoading, setIsLoading] = useState(false);
++  const [formData, setFormData] = useState({
++    productName: "",
++    price: "",
++    mrp: "",
++    productImage: "",
++    category: "",
++    gender: "",
++    rating: "",
++    isAvailable: true,
++    description: ""
++  });
++
++  useEffect(() => {
++    if (showModal) {
++      if (initialProduct) {
++        setFormData({
++          productName: initialProduct.productName || "",
++          price: initialProduct.price != null ? String(initialProduct.price) : "",
++          mrp: initialProduct.mrp != null ? String(initialProduct.mrp) : "",
++          productImage: initialProduct.productImage || "",
++          category: initialProduct.category || "",
++          gender: initialProduct.gender || "",
++          rating: initialProduct.rating != null ? String(initialProduct.rating) : "",
++          isAvailable: Boolean(initialProduct.isAvailable),
++          description: initialProduct.description || ""
++        });
++      } else {
++        setFormData({
++          productName: "", price: "", mrp: "", productImage: "",
++          category: "", gender: "", rating: "", isAvailable: true, description: ""
++        });
++      }
++    }
++  }, [showModal, initialProduct]);
++
++  const handleChange = (e) => {
++    const { name, value, type, checked } = e.target;
++    setFormData((prev) => ({ ...prev, [name]: type === "checkbox" ? checked : value }));
++  };
++
++  const handleModalClose = () => setShowModal(false);
++
++  const handleSubmit = async (e) => {
++    e.preventDefault();
++    if (!formData.productName.trim()) {
++      toast.error("Product name is required");
++      return;
++    }
++    const price = Number(formData.price);
++    const mrp = formData.mrp ? Number(formData.mrp) : null;
++    if (!Number.isFinite(price) || price <= 0) {
++      toast.error("Enter a valid selling price");
++      return;
++    }
++    if (mrp != null && (!Number.isFinite(mrp) || mrp < price)) {
++      toast.error("MRP must be greater than or equal to the selling price");
++      return;
++    }
++    const rating = formData.rating !== "" ? Number(formData.rating) : 0;
++    if (rating < 0 || rating > 5) {
++      toast.error("Rating must be between 0 and 5");
++      return;
++    }
++
++    const payload = {
++      productName: formData.productName.trim(),
++      price,
++      mrp,
++      productImage: formData.productImage.trim() || null,
++      category: formData.category.trim() || null,
++      gender: formData.gender,
++      rating,
++      isAvailable: formData.isAvailable,
++      description: formData.description.trim() || null
++    };
++
++    setIsLoading(true);
++    try {
++      const result = isEdit
++        ? await shopProductAPI.update({ productId: initialProduct.productId, ...payload })
++        : await shopProductAPI.create(payload);
++      if (result.success) {
++        toast.success(isEdit ? "Product updated" : "Product added to catalog");
++        onSuccess?.();
++      } else {
++        toast.error(result.message || "Failed to save product");
++      }
++    } catch {
++      toast.error("Failed to save product");
++    } finally {
++      setIsLoading(false);
++    }
++  };
++
++  if (!showModal) return null;
++
++  return (
++    <Modal show={showModal} onHide={handleModalClose} centered size="lg">
++      <Modal.Header closeButton>
++        <Modal.Title className="fw-bold">
++          {isEdit ? "Edit Catalog Product" : "Add Catalog Product"}
++        </Modal.Title>
++      </Modal.Header>
++      <Form onSubmit={handleSubmit}>
++        <Modal.Body>
++          <div className="row g-3">
++            <div className="col-12">
++              <Form.Label className="fw-semibold small">Product Name *</Form.Label>
++              <Form.Control
++                type="text"
++                name="productName"
++                value={formData.productName}
++                onChange={handleChange}
++                placeholder="e.g. Herbal Hair Oil 200ml"
++                required
++              />
++            </div>
++            <div className="col-6">
++              <Form.Label className="fw-semibold small">Selling Price (₹) *</Form.Label>
++              <Form.Control type="number" min="1" step="0.01" name="price" value={formData.price} onChange={handleChange} placeholder="899" required />
++            </div>
++            <div className="col-6">
++              <Form.Label className="fw-semibold small">MRP (₹)</Form.Label>
++              <Form.Control type="number" min="1" step="0.01" name="mrp" value={formData.mrp} onChange={handleChange} placeholder="1099 (optional, enables discount badge)" />
++            </div>
++            <div className="col-12">
++              <Form.Label className="fw-semibold small">Product Image URL</Form.Label>
++              <Form.Control type="url" name="productImage" value={formData.productImage} onChange={handleChange} placeholder="https://... (blank = no image)" />
++            </div>
++            <div className="col-md-4 col-6">
++              <Form.Label className="fw-semibold small">Category</Form.Label>
++              <Form.Control type="text" name="category" value={formData.category} onChange={handleChange} placeholder="Hair Care" />
++            </div>
++            <div className="col-md-4 col-6">
++              <Form.Label className="fw-semibold small">Gender</Form.Label>
++              <Form.Select name="gender" value={formData.gender} onChange={handleChange}>
++                <option value="">Any</option>
++                <option value="MALE">Men</option>
++                <option value="FEMALE">Women</option>
++                <option value="UNISEX">Unisex</option>
++              </Form.Select>
++            </div>
++            <div className="col-md-4 col-6">
++              <Form.Label className="fw-semibold small">Rating (0–5)</Form.Label>
++              <Form.Control type="number" min="0" max="5" step="0.1" name="rating" value={formData.rating} onChange={handleChange} placeholder="4.5" />
++            </div>
++            <div className="col-12">
++              <Form.Label className="fw-semibold small">Description</Form.Label>
++              <Form.Control as="textarea" rows={3} name="description" value={formData.description} onChange={handleChange} placeholder="What the salon owners should know about this product..." />
++            </div>
++            <div className="col-12">
++              <Form.Check
++                type="switch"
++                id="isAvailable"
++                label="Available in the app catalog (unhide to remove it from sale)"
++                name="isAvailable"
++                checked={formData.isAvailable}
++                onChange={handleChange}
++              />
++            </div>
++          </div>
++        </Modal.Body>
++        <Modal.Footer>
++          <Button variant="outline-secondary" onClick={handleModalClose} disabled={isLoading}>Cancel</Button>
++          <Button variant="success" type="submit" disabled={isLoading}>
++            {isLoading ? "Saving..." : isEdit ? "Update Product" : "Add Product"}
++          </Button>
++        </Modal.Footer>
++      </Form>
++    </Modal>
++  );
++};
++
++export default ShopProductModal;
+diff --git a/src/contexts/UserContext.jsx b/src/contexts/UserContext.jsx
+index 320aab5..148cc08 100644
+--- a/src/contexts/UserContext.jsx
++++ b/src/contexts/UserContext.jsx
+@@ -23,6 +23,12 @@ export const UserProvider = ({ children }) => {
+       setUser(null);
+       return;
+     }
++    // Distributor tokens are not admin tokens — the admin profile endpoint
++    // would 401 and the axios interceptor would log them straight out.
++    if (localStorage.getItem('role') === 'distributor') {
++      setUser(JSON.parse(localStorage.getItem('userData') || 'null'));
++      return;
++    }
+ 
+     setLoading(true);
+     setError(null);
+diff --git a/src/pages/DistributorPortal.jsx b/src/pages/DistributorPortal.jsx
+new file mode 100644
+index 0000000..88d96ce
+--- /dev/null
++++ b/src/pages/DistributorPortal.jsx
+@@ -0,0 +1,277 @@
++import { useState, useEffect, useCallback } from "react";
++import { shopOrderAPI } from "../services/communication";
++import Loader from "../components/Loader.jsx";
++import { toast } from "react-toastify";
++import { useNavigate } from "react-router-dom";
++import { Truck, CheckCircle2, XCircle, LogOut, Store, Package } from "lucide-react";
++
++const money = (value) => {
++  const num = Number(value);
++  if (!Number.isFinite(num)) return "—";
++  return `₹${num.toLocaleString("en-IN")}`;
++};
++
++const dateTime = (value) => {
++  if (!value) return "—";
++  const d = new Date(value);
++  return d.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
++};
++
++const STATUS_BADGES = {
++  AWAITING_ACCEPTANCE: "bg-info-subtle text-info-emphasis",
++  ASSIGNED: "bg-primary-subtle text-primary-emphasis",
++  PICKED: "bg-secondary-subtle text-secondary-emphasis",
++  SHIPPED: "bg-primary-subtle text-primary-emphasis",
++  DELIVERED: "bg-success-subtle text-success-emphasis",
++  CANCELLED: "bg-danger-subtle text-danger-emphasis"
++};
++
++const STATUS_LABELS = {
++  AWAITING_ACCEPTANCE: "Needs your reply",
++  ASSIGNED: "Accepted — pick up",
++  PICKED: "Picked up",
++  SHIPPED: "Shipped",
++  DELIVERED: "Delivered",
++  CANCELLED: "Cancelled"
++};
++
++const OrderCard = ({ order, onAccept, onReject, busy }) => {
++  const [showReject, setShowReject] = useState(false);
++  const [reason, setReason] = useState("");
++  const items = order.items || [];
++  const awaiting = order.status === "AWAITING_ACCEPTANCE";
++
++  const submitReject = () => {
++    if (reason.trim().length < 3) {
++      toast.error("Please give a reason so MyNaai can find another distributor");
++      return;
++    }
++    onReject(order.orderId, reason.trim());
++  };
++
++  return (
++    <div className="card border-0 shadow-sm mb-3" style={{ borderRadius: "12px" }}>
++      <div className="card-body p-3">
++        <div className="d-flex flex-wrap justify-content-between align-items-center mb-2 gap-2">
++          <div>
++            <span className="fw-semibold me-2">Order #{order.orderId}</span>
++            <span className={`badge ${STATUS_BADGES[order.status] || "bg-secondary-subtle text-secondary"}`}>
++              {STATUS_LABELS[order.status] || order.status}
++            </span>
++          </div>
++          <div className="text-muted small">{dateTime(order.createdAt)}</div>
++        </div>
++
++        <div className="row g-3 mb-2">
++          <div className="col-sm-6">
++            <div className="small text-muted">From Salon</div>
++            <div className="small fw-semibold">{order.salon?.salonName || "—"}</div>
++            <div className="small text-muted">{order.salon?.phoneNumber || ""}</div>
++          </div>
++          <div className="col-sm-6">
++            <div className="small text-muted">Deliver To</div>
++            <div className="small fw-semibold">{order.address?.name || "—"}</div>
++            <div className="small text-muted">
++              {order.address?.line1}{order.address?.city ? `, ${order.address.city}` : ""} – {order.address?.pincode || ""}
++            </div>
++            {order.address?.phone && <div className="small text-muted">Contact: {order.address.phone}</div>}
++          </div>
++        </div>
++
++        <div className="border rounded-2 p-2 mb-2" style={{ backgroundColor: "#fafaf8" }}>
++          <table className="table table-sm mb-0 align-middle" style={{ fontSize: "0.87rem" }}>
++            <tbody>
++              {items.map((it, idx) => (
++                <tr key={it.productId || idx}>
++                  <td className="pe-2">
++                    {it.image && <img src={it.image} alt="" style={{ width: 30, height: 30, objectFit: "cover", borderRadius: 6, marginRight: 8, verticalAlign: "middle" }} />}
++                    {it.name}
++                  </td>
++                  <td className="text-center small">{it.qty}</td>
++                  <td className="text-end small fw-semibold">{money(Number(it.price || 0) * Number(it.qty || 1))}</td>
++                </tr>
++              ))}
++            </tbody>
++          </table>
++          <div className="d-flex flex-wrap gap-4 small pt-1 border-top" style={{ borderColor: "#eee" }}>
++            <span><span className="text-muted">Total: </span><span className="fw-semibold">{money(order.amounts?.total)}</span></span>
++            <span>
++              <span className="text-muted">Payment: </span>
++              {order.payment?.status === "PAID"
++                ? <span className="text-success fw-semibold">{order.payment.method} • Already paid</span>
++                : <span className="text-warning-emphasis fw-semibold">{order.payment?.method} • Collect on delivery</span>}
++            </span>
++          </div>
++        </div>
++
++        {awaiting && (
++          <div className="d-flex flex-wrap gap-2 align-items-center">
++            <button className="button23" onClick={() => onAccept(order.orderId)} disabled={busy} style={{ padding: "8px 18px" }}>
++              <CheckCircle2 size={15} className="me-1" /> Accept Order
++            </button>
++            <button
++              className="button22"
++              onClick={() => setShowReject((v) => !v)}
++              disabled={busy}
++              style={{ color: "#c0392b", borderColor: "#e6b3ad", background: "#fdf3f1", padding: "8px 18px" }}
++            >
++              <XCircle size={15} className="me-1" /> Reject
++            </button>
++            {showReject && (
++              <div className="w-100 mt-2 border rounded-3 p-2" style={{ backgroundColor: "#fdf3f1", borderColor: "#e6b3ad" }}>
++                <textarea
++                  className="form-control form-control-sm mb-2"
++                  rows={2}
++                  value={reason}
++                  onChange={(e) => setReason(e.target.value)}
++                  placeholder="Reason (MyNaai admin will see this, e.g. out of stock, cannot cover this area...)"
++                />
++                <div className="d-flex gap-2">
++                  <button className="btn btn-sm btn-danger" onClick={submitReject} disabled={busy}>
++                    {busy ? "Sending..." : "Confirm Rejection"}
++                  </button>
++                  <button className="btn btn-sm btn-outline-secondary" onClick={() => { setShowReject(false); setReason(""); }} disabled={busy}>
++                    Cancel
++                  </button>
++                </div>
++              </div>
++            )}
++          </div>
++        )}
++
++        {!awaiting && order.status === "CANCELLED" && order.cancelReason && (
++          <div className="small text-muted mt-1">Cancel reason: {order.cancelReason}</div>
++        )}
++      </div>
++    </div>
++  );
++};
++
++const DistributorPortal = () => {
++  const [tab, setTab] = useState("queue"); // queue | all
++  const [orders, setOrders] = useState([]);
++  const [isLoading, setIsLoading] = useState(true);
++  const [busy, setBusy] = useState(false);
++  const navigate = useNavigate();
++
++  const userData = localStorage.getItem("userData") ? JSON.parse(localStorage.getItem("userData")) : {};
++
++  useEffect(() => {
++    if (localStorage.getItem("role") !== "distributor") {
++      navigate("/login", { replace: true });
++    }
++  }, []);
++
++  const fetchOrders = useCallback(async () => {
++    try {
++      setIsLoading(true);
++      const params = tab === "queue" ? { status: "AWAITING_ACCEPTANCE" } : {};
++      const result = await shopOrderAPI.distributorOrders(params);
++      if (result.success) {
++        setOrders(result.data?.orders || []);
++      } else {
++        toast.error(result.message || "Failed to load orders");
++      }
++    } catch {
++      toast.error("Failed to load orders");
++    } finally {
++      setIsLoading(false);
++    }
++  }, [tab]);
++
++  useEffect(() => {
++    fetchOrders();
++  }, [fetchOrders]);
++
++  const handleAccept = async (orderId) => {
++    if (!window.confirm("Accept this order? The salon will see it as confirmed.")) return;
++    setBusy(true);
++    try {
++      const result = await shopOrderAPI.accept(orderId);
++      if (result.success) {
++        toast.success("Order accepted — pick it up and deliver. MyNaai has been notified.");
++        fetchOrders();
++      } else {
++        toast.error(result.message || "Failed to accept order");
++      }
++    } catch {
++      toast.error("Failed to accept order");
++    } finally {
++      setBusy(false);
++    }
++  };
++
++  const handleReject = async (orderId, reason) => {
++    setBusy(true);
++    try {
++      const result = await shopOrderAPI.reject({ orderId, reason });
++      if (result.success) {
++        toast.success("Rejected — MyNaai admin will re-assign the order to another distributor.");
++        fetchOrders();
++      } else {
++        toast.error(result.message || "Failed to reject order");
++      }
++    } catch {
++      toast.error("Failed to reject order");
++    } finally {
++      setBusy(false);
++    }
++  };
++
++  const handleLogout = () => {
++    localStorage.removeItem("token");
++    localStorage.removeItem("userData");
++    localStorage.removeItem("role");
++    navigate("/login", { replace: true });
++  };
++
++  return (
++    <div className="min-vh-100" style={{ backgroundColor: "#f4f5f2" }}>
++      <nav className="navbar border-bottom px-3 px-md-4 py-2" style={{ backgroundColor: "#ffffff" }}>
++        <div className="d-flex align-items-center gap-2">
++          <div
++            className="d-flex align-items-center justify-content-center rounded-3"
++            style={{ width: 38, height: 38, background: "#1e7e34" }}
++          >
++            <Truck size={20} color="#fff" />
++          </div>
++          <div>
++            <div className="fw-bold" style={{ fontSize: "1rem", lineHeight: 1.1 }}>MyNaai Distributor Portal</div>
++            <div className="text-muted small">{userData?.name || "Distributor"}</div>
++          </div>
++        </div>
++        <button className="btn btn-sm btn-outline-secondary" onClick={handleLogout}>
++          <LogOut size={14} className="me-1" /> Logout
++        </button>
++      </nav>
++
++      <div className="container-fluid px-3 px-md-4 py-3" style={{ maxWidth: 900 }}>
++        <div className="d-flex gap-2 mb-3">
++          <button className={`btn btn-sm ${tab === "queue" ? "btn-success" : "btn-outline-secondary"}`} onClick={() => setTab("queue")}>
++            <Package size={14} className="me-1" /> Waiting for your reply
++          </button>
++          <button className={`btn btn-sm ${tab === "all" ? "btn-success" : "btn-outline-secondary"}`} onClick={() => setTab("all")}>
++            <Store size={14} className="me-1" /> All my orders
++          </button>
++        </div>
++
++        {isLoading ? (
++          <div className="text-center py-5"><Loader size="sm" /></div>
++        ) : orders.length === 0 ? (
++          <div className="card border-0 shadow-sm text-center py-5 text-muted" style={{ borderRadius: "12px" }}>
++            <Truck size={40} className="mx-auto mb-2 opacity-25" />
++            {tab === "queue"
++              ? "No orders waiting for your reply right now."
++              : "You have no orders yet. MyNaai admin will assign orders here."}
++          </div>
++        ) : (
++          orders.map((o) => (
++            <OrderCard key={o.orderId} order={o} busy={busy} onAccept={handleAccept} onReject={handleReject} />
++          ))
++        )}
++      </div>
++    </div>
++  );
++};
++
++export default DistributorPortal;
+diff --git a/src/pages/Distributors.jsx b/src/pages/Distributors.jsx
+new file mode 100644
+index 0000000..fef8c06
+--- /dev/null
++++ b/src/pages/Distributors.jsx
+@@ -0,0 +1,193 @@
++import { useState, useEffect, useCallback } from "react";
++import { distributorAPI } from "../services/communication";
++import Layout from "../components/Layout.jsx";
++import SearchInput from "../components/SearchInput.jsx";
++import Pagination from "../components/Pagination.jsx";
++import Loader from "../components/Loader.jsx";
++import DistributorModal from "../components/DistributorModal.jsx";
++import { toast } from "react-toastify";
++import { useNavigate } from "react-router-dom";
++import { Truck, Plus } from "lucide-react";
++
++const money = (value) => {
++  const num = Number(value);
++  if (!Number.isFinite(num)) return "—";
++  return `₹${num.toLocaleString("en-IN")}`;
++};
++
++const Distributors = () => {
++  const [search, setSearch] = useState("");
++  const [debouncedSearch, setDebouncedSearch] = useState("");
++  const [currentPage, setCurrentPage] = useState(1);
++  const [totalPages, setTotalPages] = useState(1);
++  const [distributors, setDistributors] = useState([]);
++  const [isLoading, setIsLoading] = useState(true);
++  const [showModal, setShowModal] = useState(false);
++  const [editingDistributor, setEditingDistributor] = useState(null);
++  const [activeFilter, setActiveFilter] = useState("ALL");
++  const navigate = useNavigate();
++
++  const fetchDistributors = useCallback(async () => {
++    try {
++      setIsLoading(true);
++      const result = await distributorAPI.list({ page: currentPage, searchString: debouncedSearch });
++      if (result.success) {
++        setDistributors(result.data?.distributors || []);
++        setTotalPages(result.data?.pagination?.totalPages || 1);
++      } else {
++        toast.error(result.message || "Failed to load distributors");
++      }
++    } catch {
++      toast.error("Failed to load distributors");
++    } finally {
++      setIsLoading(false);
++    }
++  }, [currentPage, debouncedSearch]);
++
++  useEffect(() => {
++    const timer = setTimeout(() => {
++      setDebouncedSearch(search);
++      setCurrentPage(1);
++    }, 500);
++    return () => clearTimeout(timer);
++  }, [search]);
++
++  useEffect(() => {
++    fetchDistributors();
++  }, [fetchDistributors]);
++
++  useEffect(() => {
++    const tab = localStorage.getItem("accessTab") ? JSON.parse(localStorage.getItem("accessTab")) : null;
++    if (localStorage.getItem("role") === "distributor" || !(tab && tab?.includes("distributors"))) {
++      navigate("/login", { replace: true });
++    }
++  }, []);
++
++  const handleToggleActive = async (distributor) => {
++    try {
++      const result = await distributorAPI.update({
++        distributorId: distributor.distributorId,
++        isActive: !distributor.isActive
++      });
++      if (result.success) {
++        toast.success(distributor.isActive ? "Distributor disabled — they can no longer log in" : "Distributor activated");
++        fetchDistributors();
++      } else {
++        toast.error(result.message || "Update failed");
++      }
++    } catch {
++      toast.error("Update failed");
++    }
++  };
++
++  const visible = distributors.filter((d) => (activeFilter === "ALL" ? true : activeFilter === "ACTIVE" ? d.isActive : !d.isActive));
++
++  const FILTERS = [
++    { key: "ALL", label: "All" },
++    { key: "ACTIVE", label: "Active" },
++    { key: "INACTIVE", label: "Disabled" }
++  ];
++
++  return (
++    <Layout>
++      <div className="page-content d-flex flex-column p-2 p-md-3" style={{ height: "calc(100vh - 70px)", overflow: "hidden" }}>
++        <div className="card shadow-sm mb-3 bg-white border-0 flex-shrink-0" style={{ borderRadius: "12px" }}>
++          <div className="card-body p-3">
++            <div className="row g-3 align-items-center">
++              <div className="col-12 col-md-5">
++                <SearchInput value={search} onChange={setSearch} placeholder="Search by name, phone, area..." />
++              </div>
++              <div className="col-12 col-md-4 d-flex flex-wrap gap-2">
++                {FILTERS.map((f) => (
++                  <button
++                    key={f.key}
++                    onClick={() => setActiveFilter(f.key)}
++                    className={`btn btn-sm ${activeFilter === f.key ? "btn-success" : "btn-outline-secondary"}`}
++                  >
++                    {f.label}
++                  </button>
++                ))}
++              </div>
++              <div className="col-12 col-md-3 d-flex justify-content-md-end gap-2">
++                <button className="button23" onClick={() => { setEditingDistributor(null); setShowModal(true); }}>
++                  <Plus size={15} className="me-1" /> Add Distributor
++                </button>
++                <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} size="sm" />
++              </div>
++            </div>
++          </div>
++        </div>
++
++        <div className="flex-grow-1 p-3 shadow-sm border-0" style={{ overflowY: "auto", backgroundColor: "#ffffff", borderRadius: "12px" }}>
++          {isLoading ? (
++            <div className="text-center py-5"><Loader size="sm" /></div>
++          ) : visible.length === 0 ? (
++            <div className="text-center py-5 text-muted">
++              <Truck size={40} className="mx-auto mb-2 opacity-25" />
++              No distributors found. Add one to start fulfilling salon orders.
++            </div>
++          ) : (
++            <div className="table-responsive">
++              <table className="table align-middle mb-0" style={{ fontSize: "0.9rem" }}>
++                <thead>
++                  <tr className="text-muted small" style={{ textTransform: "uppercase", letterSpacing: "0.4px" }}>
++                    <th>Distributor</th>
++                    <th>Contact</th>
++                    <th>Area</th>
++                    <th>Delivery Capability</th>
++                    <th>Status</th>
++                    <th className="text-end">Actions</th>
++                  </tr>
++                </thead>
++                <tbody>
++                  {visible.map((d) => (
++                    <tr key={d.distributorId}>
++                      <td>
++                        <div className="fw-semibold">{d.name}</div>
++                        {d.address && <div className="text-muted small">{d.address}</div>}
++                      </td>
++                      <td>
++                        <div>{d.phone}</div>
++                        {d.email && <div className="text-muted small">{d.email}</div>}
++                      </td>
++                      <td>{d.area || "—"}</td>
++                      <td>{d.deliveryCapability || "—"}</td>
++                      <td>
++                        {d.isActive
++                          ? <span className="badge bg-success-subtle text-success">Active</span>
++                          : <span className="badge bg-secondary-subtle text-secondary">Disabled</span>}
++                      </td>
++                      <td className="text-end">
++                        <button className="button22 me-1" onClick={() => { setEditingDistributor(d); setShowModal(true); }}>Edit</button>
++                        <button
++                          className="btn btn-sm"
++                          style={{
++                            color: d.isActive ? "#7f8c8d" : "#1e7e34",
++                            border: `1px solid ${d.isActive ? "#dde5dd" : "#a3d9b1"}`,
++                            background: d.isActive ? "#f4f6f4" : "#eaf7ee"
++                          }}
++                          onClick={() => handleToggleActive(d)}
++                        >
++                          {d.isActive ? "Disable" : "Activate"}
++                        </button>
++                      </td>
++                    </tr>
++                  ))}
++                </tbody>
++              </table>
++            </div>
++          )}
++        </div>
++
++        <DistributorModal
++          showModal={showModal}
++          setShowModal={setShowModal}
++          initialDistributor={editingDistributor}
++          onSuccess={() => { fetchDistributors(); setShowModal(false); setEditingDistributor(null); }}
++        />
++      </div>
++    </Layout>
++  );
++};
++
++export default Distributors;
+diff --git a/src/pages/Login.jsx b/src/pages/Login.jsx
+index 3ab434d..1173cab 100644
+--- a/src/pages/Login.jsx
++++ b/src/pages/Login.jsx
+@@ -4,19 +4,43 @@ import { Eye, EyeOff } from "lucide-react";
+ import { toast, ToastContainer } from "react-toastify";
+ import "react-toastify/dist/ReactToastify.css";
+ import { useUser } from "../contexts/UserContext.jsx";
+-import { adminAPI } from "../services/communication.jsx";
++import { adminAPI, distributorAPI } from "../services/communication.jsx";
+ import { TabArray } from "../utils/TabArray.js";
+ 
+ const Login = () => {
+   const navigate = useNavigate();
+   const { fetchUserProfile } = useUser();
++  const [mode, setMode] = useState("admin"); // "admin" | "distributor"
+   const [email, setEmail] = useState("");
++  const [identifier, setIdentifier] = useState("");
+   const [password, setPassword] = useState("");
+   const [loading, setLoading] = useState(false);
+   const [showPassword, setShowPassword] = useState(false);
+ 
+   const handleSubmit = async (e) => {
+     e.preventDefault();
++
++    if (mode === "distributor") {
++      if (!identifier || !password) {
++        toast.error("Please enter phone/email and password");
++        return;
++      }
++      setLoading(true);
++      const distResult = await distributorAPI.login({ identifier, password });
++      if (distResult.success) {
++        localStorage.setItem("token", distResult.data.token);
++        localStorage.setItem("role", "distributor");
++        localStorage.removeItem("accessTab");
++        localStorage.setItem("userData", JSON.stringify(distResult?.data?.distributor));
++        toast.success("Login Successful!", { position: "top-right", autoClose: 3000 });
++        navigate("/distributor", { replace: true });
++      } else {
++        toast.error(distResult.message || "Login Failed");
++      }
++      setLoading(false);
++      return;
++    }
++
+     if (!email || !password) {
+       toast.error("Please enter email and password");
+       return;
+@@ -38,6 +62,7 @@ const Login = () => {
+       const accessTabs = result?.data?.admin?.accessTab || [];
+ 
+       localStorage.setItem("token", result.data.token);
++      localStorage.removeItem("role");
+       localStorage.setItem("accessTab", JSON.stringify(accessTabs));
+       localStorage.setItem("userData", JSON.stringify(result?.data?.admin));
+ 
+@@ -75,18 +100,59 @@ const Login = () => {
+         <form onSubmit={handleSubmit} className="login-form">
+           <div className="form-group">
+             <h3 className="text-center">Login</h3>
+-            <label className="form-label mt-4">Email Address</label>
+-            <div className="input-wrapper">
+-              <input
+-                type="email"
+-                className="form-input"
+-                value={email}
+-                onChange={(e) => setEmail(e.target.value)}
+-                placeholder="Enter your email"
+-                required
++            <div className="d-flex gap-1 p-1 bg-light rounded" style={{ marginTop: "16px" }}>
++              <button
++                type="button"
++                className={`btn btn-sm flex-fill ${mode === "admin" ? "btn-primary" : "btn-outline-secondary"}`}
++                onClick={() => setMode("admin")}
+                 disabled={loading}
+-              />
++              >
++                Admin
++              </button>
++              <button
++                type="button"
++                className={`btn btn-sm flex-fill ${mode === "distributor" ? "btn-primary" : "btn-outline-secondary"}`}
++                onClick={() => setMode("distributor")}
++                disabled={loading}
++              >
++                Distributor
++              </button>
+             </div>
++
++            {mode === "admin" ? (
++              <>
++                <label className="form-label mt-4">Email Address</label>
++                <div className="input-wrapper">
++                  <input
++                    type="email"
++                    className="form-input"
++                    value={email}
++                    onChange={(e) => setEmail(e.target.value)}
++                    placeholder="Enter your email"
++                    required
++                    disabled={loading}
++                  />
++                </div>
++              </>
++            ) : (
++              <>
++                <label className="form-label mt-4">Phone or Email</label>
++                <div className="input-wrapper">
++                  <input
++                    type="text"
++                    className="form-input"
++                    value={identifier}
++                    onChange={(e) => setIdentifier(e.target.value)}
++                    placeholder="Enter your phone or email"
++                    required
++                    disabled={loading}
++                  />
++                </div>
++                <small className="text-muted">
++                  Use the phone or email your MyNaai admin shared with you.
++                </small>
++              </>
++            )}
+           </div>
+ 
+           <div className="form-group">
+diff --git a/src/pages/ShopOrders.jsx b/src/pages/ShopOrders.jsx
+new file mode 100644
+index 0000000..347d404
+--- /dev/null
++++ b/src/pages/ShopOrders.jsx
+@@ -0,0 +1,244 @@
++import { useState, useEffect, useCallback } from "react";
++import { shopOrderAPI } from "../services/communication";
++import Layout from "../components/Layout.jsx";
++import SearchInput from "../components/SearchInput.jsx";
++import Pagination from "../components/Pagination.jsx";
++import Loader from "../components/Loader.jsx";
++import ShopOrderDetailModal from "../components/ShopOrderDetailModal.jsx";
++import { toast } from "react-toastify";
++import { useNavigate } from "react-router-dom";
++import { ShoppingBag } from "lucide-react";
++
++const money = (value) => {
++  const num = Number(value);
++  if (!Number.isFinite(num)) return "—";
++  return `₹${num.toLocaleString("en-IN")}`;
++};
++
++const dateTime = (value) => {
++  if (!value) return "—";
++  const d = new Date(value);
++  return d.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
++};
++
++export const INTERNAL_STATUS_META = {
++  PENDING_ASSIGNMENT: { label: "Pending Assignment", badge: "bg-warning-subtle text-warning-emphasis" },
++  AWAITING_ACCEPTANCE: { label: "Awaiting Distributor", badge: "bg-info-subtle text-info-emphasis" },
++  ASSIGNED: { label: "Assigned", badge: "bg-primary-subtle text-primary-emphasis" },
++  PICKED: { label: "Picked Up", badge: "bg-secondary-subtle text-secondary-emphasis" },
++  SHIPPED: { label: "Shipped", badge: "bg-primary-subtle text-primary-emphasis" },
++  DELIVERED: { label: "Delivered", badge: "bg-success-subtle text-success-emphasis" },
++  CANCELLED: { label: "Cancelled", badge: "bg-danger-subtle text-danger-emphasis" }
++};
++
++const STATUS_FILTERS = [
++  { key: "ALL", label: "All" },
++  { key: "PENDING_ASSIGNMENT", label: "To Assign" },
++  { key: "AWAITING_ACCEPTANCE", label: "Awaiting Reply" },
++  { key: "ASSIGNED", label: "Assigned" },
++  { key: "PICKED", label: "Picked" },
++  { key: "SHIPPED", label: "Shipped" },
++  { key: "DELIVERED", label: "Delivered" },
++  { key: "CANCELLED", label: "Cancelled" }
++];
++
++const ShopOrders = () => {
++  const [search, setSearch] = useState("");
++  const [debouncedSearch, setDebouncedSearch] = useState("");
++  const [statusFilter, setStatusFilter] = useState("ALL");
++  const [currentPage, setCurrentPage] = useState(1);
++  const [totalPages, setTotalPages] = useState(1);
++  const [orders, setOrders] = useState([]);
++  const [isLoading, setIsLoading] = useState(true);
++  const [selectedOrder, setSelectedOrder] = useState(null);
++  const navigate = useNavigate();
++
++  const fetchOrders = useCallback(async () => {
++    try {
++      setIsLoading(true);
++      const params = { page: currentPage, searchString: debouncedSearch };
++      if (statusFilter !== "ALL") params.status = statusFilter;
++      const result = await shopOrderAPI.adminList(params);
++      if (result.success) {
++        setOrders(result.data?.orders || []);
++        setTotalPages(result.data?.pagination?.totalPages || 1);
++      } else {
++        toast.error(result.message || "Failed to load shop orders");
++      }
++    } catch {
++      toast.error("Failed to load shop orders");
++    } finally {
++      setIsLoading(false);
++    }
++  }, [currentPage, debouncedSearch, statusFilter]);
++
++  useEffect(() => {
++    const timer = setTimeout(() => {
++      setDebouncedSearch(search);
++      setCurrentPage(1);
++    }, 500);
++    return () => clearTimeout(timer);
++  }, [search]);
++
++  useEffect(() => {
++    fetchOrders();
++  }, [fetchOrders]);
++
++  useEffect(() => {
++    const tab = localStorage.getItem("accessTab") ? JSON.parse(localStorage.getItem("accessTab")) : null;
++    if (localStorage.getItem("role") === "distributor" || !(tab && tab?.includes("shopOrders"))) {
++      navigate("/login", { replace: true });
++    }
++  }, []);
++
++  const handleStatusChange = async (orderId, status) => {
++    try {
++      const result = await shopOrderAPI.updateStatus({ orderId, status });
++      if (result.success) {
++        toast.success(`Order ${status === "DELIVERED" ? "marked as delivered" : `moved to ${INTERNAL_STATUS_META[status]?.label || status}`}`);
++        setSelectedOrder(null);
++        fetchOrders();
++      } else {
++        toast.error(result.message || "Failed to update order status");
++      }
++    } catch {
++      toast.error("Failed to update order status");
++    }
++  };
++
++  const handleAssign = async (orderId, distributorId) => {
++    try {
++      const result = await shopOrderAPI.assignDistributor({ orderId, distributorId });
++      if (result.success) {
++        toast.success("Order requested to the distributor — waiting for their Accept / Reject");
++        setSelectedOrder(null);
++        fetchOrders();
++      } else {
++        toast.error(result.message || "Failed to assign distributor");
++      }
++    } catch {
++      toast.error("Failed to assign distributor");
++    }
++  };
++
++  // The admin token is accepted by the accept/reject endpoints, so an admin
++  // can record a decision taken over the phone and it lands as a proper
++  // ACCEPTED / REJECTED event (with the reason) in the order history.
++  const handleRecordDecision = async (orderId, action, reason) => {
++    try {
++      const result = action === "accept"
++        ? await shopOrderAPI.accept(orderId)
++        : await shopOrderAPI.reject({ orderId, reason });
++      if (result.success) {
++        toast.success(action === "accept" ? "Acceptance recorded" : "Rejection recorded — order is back to To Assign");
++        setSelectedOrder(null);
++        fetchOrders();
++      } else {
++        toast.error(result.message || "Failed to record decision");
++      }
++    } catch {
++      toast.error("Failed to record decision");
++    }
++  };
++
++  return (
++    <Layout>
++      <div className="page-content d-flex flex-column p-2 p-md-3" style={{ height: "calc(100vh - 70px)", overflow: "hidden" }}>
++        <div className="card shadow-sm mb-3 bg-white border-0 flex-shrink-0" style={{ borderRadius: "12px" }}>
++          <div className="card-body p-3">
++            <div className="row g-3">
++              <div className="col-12 col-md-4">
++                <SearchInput value={search} onChange={setSearch} placeholder="Search by order ID..." />
++              </div>
++              <div className="col-12">
++                <div className="d-flex flex-wrap gap-2 align-items-center">
++                  {STATUS_FILTERS.map((f) => (
++                    <button
++                      key={f.key}
++                      onClick={() => { setStatusFilter(f.key); setCurrentPage(1); }}
++                      className={`btn btn-sm ${statusFilter === f.key ? "btn-success" : "btn-outline-secondary"}`}
++                    >
++                      {f.label}
++                    </button>
++                  ))}
++                  <div className="ms-auto"><Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} size="sm" /></div>
++                </div>
++              </div>
++            </div>
++          </div>
++        </div>
++
++        <div className="flex-grow-1 p-3 shadow-sm border-0" style={{ overflowY: "auto", backgroundColor: "#ffffff", borderRadius: "12px" }}>
++          {isLoading ? (
++            <div className="text-center py-5"><Loader size="sm" /></div>
++          ) : orders.length === 0 ? (
++            <div className="text-center py-5 text-muted">
++              <ShoppingBag size={40} className="mx-auto mb-2 opacity-25" />
++              No shop orders match this filter.
++            </div>
++          ) : (
++            <div className="table-responsive">
++              <table className="table align-middle mb-0" style={{ fontSize: "0.9rem" }}>
++                <thead>
++                  <tr className="text-muted small" style={{ textTransform: "uppercase", letterSpacing: "0.4px" }}>
++                    <th>Order</th>
++                    <th>Salon (Customer)</th>
++                    <th className="text-end">Items</th>
++                    <th className="text-end">Total</th>
++                    <th>Payment</th>
++                    <th>Internal Status</th>
++                    <th>Customer Sees</th>
++                    <th>Distributor</th>
++                    <th>Placed</th>
++                  </tr>
++                </thead>
++                <tbody>
++                  {orders.map((o) => {
++                    const meta = INTERNAL_STATUS_META[o.status] || { label: o.status, badge: "bg-secondary-subtle text-secondary" };
++                    const customerMeta = INTERNAL_STATUS_META[o.customerStatus] || { label: o.customerStatus };
++                    const itemCount = (o.items || []).length;
++                    return (
++                      <tr
++                        key={o.orderId}
++                        className="cursor-pointer"
++                        onClick={() => setSelectedOrder(o)}
++                        style={{ cursor: "pointer" }}
++                      >
++                        <td className="fw-semibold">#{o.orderId}</td>
++                        <td>
++                          <div>{o.salon?.salonName || "—"}</div>
++                          <div className="text-muted small">{o.salon?.phoneNumber || ""}</div>
++                        </td>
++                        <td className="text-end">{o.amounts?.itemCount ?? (o.items || []).length}</td>
++                        <td className="text-end fw-semibold">{money(o.amounts?.total)}</td>
++                        <td>
++                          {o.payment?.status === "PAID"
++                            ? <span className="badge bg-success-subtle text-success">{o.payment?.method} • Paid</span>
++                            : <span className="badge bg-secondary-subtle text-secondary">{o.payment?.method} • Unpaid</span>}
++                        </td>
++                        <td><span className={`badge ${meta.badge}`}>{meta.label}</span></td>
++                        <td><span className="text-muted small">{customerMeta.label}</span></td>
++                        <td>{o.distributor?.name || <span className="text-muted">—</span>}</td>
++                        <td className="text-muted small">{dateTime(o.createdAt)}</td>
++                      </tr>
++                    );
++                  })}
++                </tbody>
++              </table>
++            </div>
++          )}
++        </div>
++
++        <ShopOrderDetailModal
++          order={selectedOrder}
++          onClose={() => setSelectedOrder(null)}
++          onStatusChange={handleStatusChange}
++          onAssign={handleAssign}
++          onRecordDecision={handleRecordDecision}
++        />
++      </div>
++    </Layout>
++  );
++};
++
++export default ShopOrders;
+diff --git a/src/pages/ShopProducts.jsx b/src/pages/ShopProducts.jsx
+new file mode 100644
+index 0000000..e029816
+--- /dev/null
++++ b/src/pages/ShopProducts.jsx
+@@ -0,0 +1,204 @@
++import { useState, useEffect, useCallback } from "react";
++import { shopProductAPI } from "../services/communication";
++import Layout from "../components/Layout.jsx";
++import SearchInput from "../components/SearchInput.jsx";
++import Pagination from "../components/Pagination.jsx";
++import Loader from "../components/Loader.jsx";
++import DeleteConfirmModal from "../components/DeleteConfirmModal.jsx";
++import ShopProductModal from "../components/ShopProductModal.jsx";
++import { toast } from "react-toastify";
++import { useNavigate } from "react-router-dom";
++import { Package, Plus } from "lucide-react";
++
++const GENDER_LABELS = { MALE: "Men", FEMALE: "Women", UNISEX: "Unisex" };
++
++const money = (value) => {
++  const num = Number(value);
++  if (!Number.isFinite(num)) return "—";
++  return `₹${num.toLocaleString("en-IN")}`;
++};
++
++const dateTime = (value) => {
++  if (!value) return "—";
++  const d = new Date(value);
++  return d.toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
++};
++
++const ShopProducts = () => {
++  const [search, setSearch] = useState("");
++  const [debouncedSearch, setDebouncedSearch] = useState("");
++  const [currentPage, setCurrentPage] = useState(1);
++  const [totalPages, setTotalPages] = useState(1);
++  const [products, setProducts] = useState([]);
++  const [isLoading, setIsLoading] = useState(true);
++  const [showModal, setShowModal] = useState(false);
++  const [editingProduct, setEditingProduct] = useState(null);
++  const [deleteModal, setDeleteModal] = useState({ show: false, target: null });
++  const navigate = useNavigate();
++
++  const fetchProducts = useCallback(async () => {
++    try {
++      setIsLoading(true);
++      const result = await shopProductAPI.adminList({ page: currentPage, searchString: debouncedSearch });
++      if (result.success) {
++        setProducts(result.data?.products || []);
++        setTotalPages(result.data?.pagination?.totalPages || 1);
++      } else {
++        toast.error(result.message || "Failed to load shop products");
++      }
++    } catch {
++      toast.error("Failed to load shop products");
++    } finally {
++      setIsLoading(false);
++    }
++  }, [currentPage, debouncedSearch]);
++
++  useEffect(() => {
++    const timer = setTimeout(() => {
++      setDebouncedSearch(search);
++      setCurrentPage(1);
++    }, 500);
++    return () => clearTimeout(timer);
++  }, [search]);
++
++  useEffect(() => {
++    fetchProducts();
++  }, [fetchProducts]);
++
++  useEffect(() => {
++    const tab = localStorage.getItem("accessTab") ? JSON.parse(localStorage.getItem("accessTab")) : null;
++    if (localStorage.getItem("role") === "distributor" || !(tab && tab?.includes("shopProducts"))) {
++      navigate("/login", { replace: true });
++    }
++  }, []);
++
++  const handleConfirmDelete = async () => {
++    try {
++      const result = await shopProductAPI.remove(deleteModal.target.productId);
++      if (result.success) {
++        toast.success("Product removed from the catalog");
++        fetchProducts();
++      } else {
++        toast.error(result.message || "Delete failed");
++      }
++    } catch {
++      toast.error("Delete failed");
++    } finally {
++      setDeleteModal({ show: false, target: null });
++    }
++  };
++
++  return (
++    <Layout>
++      <div className="page-content d-flex flex-column p-2 p-md-3" style={{ height: "calc(100vh - 70px)", overflow: "hidden" }}>
++        <div className="card shadow-sm mb-3 bg-white border-0 flex-shrink-0" style={{ borderRadius: "12px" }}>
++          <div className="card-body p-3">
++            <div className="row g-3 align-items-center">
++              <div className="col-12 col-md-6">
++                <SearchInput value={search} onChange={setSearch} placeholder="Search catalog products..." />
++              </div>
++              <div className="col-12 col-md-6 d-flex justify-content-md-end gap-2">
++                <button className="button23" onClick={() => { setEditingProduct(null); setShowModal(true); }}>
++                  <Plus size={15} className="me-1" /> Add Product
++                </button>
++                <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} size="sm" />
++              </div>
++            </div>
++          </div>
++        </div>
++
++        <div className="flex-grow-1 p-3 shadow-sm border-0" style={{ overflowY: "auto", backgroundColor: "#ffffff", borderRadius: "12px" }}>
++          {isLoading ? (
++            <div className="text-center py-5"><Loader size="sm" /></div>
++          ) : products.length === 0 ? (
++            <div className="text-center py-5 text-muted">
++              <Package size={40} className="mx-auto mb-2 opacity-25" />
++              No catalog products yet. Add the first one so salons can buy from you.
++            </div>
++          ) : (
++            <div className="table-responsive">
++              <table className="table align-middle mb-0" style={{ fontSize: "0.9rem" }}>
++                <thead>
++                  <tr className="text-muted small" style={{ textTransform: "uppercase", letterSpacing: "0.4px" }}>
++                    <th>Product</th>
++                    <th className="text-end">Price</th>
++                    <th className="text-end">MRP</th>
++                    <th>Category</th>
++                    <th>Gender</th>
++                    <th>Status</th>
++                    <th className="text-end">Actions</th>
++                  </tr>
++                </thead>
++                <tbody>
++                  {products.map((p) => {
++                    const price = Number(p.price);
++                    const mrp = Number(p.mrp);
++                    const discount = mrp > price ? Math.round(((mrp - price) / mrp) * 100) : 0;
++                    return (
++                      <tr key={p.productId}>
++                        <td>
++                          <div className="d-flex align-items-center gap-2">
++                            <div style={{ width: 40, height: 40, borderRadius: 8, background: "#f3f0ea", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 }}>
++                              {p.productImage ? (
++                                <img src={p.productImage} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
++                              ) : (
++                                <Package size={18} className="text-muted" />
++                              )}
++                            </div>
++                            <div>
++                              <div className="fw-semibold">{p.productName}</div>
++                              <div className="text-muted small">Added {dateTime(p.createdAt)}</div>
++                            </div>
++                          </div>
++                        </td>
++                        <td className="text-end fw-semibold">{money(p.price)}</td>
++                        <td className="text-end">
++                          {mrp > price ? (
++                            <span>
++                              <span className="text-muted text-decoration-line-through small me-1">{money(p.mrp)}</span>
++                              {discount > 0 && <span className="badge bg-success-subtle text-success">{discount}% off</span>}
++                            </span>
++                          ) : (
++                            <span className="text-muted">—</span>
++                          )}
++                        </td>
++                        <td>{p.category || "—"}</td>
++                        <td>{GENDER_LABELS[p.gender] || "Any"}</td>
++                        <td>
++                          {p.isAvailable
++                            ? <span className="badge bg-success-subtle text-success">Live</span>
++                            : <span className="badge bg-secondary-subtle text-secondary">Hidden</span>}
++                        </td>
++                        <td className="text-end">
++                          <button className="button22 me-1" onClick={() => { setEditingProduct(p); setShowModal(true); }}>Edit</button>
++                          <button className="btn btn-sm btn-danger" onClick={() => { setDeleteModal({ show: true, target: p }); }}>
++                            <i className="bi bi-trash"></i>
++                          </button>
++                        </td>
++                      </tr>
++                    );
++                  })}
++                </tbody>
++              </table>
++            </div>
++          )}
++        </div>
++
++        <ShopProductModal
++          showModal={showModal}
++          setShowModal={setShowModal}
++          initialProduct={editingProduct}
++          onSuccess={() => { fetchProducts(); setShowModal(false); setEditingProduct(null); }}
++        />
++
++        <DeleteConfirmModal
++          show={deleteModal.show}
++          onHide={() => setDeleteModal({ show: false, target: null })}
++          onConfirm={handleConfirmDelete}
++        />
++      </div>
++    </Layout>
++  );
++};
++
++export default ShopProducts;
+diff --git a/src/services/communication.jsx b/src/services/communication.jsx
+index 4e38931..1ba5bec 100644
+--- a/src/services/communication.jsx
++++ b/src/services/communication.jsx
+@@ -48,6 +48,7 @@ api.interceptors.response.use(
+       // Token expired or invalid
+       console.warn('401 Unauthorized - clearing token and redirecting to login');
+       localStorage.removeItem('token');
++      localStorage.removeItem('role');
+       window.location.href = '/login';
+     }
+     return Promise.reject(error);
+@@ -1345,4 +1346,146 @@ export const notificationAPI = {
+ 
+ 
+ 
+-export default api;
+\ No newline at end of file
++export default api;
++
++// ==================== NAAI SHOP (B2B) ====================
++// Two product worlds: the salons' customer-facing products (untouched) and
++// the company catalog salons BUY from (shop_products below). Orders carry
++// two status tracks: `status` = internal (admin/distributor),
++// `customerStatus` = what the salon sees. DECIMAL columns come back as
++// strings — parse with Number() before display.
++
++// Company catalog (admin product management tab)
++export const shopProductAPI = {
++  adminList: async ({ page = 1, searchString = "" } = {}) => {
++    try {
++      const response = await api.post('/api/shop-products/admin-list', { page, searchString });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to fetch shop products", error: error.response?.data };
++    }
++  },
++  create: async (productData) => {
++    try {
++      const response = await api.post('/api/shop-products/admin-create', productData);
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to create product", error: error.response?.data };
++    }
++  },
++  update: async (productData) => {
++    try {
++      const response = await api.post('/api/shop-products/admin-update', productData);
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to update product", error: error.response?.data };
++    }
++  },
++  remove: async (productId) => {
++    try {
++      const response = await api.post('/api/shop-products/admin-delete', { productId });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to delete product", error: error.response?.data };
++    }
++  }
++};
++
++// Delivery partners (distributors tab)
++export const distributorAPI = {
++  list: async ({ page = 1, searchString = "" } = {}) => {
++    try {
++      const response = await api.post('/api/distributors/list', { page, searchString });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to fetch distributors", error: error.response?.data };
++    }
++  },
++  create: async (distributorData) => {
++    try {
++      const response = await api.post('/api/distributors/create', distributorData);
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to create distributor", error: error.response?.data };
++    }
++  },
++  update: async (distributorData) => {
++    try {
++      const response = await api.post('/api/distributors/update', distributorData);
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to update distributor", error: error.response?.data };
++    }
++  },
++  // Distributor portal login (phone or email + the password the admin set).
++  login: async ({ identifier, password }) => {
++    try {
++      const response = await axios.post(`${API_BASE_URL}/api/distributors/login`, { identifier, password });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Login failed", error: error.response?.data };
++    }
++  }
++};
++
++// Orders — admin dashboard + distributor portal
++export const shopOrderAPI = {
++  adminList: async ({ page = 1, status = "", customerStatus = "", searchString = "" } = {}) => {
++    try {
++      const response = await api.post('/api/shop-orders/admin-list', { page, status, customerStatus, searchString });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to fetch orders", error: error.response?.data };
++    }
++  },
++  adminGetById: async (orderId) => {
++    try {
++      const response = await api.post('/api/shop-orders/admin-get-by-id', { orderId });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to fetch order", error: error.response?.data };
++    }
++  },
++  assignDistributor: async ({ orderId, distributorId, notes = "" }) => {
++    try {
++      const response = await api.post('/api/shop-orders/admin-assign-distributor', { orderId, distributorId, notes });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to assign distributor", error: error.response?.data };
++    }
++  },
++  updateStatus: async ({ orderId, status, notes = "" }) => {
++    try {
++      const response = await api.post('/api/shop-orders/admin-update-status', { orderId, status, notes });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to update status", error: error.response?.data };
++    }
++  },
++  // Distributor portal (distributor token, or the admin's token when the
++  // admin records a decision taken over the phone)
++  distributorOrders: async ({ page = 1, status = "" } = {}) => {
++    try {
++      const response = await api.post('/api/shop-orders/distributor-orders', { page, status });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to fetch orders", error: error.response?.data };
++    }
++  },
++  accept: async (orderId) => {
++    try {
++      const response = await api.post('/api/shop-orders/distributor-accept', { orderId });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to accept order", error: error.response?.data };
++    }
++  },
++  reject: async ({ orderId, reason }) => {
++    try {
++      const response = await api.post('/api/shop-orders/distributor-reject', { orderId, reason });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to reject order", error: error.response?.data };
++    }
++  }
++};
+\ No newline at end of file
+diff --git a/src/utils/TabArray.js b/src/utils/TabArray.js
+index 54ee3b4..0e468d0 100644
+--- a/src/utils/TabArray.js
++++ b/src/utils/TabArray.js
+@@ -34,4 +34,19 @@ export const TabArray = [
+     label: "Push Notifications",
+     route: "/notifications",
+   },
++  {
++    key: "shopProducts",
++    label: "Shop Products",
++    route: "/shop-products",
++  },
++  {
++    key: "distributors",
++    label: "Distributors",
++    route: "/distributors",
++  },
++  {
++    key: "shopOrders",
++    label: "Shop Orders",
++    route: "/shop-orders",
++  },
+ ];
+diff --git a/vite.config.js b/vite.config.js
+index 3a3738f..ccb939a 100644
+--- a/vite.config.js
++++ b/vite.config.js
+@@ -7,6 +7,8 @@ export default defineConfig(({ mode }) => ({
+   server: {
+     host: "::",
+     port: 8080,
++    // Preview/remote dev hosts (e.g. sandbox preview tunnels) are allowed.
++    allowedHosts: true,
+   },
+   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
+   resolve: {
+-- 
+2.39.5
+

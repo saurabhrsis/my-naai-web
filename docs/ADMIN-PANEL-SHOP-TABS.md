@@ -121,3 +121,10 @@ Distributor home (token from above):
 4. On rejection the admin re-assigns another distributor → repeat step 3.
 5. Admin moves the parcel: PICKED → SHIPPED → DELIVERED; every step is in
    the record with who/when/why.
+
+## Delivery status
+
+- **Backend**: delivered in `backend-shop-api/` of this repo (install + `/test-db`).
+- **Frontend**: delivered in `admin-panel-shop-tabs/` of this repo — 14 files
+  (7 new + 7 overwrites, nothing deleted) for `my-naai-frontend`, built and
+  verified end-to-end against a live instance of the backend.
