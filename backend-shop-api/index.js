@@ -113,13 +113,44 @@ app.get("/test-db", async (req, res) => {
 
         const ignoredModels = ["Admin"];
 
-        for (const [modelName, model] of Object.entries(db.sequelize.models)) {
-            if (ignoredModels.includes(modelName)) {
-                console.log(`Skipping table sync: ${modelName}`);
-                continue;
+        // Models auto-load in alphabetical order, but a table can only be
+        // created once its foreign-key targets exist (e.g. shop_carts
+        // references shop_products, shop_order references shop_cart). So the
+        // sync runs in passes: a model that fails is retried on the next
+        // pass, once the tables it references have been created. Models whose
+        // tables already exist are unaffected (alter only touches columns).
+        let pending = Object.entries(db.sequelize.models).filter(
+            ([modelName]) => {
+                if (ignoredModels.includes(modelName)) {
+                    console.log(`Skipping table sync: ${modelName}`);
+                    return false;
+                }
+                return true;
             }
+        );
 
-            await model.sync({ alter: true });
+        for (let pass = 1; pass <= 5 && pending.length > 0; pass++) {
+            const failed = [];
+            for (const [modelName, model] of pending) {
+                try {
+                    await model.sync({ alter: true });
+                } catch (error) {
+                    console.error(`Table sync failed on pass ${pass}: ${modelName} - ${error.message}`);
+                    failed.push([modelName, model]);
+                }
+            }
+            pending = failed;
+        }
+
+        if (pending.length > 0) {
+            const message = `Table sync failed for: ${pending.map(([modelName]) => modelName).join(", ")}`;
+            console.error("Database update failed:", message);
+
+            return res.status(500).json({
+                success: false,
+                message: "Database update failed",
+                error: message,
+            });
         }
 
         return res.json({

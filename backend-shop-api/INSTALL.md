@@ -32,6 +32,11 @@ its own tables and the legacy product API is back to its original shape.
   PROCESSING → SHIPPED → DELIVERED`); salon responses only ever carry the
   salon track, never the distributor.
 - **Razorpay webhook** confirms the payment on the salon track only.
+- **`GET /test-db` now syncs in passes** — models auto-load alphabetically,
+  but a table can only be created once its foreign-key targets exist
+  (`shop_carts` → `shop_products`). A model that fails on one pass is
+  retried on the next, so the four new tables create themselves in the
+  right order. Existing tables are unaffected (only new tables are created).
 - **Deletes** the four admin product controllers the previous bundle added
   (they managed the merged table that no longer exists).
 
