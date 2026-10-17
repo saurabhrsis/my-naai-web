@@ -13,7 +13,9 @@ const adminGetShopOrderById = async (request, response) => {
             });
         }
 
-        const order = await shopOrderService.getById(orderId);
+        // withEvents: the complete record — who did what, when, and why
+        // (rejection reasons, re-assignments, every status move).
+        const order = await shopOrderService.getById(orderId, { withEvents: true });
         if (!order) {
             return response.status(404).json({
                 status: 'FAILED',

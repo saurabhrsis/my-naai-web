@@ -49,7 +49,7 @@ const cancelShopOrderSchema = Joi.object({
 // derived from it. See shopOrder.service.INTERNAL_STATUSES.
 const adminUpdateShopOrderStatusSchema = Joi.object({
     orderId: Joi.string().max(64).required(),
-    status: Joi.string().valid('PENDING_ASSIGNMENT', 'ASSIGNED', 'PICKED', 'SHIPPED', 'DELIVERED', 'CANCELLED').required(),
+    status: Joi.string().valid('PENDING_ASSIGNMENT', 'AWAITING_ACCEPTANCE', 'ASSIGNED', 'PICKED', 'SHIPPED', 'DELIVERED', 'CANCELLED').required(),
     notes: Joi.string().max(1000).allow(null, '').optional()
 });
 
@@ -59,10 +59,29 @@ const adminAssignDistributorSchema = Joi.object({
     notes: Joi.string().max(1000).allow(null, '').optional()
 });
 
+// Distributor portal (or the admin acting on the distributor's behalf).
+const distributorOrderSchema = Joi.object({
+    orderId: Joi.string().max(64).required()
+});
+
+const distributorRejectOrderSchema = Joi.object({
+    orderId: Joi.string().max(64).required(),
+    // The reason is part of the permanent record — it must say something.
+    reason: Joi.string().trim().min(3).max(500).required()
+});
+
+const distributorListOrdersSchema = Joi.object({
+    page: Joi.number().integer().min(1).optional(),
+    status: Joi.string().valid('PENDING_ASSIGNMENT', 'AWAITING_ACCEPTANCE', 'ASSIGNED', 'PICKED', 'SHIPPED', 'DELIVERED', 'CANCELLED').optional().allow(null, '')
+});
+
 module.exports = {
     createShopOrderSchema,
     getShopOrderSchema,
     cancelShopOrderSchema,
     adminUpdateShopOrderStatusSchema,
-    adminAssignDistributorSchema
+    adminAssignDistributorSchema,
+    distributorOrderSchema,
+    distributorRejectOrderSchema,
+    distributorListOrdersSchema
 };

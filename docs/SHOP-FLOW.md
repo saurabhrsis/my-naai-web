@@ -164,12 +164,17 @@ under `/api/products/*`) are NOT the shop catalog. The shop browses the
   is what the backend's signed webhook flips to PAID.
 
 **Two status tracks.** The order carries an INTERNAL track (what the company
-admin and the assigned **distributor** see: `PENDING_ASSIGNMENT → ASSIGNED →
-PICKED → SHIPPED → DELIVERED`, moved through `admin-assign-distributor` and
+admin and the assigned **distributor** see:
+`PENDING_ASSIGNMENT → AWAITING_ACCEPTANCE → ASSIGNED → PICKED → SHIPPED →
+DELIVERED`, moved through `admin-assign-distributor`,
+`distributor-accept`/`distributor-reject` (a rejection with a reason sends
+the order back to `PENDING_ASSIGNMENT` for re-assignment) and
 `admin-update-status`) and a SALON track (what the buying salon sees). The
 salon responses only ever carry the salon track as `status`; the internal
-track and the distributor never cross to the client. The 4-step tracker maps
-the salon track onto it:
+track and the distributor never cross to the client. Every admin/distributor
+action is appended to `shop_order_events` (the complete record shown on the
+admin dashboard: who, what, before/after status, reason). The 4-step tracker
+maps the salon track onto it:
 
 | salon track  | tracker step        |
 | ------------ | ------------------- |

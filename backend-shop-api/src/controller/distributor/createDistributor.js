@@ -4,8 +4,8 @@ const distributorService = require('../../services/distributor.service');
 // Company admin: add a delivery partner.
 const createDistributor = async (request, response) => {
     try {
-        const { name, phone, email, area, address, isActive } = request.body || {};
-        const validationResult = createDistributorSchema.validate({ name, phone, email, area, address, isActive }, { abortEarly: true });
+        const { name, phone, email, area, deliveryCapability, address, password, isActive } = request.body || {};
+        const validationResult = createDistributorSchema.validate({ name, phone, email, area, deliveryCapability, address, password, isActive }, { abortEarly: true });
         if (validationResult.error) {
             return response.status(400).json({ status: 'FAILED', message: validationResult.error.details[0].message });
         }
@@ -15,7 +15,9 @@ const createDistributor = async (request, response) => {
             phone: value.phone || null,
             email: value.email || null,
             area: value.area || null,
+            deliveryCapability: value.deliveryCapability || null,
             address: value.address || null,
+            password: value.password || null,
             isActive: value.isActive
         });
         return response.status(200).json({ status: 'SUCCESS', message: 'Distributor added successfully', data: result });

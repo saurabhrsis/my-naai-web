@@ -35,6 +35,21 @@ module.exports = (sequelize) => {
             allowNull: true
         },
 
+        // Delivery capability, free text (e.g. "2 bikes + 1 van, 50 orders
+        // a day") — shown to the admin when choosing a distributor.
+        deliveryCapability: {
+            type: DataTypes.STRING(200),
+            allowNull: true,
+            field: 'delivery_capability'
+        },
+
+        // bcrypt hash. NULL means the distributor has no portal login yet
+        // (the admin sets a password when creating/updating them).
+        password: {
+            type: DataTypes.STRING(255),
+            allowNull: true
+        },
+
         address: {
             type: DataTypes.TEXT,
             allowNull: true

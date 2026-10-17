@@ -27,10 +27,25 @@ its own tables and the legacy product API is back to its original shape.
 - **Distributors** (`distributors`) — delivery partners the company admin
   assigns orders to (`/api/shop-orders/admin-assign-distributor`).
 - **Two status tracks on `shop_orders`** — an INTERNAL track for
-  admin/distributor (`PENDING_ASSIGNMENT → ASSIGNED → PICKED → SHIPPED →
-  DELIVERED`) and a SALON track (`customerStatus`: `PENDING → CONFIRMED →
-  PROCESSING → SHIPPED → DELIVERED`); salon responses only ever carry the
-  salon track, never the distributor.
+  admin/distributor (`PENDING_ASSIGNMENT → AWAITING_ACCEPTANCE → ASSIGNED →
+  PICKED → SHIPPED → DELIVERED`) and a SALON track (`customerStatus`:
+  `PENDING → CONFIRMED → PROCESSING → SHIPPED → DELIVERED`); salon responses
+  only ever carry the salon track, never the distributor. The customer track
+  never regresses (a paid order stays CONFIRMED even when a distributor
+  rejects).
+- **Distributor accept / reject / re-assign.** Assigning a distributor
+  requests them (`AWAITING_ACCEPTANCE`); the distributor (or the admin on
+  their behalf) accepts or rejects with a reason. A rejection sends the
+  order back to `PENDING_ASSIGNMENT` for re-assignment.
+- **Complete order record** — a new `shop_order_events` table logs every
+  action (placed, assigned, accepted, rejected + reason, every status move,
+  cancellation) with actor, before/after status and note. Admin order
+  views include the full event list.
+- **Distributor portal login** — `distributors` gains `password` (bcrypt,
+  set by the admin at create/update) and `deliveryCapability`;
+  `POST /api/distributors/login` (phone or email + password) returns a JWT
+  the accept/reject endpoints accept — alongside the admin token, so the
+  admin can record a decision taken over the phone.
 - **Razorpay webhook** confirms the payment on the salon track only.
 - **`GET /test-db` now syncs in passes** — models auto-load alphabetically,
   but a table can only be created once its foreign-key targets exist
@@ -76,6 +91,29 @@ sync only creates the missing shop tables, your existing data is untouched.
    `feature/naai-shop-ecommerce-api`.
 
 (No deletion step is needed — see the optional cleanup note above.)
+
+## Endpoint reference (shop)
+
+All routes are `POST` and answer `{ status, message, data }`.
+
+| Endpoint | Auth | Purpose |
+| --- | --- | --- |
+| `/api/shop-products/list` | salon or user | Company catalog for the shop |
+| `/api/shop-products/admin-list` · `admin-create` · `admin-update` · `admin-delete` | admin | Product management tab |
+| `/api/shop-cart/get` · `add` · `set-qty` · `remove` · `clear` | salon | Server-side cart (per salon account) |
+| `/api/shop-orders/create` · `list` · `get-by-id` · `cancel` | salon | Salon's orders (salon status track) |
+| `/api/shop-orders/admin-list` · `admin-get-by-id` | admin | Central order dashboard — responses include the full `events` record |
+| `/api/shop-orders/admin-assign-distributor` | admin | Assign / re-assign a distributor → `AWAITING_ACCEPTANCE` |
+| `/api/shop-orders/admin-update-status` | admin | Move the internal track (PICKED / SHIPPED / DELIVERED / CANCELLED …) |
+| `/api/distributors/list` · `create` · `update` | admin | Distributors tab (`password` + `deliveryCapability` supported; hash never returned) |
+| `/api/distributors/login` | public | Distributor portal login (phone or email + password) → JWT `{distributorId}` |
+| `/api/shop-orders/distributor-orders` | distributor (admin rejected) | Orders on this distributor's plate; `status` filter, `AWAITING_ACCEPTANCE` = respond queue |
+| `/api/shop-orders/distributor-accept` | distributor or admin | Accept the assigned order → `ASSIGNED` (salon sees CONFIRMED) |
+| `/api/shop-orders/distributor-reject` | distributor or admin | Reject with `reason` (required) → back to `PENDING_ASSIGNMENT` |
+
+`events` entry: `{ id, orderId, actorType: ADMIN|DISTRIBUTOR|SALON|SYSTEM,
+actorId, actorLabel, action: ORDER_PLACED|PAYMENT_CONFIRMED|ASSIGNED|ACCEPTED|
+REJECTED|STATUS_CHANGED|CANCELLED, fromStatus, toStatus, note, createdAt }`.
 
 ## Environment notes
 

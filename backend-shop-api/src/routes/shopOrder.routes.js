@@ -1,6 +1,7 @@
 const express = require('express');
 const { authenticateSalon } = require('../utils/middleware/authSalon.middleware');
 const { authenticateAdmin } = require('../utils/middleware/auth.middleware');
+const { authenticateDistributorOrAdmin } = require('../utils/middleware/authDistributorOrAdmin.middleware');
 const createShopOrder = require('../controller/shopOrder/createShopOrder');
 const listShopOrders = require('../controller/shopOrder/listShopOrders');
 const getShopOrderById = require('../controller/shopOrder/getShopOrderById');
@@ -9,6 +10,9 @@ const adminListShopOrders = require('../controller/shopOrder/adminListShopOrders
 const adminGetShopOrderById = require('../controller/shopOrder/adminGetShopOrderById');
 const adminUpdateShopOrderStatus = require('../controller/shopOrder/adminUpdateShopOrderStatus');
 const adminAssignDistributor = require('../controller/shopOrder/adminAssignDistributor');
+const distributorAcceptOrder = require('../controller/shopOrder/distributorAcceptOrder');
+const distributorRejectOrder = require('../controller/shopOrder/distributorRejectOrder');
+const distributorListOrders = require('../controller/shopOrder/distributorListOrders');
 
 const shopOrderRouter = express.Router();
 
@@ -24,5 +28,11 @@ shopOrderRouter.post('/admin-list', authenticateAdmin, adminListShopOrders);
 shopOrderRouter.post('/admin-get-by-id', authenticateAdmin, adminGetShopOrderById);
 shopOrderRouter.post('/admin-update-status', authenticateAdmin, adminUpdateShopOrderStatus);
 shopOrderRouter.post('/admin-assign-distributor', authenticateAdmin, adminAssignDistributor);
+
+// Distributor portal (distributor token) — the admin token is accepted too,
+// so the admin can record a distributor's accept/reject on their behalf.
+shopOrderRouter.post('/distributor-orders', authenticateDistributorOrAdmin, distributorListOrders);
+shopOrderRouter.post('/distributor-accept', authenticateDistributorOrAdmin, distributorAcceptOrder);
+shopOrderRouter.post('/distributor-reject', authenticateDistributorOrAdmin, distributorRejectOrder);
 
 module.exports = shopOrderRouter;

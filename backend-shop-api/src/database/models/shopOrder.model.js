@@ -11,8 +11,13 @@ const { DataTypes } = require('sequelize');
  *   `status`         INTERNAL track — what the company ADMIN and the
  *                    distributor see: who picks the parcel up and how far
  *                    it has physically come.
- *                        PENDING_ASSIGNMENT -> ASSIGNED -> PICKED ->
- *                        SHIPPED -> DELIVERED   (CANCELLED is terminal)
+ *                        PENDING_ASSIGNMENT -> AWAITING_ACCEPTANCE ->
+ *                        ASSIGNED -> PICKED -> SHIPPED -> DELIVERED
+ *                        (CANCELLED is terminal)
+ *                    AWAITING_ACCEPTANCE means a distributor was requested
+ *                    and has not yet accepted; a rejection sends the order
+ *                    back to PENDING_ASSIGNMENT (the reason is recorded in
+ *                    shop_order_events, not here).
  *   `customerStatus` SALON track — what the buying salon (customer) sees:
  *                        PENDING -> CONFIRMED -> PROCESSING -> SHIPPED ->
  *                        DELIVERED   (CANCELLED is terminal)
@@ -82,7 +87,7 @@ module.exports = (sequelize) => {
         // INTERNAL track (admin + distributor): has the order been handed
         // to a delivery partner and where is the parcel now?
         status: {
-            type: DataTypes.ENUM('PENDING_ASSIGNMENT', 'ASSIGNED', 'PICKED', 'SHIPPED', 'DELIVERED', 'CANCELLED'),
+            type: DataTypes.ENUM('PENDING_ASSIGNMENT', 'AWAITING_ACCEPTANCE', 'ASSIGNED', 'PICKED', 'SHIPPED', 'DELIVERED', 'CANCELLED'),
             allowNull: false,
             defaultValue: 'PENDING_ASSIGNMENT',
             field: 'status'
@@ -134,6 +139,10 @@ module.exports = (sequelize) => {
         ShopOrder.belongsTo(models.Distributor, {
             foreignKey: 'distributorId',
             as: 'distributor'
+        });
+        ShopOrder.hasMany(models.ShopOrderEvent, {
+            foreignKey: 'orderId',
+            as: 'events'
         });
     };
 

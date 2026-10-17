@@ -4,8 +4,8 @@ const distributorService = require('../../services/distributor.service');
 // Company admin: partially update a delivery partner.
 const updateDistributor = async (request, response) => {
     try {
-        const { distributorId, name, phone, email, area, address, isActive } = request.body || {};
-        const validationResult = updateDistributorSchema.validate({ distributorId, name, phone, email, area, address, isActive }, { abortEarly: true });
+        const { distributorId, name, phone, email, area, deliveryCapability, address, password, isActive } = request.body || {};
+        const validationResult = updateDistributorSchema.validate({ distributorId, name, phone, email, area, deliveryCapability, address, password, isActive }, { abortEarly: true });
         if (validationResult.error) {
             return response.status(400).json({ status: 'FAILED', message: validationResult.error.details[0].message });
         }
@@ -14,7 +14,9 @@ const updateDistributor = async (request, response) => {
         if (phone !== undefined) dataToUpdate.phone = phone || null;
         if (email !== undefined) dataToUpdate.email = email || null;
         if (area !== undefined) dataToUpdate.area = area || null;
+        if (deliveryCapability !== undefined) dataToUpdate.deliveryCapability = deliveryCapability || null;
         if (address !== undefined) dataToUpdate.address = address || null;
+        if (password !== undefined) dataToUpdate.password = password || null;
         if (typeof isActive === 'boolean') dataToUpdate.isActive = isActive;
         if (Object.keys(dataToUpdate).length === 0) {
             return response.status(400).json({ status: 'FAILED', message: 'No fields to update' });

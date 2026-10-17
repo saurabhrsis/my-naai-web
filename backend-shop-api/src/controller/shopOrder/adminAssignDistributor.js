@@ -22,8 +22,17 @@ const adminAssignDistributor = async (request, response) => {
             return response.status(404).json({ status: 'FAILED', message: 'Order not found' });
         }
 
-        const updated = await shopOrderService.assignDistributor(orderId, distributorId, notes || null);
-        return response.status(200).json({ status: 'SUCCESS', message: 'Distributor assigned successfully', data: updated });
+        const actor = {
+            actorType: 'ADMIN',
+            actorId: request.admin?.id,
+            actorLabel: request.admin?.name || 'Admin'
+        };
+        const updated = await shopOrderService.assignDistributor(orderId, distributorId, notes || null, actor, distributor);
+        return response.status(200).json({
+            status: 'SUCCESS',
+            message: 'Distributor assigned — awaiting their acceptance',
+            data: updated
+        });
     } catch (error) {
         console.log('error', error);
         const known = /can no longer be assigned/.test(error.message);

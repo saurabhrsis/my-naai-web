@@ -17,7 +17,12 @@ const adminUpdateShopOrderStatus = async (request, response) => {
             return response.status(404).json({ status: 'FAILED', message: 'Order not found' });
         }
 
-        const updated = await shopOrderService.updateStatus(orderId, status, notes || null);
+        const actor = {
+            actorType: 'ADMIN',
+            actorId: request.admin?.id,
+            actorLabel: request.admin?.name || 'Admin'
+        };
+        const updated = await shopOrderService.updateStatus(orderId, status, notes || null, actor);
         return response.status(200).json({ status: 'SUCCESS', message: 'Order status updated successfully', data: updated });
     } catch (error) {
         console.log('error', error);
