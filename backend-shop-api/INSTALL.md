@@ -48,19 +48,21 @@ In your `my_naai_backend` clone:
 cd my_naai_backend
 git fetch https://github.com/saurabhrsis/my-naai-web.git naai-backend/shop-ecommerce-api-files
 git checkout FETCH_HEAD -- .
-# The new design removes the admin product controllers from the previous bundle:
-git rm -f --ignore-unmatch \
-  src/controller/product/adminCreateProduct.js \
-  src/controller/product/adminDeleteProduct.js \
-  src/controller/product/adminListProducts.js \
-  src/controller/product/adminUpdateProduct.js
 git add -A
 git commit -m "Naai Shop e-commerce API: separate shop_products table, server cart, distributors, two status tracks"
 git push origin HEAD:feature/naai-shop-ecommerce-api
 ```
 
 That's it — the branch `feature/naai-shop-ecommerce-api` now exists in the
-backend repo and you can open the PR from there.
+backend repo and you can open the PR from there. **Nothing is deleted:** the
+sync only creates the missing shop tables, your existing data is untouched.
+
+> *Optional cleanup (only if you applied the earlier 27-file bundle): it had
+> added four admin product controllers that the new design doesn't use —
+> `adminCreateProduct.js`, `adminDeleteProduct.js`, `adminListProducts.js`,
+> `adminUpdateProduct.js` in `src/controller/product/`. No route loads them
+> anymore, so leaving them is harmless; delete them only if you want the PR
+> clean.*
 
 ## Method B — no terminal (copy & paste)
 
@@ -70,9 +72,10 @@ backend repo and you can open the PR from there.
 2. Copy the `backend-shop-api/` folder's contents (keeping the
    `src/...` structure, plus `index.js` and `README.md`) into your
    `my_naai_backend` clone, overwriting the old files.
-3. Delete the four admin product controllers listed above (if present).
-4. In your backend clone: `git add -A`, commit, and push to
+3. In your backend clone: `git add -A`, commit, and push to
    `feature/naai-shop-ecommerce-api`.
+
+(No deletion step is needed — see the optional cleanup note above.)
 
 ## Environment notes
 
