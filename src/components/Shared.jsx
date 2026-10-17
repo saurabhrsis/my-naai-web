@@ -138,16 +138,31 @@ export function formatDistanceInKm(value, { zeroLabel = '< 0.1 km' } = {}) {
   return `${Number(number.toFixed(1))} km`;
 }
 
-export function getSalonStatus(businessHours = [], explicitOpen) {
-  if (typeof explicitOpen === 'boolean') return explicitOpen ? { isOpen: true, text: 'OPEN NOW', color: GREEN } : { isOpen: false, text: 'CLOSED', color: RED };
+// Salon open/closed status.
+//
+// When a salon has published timings, the status ALWAYS follows the Indian
+// clock (Asia/Kolkata) — the viewer's device timezone is not the authority,
+// so a phone set to any other zone still sees the right state. The API's
+// `isOpen` flag is only honoured when no timings exist: that column defaults
+// to `false` in the database (any salon that was never manually toggled
+// carries the default), and trusting it as a boolean used to make every such
+// salon read CLOSED in the middle of its working hours.
+export function getSalonStatus(businessHours = [], explicitOpen, now = new Date()) {
   const schedule = Array.isArray(businessHours) ? businessHours[0] : businessHours;
-  if (!schedule?.openingTime || !schedule?.closingTime) return { isOpen: false, text: 'CLOSED', color: RED };
+  if (!schedule?.openingTime || !schedule?.closingTime) {
+    if (typeof explicitOpen === 'boolean') return explicitOpen ? { isOpen: true, text: 'OPEN NOW', color: GREEN } : { isOpen: false, text: 'CLOSED', color: RED };
+    return { isOpen: false, text: 'CLOSED', color: RED };
+  }
 
   const nowParts = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', weekday: 'long', hour12: false,
-  }).formatToParts(new Date());
+  }).formatToParts(now);
   const currentDay = nowParts.find(part => part.type === 'weekday')?.value;
-  const currentMinutes = Number(nowParts.find(part => part.type === 'hour')?.value || 0) * 60 + Number(nowParts.find(part => part.type === 'minute')?.value || 0);
+  // A few ICU versions report midnight as "24" under hour12:false (h24 cycle) —
+  // fold it back to 00 so 12:05 am still reads as 5 minutes past midnight.
+  let hourValue = Number(nowParts.find(part => part.type === 'hour')?.value || 0);
+  if (hourValue === 24) hourValue = 0;
+  const currentMinutes = hourValue * 60 + Number(nowParts.find(part => part.type === 'minute')?.value || 0);
   const opening = String(schedule.openingTime).slice(0, 5).split(':').map(Number);
   const closing = String(schedule.closingTime).slice(0, 5).split(':').map(Number);
   const openingMinutes = opening[0] * 60 + opening[1];

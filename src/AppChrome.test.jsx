@@ -333,7 +333,7 @@ describe('Bottom navigation labels', () => {
     await mount();
 
     const labels = tabLabels();
-    expect(labels).toEqual(['Queue', 'History', 'Products', 'Account']);
+    expect(labels).toEqual(['Queue', 'History', 'Shop', 'Products', 'Account']);
     labels.forEach(label => expect(label[0]).toBe(label[0].toUpperCase()));
   });
 

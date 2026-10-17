@@ -45,10 +45,61 @@
         }, true);
       })();
     </script>
-    <title>My Naai — your salon, your time</title>
+    <style id="mynaai-dev-error-overlay-style">#mynaai-dev-error-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; z-index: 99999; padding: 10px 14px; background: #7f1d1d; color: #fff; font: 12px/1.5 ui-monospace, monospace; white-space: pre-wrap; word-break: break-word; box-shadow: 0 6px 24px rgba(0,0,0,.5); }</style>
+  <title>My Naai — your salon, your time</title>
   </head>
   <body>
     <div id="root"></div>
+    <div id="mynaai-dev-error-overlay" aria-live="assertive"></div>
+    <script type="module">
+      // DEV-ONLY diagnostics: if the preview goes blank, show why instead of
+      // an empty screen. import.meta.env.DEV is false in production builds,
+      // so none of this ships.
+      if (import.meta.env.DEV) {
+        const problems = [];
+        const overlay = document.getElementById('mynaai-dev-error-overlay');
+        // A proxy/browser cache may still hold an OLD copy of this page
+        // (older than the per-process ?v= module versioning). If that old
+        // copy fails to load the app, reload ONCE through a fresh URL —
+        // a different URL is a different cache key, so the origin serves
+        // the current page. The mynaaiFresh marker prevents loops.
+        let selfHealed = false;
+        const FRESH_MARK = 'mynaaiFresh=';
+        const selfHeal = (context) => {
+          if (selfHealed || location.search.indexOf(FRESH_MARK) !== -1) return false;
+          selfHealed = true;
+          overlay.style.display = 'block';
+          overlay.textContent = context + ' — reloading once through a fresh URL to bypass the cached copy…';
+          setTimeout(() => {
+            location.replace(location.pathname + (location.search ? location.search + '&' : '?') + FRESH_MARK + Date.now());
+          }, 900);
+          return true;
+        };
+        const show = (context) => {
+          if (!overlay || !problems.length) return;
+          overlay.style.display = 'block';
+          overlay.textContent = (context || 'DEV ERROR (not shown in production) — ') + problems.slice(0, 3).join(' | ');
+        };
+        window.addEventListener('error', event => {
+          if (event.message) {
+            problems.push(event.message + (event.filename ? ' @ ' + event.filename + ':' + event.lineno : ''));
+            if (!selfHeal('Load failed')) show('DEV ERROR (not shown in production) — ');
+          }
+        }, true);
+        window.addEventListener('unhandledrejection', event => {
+          const reason = event.reason;
+          problems.push((reason && (reason.message || String(reason))) || 'unhandled rejection');
+          if (!selfHeal('Load failed')) show('DEV ERROR (not shown in production) — ');
+        });
+        setTimeout(() => {
+          const root = document.getElementById('root');
+          if (!root || root.childElementCount === 0) {
+            if (!problems.length) problems.push('App did not mount and no JS error was captured — check the browser Network tab for a failed module');
+            if (!selfHeal('App did not mount')) show('DEV ERROR (not shown in production) — ');
+          }
+        }, 6000);
+      }
+    </script>
     <script type="module" src="/src/main.jsx"></script>
     <!-- PWA install helper - show install prompt when available -->
     <script>

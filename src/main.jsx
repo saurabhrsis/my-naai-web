@@ -19,7 +19,21 @@ installDevToolsErrorShield();
 // push subscriptions go stale and token generation fail with "no active service
 // worker". Push registration therefore lives in exactly one place.
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
+  if (import.meta.env.DEV) {
+    // The dev preview must never run the PWA worker. A worker left behind by
+    // an earlier load (especially across a dev-server restart) can serve a
+    // cached app shell and blank the page — the exact failure the worker's
+    // fetch handler was written to guard against. Unregister anything present
+    // and clear the shell caches so every dev load comes straight from Vite.
+    navigator.serviceWorker
+      .getRegistrations?.()
+      .then(registrations => Promise.all(registrations.map(registration => registration.unregister())))
+      .catch(() => {});
+    (typeof caches !== 'undefined' ? caches.keys() : Promise.resolve([]))
+      .then(keys => Promise.all(keys.filter(key => key.startsWith('mynaai')).map(key => caches.delete(key))))
+      .catch(() => {});
+  } else {
+    window.addEventListener('load', () => {
     registerPushServiceWorker().then(registration => {
       if (!registration) {
         console.debug('Service worker registration did not complete; the app keeps working online.');
@@ -51,6 +65,7 @@ if ('serviceWorker' in navigator) {
       } catch {}
     }
   });
+  }
 }
 
 createRoot(document.getElementById('root')).render(
