@@ -2,228 +2,133 @@
 // token current.
 //
 // Why this exists: today the API learns a device token in exactly ONE place,
-// the `deviceToken` field of OTP login / onboarding. On a phone that is fine —
-// the token exists before anyone signs in. In a browser it is the reason for
-// "permission is granted but no notification arrives":
+// the `deviceToken` field of OTP login / onboarding. On a phone that is fine
+// — the token exists before anyone signs in. In a browser it is the reason
+// for "permission is granted but no notification arrives":
 //
-//   · the salon signs in first and allows notifications afterwards (from the
-//     Account card, or the browser's own prompt) → the server has NO token;
+//   · the salon signs in first and allows notifications afterwards → the
+//     server has NO token;
 //   · the token rotates (Firebase does this; a re-installed PWA does too) →
 //     the server keeps sending to a token that no longer exists;
-//   · the salon signs in on the laptop → the server's one token is the
-//     laptop's, and the phone in the shop hears nothing.
+//   · the salon signs in on a second browser → the older rows go stale until
+//     the 10-device cap evicts them.
 //
 // The web portal (src/lib/deviceToken.js) posts a confirmed live token here
-// when a signed-in account has no login baseline (or has just enabled alerts).
-// If Firebase rotates a token that was stored at login, the portal's recovery UI
-// asks for a fresh OTP login so the next authoritative request carries it.
-// Until this route exists the portal gets a 404, remembers it for the session,
-// and keeps working as before.
+// whenever the signed-in account's token differs from what login carried.
+// The push pipeline (addBooking, customerDelayAction, …) reads the
+// `device_tokens` table — this is the only way a rotated token reaches it
+// without a fresh OTP login. Until this route exists the portal gets a 404,
+// remembers it for the session, and falls back to the profile-update
+// endpoints.
 //
-// Drop this file in next to the other notification controllers and wire it
-// behind the SAME auth middleware the notification list uses (it must serve
-// both salon and user tokens):
+// Wiring (this repo's layout):
+//   src/controller/notification/registerDevice.js   ← this file
+//   src/routes/notification.routes.js:
+//     const authenticateUserOrSalon = require('../utils/middleware/authUserOrSalon.middleware');
+//     const registerDevice = require('../controller/notification/registerDevice');
+//     notificationRouter.post('/register-device', authenticateUserOrSalon, registerDevice);
 //
-//   const registerDevice = require('./controllers/notifications/registerDevice');
-//   router.post('/register-device', auth, registerDevice);
+// `authenticateUserOrSalon` decorates `req.salon` (a salon row, `.salonId`)
+// or `req.user` (`{ id, phoneNumber }`) depending on the bearer token — the
+// identity always comes from the token, never from the body.
 //
 // Body:
 //   { "deviceToken": "<fcm token>", "platform": "web" | "android" | "ios",
 //     "userType": "SALON" | "USER", "userId": "<optional, must match the token>" }
 //
-// Response: { status: 'SUCCESS', data: { platform, updated: true } }
+// Response: { status: 'SUCCESS', data: { platform, updated: true, multiDevice } }
 //
-// ── Two schemas this handler supports ────────────────────────────────────────
-// (A) One `deviceToken` column on Salon / User (what the app has today). The
-//     column is overwritten. A web login therefore REPLACES a phone token — the
-//     same thing a phone login already does — so a salon that works from both
-//     should prefer (B).
-// (B) A DeviceToken table ({ ownerType, ownerId, token, platform, lastSeenAt,
-//     active }) if `db.DeviceToken` exists. The token is upserted, every active
-//     token for the account is kept, and the send helper should fan out to all
-//     of them (and deactivate tokens FCM reports as unregistered).
-//
-// The handler detects (B) at runtime and otherwise falls back to (A), so it can
-// be dropped in before or after that table exists.
+// ── The two storage shapes this handler supports ───────────────────────────
+// (A) The `device_tokens` table (DeviceToken model: deviceId, salonId,
+//     deviceToken, isActive) — what this codebase has. SALON accounts only:
+//     the token is upserted, all active devices are kept (same 10-device cap
+//     as login), and a token re-registered under another salon MOVES.
+// (B) A single `deviceToken` column on the account (users have one, salons
+//     do not in this codebase). USER accounts always land here; the column
+//     is overwritten and a copy of the same token on any other account row
+//     is cleared, because one token identifies one installation.
+// If a future deployment adds a deviceToken column to salons, (A) mirrors it
+// automatically (hasDeviceTokenAttribute check below).
 
-const db = require('../database/models');
+// (Two levels up: this file lives in src/controller/notification/.)
+const db = require('../../database/models');
 
-// Web FCM tokens are longer than Android ones (often 150–200 chars); make sure
-// the column is at least VARCHAR(255) or TEXT before enabling this for web.
+// Web FCM tokens are longer than Android ones (often 150–200 chars); make
+// sure device_tokens.device_token is at least VARCHAR(255) (it is, per the
+// DeviceToken model) before enabling this for web.
 const MIN_TOKEN_LENGTH = 20;
 const MAX_TOKEN_LENGTH = 4096;
 const PLATFORMS = ['web', 'android', 'ios'];
+// Same cap the login flow enforces (salonLogin.js: delete the oldest at >= 10).
+const MAX_SALON_DEVICES = 10;
 
 function normalizeDeviceToken(value) {
   if (typeof value !== 'string') return '';
   const token = value.trim();
   // FCM registration tokens are opaque, but never contain whitespace/control
   // characters. Rejecting those here prevents a copied placeholder or a token
-  // accidentally concatenated with a second value from becoming an owner row.
+  // accidentally concatenated with a second value from becoming a device row.
   if (!token || /[\u0000-\u0020\u007f]/.test(token)) return '';
   if (token.length < MIN_TOKEN_LENGTH || token.length > MAX_TOKEN_LENGTH) return '';
   return token;
 }
 
+// Identity comes from the authenticated request only (the auth middleware
+// decorates it from the bearer token). The body may claim a type/id, but the
+// handler verifies the claim below — it never chooses an account from it.
 function resolveIdentity(req) {
-  // The auth middleware decorates req differently for the two account types in
-  // this codebase; read whichever it set. Never trust the body to choose an
-  // account that the bearer token did not authenticate.
-  const salonId = req.salon?.salonId || req.salon?.id || req.auth?.salonId || req.user?.salonId || req.salonId || null;
-  const userId = req.user?.userId || req.user?.id || req.auth?.userId || req.userId || null;
-  const claimedType = String(req.body?.userType || '').trim().toUpperCase();
-  const authenticatedType = String(req.user?.role || req.user?.userType || req.auth?.role || req.auth?.userType || '').trim().toUpperCase();
-  if (claimedType && !['SALON', 'USER'].includes(claimedType)) return null;
-  if (claimedType === 'SALON' && salonId) return { type: 'SALON', id: salonId };
-  // Some auth middleware exposes a salon account as req.user.userId plus a role
-  // instead of attaching req.salon. Honour that authenticated role, never the
-  // request body alone, so the web portal's `userId` field still works.
-  if (claimedType === 'SALON' && authenticatedType === 'SALON' && userId) return { type: 'SALON', id: userId };
-  if (claimedType === 'USER' && userId) return { type: 'USER', id: userId };
-  if (salonId) return { type: 'SALON', id: salonId };
-  if (userId) return { type: authenticatedType === 'SALON' ? 'SALON' : 'USER', id: userId };
+  const salonId = req.salon?.salonId ?? req.salon?.id ?? null;
+  const userId = req.user?.id ?? req.user?.userId ?? null;
+  if (salonId) return { type: 'SALON', id: String(salonId) };
+  if (userId) return { type: 'USER', id: String(userId) };
   return null;
-}
-
-function transactionOptions(transaction) {
-  return transaction ? { transaction } : {};
-}
-
-async function inTransaction(work) {
-  if (typeof db.sequelize?.transaction !== 'function') return work(null);
-  const transaction = await db.sequelize.transaction();
-  try {
-    const result = await work(transaction);
-    await transaction.commit();
-    return result;
-  } catch (error) {
-    try { await transaction.rollback(); } catch { /* preserve the original error */ }
-    throw error;
-  }
-}
-
-async function findTokenRows(Model, token, transaction) {
-  const options = { where: { token }, ...transactionOptions(transaction) };
-  if (typeof Model.findAll === 'function') {
-    // The lock is important for two tabs that finish token registration at the
-    // same time. A unique index remains the final safety net for a concurrent
-    // insert that starts before either transaction can acquire this lock.
-    if (transaction?.LOCK?.UPDATE) options.lock = transaction.LOCK.UPDATE;
-    const rows = await Model.findAll(options);
-    return Array.isArray(rows) ? rows : [];
-  }
-  if (typeof Model.findOne === 'function') {
-    const row = await Model.findOne(options);
-    return row ? [row] : [];
-  }
-  return [];
-}
-
-async function deactivateDuplicate(row, transaction) {
-  if (!row) return;
-  if (typeof row.destroy === 'function') {
-    await row.destroy(transactionOptions(transaction));
-    return;
-  }
-  // Do not leave a second active owner if the model does not expose destroy.
-  if (typeof row.update === 'function') {
-    await row.update({ active: false }, transactionOptions(transaction));
-  }
-}
-
-function isUniqueConstraintError(error) {
-  const code = String(error?.name || error?.original?.code || '').toLowerCase();
-  const message = String(error?.message || '').toLowerCase();
-  return /unique|duplicate|constraint/.test(`${code} ${message}`);
-}
-
-async function updateExistingTokenRows(Model, identity, token, values, transaction) {
-  const rows = await findTokenRows(Model, token, transaction);
-  if (!rows.length) return null;
-  // A token identifies one browser/app installation. If old deployments
-  // already contain duplicate rows, keep one current owner and remove or
-  // deactivate every duplicate before returning. This also moves a token
-  // cleanly when Firebase reuses it after an account switch.
-  const [keeper, ...duplicates] = rows;
-  const previousOwner = keeper.ownerId ?? keeper.userId ?? keeper.salonId;
-  const rotated = previousOwner !== undefined && previousOwner !== null && String(previousOwner) !== String(identity.id);
-  await keeper.update(values, transactionOptions(transaction));
-  for (const duplicate of duplicates) await deactivateDuplicate(duplicate, transaction);
-  return { rotated };
-}
-
-async function upsertDeviceToken(identity, token, platform) {
-  const Model = db.DeviceToken;
-  const values = {
-    ownerType: identity.type,
-    ownerId: identity.id,
-    token,
-    platform,
-    lastSeenAt: new Date(),
-    active: true,
-  };
-
-  try {
-    return await inTransaction(async transaction => {
-      const existing = await updateExistingTokenRows(Model, identity, token, values, transaction);
-      if (existing) return existing;
-      await Model.create(values, transactionOptions(transaction));
-      return { rotated: false };
-    });
-  } catch (error) {
-    // A concurrent insert can win the unique-token race. That transaction is
-    // already rolled back by inTransaction (important for PostgreSQL), so
-    // retry the lookup in a fresh transaction rather than querying an aborted
-    // transaction or creating a second owner.
-    if (!isUniqueConstraintError(error)) throw error;
-    return inTransaction(async transaction => {
-      const existing = await updateExistingTokenRows(Model, identity, token, values, transaction);
-      if (existing) return existing;
-      throw error;
-    });
-  }
 }
 
 function hasDeviceTokenAttribute(Model) {
   return Boolean(Model && (!Model.rawAttributes || Object.prototype.hasOwnProperty.call(Model.rawAttributes, 'deviceToken')));
 }
 
-async function clearLegacyCopies(token, transaction) {
-  // The single-column fallback cannot fan out, so keep the token owned by only
-  // one account. This prevents a token left on an old Salon/User row from
-  // receiving a duplicate notification after the current account registers it.
-  for (const Model of [db.Salon, db.User]) {
-    if (!hasDeviceTokenAttribute(Model) || typeof Model.update !== 'function') continue;
-    await Model.update(
-      { deviceToken: null },
-      { where: { deviceToken: token }, ...transactionOptions(transaction) },
+async function registerSalonDeviceToken(salonId, token) {
+  const Model = db.DeviceToken;
+  const existing = await Model.findOne({ where: { deviceToken: token } });
+  if (existing) {
+    // A token belongs to one installation. If it is registered under another
+    // salon (account switch on this browser, or Firebase reusing the token),
+    // move it; otherwise just re-affirm it as active.
+    await existing.update(
+      String(existing.salonId) === String(salonId)
+        ? { isActive: true }
+        : { salonId, isActive: true }
     );
+    return;
   }
+  // New device: keep the same cap login uses — at the limit, drop the oldest.
+  const deviceCount = await Model.count({ where: { salonId } });
+  if (deviceCount >= MAX_SALON_DEVICES) {
+    const oldest = await Model.findOne({ where: { salonId }, order: [['createdAt', 'ASC']] });
+    if (oldest) await oldest.destroy();
+  }
+  await Model.create({ salonId, deviceToken: token });
 }
 
-async function writeLegacyAccount(identity, token, transaction) {
+async function registerLegacyColumn(identity, token) {
   const Model = identity.type === 'SALON' ? db.Salon : db.User;
-  if (!Model || !hasDeviceTokenAttribute(Model) || typeof Model.update !== 'function') return true;
+  if (!Model || !hasDeviceTokenAttribute(Model) || typeof Model.update !== 'function') {
+    return 0;
+  }
+  // One token identifies one installation: clear any stale copy on other
+  // accounts first (the WHERE keeps the update atomic with the write below).
+  for (const other of [db.Salon, db.User]) {
+    if (!other || other === Model || !hasDeviceTokenAttribute(other) || typeof other.update !== 'function') continue;
+    await other.update({ deviceToken: null }, { where: { deviceToken: token } });
+  }
   const whereKeys = identity.type === 'SALON' ? ['salonId', 'id'] : ['userId', 'id'];
-  let updated = 0;
   for (const key of whereKeys) {
-    const result = await Model.update(
-      { deviceToken: token },
-      { where: { [key]: identity.id }, ...transactionOptions(transaction) },
-    );
-    updated = Number(Array.isArray(result) ? result[0] : result) || 0;
-    if (updated > 0) break;
+    const result = await Model.update({ deviceToken: token }, { where: { [key]: identity.id } });
+    const updated = Number(Array.isArray(result) ? result[0] : result) || 0;
+    if (updated > 0) return updated;
   }
-  return updated > 0;
-}
-
-async function updateLegacyAccount(identity, token) {
-  const Model = identity.type === 'SALON' ? db.Salon : db.User;
-  if (!Model || !hasDeviceTokenAttribute(Model) || typeof Model.update !== 'function') throw new Error('Account model is unavailable');
-  return inTransaction(async transaction => {
-    await clearLegacyCopies(token, transaction);
-    return writeLegacyAccount(identity, token, transaction);
-  });
+  return 0;
 }
 
 module.exports = async function registerDevice(req, res) {
@@ -245,30 +150,26 @@ module.exports = async function registerDevice(req, res) {
     }
 
     // A client may only register a token for the account it is signed in as.
-    // Accept the existing client field (`userId`) for salon sessions too, but
-    // reject any second account claim rather than silently choosing one.
-    for (const claimedId of [req.body?.userId, req.body?.salonId].filter(value => value !== undefined && value !== null && value !== '')) {
-      if (String(claimedId) !== String(identity.id)) {
-        return res.status(403).json({ status: 'FAILED', message: 'Unauthorized' });
-      }
+    const claimedId = [req.body?.userId, req.body?.salonId].find(value => value !== undefined && value !== null && value !== '');
+    if (claimedId !== undefined && String(claimedId) !== identity.id) {
+      return res.status(403).json({ status: 'FAILED', message: 'Unauthorized' });
     }
     const claimedType = String(req.body?.userType || '').trim().toUpperCase();
     if (claimedType && claimedType !== identity.type) {
       return res.status(403).json({ status: 'FAILED', message: 'Unauthorized' });
     }
 
-    let rotated = false;
-    if (db.DeviceToken && (typeof db.DeviceToken.findAll === 'function' || typeof db.DeviceToken.findOne === 'function')) {
-      ({ rotated } = await upsertDeviceToken(identity, deviceToken, rawPlatform));
-      // Keep old senders that still read User/Salon.deviceToken correct while
-      // removing the same token from any stale account row. The DeviceToken
-      // table remains authoritative for multi-device fan-out.
-      await inTransaction(async transaction => {
-        await clearLegacyCopies(deviceToken, transaction);
-        await writeLegacyAccount(identity, deviceToken, transaction);
-      });
+    const salonTableExists = Boolean(db.DeviceToken && typeof db.DeviceToken.findOne === 'function');
+    if (identity.type === 'SALON' && salonTableExists) {
+      await registerSalonDeviceToken(identity.id, deviceToken);
+      // Keep any sender that still reads the account column correct (the
+      // salons table has no such column in this codebase, so this is a no-op
+      // until a deployment adds one).
+      await registerLegacyColumn(identity, deviceToken);
     } else {
-      const updated = await updateLegacyAccount(identity, deviceToken);
+      // USER accounts (and a salon deployment without the table) fall back to
+      // the single column; users.deviceToken exists in this codebase.
+      const updated = await registerLegacyColumn(identity, deviceToken);
       if (!updated) {
         return res.status(404).json({ status: 'FAILED', message: 'Account not found.' });
       }
@@ -276,7 +177,7 @@ module.exports = async function registerDevice(req, res) {
 
     return res.json({
       status: 'SUCCESS',
-      data: { platform: rawPlatform, updated: true, rotated, multiDevice: Boolean(db.DeviceToken) },
+      data: { platform: rawPlatform, updated: true, multiDevice: identity.type === 'SALON' && salonTableExists },
     });
   } catch (error) {
     console.error('register-device failed:', error?.message || error);
@@ -284,6 +185,6 @@ module.exports = async function registerDevice(req, res) {
   }
 };
 
-// Exporting the pure normalizer makes it easy for a backend test to pin the
-// contract without importing the application's database connection.
+// Exporting the pure normalizer keeps the contract testable without importing
+// the application's database connection.
 module.exports.normalizeDeviceToken = normalizeDeviceToken;

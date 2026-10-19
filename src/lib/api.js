@@ -244,6 +244,9 @@ async function request(path, { method = 'GET', body, params, headers = {}, auth 
   const token = getToken();
   const hasAuthorizationHeader = Object.keys(requestHeaders).some(key => key.toLowerCase() === 'authorization');
   if (auth && token && !hasAuthorizationHeader) requestHeaders.Authorization = `Bearer ${token}`;
+  // The token this request actually carried ('' for anonymous calls). Only a
+  // rejection of THIS token may ever clear the session.
+  const sentToken = requestHeaders.Authorization ? String(requestHeaders.Authorization).replace(/^Bearer\s+/i, '') : '';
 
   const guard = withTimeout(signal, timeoutMs);
   let response;
@@ -282,10 +285,14 @@ async function request(path, { method = 'GET', body, params, headers = {}, auth 
 
   if (!response.ok) {
     const message = data?.message || data?.error || `Request failed (${response.status})`;
-    if (data?.status === 'JWT_FAILED') clearSession();
+    // Only wipe the session when the backend rejected the exact token this
+    // request carried. An anonymous call (no token sent) or a stale in-flight
+    // call from a previous login (the stored token has already moved on)
+    // must never clear a live or newer session.
+    if (data?.status === 'JWT_FAILED' && sentToken && getToken() === sentToken) clearSession();
     throw new ApiError(message, response.status, data);
   }
-  if (data?.status === 'JWT_FAILED') {
+  if (data?.status === 'JWT_FAILED' && sentToken && getToken() === sentToken) {
     clearSession();
     throw new ApiError(data?.message || 'Your session has expired.', response.status, data);
   }

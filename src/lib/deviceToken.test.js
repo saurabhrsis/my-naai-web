@@ -12,7 +12,7 @@ const { registerDevice, updateSalonProfile, updateProfile, getPushToken, readNot
 vi.mock('./api', () => ({ api: { registerDevice, updateSalonProfile, updateProfile } }));
 vi.mock('./push', () => ({ getPushToken, readNotificationPermission, isPushConfigured, PUSH_TOKEN_EVENT: 'mynaai:push-token' }));
 
-import { TOKEN_CHANGED_EVENT, holdRelogin, clearDeviceTokenSync, keepDeviceTokenSynced, rememberLoginToken, serverHasToken, syncDeviceToken } from './deviceToken';
+import { holdRelogin, clearDeviceTokenSync, keepDeviceTokenSynced, rememberLoginToken, serverHasToken, syncDeviceToken } from './deviceToken';
 
 const session = { role: 'SALON', userId: 'salon-1' };
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -106,93 +106,61 @@ describe('token change after login (browser tab → installed app)', () => {
     expect(serverHasToken(session, 'token-pwa')).toBe(false);
   });
 
-  it('asks for a fresh login when the live token differs from the login token', async () => {
+  it('hands a rotated live token over quietly instead of signing the user out', async () => {
+    // The bug being guarded: the live token differs from the login token
+    // (PWA install / Firebase rotation). The old behaviour fired
+    // TOKEN_CHANGED_EVENT and the shell logged the salon out; now the new
+    // token is registered and the session stays.
     rememberLoginToken(session, 'token-login');
     getPushToken.mockResolvedValue('token-pwa');
-    const changed = vi.fn();
-    window.addEventListener(TOKEN_CHANGED_EVENT, changed);
     const stop = keepDeviceTokenSynced(session);
     await flush();
-    expect(changed).toHaveBeenCalledTimes(1);
-    expect(changed.mock.calls[0][0].detail).toMatchObject({ token: 'token-pwa', previous: 'token-login' });
-    // The backend learns tokens at login; a profile update is not a substitute.
-    expect(registerDevice).not.toHaveBeenCalled();
+    expect(registerDevice).toHaveBeenCalledWith(expect.objectContaining({ deviceToken: 'token-pwa', userId: 'salon-1' }));
     stop();
-    window.removeEventListener(TOKEN_CHANGED_EVENT, changed);
   });
 
-  it('asks only once per token — a login that cannot read the token cannot loop', async () => {
-    rememberLoginToken(session, 'token-login');
+  it('a session with no login token banked is synced quietly too', async () => {
     getPushToken.mockResolvedValue('token-pwa');
-    const changed = vi.fn();
-    window.addEventListener(TOKEN_CHANGED_EVENT, changed);
-    let stop = keepDeviceTokenSynced(session);
-    await flush();
-    stop();
-    // Signed out, signed in again, but the login again banked the old token.
-    clearDeviceTokenSync();
-    rememberLoginToken(session, 'token-login');
-    stop = keepDeviceTokenSynced(session);
-    await flush();
-    expect(changed).toHaveBeenCalledTimes(1);
-    // Second time round it falls back to the quiet hand-over instead.
-    expect(registerDevice).toHaveBeenCalledWith(expect.objectContaining({ deviceToken: 'token-pwa' }));
-    stop();
-    window.removeEventListener(TOKEN_CHANGED_EVENT, changed);
-  });
-
-  it('never signs out a session that has no login token banked (pre-existing or token-less login)', async () => {
-    getPushToken.mockResolvedValue('token-pwa');
-    const changed = vi.fn();
-    window.addEventListener(TOKEN_CHANGED_EVENT, changed);
     const stop = keepDeviceTokenSynced(session);
     await flush();
-    expect(changed).not.toHaveBeenCalled();
     expect(registerDevice).toHaveBeenCalledWith(expect.objectContaining({ deviceToken: 'token-pwa' }));
     stop();
-    window.removeEventListener(TOKEN_CHANGED_EVENT, changed);
   });
 
-  it('does not sign out when the quiet hand-over fails and there is no baseline', async () => {
+  it('a failed hand-over never signs the user out either — the next focus retries', async () => {
+    rememberLoginToken(session, 'token-login');
     getPushToken.mockResolvedValue('token-pwa');
     registerDevice.mockRejectedValue(new Error('offline'));
     updateSalonProfile.mockRejectedValue(new Error('offline'));
-    const changed = vi.fn();
-    window.addEventListener(TOKEN_CHANGED_EVENT, changed);
     const stop = keepDeviceTokenSynced(session);
     await flush();
-    expect(changed).not.toHaveBeenCalled();
+    expect(registerDevice).toHaveBeenCalledTimes(1);
+    // Back online: the visibility re-check syncs the same token again.
+    registerDevice.mockResolvedValue({ status: 'SUCCESS' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    await flush();
+    expect(registerDevice).toHaveBeenCalledTimes(2);
+    expect(registerDevice).toHaveBeenLastCalledWith(expect.objectContaining({ deviceToken: 'token-pwa' }));
     stop();
-    window.removeEventListener(TOKEN_CHANGED_EVENT, changed);
   });
 
   it('stays quiet when the live token is the login token', async () => {
     rememberLoginToken(session, 'token-A');
-    const changed = vi.fn();
-    window.addEventListener(TOKEN_CHANGED_EVENT, changed);
     const stop = keepDeviceTokenSynced(session);
     await flush();
     expect(registerDevice).not.toHaveBeenCalled();
-    expect(changed).not.toHaveBeenCalled();
     stop();
-    window.removeEventListener(TOKEN_CHANGED_EVENT, changed);
   });
 
-  it('holds the sign-out while a booking request is being answered, then asks on the next check', async () => {
+  it('holdRelogin is a legacy no-op — answering a booking never blocks the quiet sync', async () => {
     rememberLoginToken(session, 'token-login');
     getPushToken.mockResolvedValue('token-pwa');
-    const changed = vi.fn();
-    window.addEventListener(TOKEN_CHANGED_EVENT, changed);
     holdRelogin(true);
     const stop = keepDeviceTokenSynced(session);
     await flush();
-    expect(changed).not.toHaveBeenCalled();
+    expect(registerDevice).toHaveBeenCalledWith(expect.objectContaining({ deviceToken: 'token-pwa' }));
     holdRelogin(false);
-    document.dispatchEvent(new Event('visibilitychange'));
-    await flush();
-    expect(changed).toHaveBeenCalledTimes(1);
     stop();
-    window.removeEventListener(TOKEN_CHANGED_EVENT, changed);
   });
 
   it('logout forgets the login token', () => {

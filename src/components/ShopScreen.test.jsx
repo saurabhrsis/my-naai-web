@@ -78,6 +78,27 @@ beforeEach(() => {
 });
 
 describe('ShopScreen', () => {
+  it('loads every catalog page, not just the first 20 products', async () => {
+    const pageOne = [{ productId: 'p1', productName: 'Page One Oil', price: 100, isAvailable: true }];
+    const pageTwo = [{ productId: 'p2', productName: 'Page Two Wax', price: 200, isAvailable: true }];
+    shopProductList.mockImplementation(({ page }) =>
+      Promise.resolve({
+        status: 'SUCCESS',
+        data: {
+          products: page === 1 ? pageOne : pageTwo,
+          pagination: { page, limit: 1, totalProducts: 2, totalPages: 2 },
+        },
+      })
+    );
+    const { container } = await render(<ShopScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    expect(shopProductList).toHaveBeenCalledTimes(2);
+    expect(shopProductList).toHaveBeenLastCalledWith({ page: 2, searchString: '' });
+    // Both pages are in the grid — the second product is visible, not lost.
+    expect(container.querySelectorAll('.shop-card')).toHaveLength(2);
+    expect(container.textContent).toContain('Page One Oil');
+    expect(container.textContent).toContain('Page Two Wax');
+  });
+
   it('renders the catalog, hides out-of-stock items and adds to the cart', async () => {
     const navigate = vi.fn();
     const { container } = await render(<ShopScreen session={SESSION} navigate={navigate} notify={vi.fn()} />);

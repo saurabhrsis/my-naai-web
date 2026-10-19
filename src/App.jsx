@@ -47,7 +47,7 @@ import { BOOKING_ALERT_WINDOW_MS, BookingRequestAlert } from './components/Booki
 // The deviceToken rule is shared (lib/apiPayload) so the Alerts & permissions
 // card's end-to-end test alert follows the same mobile contract as sign-in.
 import { normalizeDeviceToken, withDeviceToken } from './lib/apiPayload';
-import { TOKEN_CHANGED_EVENT, clearDeviceTokenSync, holdRelogin, keepDeviceTokenSynced, rememberLoginToken } from './lib/deviceToken';
+import { clearDeviceTokenSync, holdRelogin, keepDeviceTokenSynced, rememberLoginToken } from './lib/deviceToken';
 import { alertIdentity, claimAlertDelivery, playBuzzer, unlockBuzzer } from './lib/buzzer';
 import { resetLiveUpdatesSocket } from './lib/socket';
 import { armStoredReminders } from './lib/reminders';
@@ -481,31 +481,15 @@ function AppRoot() {
       }
     };
     const onSessionExpired = () => { deletePushToken().catch(error => console.debug(getErrorMessage(error, 'Could not clear the browser notification token.'))); resetLiveUpdatesSocket(); setSession(null); setRoute({ name: 'home', params: {} }); };
-    // This device's notification token is no longer the one the backend has
-    // (typically: the salon opened the installed app after signing in from
-    // the browser tab — the app has its own push subscription) and the quiet
-    // re-sync could not hand it over. The backend only reliably learns a token
-    // from login, so sign out and bring the user straight back to sign in;
-    // the next OTP carries the new token. The current token stays banked so
-    // the login can send it without another permission prompt.
-    const onTokenChanged = () => {
-      const current = readStoredSession();
-      if (!current) return;
-      clearDeviceTokenSync();
-      clearSession();
-      resetLiveUpdatesSocket();
-      try { sessionStorage.setItem(RELOGIN_NOTICE_KEY, TOKEN_CHANGED_NOTICE); } catch { /* storage blocked */ }
-      setSession(null);
-      setRoute({ name: 'login', params: { role: current.role, reason: 'device-token' } });
-      window.history.replaceState({}, '', routeToPath('login', { role: current.role }));
-    };
+    // (A rotated push notification token no longer signs the user out — the
+    // quiet re-sync in lib/deviceToken hands the new token over instead. The
+    // old token-changed sign-out listener lived here and was the cause of
+    // salons being logged out "after sometime" and "after refresh".)
     window.addEventListener('storage', onStorage);
     window.addEventListener('mynaai:session-expired', onSessionExpired);
-    window.addEventListener(TOKEN_CHANGED_EVENT, onTokenChanged);
     return () => {
       window.removeEventListener('storage', onStorage);
       window.removeEventListener('mynaai:session-expired', onSessionExpired);
-      window.removeEventListener(TOKEN_CHANGED_EVENT, onTokenChanged);
     };
   }, []);
   const install = async () => {

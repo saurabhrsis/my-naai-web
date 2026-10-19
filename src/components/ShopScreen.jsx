@@ -134,9 +134,26 @@ export function useShopCatalog(notify) {
     try {
       // The shop browses the COMPANY catalog (shop_products) — separate from
       // the salons' customer-facing products the app lists under /api/products.
-      const response = await api.shopProductList({ page: 1, searchString: '' });
-      const list = response?.data?.products || (Array.isArray(response?.data) ? response.data : []);
+      // The grid shows the WHOLE catalog, not just page 1, so products added
+      // later still appear; at most 10 pages (200 products) are fetched, the
+      // remaining pages in parallel.
+      const first = await api.shopProductList({ page: 1, searchString: '' });
+      const firstBody = first?.data || {};
+      const rows = firstBody.products || (Array.isArray(firstBody) ? firstBody : []);
+      const totalPages = firstBody.pagination?.totalPages || 1;
+      const pages = Math.min(totalPages, 10);
+      const rest = await Promise.all(
+        Array.from({ length: pages - 1 }, (_, i) =>
+          api.shopProductList({ page: i + 2, searchString: '' })
+            .then(r => r?.data?.products || (Array.isArray(r?.data) ? r.data : []))
+            .catch(() => [])
+        )
+      );
+      const list = [...rows, ...rest.flat()];
       setProducts(list.map(normalizeShopProduct));
+      // Marker that identifies the deployed build (older builds called the
+      // marketplace endpoint and silently showed the wrong — empty — list).
+      console.debug(`[mynaai-web] Naai Shop: loaded ${list.length} product(s) from /api/shop-products/list`);
     } catch (err) {
       setProducts([]);
       setError(getErrorMessage(err, 'The shop list could not be loaded.'));
