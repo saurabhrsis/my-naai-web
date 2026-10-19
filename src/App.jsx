@@ -988,7 +988,11 @@ function SalonRegistration({ initialData, onBack, onComplete, notifyInstall }) {
 function Brand({ light = false }) {
   return (
     <div className={cx('brand', light && 'brand-light')}>
-      <img className="brand-mark" src="/assets/my_naai.png" alt="" decoding="async" />
+      {/* The new M/N ribbon mark. It is the vector file so the tile stays crisp
+          from the 34px phone navbar up to the 58px sidebar — the PNG twin
+          (`/assets/my_naai.png`) is only for places that cannot take an SVG
+          (the Razorpay checkout sheet). */}
+      <img className="brand-mark" src="/assets/brand/naai-logo.svg" alt="" decoding="async" />
       {/* Both capitals share .brand-cap, so the "M" and the "N" are always the
           same size. The wordmark used to be "M" at 30px plus "y Naai" at 24px,
           which left the N visibly smaller than the M in every header. */}

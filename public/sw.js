@@ -7,7 +7,7 @@
  * - Works on Android, iOS (PWA), Chrome, Edge, Firefox, Samsung Internet, Safari
  */
 
-const CACHE_NAME = 'mynaai-shell-v9';
+const CACHE_NAME = 'mynaai-shell-v10';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -15,11 +15,10 @@ const APP_SHELL = [
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/assets/brand/naai-mark.svg',
+  '/assets/brand/naai-logo.svg',
   '/assets/brand/naai-logo-dark.svg',
-  '/assets/my_naai_circle.png',
   '/assets/my_naai.png',
   '/assets/new_background.jpeg',
-  '/assets/salon_page_bg.png',
   '/assets/audio/buzzer.wav',
   '/assets/audio/buzzer_old.wav'
 ];
@@ -192,7 +191,7 @@ function notificationRoute(data) {
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(APP_SHELL).catch(() => {}))
+      .then(cache => Promise.all(APP_SHELL.map(url => cache.add(url).catch(() => {}))))
       .then(() => self.skipWaiting())
   );
 });

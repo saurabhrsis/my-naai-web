@@ -158,11 +158,12 @@ img { display: block; max-width: 100%; }
 .login-back { display: inline-flex; align-items: center; gap: 5px; margin: 0 0 18px; padding: 0; background: none; border: 0; color: var(--muted); font-size: 12px; font-weight: 600; }
 .login-back:hover { color: var(--gold); }
 
-/* Official My Naai mark (`my_naai.png` — the white geometric M) plus the
-   wordmark. The M of "My" is drawn larger so the name reads clearly next to
-   the logo tile. */
+/* Official My Naai mark (`my_naai.png` — the cream plate carrying the ink
+   M/N ribbon monogram) plus the wordmark. The artwork brings its own plate,
+   so the tile needs no dark background or gold ring any more — just a soft
+   shadow to lift it off the dark chrome. */
 .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--white); white-space: nowrap; }
-.brand-mark { width: 46px; height: 46px; flex: none; object-fit: contain; border-radius: 13px; background: #050505; border: 1px solid rgba(232, 185, 126, .38); box-shadow: 0 0 0 3px rgba(232, 185, 126, .08); }
+.brand-mark { width: 46px; height: 46px; flex: none; object-fit: contain; border-radius: 13px; background: transparent; box-shadow: 0 6px 18px rgba(0, 0, 0, .32); }
 .brand-wordmark { display: inline-flex; align-items: baseline; line-height: 1; letter-spacing: -.045em; }
 /* Both capitals of "My Naai" share .brand-cap so the M and the N are always the
    same size; the lowercase runs stay a step smaller, which is the wordmark's
@@ -170,7 +171,7 @@ img { display: block; max-width: 100%; }
 .brand-cap { color: #ffffff; font-size: 30px; font-weight: 800; letter-spacing: -.06em; }
 .brand-lower { color: #f3efe8; font-size: 24px; font-weight: 700; }
 .brand-light { color: white; }
-.brand-light .brand-mark { border-color: rgba(255, 255, 255, .28); }
+.brand-light .brand-mark { box-shadow: 0 8px 24px rgba(0, 0, 0, .4); }
 .login-page { display: grid; grid-template-columns: 1fr; }
 .auth-visual { display: none; position: relative; overflow: hidden; }
 .auth-visual-image { position: absolute; inset: 0; background: url('/assets/new_background.jpeg') center / cover; filter: saturate(.8); }
@@ -1776,6 +1777,7 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .booking-title-row h3 { font-size: 13px; }
   .product-manage-row { flex-wrap: wrap; align-items: flex-start; }
   .product-manage-row > div:last-child { margin-left: auto; }
+
   .request-actions > div, .delay-actions { flex-direction: column; }
   .request-actions > div .btn, .delay-actions .btn { width: 100%; }
   .form-two-col, .form-three-col { grid-template-columns: 1fr; gap: 10px; }
@@ -2169,38 +2171,84 @@ img.image-fallback-tile {
   .shop-cart-footer { left: auto; right: 26px; bottom: 26px; width: min(420px, calc(100vw - 52px)); }
 }
 
-/* ── Mobile: compact list rows instead of 2-up vertical cards ──
-   A fixed square thumbnail on the left keeps every card the same short
-   height no matter what aspect ratio the admin uploaded — a 4:3 marketing
-   image used to stretch a vertical card down the whole screen. The
-   ADD / stepper shrinks to a right-aligned pill so the row stays scannable. */
+/* ── Mobile: two vertical product cards per row ──
+   Phones used to switch every card to a full-width horizontal list row (a
+   fixed 104px thumbnail on the left, details on the right). That read like a
+   settings list, not a shop: the client wants the same vertical product card
+   as desktop, two per row. The square photo keeps every card the same
+   starting height no matter what aspect ratio the admin uploaded, the name
+   clamps to two lines, and the ADD / stepper becomes a full-width pill, so
+   two columns stay scannable from a 320px phone to a small tablet. */
 @media (max-width: 639px) {
   /* The tagline duplicates the title on small screens — drop it. */
   .shop-screen .page-header-leading p { display: none; }
 
-  .shop-grid { grid-template-columns: 1fr; gap: 9px; }
-  .skeleton-card.shop-skeleton { min-height: 104px; }
+  .shop-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+  .skeleton-card.shop-skeleton { min-height: 236px; }
 
-  .shop-card { flex-direction: row; border-radius: 14px; }
+  .shop-card { flex-direction: column; border-radius: 14px; }
   .shop-card:hover { transform: none; box-shadow: none; }
 
-  .shop-card-media { width: 104px; flex: 0 0 104px; aspect-ratio: 1 / 1; }
+  .shop-card-media { width: 100%; flex: none; aspect-ratio: 1 / 1; }
   .shop-card-image { transition: none; }
   .shop-card:hover .shop-card-image { transform: none; }
 
-  .shop-card-body { gap: 4px; padding: 9px 12px 10px; }
-  .shop-card-body h3 { font-size: 13.5px; min-height: 2.7em; }
-  .shop-card-salon { font-size: 9.5px; }
-  .shop-card-price-row { margin-top: 0; }
-  .shop-card-price-row strong { font-size: 14px; }
+  /* At 320px each card is only ~143px wide, so the name, price and rating
+     each get one step down in type to stay on their own rows. */
+  .shop-card-body { gap: 3px; padding: 8px 9px 9px; }
+  .shop-card-body h3 { font-size: 12.5px; line-height: 1.3; min-height: 2.6em; }
+  .shop-card-salon { font-size: 9px; }
+  .shop-card-price-row { margin-top: 1px; gap: 3px 5px; }
+  .shop-card-price-row strong { font-size: 13.5px; }
+  .shop-card-price-row s { font-size: 10px; }
+  .shop-rating { padding: 2px 5px; font-size: 9px; }
+  .shop-rating svg { width: 9px; height: 9px; }
+  .shop-off-badge { top: 6px; left: 6px; padding: 2.5px 6px; font-size: 9px; }
+  /* The photo already carries "% off"; repeating it beside the MRP pushed the
+     rating chip onto a second line in a two-up card. */
+  .shop-card-price-row .shop-off-badge.inline { display: none; }
 
-  .shop-card-action { padding-top: 6px; justify-content: flex-end; }
+  /* Full-width ADD / stepper: at 320px a fixed 104px stepper plus its own
+     padding overflowed the card body and pushed the plus button out. */
+  .shop-card-action { padding-top: 7px; }
   .shop-card-action > .shop-add-button,
   .shop-card-action > .shop-stepper,
-  .shop-card-action > .shop-stock-chip { flex: none; }
-  .shop-card-action > .shop-add-button { min-width: 72px; min-height: 31px; padding: 0 14px; }
-  .shop-card-action > .shop-stepper { width: 104px; min-height: 31px; }
-  .shop-card-action > .shop-stepper button { flex: 0 0 31px; }
+  .shop-card-action > .shop-stock-chip { flex: 1; }
+  .shop-card-action > .shop-add-button { min-width: 0; min-height: 32px; padding: 0 10px; font-size: 11.5px; letter-spacing: .08em; }
+  .shop-card-action > .shop-stepper { width: 100%; min-height: 32px; }
+  .shop-card-action > .shop-stepper button { flex: 0 0 30px; }
+  .shop-card-action > .shop-stock-chip { padding: 6px 8px; font-size: 10px; text-align: center; }
+}
+
+/* Two columns at 320–380px leaves a ~120px text column. One more type step
+   down keeps the name at two lines and the price on its own row, and the
+   image's "% off" badge already carries the discount, so the inline copy is
+   dropped rather than wrapping the rating onto a third line. The shop header
+   also stacks here: "Naai Shop" beside two pills clipped the title to
+   "Naai Sh…" at 320px. */
+@media (max-width: 380px) {
+  .shop-card-body { padding: 7px 8px 8px; }
+  .shop-card-body h3 { font-size: 12px; }
+  .shop-card-price-row strong { font-size: 13px; }
+  .shop-screen .page-header { flex-wrap: wrap; row-gap: 9px; }
+  .shop-screen .page-header-leading h1 { font-size: 23px; }
+  .shop-screen .page-header-action { width: 100%; }
+  .shop-screen .page-header-action .refresh-text-button { flex: 1; justify-content: center; }
+  /* "My cart · 1" wrapped onto a second line inside its pill. */
+  .shop-header-actions .refresh-text-button { white-space: nowrap; }
+  /* Three 93px selects: the browser's own dropdown arrow sat on top of
+     "All categories" and clipped it. Drawing the chevron as a background
+     frees the text column and keeps the arrow at a fixed 12px. */
+  .shop-filter-select select {
+    appearance: none;
+    -webkit-appearance: none;
+    padding: 0 16px 0 6px;
+    font-size: 10.5px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5l5-5' fill='none' stroke='%23b7bebe' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 5px center;
+    background-size: 9px 6px;
+  }
 }
 
 /* ── Product details page (the full page a product card opens) ── */

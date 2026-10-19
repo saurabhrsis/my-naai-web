@@ -465,8 +465,10 @@ request runs a 60-second countdown that a second dialog would eat into.
 | `src/components/SubscriptionScreen.jsx` | Plan picker, Razorpay flow, cancellation/failure copy and payment recovery |
 | `src/components/ConfirmDialog.jsx` | Promise-based in-app confirmation sheet that replaces every native browser dialog |
 | `src/lib/push.js` | Firebase initialization, permission/token flow and notification route mapping |
-| `public/assets/brand/naai-mark.svg` | Official MyNaai mark (inherits `currentColor`) used by the in-app brand chip |
+| `public/assets/brand/naai-mark.svg` | Official My Naai monogram — the 2026 M/N ribbon (inherits `currentColor`) |
+| `public/assets/brand/naai-logo.svg` | Official logo: ink mark on the cream plate (favicon and store artwork) |
 | `public/assets/brand/naai-logo-dark.svg` | Official logo on the dark app tile; the default image fallback everywhere |
+| `public/assets/my_naai.png` | Raster version of the brand tile for surfaces that cannot take SVG (Razorpay checkout) |
 | `public/firebase-messaging-sw.js` | Background push display and notification click routing |
 | `src/components/UserScreens.jsx` | Customer screens, bookings and delay response |
 | `src/components/SalonScreens.jsx` | Salon queue, booking request, delay action and partner screens |

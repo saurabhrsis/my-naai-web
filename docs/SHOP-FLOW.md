@@ -71,6 +71,12 @@ Order detail ── 4-step tracker (Placed → Packed → Out for delivery → D
 
 ## Filters
 
+The grid keeps the same **vertical product card at every width — two per row
+on phones** (square photo, two-line name, price/MRP, full-width ADD ↔ stepper),
+then 3-up from 640px and 5-up from 1024px. Phones previously collapsed to one
+full-width horizontal list row per product; the two-up portrait card is the
+client-specified mobile layout.
+
 The whole filter area is one compact strip of **three labelled selects**
 (Category · For · Price) — no chip rows and no sort control, so the grid
 starts high on the screen and the space stays free for products. Default
