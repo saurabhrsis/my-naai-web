@@ -3,7 +3,7 @@ import { NavLink, Link, useNavigate } from "react-router-dom";
 import ProfileDropdown from "./ProfileDropdown.jsx";
 import ChangePasswordModal from "./ChangePasswordModal.jsx";
 import { useUser } from "../contexts/UserContext.jsx";
-import { ClipboardList, Store, CalendarCheck, User, Users, Package, Truck, ShoppingBag } from "lucide-react";
+import { ClipboardList, Store, CalendarCheck, User, Users, Package, Truck, ShoppingBag, SlidersHorizontal } from "lucide-react";
 import { salonRequestAPI } from "../services/communication.jsx";
 // Icons definitions (SVG)
 const Icons = {
@@ -52,6 +52,7 @@ const navItems = [
   { path: "/shop-products", key: "shopProducts", label: "Shop Products", icon: <Package size={20} /> },
   { path: "/distributors", key: "distributors", label: "Distributors", icon: <Truck size={20} /> },
   { path: "/shop-orders", key: "shopOrders", label: "Shop Orders", icon: <ShoppingBag size={20} /> },
+  { path: "/shop-settings", key: "shopSettings", label: "Shop Settings", icon: <SlidersHorizontal size={20} /> },
 ];
 
 const Layout = ({ children }) => {
@@ -63,7 +64,13 @@ const Layout = ({ children }) => {
   const [salonRequestCount, setSalonRequestCount] = useState(0);
   const navigate = useNavigate();
   const accessTab = JSON.parse(localStorage.getItem("accessTab"))
-  const [filteredTabs, setFilterTabs] = useState(navItems.filter((navDetails) => accessTab?.includes(navDetails.key)))
+  // Shop Settings rides with any of the shop tabs (it manages the same shop)
+  // or its own key — so admins provisioned before this tab existed still see
+  // it without an accessTab change.
+  const hasAnyShopTab = ["shopProducts", "distributors", "shopOrders"].some((key) => accessTab?.includes(key))
+  const [filteredTabs, setFilterTabs] = useState(navItems.filter((navDetails) =>
+    accessTab?.includes(navDetails.key) || (navDetails.key === "shopSettings" && hasAnyShopTab)
+  ))
   // const [filteredTabs, setFilterTabs] = useState(accessTab.map((ele) => {
   //   const data = navItems.find((navDetails) => navDetails?.key === ele)
   //   if (data) {

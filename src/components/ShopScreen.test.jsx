@@ -7,14 +7,20 @@ import { ShopProductDetailScreen, ShopQuantityControl, ShopScreen } from './Shop
 import { ShopCartScreen, ShopCheckoutScreen } from './ShopCartCheckout';
 import { ShopOrderScreen, ShopOrdersScreen } from './ShopOrders';
 import { addToCart, clearShopStorage, findOrder, placeOrder, readCart, readOrders } from '../lib/shopOrders';
+import { resetShopSettingsCache } from '../lib/shopSettings';
 
-const { shopProductList } = vi.hoisted(() => ({ shopProductList: vi.fn() }));
+const { shopProductList, shopSettingsGet } = vi.hoisted(() => ({
+  shopProductList: vi.fn(),
+  shopSettingsGet: vi.fn(),
+}));
 
 vi.mock('../lib/api', async () => {
   const actual = await vi.importActual('../lib/api');
   // The shop now browses the company catalog (shop_products) — the mock
   // answers the new endpoint; the old marketplace one is left as-is.
-  return { ...actual, api: { ...actual.api, shopProductList } };
+  // shopSettingsGet answers the admin-managed shop rules (tests that need
+  // custom rules re-mock it; the default is the historic 499/49 bill).
+  return { ...actual, api: { ...actual.api, shopProductList, shopSettingsGet } };
 });
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -72,8 +78,16 @@ function buttonsContaining(text, root = document.body) {
 
 beforeEach(() => {
   localStorage.clear();
+  resetShopSettingsCache(); // each test re-fetches its own rules
   shopProductList.mockReset();
   shopProductList.mockResolvedValue({ status: 'SUCCESS', data: { products: PRODUCT_FIXTURES } });
+  // Shop rules default to the historic bill (₹49 free delivery, above ₹499,
+  // no discount, no COD limit) — tests that need other rules re-mock this.
+  shopSettingsGet.mockReset();
+  shopSettingsGet.mockResolvedValue({
+    status: 'SUCCESS',
+    data: { freeDeliveryAbove: 499, deliveryFee: 49, discountPercent: 0, codThreshold: 0, codCharges: 0 },
+  });
   document.body.innerHTML = '';
 });
 
@@ -211,6 +225,43 @@ describe('ShopProductDetailScreen', () => {
     expect(navigate).toHaveBeenCalledWith('shopCart');
   });
 
+  it('shows the delivery terms AFTER the description, with the exact lines', async () => {
+    const { container } = await render(
+      <ShopProductDetailScreen session={SESSION} params={{ productId: 'sp2' }} navigate={vi.fn()} notify={vi.fn()} />
+    );
+    const cards = Array.from(container.querySelectorAll('.shop-detail-card'));
+    const aboutIndex = cards.findIndex(card => card.textContent.includes('About this product'));
+    const deliveryIndex = cards.findIndex(card => card.textContent.includes('Delivery'));
+    expect(aboutIndex).toBeGreaterThan(-1);
+    expect(deliveryIndex).toBeGreaterThan(aboutIndex); // terms are read with the description
+
+    // sp2 is ₹499 — exactly on the free-delivery threshold, so FREE; COD is
+    // unrestricted, so it is offered. (Session city Nagpur is named.)
+    const deliveryCard = cards[deliveryIndex];
+    expect(deliveryCard.textContent).toContain('Next-day delivery to Nagpur · FREE on this item');
+    expect(deliveryCard.textContent).toContain('Cash on delivery available · online payment via UPI, cards & netbanking');
+    expect(deliveryCard.textContent).toContain('Free cancellation until the order goes out for delivery');
+  });
+
+  it('follows the admin shop settings on the delivery card', async () => {
+    // Free delivery only above ₹1,000 (so ₹499 is not FREE), COD only up to
+    // ₹400 (so ₹499 is online-only) — the card must say so, not the default.
+    shopSettingsGet.mockResolvedValue({
+      status: 'SUCCESS',
+      data: { freeDeliveryAbove: 1000, deliveryFee: 40, discountPercent: 0, codThreshold: 400, codCharges: 20 },
+    });
+    const { container } = await render(
+      <ShopProductDetailScreen session={SESSION} params={{ productId: 'sp2' }} navigate={vi.fn()} notify={vi.fn()} />
+    );
+    const deliveryCard = Array.from(container.querySelectorAll('.shop-detail-card'))
+      .find(card => card.textContent.includes('Delivery'));
+    expect(deliveryCard.textContent).toContain('· free above ₹ 1,000');
+    expect(deliveryCard.textContent).not.toContain('FREE on this item');
+    expect(deliveryCard.textContent).not.toContain('Cash on delivery available');
+    expect(deliveryCard.textContent).toContain('Online payment via UPI, cards & netbanking');
+    expect(deliveryCard.textContent).toContain('Free cancellation until the order goes out for delivery');
+  });
+
   it('jumps to another product from the suggestions', async () => {
     const navigate = vi.fn();
     const { container } = await render(
@@ -331,6 +382,26 @@ describe('ShopCartScreen', () => {
     const { container } = await render(<ShopCartScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
     expect(container.textContent).toContain('Your cart is empty');
   });
+
+  it('bills the cart from the admin shop settings (discount, fee, threshold)', async () => {
+    shopSettingsGet.mockResolvedValue({
+      status: 'SUCCESS',
+      data: { freeDeliveryAbove: 500, deliveryFee: 40, discountPercent: 10, codThreshold: 0, codCharges: 25 },
+    });
+    addToCart('salon-1', { id: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men' });
+    const { container } = await render(<ShopCartScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+
+    // ₹199 − 10% (₹20) = ₹179 < ₹500 → +₹40 fee → ₹219 to pay.
+    const bill = container.querySelector('.shop-bill-card');
+    expect(bill.textContent).toContain('Order discount (10%)');
+    expect(bill.textContent).toContain('− ₹ 20');
+    expect(bill.textContent).toContain('₹ 40');
+    expect(container.querySelector('.shop-cart-footer').textContent).toContain('₹ 219');
+    // The free-delivery progress runs on the after-discount subtotal: 500 − 179.
+    expect(container.querySelector('.shop-delivery-note').textContent).toContain('₹ 321');
+    // COD is not chosen at cart level yet, so no COD charges line.
+    expect(bill.textContent).not.toContain('COD charges');
+  });
 });
 
 describe('ShopCheckoutScreen', () => {
@@ -373,6 +444,45 @@ describe('ShopCheckoutScreen', () => {
     await flush();
     expect(readOrders('salon-1')).toHaveLength(0);
     expect(notify).toHaveBeenCalledWith('error', expect.stringContaining('name'));
+  });
+
+  it('adds the admin-set COD charges only while COD is selected', async () => {
+    shopSettingsGet.mockResolvedValue({
+      status: 'SUCCESS',
+      data: { freeDeliveryAbove: 499, deliveryFee: 49, discountPercent: 0, codThreshold: 0, codCharges: 25 },
+    });
+    addToCart('salon-1', { id: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men' });
+    const { container } = await render(<ShopCheckoutScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+
+    // Online by default: 199 + 49 = 248, no COD line.
+    let summary = container.querySelector('.shop-checkout-summary');
+    expect(summary.textContent).toContain('₹ 248');
+    expect(summary.textContent).not.toContain('COD charges');
+
+    // Choosing COD adds the ₹25 surcharge → 273, and the bill card says so.
+    await act(async () => { container.querySelector('input[value="cod"]').click(); });
+    summary = container.querySelector('.shop-checkout-summary');
+    expect(summary.textContent).toContain('COD charges');
+    expect(summary.textContent).toContain('₹ 25');
+    expect(summary.textContent).toContain('₹ 273');
+    expect(container.querySelector('.shop-pay-option.active .shop-pay-copy').textContent).toContain('Cash on delivery');
+  });
+
+  it('locks COD out when the order is above the admin COD threshold', async () => {
+    shopSettingsGet.mockResolvedValue({
+      status: 'SUCCESS',
+      data: { freeDeliveryAbove: 499, deliveryFee: 49, discountPercent: 0, codThreshold: 100, codCharges: 25 },
+    });
+    addToCart('salon-1', { id: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men' });
+    const { container } = await render(<ShopCheckoutScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+
+    // ₹199 > ₹100 limit → COD is disabled with the reason, and the bill stays online.
+    const cod = container.querySelector('input[value="cod"]');
+    expect(cod.disabled).toBe(true);
+    expect(container.querySelector('input[value="online"]').checked).toBe(true);
+    expect(container.textContent).toContain('Only for orders up to ₹ 100');
+    expect(container.querySelector('.shop-checkout-summary').textContent).not.toContain('COD charges');
+    expect(buttonsContaining('Pay', container)[0].textContent).toContain('₹ 248'); // online total, not 273
   });
 });
 

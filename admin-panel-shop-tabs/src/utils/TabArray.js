@@ -49,4 +49,9 @@ export const TabArray = [
     label: "Shop Orders",
     route: "/shop-orders",
   },
+  {
+    key: "shopSettings",
+    label: "Shop Settings",
+    route: "/shop-settings",
+  },
 ];

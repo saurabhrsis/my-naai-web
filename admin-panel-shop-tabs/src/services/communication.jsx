@@ -1487,5 +1487,38 @@ export const shopOrderAPI = {
     } catch (error) {
       return { success: false, message: error.response?.data?.message || "Failed to reject order", error: error.response?.data };
     }
+  },
+  // Distributor carries an accepted parcel forward (next step only — the
+  // server enforces ASSIGNED -> PICKED -> SHIPPED -> DELIVERED). The admin
+  // token is accepted too, for moves recorded over the phone.
+  distributorUpdateStatus: async ({ orderId, status }) => {
+    try {
+      const response = await api.post('/api/shop-orders/distributor-update-status', { orderId, status });
+      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
+    } catch (error) {
+      return { success: false, message: error.response?.data?.message || "Failed to update order status", error: error.response?.data };
+    }
+  }
+};
+
+// Shop Settings — the admin-managed commerce rules (free-delivery threshold,
+// delivery charges, order discount %, COD limit + COD charges). One row on
+// the backend; the web shop bills from it.
+export const shopSettingsAPI = {
+  get: async () => {
+    try {
+      const response = await api.post('/api/shop-settings/get', {});
+      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
+    } catch (error) {
+      return { success: false, message: error.response?.data?.message || "Failed to load shop settings", error: error.response?.data };
+    }
+  },
+  update: async (settingsData) => {
+    try {
+      const response = await api.post('/api/shop-settings/admin-update', settingsData);
+      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
+    } catch (error) {
+      return { success: false, message: error.response?.data?.message || "Failed to save shop settings", error: error.response?.data };
+    }
   }
 };

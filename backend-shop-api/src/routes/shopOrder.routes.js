@@ -13,6 +13,7 @@ const adminAssignDistributor = require('../controller/shopOrder/adminAssignDistr
 const distributorAcceptOrder = require('../controller/shopOrder/distributorAcceptOrder');
 const distributorRejectOrder = require('../controller/shopOrder/distributorRejectOrder');
 const distributorListOrders = require('../controller/shopOrder/distributorListOrders');
+const distributorUpdateOrderStatus = require('../controller/shopOrder/distributorUpdateOrderStatus');
 
 const shopOrderRouter = express.Router();
 
@@ -34,5 +35,8 @@ shopOrderRouter.post('/admin-assign-distributor', authenticateAdmin, adminAssign
 shopOrderRouter.post('/distributor-orders', authenticateDistributorOrAdmin, distributorListOrders);
 shopOrderRouter.post('/distributor-accept', authenticateDistributorOrAdmin, distributorAcceptOrder);
 shopOrderRouter.post('/distributor-reject', authenticateDistributorOrAdmin, distributorRejectOrder);
+// After accepting, the distributor carries the parcel: ASSIGNED -> PICKED ->
+// SHIPPED -> DELIVERED (next step only). Admin token accepted on their behalf.
+shopOrderRouter.post('/distributor-update-status', authenticateDistributorOrAdmin, distributorUpdateOrderStatus);
 
 module.exports = shopOrderRouter;

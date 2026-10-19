@@ -12,6 +12,7 @@ const shopProductRouter = require('./shopProduct.routes');
 const shopCartRouter = require('./shopCart.routes');
 const distributorRouter = require('./distributor.routes');
 const shopOrderRouter = require('./shopOrder.routes');
+const shopSettingsRouter = require('./shopSettings.routes');
 const razorpayWebhook = require('../controller/razorpay/razorpayWebhook');
 const notificationRouter = require('./notification.routes');
 const bookingRequestRouter = require('./bookingRequest.routes');
@@ -39,6 +40,7 @@ routes.use('/shop-products', shopProductRouter);
 routes.use('/shop-cart', shopCartRouter);
 routes.use('/distributors', distributorRouter);
 routes.use('/shop-orders', shopOrderRouter);
+routes.use('/shop-settings', shopSettingsRouter);
 
 // Razorpay webhook — public, but signature-verified (raw body HMAC-SHA256).
 routes.post('/razorpay/webhook', razorpayWebhook);

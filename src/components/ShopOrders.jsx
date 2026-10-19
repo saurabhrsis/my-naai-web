@@ -267,7 +267,9 @@ export function ShopOrderScreen({ session, params, navigate, notify }) {
         ))}
         <div className="shop-order-bill">
           <div className="shop-bill-row"><span>Item total</span><span>{formatCurrency(order.amounts.itemTotal)}</span></div>
+          {Number(order.amounts.discount) > 0 && <div className="shop-bill-row saving"><span>Order discount</span><span>− {formatCurrency(order.amounts.discount)}</span></div>}
           <div className="shop-bill-row"><span>Delivery fee</span>{order.amounts.deliveryFee === 0 ? <span className="shop-bill-free">FREE</span> : <span>{formatCurrency(order.amounts.deliveryFee)}</span>}</div>
+          {Number(order.amounts.codFee) > 0 && <div className="shop-bill-row"><span>COD charges</span><span>{formatCurrency(order.amounts.codFee)}</span></div>}
           {order.amounts.savings > 0 && <div className="shop-bill-row saving"><span>MRP savings</span><span>− {formatCurrency(order.amounts.savings)}</span></div>}
           <div className="shop-bill-row total"><span>To pay</span><strong>{formatCurrency(order.amounts.total)}</strong></div>
         </div>

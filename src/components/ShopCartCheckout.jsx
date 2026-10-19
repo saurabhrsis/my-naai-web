@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Banknote,
   CheckCircle2,
@@ -19,7 +19,6 @@ import {
   openRazorpayOrderlessCheckout,
 } from '../lib/razorpay';
 import {
-  FREE_DELIVERY_ABOVE,
   cartCount,
   cartTotals,
   clearCart,
@@ -29,6 +28,7 @@ import {
   placeOrder,
   readCart,
 } from '../lib/shopOrders';
+import { useShopSettings } from '../lib/shopSettings';
 import { clearServerCart, registerServerOrder } from '../lib/shopServerSync';
 import {
   Button,
@@ -45,14 +45,24 @@ import { ShopQuantityControl, shopOwnerId, shopSalonName, useSyncedCart } from '
 const PRODUCT_PLACEHOLDER = '/assets/brand/product-placeholder.svg';
 
 /* ------------------------------------------------------------------ *\
- * Bill card — shared by the cart and the checkout summary.
+ * Bill card — shared by the cart, the checkout summary and the success
+ * view. `settings` is the admin-managed shop rules; `method` adds the COD
+ * charges when COD is the chosen payment; `amounts` (success view) freezes
+ * the bill exactly as the order was billed — the settings may have moved
+ * since.
  * ------------------------------------------------------------------ */
-export function ShopBillCard({ lines, title = 'Bill details' }) {
-  const totals = cartTotals(lines);
+export function ShopBillCard({ lines, settings, method, title = 'Bill details', amounts }) {
+  const totals = amounts || cartTotals(lines, settings, { method });
   return (
     <section className="shop-bill-card">
       <h3>{title}</h3>
       <div className="shop-bill-row"><span>Item total</span><span>{formatCurrency(totals.itemTotal)}</span></div>
+      {totals.discount > 0 && (
+        <div className="shop-bill-row saving">
+          <span>Order discount{totals.discountPercent ? ` (${totals.discountPercent}%)` : ''}</span>
+          <span>− {formatCurrency(totals.discount)}</span>
+        </div>
+      )}
       {totals.savings > 0 && <div className="shop-bill-row saving"><span>MRP savings</span><span>− {formatCurrency(totals.savings)}</span></div>}
       <div className="shop-bill-row">
         <span>Delivery fee</span>
@@ -60,6 +70,7 @@ export function ShopBillCard({ lines, title = 'Bill details' }) {
           ? <span className="shop-bill-free">FREE</span>
           : <span>{totals.deliveryFee === 0 ? '—' : formatCurrency(totals.deliveryFee)}</span>}
       </div>
+      {totals.codFee > 0 && <div className="shop-bill-row"><span>COD charges</span><span>{formatCurrency(totals.codFee)}</span></div>}
       <div className="shop-bill-row total"><span>To pay</span><strong>{formatCurrency(totals.total)}</strong></div>
       {totals.savings > 0 && <p className="shop-bill-saved">You saved {formatCurrency(totals.savings)} on this order</p>}
     </section>
@@ -72,10 +83,15 @@ export function ShopBillCard({ lines, title = 'Bill details' }) {
 export function ShopCartScreen({ session, navigate, notify }) {
   const ownerId = shopOwnerId(session);
   const { cart: lines, setQty, removeLine } = useSyncedCart(ownerId);
+  const shopSettings = useShopSettings();
 
-  const totals = cartTotals(lines);
-  const gap = freeDeliveryGap(lines);
-  const progress = Math.min(100, Math.round((totals.itemTotal / FREE_DELIVERY_ABOVE) * 100));
+  const totals = cartTotals(lines, shopSettings);
+  const gap = freeDeliveryGap(lines, shopSettings);
+  // Progress runs on the AFTER-DISCOUNT subtotal — the same number the
+  // server bills against, so the bar never oversells the free-delivery rule.
+  const progress = shopSettings.freeDeliveryAbove > 0
+    ? Math.min(100, Math.round((totals.subtotal / shopSettings.freeDeliveryAbove) * 100))
+    : 100;
 
   const confirm = useConfirm();
   const clearAll = async () => {
@@ -152,7 +168,7 @@ export function ShopCartScreen({ session, navigate, notify }) {
           </div>
         </div>
         <aside className="shop-cart-aside">
-          <ShopBillCard lines={lines} />
+          <ShopBillCard lines={lines} settings={shopSettings} />
         </aside>
       </div>
       <div className="shop-cart-footer">
@@ -196,9 +212,20 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
   const [busy, setBusy] = useState(false);
   const [payState, setPayState] = useState('idle'); // idle | opening | in-checkout | app-switched | confirming
   const [placed, setPlaced] = useState(null);
+  const shopSettings = useShopSettings();
 
-  const totals = cartTotals(lines);
+  // The bill is payment-aware: choosing COD adds the admin-set COD charges,
+  // so the "To pay" figure and the Razorpay amount always match what the
+  // server will bill (it recomputes the identical numbers on registration).
+  const totals = cartTotals(lines, shopSettings, { method: payment === 'cod' ? 'COD' : 'ONLINE' });
   const razorpayKey = useMemo(() => getRazorpayKeyId(), []);
+
+  // The admin's COD limit: above it, COD is offered nowhere — the server
+  // enforces the same rule, so this only keeps the UI honest and up-front.
+  const codLocked = shopSettings.codThreshold > 0 && totals.itemTotal > shopSettings.codThreshold;
+  useEffect(() => {
+    if (payment === 'cod' && codLocked) setPayment('online');
+  }, [payment, codLocked]);
 
   const setAddressField = (key, value) => setAddress(current => ({ ...current, [key]: value }));
 
@@ -281,6 +308,7 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     const problem = validate();
     if (problem) return notify?.('error', problem);
     if (lines.length === 0) return notify?.('error', 'Your cart is empty.');
+    if (payment === 'cod' && codLocked) return notify?.('error', `Cash on delivery is only available for orders up to ${formatCurrency(shopSettings.codThreshold)} — please pay online.`);
     if (payment === 'online' && !onlineAvailable) return notify?.('error', 'Online payment is not configured on this device — use Cash on Delivery.');
     setBusy(true);
     try {
@@ -304,7 +332,9 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
             <Truck size={16} /> Arriving by <strong>{etaText || 'the next working day'}</strong> at {placed.address.line1 || 'your salon'}, {placed.address.city}
           </p>
           <div className="shop-success-bill">
-            <ShopBillCard lines={placed.items} title="Order bill" />
+            {/* Frozen bill: exactly what this order was billed for, even if
+                the shop settings change before the customer sees this page. */}
+            <ShopBillCard lines={placed.items} amounts={placed.amounts} title="Order bill" />
           </div>
           <p className="shop-success-payment">
             {placed.payment.method === 'ONLINE'
@@ -354,7 +384,7 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
             </div>
           </div>
           <div className="shop-checkout-summary">
-            <ShopBillCard lines={lines} />
+            <ShopBillCard lines={lines} settings={shopSettings} method={payment === 'cod' ? 'COD' : 'ONLINE'} />
           </div>
           <section className="shop-pay-options" aria-label="Payment method">
             <label className={cx('shop-pay-option', payment === 'online' && 'active', !onlineAvailable && 'disabled')}>
@@ -366,12 +396,18 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
               </span>
               <span className={cx('shop-pay-tick', payment === 'online' && 'on')}><CheckCircle2 size={18} /></span>
             </label>
-            <label className={cx('shop-pay-option', payment === 'cod' && 'active')}>
-              <input type="radio" name="shop-payment" value="cod" checked={payment === 'cod'} onChange={() => setPayment('cod')} />
+            <label className={cx('shop-pay-option', payment === 'cod' && 'active', codLocked && 'disabled')} aria-disabled={codLocked}>
+              <input type="radio" name="shop-payment" value="cod" checked={payment === 'cod'} disabled={codLocked} onChange={() => setPayment('cod')} />
               <Banknote size={19} className="shop-pay-icon" />
               <span className="shop-pay-copy">
                 <strong>Cash on delivery</strong>
-                <small>Pay in cash when the order reaches your salon</small>
+                <small>
+                  {codLocked
+                    ? `Only for orders up to ${formatCurrency(shopSettings.codThreshold)} — this one is ${formatCurrency(totals.itemTotal)}, so please pay online`
+                    : shopSettings.codCharges > 0
+                      ? `Pay in cash when the order reaches your salon · ${formatCurrency(shopSettings.codCharges)} COD charges`
+                      : 'Pay in cash when the order reaches your salon'}
+                </small>
               </span>
               <span className={cx('shop-pay-tick', payment === 'cod' && 'on')}><CheckCircle2 size={18} /></span>
             </label>

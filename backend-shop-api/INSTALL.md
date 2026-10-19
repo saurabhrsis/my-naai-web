@@ -46,6 +46,21 @@ its own tables and the legacy product API is back to its original shape.
   `POST /api/distributors/login` (phone or email + password) returns a JWT
   the accept/reject endpoints accept — alongside the admin token, so the
   admin can record a decision taken over the phone.
+- **Shop settings** (this change) — a single-row `shop_settings` table the
+  admin edits from the new **Shop Settings** tab: `freeDeliveryAbove`
+  (min item total for free delivery), `deliveryFee`, `discountPercent`
+  (% off the whole item total, 0–100), `codThreshold` (max item total that
+  may still pay COD, 0 = no limit) and `codCharges` (extra fee when COD is
+  chosen). The row self-seeds on first read with the historic defaults
+  (₹499 / ₹49 / 0 / 0 / 0), so an untouched deployment behaves exactly as
+  before. **Every bill is recomputed from these values server-side** in
+  `createOrder`, so a tampered client can never change what it owes.
+- **Distributor carries the parcel** (this change) — after accepting, the
+  distributor advances their own order `ASSIGNED → PICKED → SHIPPED →
+  DELIVERED` (next step only, no skipping, no going back, no cancelling —
+  that stays the salon's/admin's call). Re-submitting the current status is
+  a no-op, so a double-tap never errors. The admin token is accepted on
+  their behalf. Each move lands in the event record.
 - **Razorpay webhook** confirms the payment on the salon track only.
 - **`GET /test-db` now syncs in passes** — models auto-load alphabetically,
   but a table can only be created once its foreign-key targets exist
@@ -110,19 +125,29 @@ All routes are `POST` and answer `{ status, message, data }`.
 | `/api/shop-orders/distributor-orders` | distributor (admin rejected) | Orders on this distributor's plate; `status` filter, `AWAITING_ACCEPTANCE` = respond queue |
 | `/api/shop-orders/distributor-accept` | distributor or admin | Accept the assigned order → `ASSIGNED` (salon sees CONFIRMED) |
 | `/api/shop-orders/distributor-reject` | distributor or admin | Reject with `reason` (required) → back to `PENDING_ASSIGNMENT` |
+| `/api/shop-orders/distributor-update-status` | distributor or admin | Advance an accepted order `PICKED` / `SHIPPED` / `DELIVERED` (next step only) |
+| `/api/shop-settings/get` | public | Read the shop's commerce rules (the web shop shows honest delivery/COD copy from this) |
+| `/api/shop-settings/admin-update` | admin | Save shop settings (all five fields optional — only what's sent changes) |
+
+`/api/shop-settings/*` data shape:
+`{ freeDeliveryAbove, deliveryFee, discountPercent, codThreshold, codCharges }`
+(all numbers, `discountPercent` 0–100, `codThreshold` 0 = no COD limit).
 
 `events` entry: `{ id, orderId, actorType: ADMIN|DISTRIBUTOR|SALON|SYSTEM,
 actorId, actorLabel, action: ORDER_PLACED|PAYMENT_CONFIRMED|ASSIGNED|ACCEPTED|
-REJECTED|STATUS_CHANGED|CANCELLED, fromStatus, toStatus, note, createdAt }`.
+REJECTED|PICKED|SHIPPED|DELIVERED|STATUS_CHANGED|CANCELLED, fromStatus,
+toStatus, note, createdAt }`.
 
 ## Environment notes
 
 - The new tables (`shop_products`, `shop_carts`, `distributors`,
-  `shop_orders` incl. the new `customer_status` / `distributor_id` columns)
-  are created by the existing `GET /test-db` table sync, same as every other
-  model — nothing to run by hand.
+  `shop_orders` incl. the new `customer_status` / `distributor_id` columns,
+  and `shop_settings` — a single-row table, seeded on first read) are
+  created by the existing `GET /test-db` table sync, same as every other
+  model — nothing to run by hand, nothing is ever dropped.
 - `RAZORPAY_WEBHOOK_SECRET` (webhook signature) must match the secret
   configured in the Razorpay dashboard → Webhooks.
 - Optional env: `SHOP_DELIVERY_FEE` (default 49), `SHOP_FREE_DELIVERY_ABOVE`
-  (default 499), `PAGE_LIMIT` (default 20) — same thresholds the shop UI
-  already uses.
+  (default 499), `PAGE_LIMIT` (default 20). The first two are now only the
+  **seed defaults** for a `shop_settings` row that has never been written —
+  once the admin saves settings from the panel, the panel values win.

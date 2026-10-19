@@ -50,6 +50,10 @@ const createShopOrder = async (request, response) => {
         if (String(error?.name) === 'SequelizeUniqueConstraintError') {
             return response.status(409).json({ status: 'FAILED', message: 'Order id already registered — refresh your order list' });
         }
+        // The COD limit is a business rule (client-side error), not a crash.
+        if (/Cash on delivery is available only/i.test(error.message)) {
+            return response.status(400).json({ status: 'FAILED', message: error.message });
+        }
         return response.status(500).json({
             status: 'FAILED',
             message: error.message

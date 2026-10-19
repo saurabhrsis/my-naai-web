@@ -75,6 +75,13 @@ const distributorListOrdersSchema = Joi.object({
     status: Joi.string().valid('PENDING_ASSIGNMENT', 'AWAITING_ACCEPTANCE', 'ASSIGNED', 'PICKED', 'SHIPPED', 'DELIVERED', 'CANCELLED').optional().allow(null, '')
 });
 
+// Distributor advances an accepted order (the service enforces the chain:
+// ASSIGNED -> PICKED -> SHIPPED -> DELIVERED, next step only).
+const distributorUpdateStatusSchema = Joi.object({
+    orderId: Joi.string().max(64).required(),
+    status: Joi.string().valid('PICKED', 'SHIPPED', 'DELIVERED').required()
+});
+
 module.exports = {
     createShopOrderSchema,
     getShopOrderSchema,
@@ -83,5 +90,6 @@ module.exports = {
     adminAssignDistributorSchema,
     distributorOrderSchema,
     distributorRejectOrderSchema,
-    distributorListOrdersSchema
+    distributorListOrdersSchema,
+    distributorUpdateStatusSchema
 };

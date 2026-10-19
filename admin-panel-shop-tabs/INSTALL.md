@@ -17,15 +17,16 @@ APIs only).
 |---|---|---|
 | **Shop Products** tab | `pages/ShopProducts.jsx` + `components/ShopProductModal.jsx` | Add / edit / hide / delete catalog products (name, price, MRP, image, category, gender, rating, description, live toggle) |
 | **Distributors** tab | `pages/Distributors.jsx` + `components/DistributorModal.jsx` | Add / edit delivery partners, set portal login password, activate / disable |
-| **Shop Orders** tab | `pages/ShopOrders.jsx` + `components/ShopOrderDetailModal.jsx` | Central dashboard: status filter chips, order detail with items/address/payment/amounts, **full order-history timeline** (who did what, when, rejection reasons), assign / re-assign distributor, advance status, or record a distributor's accept / reject taken over the phone |
-| **Distributor Portal** | `pages/DistributorPortal.jsx` | Separate simple screen (no admin sidebar). Distributor logs in with phone/email + the password the admin set. Sees orders waiting for their reply → **Accept** or **Reject with reason**; plus all their past orders |
+| **Shop Orders** tab | `pages/ShopOrders.jsx` + `components/ShopOrderDetailModal.jsx` | Central dashboard: status filter chips, order detail with items/address/payment/amounts (incl. discount + COD charges), **full order-history timeline** (who did what, when, rejection reasons), assign / re-assign via a distributor **select**, advance status, or record a distributor's accept / reject taken over the phone. Fullscreen on phones |
+| **Shop Settings** tab | `pages/ShopSettings.jsx` | The five commerce rules the shop bills with: **Free Shipping Threshold (₹)**, **Delivery Charges (₹)**, **Discount Percentage (%)**, **COD Threshold (₹)** and **COD Charges (₹)** — saved to the backend's single `shop_settings` row; the web shop reads the same values |
+| **Distributor Portal** | `pages/DistributorPortal.jsx` | Separate simple screen (no admin sidebar), responsive from phone to desktop. Distributor logs in with phone/email + the password the admin set. Sees orders waiting for their reply → **Accept** or **Reject with reason**; after accepting they carry the parcel forward with one tap per step — **Mark Picked Up → Mark Shipped → Mark Delivered**; plus all their past orders |
 | Login screen | `pages/Login.jsx` | Admin / Distributor toggle |
 
 Wiring (small changes to existing files):
-- `services/communication.jsx` — new `shopProductAPI`, `distributorAPI`, `shopOrderAPI`; the 401 interceptor now also clears the `role` key.
-- `utils/TabArray.js` — 3 new tab keys (`shopProducts`, `distributors`, `shopOrders`). This automatically makes the tabs appear in the **User Edit modal permission checkboxes** and the **Role Management** labels — assign the tabs to an admin there.
-- `components/Layout.jsx` — 3 new sidebar items (visible only when the admin has the tab permission).
-- `App.jsx` — 4 new routes + `DistributorOnlyRoute` guard.
+- `services/communication.jsx` — new `shopProductAPI`, `distributorAPI`, `shopOrderAPI` (incl. `distributorUpdateStatus`) and `shopSettingsAPI`; the 401 interceptor now also clears the `role` key.
+- `utils/TabArray.js` — 4 new tab keys (`shopProducts`, `distributors`, `shopOrders`, `shopSettings`). This automatically makes the tabs appear in the **User Edit modal permission checkboxes** and the **Role Management** labels — assign the tabs to an admin there. The **Shop Settings** tab also shows for any admin who already has one of the other shop tabs, so existing admins see it without a permission change.
+- `components/Layout.jsx` — 4 new sidebar items (visible only when the admin has the tab permission — see the note above).
+- `App.jsx` — 5 new routes + `DistributorOnlyRoute` guard.
 - `contexts/UserContext.jsx` — skips the admin profile call for distributor tokens (their token is not an admin token; without this they'd be logged straight out).
 - `vite.config.js` — dev-server only: `allowedHosts: true` so the dev server also works when reached through a remote/preview tunnel. No effect on `npm run build`.
 
@@ -36,20 +37,21 @@ Wiring (small changes to existing files):
 > Run this from the folder of the copied bundle, **next to** your `my-naai-frontend` checkout:
 > `./copy-to-frontend.sh /path/to/my-naai-frontend`
 
-Or copy the 14 files manually (paths below are relative to the repo root):
+Or copy the 16 files manually (paths below are relative to the repo root):
 
-**New files (7):**
+**New files (8):**
 ```
 src/pages/ShopProducts.jsx
 src/pages/Distributors.jsx
 src/pages/ShopOrders.jsx
 src/pages/DistributorPortal.jsx
+src/pages/ShopSettings.jsx
 src/components/ShopProductModal.jsx
 src/components/DistributorModal.jsx
 src/components/ShopOrderDetailModal.jsx
 ```
 
-**Overwrites (7):**
+**Overwrites (7) + root config (1):**
 ```
 src/App.jsx
 src/pages/Login.jsx
@@ -60,9 +62,13 @@ src/contexts/UserContext.jsx
 vite.config.js
 ```
 
-> Prefer applying the patch instead? From the repo root:
-> `git apply SHOP-TABS-FRONTEND.patch`
-> (it contains exactly the same 14-file change.)
+> Prefer applying the patch instead? `SHOP-TABS-FRONTEND.patch` is the
+> **increment for this delivery** — it applies on top of the shop-tabs
+> bundle you already installed (order detail modal revamp, Shop Settings
+> tab, distributor progression). From your admin frontend repo root:
+> `git apply /path/to/admin-panel-shop-tabs/SHOP-TABS-FRONTEND.patch`
+> A fresh install? Just use the copy script above — it carries the complete
+> 16-file state.
 
 **No new npm packages are needed** — the bundle only uses libraries the panel already has
 (react-bootstrap, react-toastify, lucide-react).
@@ -77,12 +83,14 @@ npm run build      # production bundle in dist/ — deploy as before
 ## After deploying
 
 1. Make sure the backend files are installed and `GET /test-db` was hit once (creates the new tables/columns — it never deletes anything).
-2. Log in as an existing admin → open **Role Management** (or edit the admin user) → tick the three new checkboxes: **Shop Products**, **Distributors**, **Shop Orders** → save.
+2. Log in as an existing admin → open **Role Management** (or edit the admin user) → tick the four shop checkboxes: **Shop Products**, **Distributors**, **Shop Orders**, **Shop Settings** → save. (An admin who already has any shop tab sees **Shop Settings** even before this is ticked.)
 3. Add distributors from the **Distributors** tab — set each one's portal password there.
 4. Share with each distributor: the panel URL, their phone or email, and their password. They pick the **Distributor** login option on the same login screen.
+5. Open **Shop Settings** and set your rules — Free Shipping Threshold, Delivery Charges, Discount %, COD Threshold (0 = no limit), COD Charges. The web shop's cart/checkout/product pages bill and phrase everything from these exact values.
 
 ## Quick demo script (what the panel should show)
 
-- **Shop Orders** tab: one order per stage — To Assign → Awaiting Distributor → Assigned → Picked → Shipped → Delivered, plus an order whose distributor **rejected** (open it: the timeline shows the rejection reason and the re-assignment).
+- **Shop Settings** tab: save e.g. Free Shipping ₹500, Delivery ₹40, Discount 10%, COD Threshold ₹1000, COD Charges ₹25 → on the web, a ₹550 COD order bills as 550 − 55 (discount) + 40 (fee) + 25 (COD) = ₹560, and a ₹1200 order cannot choose COD at checkout (it is greyed out with the reason).
+- **Shop Orders** tab: one order per stage — To Assign → Awaiting Distributor → Assigned → Picked → Shipped → Delivered, plus an order whose distributor **rejected** (open it: the timeline shows the rejection reason and the re-assignment). Open the detail on a phone — it goes fullscreen; the assign flow is a dropdown; the bill shows discount/COD rows.
 - Open an order in **Awaiting Distributor**: click **Record Accept** / **Record Reject** (type a reason) — it lands in the timeline just like when the distributor does it from their portal.
-- **Distributor login** with a distributor's phone + password: their queue shows the order waiting for their reply; Accept moves it to Assigned, Reject asks for a reason and returns it to To Assign.
+- **Distributor login** with a distributor's phone + password: their queue shows the order waiting for their reply; Accept moves it to Assigned; then **Mark Picked Up → Mark Shipped → Mark Delivered** — one tap per step, each landing in the order's timeline (and the salon's tracker) immediately.

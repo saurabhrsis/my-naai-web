@@ -339,6 +339,10 @@ export const api = {
   shopOrderList: payload => post('/api/shop-orders/list', payload),
   shopOrderGetById: payload => post('/api/shop-orders/get-by-id', payload),
   shopOrderCancel: payload => post('/api/shop-orders/cancel', payload),
+  // Public read of the admin-managed shop rules (delivery charges, free
+  // threshold, discount %, COD limit + charges) — the shop screens use it to
+  // bill and phrase delivery exactly as the server will.
+  shopSettingsGet: () => post('/api/shop-settings/get', {}),
   // Legacy mobile helpers choose the endpoint from the authenticated role.
   // Keep the explicit customer alias below for screens that must not depend on
   // ambient storage (this is also present in communication.js).

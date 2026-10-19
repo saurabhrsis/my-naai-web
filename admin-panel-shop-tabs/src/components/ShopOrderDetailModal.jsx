@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Modal, Button, Spinner } from "react-bootstrap";
 import { shopOrderAPI, distributorAPI } from "../services/communication";
 import { toast } from "react-toastify";
-import { Plus, CreditCard, UserPlus, CheckCircle2, XCircle, Truck, Ban, Store } from "lucide-react";
+import { Plus, CreditCard, UserPlus, CheckCircle2, XCircle, Truck, Ban, Store, Package } from "lucide-react";
 import { INTERNAL_STATUS_META } from "../pages/ShopOrders.jsx";
 
 const money = (value) => {
@@ -23,6 +23,10 @@ const EVENT_META = {
   ASSIGNED: { icon: UserPlus, color: "#6f42c1", label: "Distributor requested" },
   ACCEPTED: { icon: CheckCircle2, color: "#1e7e34", label: "Distributor accepted" },
   REJECTED: { icon: XCircle, color: "#dc3545", label: "Distributor rejected" },
+  // The distributor carries the parcel forward — each move is its own event.
+  PICKED: { icon: Package, color: "#fd7e14", label: "Picked up at the depot" },
+  SHIPPED: { icon: Truck, color: "#0d6efd", label: "Out for delivery" },
+  DELIVERED: { icon: CheckCircle2, color: "#1e7e34", label: "Delivered" },
   STATUS_CHANGED: { icon: Truck, color: "#0d6efd", label: "Status changed" },
   CANCELLED: { icon: Ban, color: "#dc3545", label: "Order cancelled" }
 };
@@ -153,7 +157,9 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
   };
 
   return (
-    <Modal show={Boolean(order)} onHide={onClose} centered size="xl" backdrop="static">
+    // Fullscreen below the sm breakpoint — on a phone the order, the bill
+    // and the actions all fit in one scroll instead of a cramped popup.
+    <Modal show={Boolean(order)} onHide={onClose} centered size="xl" fullscreen="sm-down" backdrop="static">
       <Modal.Header closeButton>
         <Modal.Title className="fw-bold d-flex align-items-center gap-2">
           <Store size={18} />
@@ -189,6 +195,9 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
 
             <div className="border rounded-2 p-2 mb-3" style={{ backgroundColor: "#fafaf8" }}>
               <div className="small text-muted mb-2">Items ({order.amounts?.itemCount ?? items.length})</div>
+              {/* table-responsive: the bill scrolls sideways on a phone
+                  instead of squeezing the item names. */}
+              <div className="table-responsive">
               <table className="table table-sm mb-0 align-middle" style={{ fontSize: "0.87rem" }}>
                 <thead>
                   <tr className="text-muted small">
@@ -216,16 +225,27 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
                   })}
                 </tbody>
               </table>
+              </div>
             </div>
 
-            <div className="d-flex flex-wrap gap-4 small mb-3">
+            <div className="d-flex flex-wrap gap-3 gap-md-4 small mb-3">
               <div>
                 <span className="text-muted">Items: </span><span className="fw-semibold">{money(order.amounts?.itemTotal)}</span>
               </div>
+              {Number(order.amounts?.discount) > 0 && (
+                <div>
+                  <span className="text-muted">Discount: </span><span className="text-success fw-semibold">− {money(order.amounts?.discount)}</span>
+                </div>
+              )}
               <div>
                 <span className="text-muted">Delivery: </span>
                 <span className="fw-semibold">{Number(order.amounts?.deliveryFee) === 0 ? "Free" : money(order.amounts?.deliveryFee)}</span>
               </div>
+              {Number(order.amounts?.codFee) > 0 && (
+                <div>
+                  <span className="text-muted">COD charges: </span><span className="fw-semibold">{money(order.amounts?.codFee)}</span>
+                </div>
+              )}
               <div>
                 <span className="text-muted">Total: </span><span className="fw-semibold">{money(order.amounts?.total)}</span>
               </div>
@@ -298,16 +318,56 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
               ) : (
                 <div className="text-muted">Not assigned yet</div>
               )}
-              <div className="mt-3">
-                <Button variant="success" size="sm" onClick={openAssign} disabled={busy} className="w-100">
-                  <UserPlus size={14} className="me-1" />
-                  {order.distributor ? "Re-assign / Request Another" : "Assign Distributor"}
-                </Button>
-              </div>
+
+              {showAssign ? (
+                // The pick is a proper <select> (name + phone + area in one
+                // row) instead of a card grid — one control on every screen
+                // size, and the chosen partner is unambiguous.
+                <div className="mt-3">
+                  <label className="form-label small text-muted mb-1" htmlFor="distributor-select">
+                    {order.distributor ? "Re-assign to another distributor" : "Choose a distributor"}
+                  </label>
+                  {distributorLoading ? (
+                    <div className="py-2 d-flex align-items-center gap-2 text-muted small"><Spinner size="sm" /> Loading distributors…</div>
+                  ) : distributors.length === 0 ? (
+                    <div className="text-muted small py-1">No active distributors yet — add some in the Distributors tab first.</div>
+                  ) : (
+                    <select
+                      id="distributor-select"
+                      className="form-select form-select-sm mb-2"
+                      value={selectedDistributor}
+                      onChange={(e) => setSelectedDistributor(e.target.value)}
+                    >
+                      <option value="">Choose a distributor…</option>
+                      {distributors.map((d) => (
+                        <option key={d.distributorId} value={d.distributorId} disabled={!d.isActive}>
+                          {d.name} — {d.phone}{d.area ? ` • ${d.area}` : ""}{!d.isActive ? " (disabled)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <div className="d-grid d-sm-flex gap-2">
+                    <Button variant="success" size="sm" onClick={confirmAssign} disabled={assigning || !selectedDistributor || distributorLoading}>
+                      {assigning ? "Requesting…" : "Assign"}
+                    </Button>
+                    <Button variant="outline-secondary" size="sm" onClick={() => { setShowAssign(false); setSelectedDistributor(""); }} disabled={assigning}>
+                      Close
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-3">
+                  <Button variant="success" size="sm" onClick={openAssign} disabled={busy} className="w-100">
+                    <UserPlus size={14} className="me-1" />
+                    {order.distributor ? "Re-assign / Request Another" : "Assign Distributor"}
+                  </Button>
+                </div>
+              )}
             </div>
 
             <div className="small text-muted mb-2 fw-semibold" style={{ textTransform: "uppercase", letterSpacing: "0.4px" }}>Actions</div>
-            <div className="d-flex flex-wrap gap-2">
+            {/* Full-width stacked on phones, wrapping row on desktop. */}
+            <div className="d-grid gap-2 d-md-flex flex-md-wrap">
               {statusActionButtons()}
             </div>
 
@@ -321,7 +381,7 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
                   onChange={(e) => setRejectReason(e.target.value)}
                   placeholder="e.g. Out of stock of Herbal Oil, cannot deliver to this pincode..."
                 />
-                <div className="d-flex gap-2">
+                <div className="d-grid d-sm-flex gap-2">
                   <Button variant="danger" size="sm" onClick={recordReject} disabled={busy}>{busy ? "Saving..." : "Confirm Rejection"}</Button>
                   <Button variant="outline-secondary" size="sm" onClick={() => { setShowReject(false); setRejectReason(""); }} disabled={busy}>Cancel</Button>
                 </div>
@@ -331,50 +391,11 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
             <div className="alert small mb-0 mt-3" style={{ backgroundColor: "#f6f8f6", borderColor: "#e3e8e3" }}>
               <strong>How the flow works:</strong> assign a distributor → it waits in <em>Awaiting Distributor</em> while they check
               the order in the Distributor Portal. They Accept (→ Assigned) or Reject (back to To Assign with their reason).
-              You can also record their decision here if they told you on the phone.
+              After accepting, the distributor carries it forward — Picked Up → Shipped → Delivered — from the portal,
+              and you can record any of those moves here too (over the phone).
             </div>
           </div>
         </div>
-
-        {/* Assign distributor inline section */}
-        {showAssign && (
-          <div className="mt-4 border-top pt-3">
-            <div className="d-flex align-items-center justify-content-between mb-2">
-              <div className="fw-semibold">Choose a distributor</div>
-              <Button variant="link" size="sm" className="p-0" onClick={() => setShowAssign(false)}>Close</Button>
-            </div>
-            {distributorLoading ? (
-              <div className="text-center py-3"><Spinner size="sm" /></div>
-            ) : distributors.length === 0 ? (
-              <div className="text-muted small py-2">No active distributors yet — add some in the Distributors tab first.</div>
-            ) : (
-              <div className="row g-2" style={{ maxHeight: 240, overflowY: "auto" }}>
-                {distributors.map((d) => (
-                  <div className="col-md-6" key={d.distributorId}>
-                    <button
-                      className="w-100 text-start border rounded-3 p-2 small"
-                      style={{
-                        backgroundColor: selectedDistributor === d.distributorId ? "#eaf7ee" : "#ffffff",
-                        borderColor: selectedDistributor === d.distributorId ? "#1e7e34" : "#e3e6e3"
-                      }}
-                      onClick={() => setSelectedDistributor(d.distributorId)}
-                    >
-                      <div className="fw-semibold">{d.name}</div>
-                      <div className="text-muted">{d.phone} • {d.area || "no area set"}</div>
-                      {d.deliveryCapability && <div className="text-muted" style={{ fontSize: "0.78rem" }}>{d.deliveryCapability}</div>}
-                      {!d.isActive && <div className="text-danger" style={{ fontSize: "0.78rem" }}>Disabled — cannot log in</div>}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="mt-3 d-flex gap-2">
-              <Button variant="success" size="sm" onClick={confirmAssign} disabled={assigning || !selectedDistributor}>
-                {assigning ? "Requesting..." : "Send to Distributor (Awaiting Accept/Reject)"}
-              </Button>
-            </div>
-          </div>
-        )}
       </Modal.Body>
     </Modal>
   );

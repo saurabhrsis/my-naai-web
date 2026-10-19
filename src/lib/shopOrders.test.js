@@ -83,6 +83,39 @@ describe('cartTotals', () => {
   it('is zero on an empty cart', () => {
     expect(cartTotals([])).toMatchObject({ itemCount: 0, itemTotal: 0, deliveryFee: 0, total: 0 });
   });
+
+  // Admin-managed rules (the shop_settings row). The numbers mirror the
+  // backend's computeTotals — the two implementations must stay in lock-step.
+  const RULES = { freeDeliveryAbove: 500, deliveryFee: 40, discountPercent: 10, codThreshold: 1000, codCharges: 25 };
+
+  it('applies the discount, the free threshold on the after-discount subtotal, and COD charges', () => {
+    const totals = cartTotals([product('p1', 550)], RULES, { method: 'COD' });
+    expect(totals.itemTotal).toBe(550);
+    expect(totals.discount).toBe(55); // 10% of 550
+    expect(totals.subtotal).toBe(495);
+    expect(totals.deliveryFee).toBe(40); // 495 < 500 → charged
+    expect(totals.codFee).toBe(25);
+    expect(totals.total).toBe(560); // 495 + 40 + 25
+    expect(freeDeliveryGap([product('p1', 550)], RULES)).toBe(5);
+  });
+
+  it('waives delivery once the after-discount subtotal clears the threshold, and adds no COD fee for online', () => {
+    const totals = cartTotals([product('p1', 1500)], RULES, { method: 'ONLINE' });
+    expect(totals.discount).toBe(150);
+    expect(totals.subtotal).toBe(1350);
+    expect(totals.deliveryFee).toBe(0); // 1350 ≥ 500
+    expect(totals.codFee).toBe(0);
+    expect(totals.total).toBe(1350);
+  });
+
+  it('clamps a bogus discount to 0–100 instead of emitting NaN', () => {
+    expect(cartTotals([product('p1', 200)], { ...RULES, discountPercent: 150 })).toMatchObject({ discount: 200, subtotal: 0, total: 40 });
+    expect(cartTotals([product('p1', 200)], { ...RULES, discountPercent: -10 }).deliveryFee).toBe(40);
+  });
+
+  it('keeps the historic bill when no settings are passed', () => {
+    expect(cartTotals([product('p1', 199)])).toMatchObject({ discount: 0, codFee: 0, deliveryFee: 49, total: 248, freeDeliveryAbove: 499 });
+  });
 });
 
 describe('order lifecycle', () => {

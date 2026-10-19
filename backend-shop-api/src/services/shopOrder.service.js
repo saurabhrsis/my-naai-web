@@ -1,11 +1,16 @@
 const { Op } = require('sequelize');
 const db = require('../database/models');
+const shopSettingsService = require('./shopSettings.service');
 const DEFAULT_LIMIT = parseInt(process.env.PAGE_LIMIT) || 20;
 
 /* ------------------------------------------------------------------ *\
  * Bill math — must stay in lock-step with the frontend's `cartTotals`
  * (my-naai-web/src/lib/shopOrders.js). Blinkit-style shipping: a flat
- * fee below the threshold, free above it. Env overrides:
+ * fee below the threshold, free above it.
+ *
+ * The rules come from the single-row shop_settings table (admin-managed
+ * via /api/shop-settings/admin-update); the env vars are only the seed
+ * defaults for a settings row that has never been written:
  *   SHOP_DELIVERY_FEE        (default 49)
  *   SHOP_FREE_DELIVERY_ABOVE (default 499)
  * ------------------------------------------------------------------ */
@@ -15,17 +20,45 @@ const FREE_DELIVERY_ABOVE = Number(process.env.SHOP_FREE_DELIVERY_ABOVE) || 499;
 // A raw line without qty is read as one; the bill math must never emit NaN.
 const lineQty = (line) => Math.max(1, Math.min(99, Math.round(Number(line?.qty) || 1)));
 
-const computeTotals = (lines = []) => {
+const clampPercent = (value) => {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(100, n);
+};
+
+// A settings value, with the env default as fallback for unset rows.
+const settingsNumber = (settings, field, fallback) => {
+  const n = Number(settings?.[field]);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+};
+
+// `method` ('COD' | 'ONLINE') decides whether the COD surcharge is added.
+// The free-delivery threshold applies to the AFTER-DISCOUNT subtotal, so
+// admin-managed discount and free-delivery rules compose predictably.
+const computeTotals = (lines = [], settings = {}, method = 'COD') => {
+  const freeAbove = settingsNumber(settings, 'freeDeliveryAbove', FREE_DELIVERY_ABOVE);
+  const fee = settingsNumber(settings, 'deliveryFee', DELIVERY_FEE);
+  const discountPercent = clampPercent(settings?.discountPercent);
+  const codCharges = settingsNumber(settings, 'codCharges', 0);
+
   const itemTotal = lines.reduce((sum, line) => sum + (Number(line?.price) || 0) * lineQty(line), 0);
   const savings = lines.reduce((sum, line) => sum + Math.max(0, (Number(line?.mrp) || 0) - (Number(line?.price) || 0)) * lineQty(line), 0);
-  const deliveryFee = !lines.length || itemTotal >= FREE_DELIVERY_ABOVE ? 0 : DELIVERY_FEE;
+  const discount = Math.round((itemTotal * discountPercent) / 100);
+  const subtotal = itemTotal - discount;
+  const deliveryFee = !lines.length || subtotal >= freeAbove ? 0 : fee;
+  const codFee = method === 'COD' ? codCharges : 0;
   return {
     itemCount: lines.reduce((sum, line) => sum + lineQty(line), 0),
     itemTotal,
     savings,
+    discount,
+    subtotal,
     deliveryFee,
-    total: itemTotal + deliveryFee,
-    freeDeliveryAbove: FREE_DELIVERY_ABOVE
+    codFee,
+    total: subtotal + deliveryFee + codFee,
+    freeDeliveryAbove: freeAbove,
+    deliveryFeeBase: fee,
+    discountPercent
   };
 };
 
@@ -86,15 +119,30 @@ const logEvent = (order, { actorType, actorId = null, actorLabel = null, action,
   });
 };
 
+// Rupee formatting for error messages (thousands as in India).
+const inr = (n) => `₹${Number(n).toLocaleString('en-IN')}`;
+
 /**
  * Create a shop order. Amounts are always recomputed from the lines —
  * the client's `amounts` payload is ignored on purpose. A client-supplied
  * `orderId` is honoured (the web shop creates its local record first, so
  * both ends share the id); otherwise one is generated.
+ *
+ * The COD limit (shop_settings.codThreshold) is enforced here as well as in
+ * the checkout UI — a tampered client cannot order COD above it.
  */
 const createOrder = async ({ salonId, orderId, items, address, payment, notes }) => {
-  const amounts = computeTotals(items);
   const method = payment?.method === 'ONLINE' ? 'ONLINE' : 'COD';
+  const settings = await shopSettingsService.getSettings();
+
+  // The COD limit is enforced HERE, not just in the checkout UI — a tampered
+  // client cannot slip past it. Judged on the item total (0 = no limit).
+  const amounts = computeTotals(items, settings, method);
+  if (method === 'COD' && settings.codThreshold > 0 && amounts.itemTotal > settings.codThreshold) {
+    throw new Error(
+      `Cash on delivery is available only for orders of ${inr(settings.codThreshold)} or less — this one is ${inr(amounts.itemTotal)}. Please pay online.`
+    );
+  }
   const paid = method === 'ONLINE' && payment?.status === 'PAID';
 
   const order = await db.ShopOrder.create({
@@ -255,6 +303,47 @@ const rejectOrder = async (orderIdOrId, reason, actor = {}, distributor = null) 
   return order;
 };
 
+// Distributor (or the admin on their behalf) advances an ACCEPTED order
+// through the fulfilment chain: ASSIGNED -> PICKED -> SHIPPED -> DELIVERED.
+// Only the next step is allowed — no skipping, no going back, no cancelling
+// (that stays the salon's or admin's call). Re-sending the current status is
+// a harmless no-op so a double-tap never errors.
+const DISTRIBUTOR_PROGRESSION = [
+  { from: 'ASSIGNED', to: 'PICKED', label: 'picked up' },
+  { from: 'PICKED', to: 'SHIPPED', label: 'shipped' },
+  { from: 'SHIPPED', to: 'DELIVERED', label: 'delivered' }
+];
+
+const distributorUpdateStatus = async (orderIdOrId, nextStatus, actor = {}, distributor = null) => {
+  const step = DISTRIBUTOR_PROGRESSION.find(entry => entry.to === nextStatus);
+  if (!step) {
+    throw new Error('This order can only be moved to PICKED, SHIPPED or DELIVERED');
+  }
+  const order = await getById(orderIdOrId);
+  if (!order) return null;
+  if (distributor && order.distributorId !== distributor.distributorId) {
+    throw new Error('This order is not assigned to your distributor account');
+  }
+  if (order.status === step.to) return order; // idempotent re-submit
+
+  if (order.status !== step.from) {
+    throw new Error(
+      `This order must be ${step.from.replace(/_/g, ' ')} before it can be marked ${nextStatus.replace(/_/g, ' ')} (current: ${order.status.replace(/_/g, ' ')})`
+    );
+  }
+
+  const fromStatus = order.status;
+  order.status = nextStatus;
+  order.customerStatus = nextCustomerStatus(order.customerStatus, INTERNAL_TO_CUSTOMER_STATUS[nextStatus]);
+  await order.save();
+
+  const who = distributor
+    ? `Distributor ${distributor.name}`
+    : (actor.label ? `${actor.label} for distributor ${order.distributor?.name || order.distributorId}` : 'Distributor');
+  await logEvent(order, { ...actor, action: nextStatus, fromStatus, toStatus: nextStatus, note: `${who} marked the order ${step.label}` });
+  return order;
+};
+
 // Admin: move the INTERNAL track; the customer track follows the mapping
 // (and never regresses — see nextCustomerStatus). DELIVERED/CANCELLED are
 // terminal; anything else may move forward, backward (a parcel goes back to
@@ -398,6 +487,7 @@ module.exports = {
   assignDistributor,
   acceptOrder,
   rejectOrder,
+  distributorUpdateStatus,
   updateStatus,
   cancelBySalon,
   listForAdmin,

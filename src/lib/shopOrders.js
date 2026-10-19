@@ -21,8 +21,21 @@ const CART_PREFIX = 'mynaaiShopCart:';
 const ORDERS_PREFIX = 'mynaaiShopOrders:';
 
 // Blinkit-style shipping: free above the threshold, a flat fee below it.
+// The rules are admin-managed on the backend (single-row `shop_settings`
+// table, edited in the Shop Settings tab) and reach the screens through
+// `useShopSettings` (src/lib/shopSettings.js). These constants are the SAME
+// defaults the backend seeds that row with, so a bill computed with the
+// defaults — offline, or before the settings fetch resolves — matches the
+// server's bill exactly.
 export const DELIVERY_FEE = 49;
 export const FREE_DELIVERY_ABOVE = 499;
+export const DEFAULT_SHOP_SETTINGS = {
+  freeDeliveryAbove: FREE_DELIVERY_ABOVE,
+  deliveryFee: DELIVERY_FEE,
+  discountPercent: 0,
+  codThreshold: 0, // 0 = no limit
+  codCharges: 0,
+};
 
 // Minutes after placement at which each step becomes current. Delivered is
 // the ETA: 26 hours covers a next-day slot without over-promising.
@@ -146,28 +159,63 @@ function lineQty(line) {
   return Math.max(1, Math.min(99, Math.round(Number(line?.qty) || 1)));
 }
 
+const clampPercent = (value) => {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(100, n);
+};
+
+// A settings value, with the shipped default as fallback for unset rows.
+const settingsNumber = (settings, field, fallback) => {
+  const n = Number(settings?.[field]);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+};
+
 // The bill: item total, MRP savings, delivery fee and grand total.
 // `deliveryFee` is 0 on an empty cart so the "proceed" button can never be
 // paid on zero.
-export function cartTotals(lines) {
+//
+// `settings` is the admin-managed shop_settings row (see
+// DEFAULT_SHOP_SETTINGS) — when omitted the bill is exactly the historic
+// one. `method` ('COD' | 'ONLINE') adds the admin-set COD charges when COD
+// is chosen. The free-delivery threshold applies to the AFTER-DISCOUNT
+// subtotal, so the admin's discount and free-delivery rules compose
+// predictably. MUST stay in lock-step with the backend's computeTotals
+// (my_naai_backend/src/services/shopOrder.service.js) — the server
+// recomputes the same bill when the order is registered.
+export function cartTotals(lines, settings = null, { method } = {}) {
+  const freeAbove = settingsNumber(settings, 'freeDeliveryAbove', FREE_DELIVERY_ABOVE);
+  const fee = settingsNumber(settings, 'deliveryFee', DELIVERY_FEE);
+  const discountPercent = clampPercent(settings?.discountPercent);
+  const codCharges = settingsNumber(settings, 'codCharges', 0);
+
   const itemTotal = (lines || []).reduce((sum, line) => sum + (Number(line?.price) || 0) * lineQty(line), 0);
   const savings = (lines || []).reduce((sum, line) => sum + Math.max(0, (Number(line?.mrp) || 0) - (Number(line?.price) || 0)) * lineQty(line), 0);
-  const deliveryFee = !lines?.length || itemTotal >= FREE_DELIVERY_ABOVE ? 0 : DELIVERY_FEE;
+  const discount = Math.round((itemTotal * discountPercent) / 100);
+  const subtotal = itemTotal - discount;
+  const deliveryFee = !lines?.length || subtotal >= freeAbove ? 0 : fee;
+  const codFee = method === 'COD' ? codCharges : 0;
   return {
     itemCount: cartCount(lines),
     itemTotal,
     savings,
+    discount,
+    subtotal,
     deliveryFee,
-    total: itemTotal + deliveryFee,
-    freeDeliveryAbove: FREE_DELIVERY_ABOVE,
+    codFee,
+    total: subtotal + deliveryFee + codFee,
+    freeDeliveryAbove: freeAbove,
+    deliveryFeeBase: fee,
+    discountPercent,
   };
 }
 
-// How much more to reach free delivery (0 when already there / empty).
-export function freeDeliveryGap(lines) {
-  const { itemTotal, deliveryFee } = cartTotals(lines);
-  if (!lines?.length || deliveryFee === 0) return 0;
-  return FREE_DELIVERY_ABOVE - itemTotal;
+// How much more (after discount) to reach free delivery (0 when already
+// there / empty).
+export function freeDeliveryGap(lines, settings = null) {
+  const totals = cartTotals(lines, settings);
+  if (!lines?.length || totals.deliveryFee === 0) return 0;
+  return totals.freeDeliveryAbove - totals.subtotal;
 }
 
 /* ------------------------------------------------------------------ *\
@@ -248,7 +296,9 @@ export function placeOrder(salonId, { items, address, payment, amounts, salonNam
     amounts: {
       itemTotal: Number(amounts?.itemTotal) || 0,
       savings: Number(amounts?.savings) || 0,
+      discount: Number(amounts?.discount) || 0,
       deliveryFee: Number(amounts?.deliveryFee) || 0,
+      codFee: Number(amounts?.codFee) || 0,
       total: Number(amounts?.total) || 0,
     },
     placedAt: new Date(now).toISOString(),

@@ -53,8 +53,12 @@ Order detail ── 4-step tracker (Placed → Packed → Out for delivery → D
                 items, address, payment (id, refund state), Cancel order
 ```
 
-- **Delivery fee:** ₹49, FREE above ₹499 (constants in `shopOrders.js`;
-  the backend recomputes the bill with the same thresholds).
+- **Delivery fee / free threshold / discount % / COD rules:** admin-managed
+  in the **Shop Settings** tab (the backend's `shop_settings` row — see
+  "Admin-managed bill rules" below); the defaults are ₹49, FREE above ₹499,
+  no discount, COD unlimited, no COD surcharge. The web fetches the same row
+  once per session and the backend **recomputes the bill server-side** at
+  order time, so display and charge always match.
 - **Timeline:** server-tracked orders follow the salon status track (see
   below); local-only orders fall back to a deterministic timeline from
   `placedAt` — packed after 30 min, out for delivery after 3 h, delivered/ETA
@@ -80,9 +84,11 @@ a **My cart** shortcut (with the live item count) beside **My orders**.
 - **Price:** Any price · Under ₹500 · ₹500–₹1,000 · ₹1,000+.
 - **Search** across name, salon and description.
 
-Delivery facts (free-above-₹499, order-by) are managed by the backend, so the
-shop no longer renders a delivery banner — only the bill card and the
-details-page delivery card still state the fee/free rule.
+Delivery facts (the free-delivery threshold, order-by) come from the
+admin-managed `shop_settings` row (default free above ₹499), so the shop no
+longer renders a delivery banner — only the bill card and the details-page
+delivery card still state the fee/free rule, and they read it live from the
+same settings the backend bills against.
 
 All filtering is client-side over the catalog (`applyShopFilters` in
 `shopCatalog.js` — pure, fully unit-tested). The catalog endpoint
@@ -109,11 +115,17 @@ as `shopProduct?productId=`) instead of an inline sheet:
 - **Tags** — category, gender, in/out of stock — then the product name, the
   seller line (`Sold by <salon>` when the product is salon-listed, otherwise
   `Supplied by My Naai`) and the price row with struck-through MRP + rating;
-- **Large ADD control** (the Blinkit-style in-page button, 44 px) above a
-  **Delivery card** (next-day to the salon's city, free above ₹499, COD +
-  online payment, free cancellation until dispatch) and an **About this
-  product** card (description, with a fallback line when the backend sends
-  none);
+- **Large ADD control** (the Blinkit-style in-page button, 44 px), then an
+  **About this product** card (description, with a fallback line when the
+  backend sends none) and — deliberately **after the description**, so the
+  terms are read with the product they belong to — the **Delivery card**:
+  *Next-day delivery to your salon · FREE on this item* (FREE only when the
+  item clears the free-delivery threshold, otherwise *free above ₹X*),
+  *Cash on delivery available · online payment via UPI, cards & netbanking*
+  (the COD half drops out when the item is above the admin's COD limit, so
+  the page never promises a payment the checkout will refuse), and
+  *Free cancellation until the order goes out for delivery*. Every line is
+  driven by the admin-managed shop settings (below), not by constants;
 - **Photo gallery** — products can carry multiple admin-uploaded photos
   (the editor joins them into the single `productImage` field with commas,
   the same file-path pattern the home-screen salon photos use; `getFileUrl`
@@ -168,8 +180,10 @@ admin and the assigned **distributor** see:
 `PENDING_ASSIGNMENT → AWAITING_ACCEPTANCE → ASSIGNED → PICKED → SHIPPED →
 DELIVERED`, moved through `admin-assign-distributor`,
 `distributor-accept`/`distributor-reject` (a rejection with a reason sends
-the order back to `PENDING_ASSIGNMENT` for re-assignment) and
-`admin-update-status`) and a SALON track (what the buying salon sees). The
+the order back to `PENDING_ASSIGNMENT` for re-assignment),
+`distributor-update-status` (the distributor advances PICKED → SHIPPED →
+DELIVERED themselves, next-step-only) and `admin-update-status`) and a
+SALON track (what the buying salon sees). The
 salon responses only ever carry the salon track as `status`; the internal
 track and the distributor never cross to the client. Every admin/distributor
 action is appended to `shop_order_events` (the complete record shown on the
@@ -189,6 +203,29 @@ An order fetched from the server carries its raw value as
 `order.serverStatus`; the tracker and the cancel gate use it when present,
 and fall back to the deterministic `placedAt` timeline for local-only orders
 (offline placements, guests).
+
+**Admin-managed bill rules (`shop_settings`).** The delivery fee, the
+free-delivery threshold, an order-wide discount %, the COD limit and the COD
+surcharge are no longer constants — the company admin edits the five values
+in the **Shop Settings** tab of the admin panel (single row on the backend,
+`POST /api/shop-settings/admin-update`, self-seeding with the historic
+₹49 / free-above-₹499 / no-discount / no-limits defaults). The web shop
+fetches the same row once per session (`api.shopSettingsGet` →
+`useShopSettings`, `src/lib/shopSettings.js`) and threads it through
+`cartTotals(lines, settings, { method })` — so the product page, the cart
+bill, the checkout bill (which adds the COD charges while COD is selected)
+and the "add ₹X more for FREE delivery" progress bar all agree with each
+other and with the server: `createOrder` **recomputes the bill from the
+lines + settings** and ignores any client amounts, and it rejects a COD
+order whose item total is above the COD limit with a friendly 400 (the
+checkout greys the COD radio with the reason, so the customer sees it up
+front). The free-delivery threshold applies to the after-discount subtotal,
+so a discount can push an order below the free line — and the progress bar
+runs on that same subtotal. If the settings fetch fails (offline, or a
+deployment ahead of the backend), the shop falls back to the same defaults
+the server seeds, so the displayed bill still matches the billed bill.
+Order records keep the frozen amounts (item total, discount, delivery fee,
+COD charges, total), so a later settings change never rewrites history.
 
 **Cancellation** is server-authoritative for server-tracked orders
 (`POST /api/shop-orders/cancel` — free while the parcel has not left the

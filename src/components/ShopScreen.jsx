@@ -23,7 +23,8 @@ import {
   discountPercent,
   normalizeShopProduct,
 } from '../lib/shopCatalog';
-import { FREE_DELIVERY_ABOVE, addToCart, cartTotals, readCart, removeCartLine, saveCart, setCartQty } from '../lib/shopOrders';
+import { addToCart, cartTotals, readCart, removeCartLine, saveCart, setCartQty } from '../lib/shopOrders';
+import { useShopSettings } from '../lib/shopSettings';
 import { fetchServerCart, pushCartAdd, pushCartRemove, pushCartSetQty } from '../lib/shopServerSync';
 import {
   Button,
@@ -221,12 +222,13 @@ export function ShopScreen({ session, navigate, notify }) {
   const [gender, setGender] = useState('all');
   const [priceRange, setPriceRange] = useState('all');
 
+  const shopSettings = useShopSettings();
   const categories = useMemo(() => categoryChipsFor(products), [products]);
   const visible = useMemo(
     () => applyShopFilters(products, { search, category, gender, priceRange }),
     [products, search, category, gender, priceRange],
   );
-  const totals = useMemo(() => cartTotals(cart), [cart]);
+  const totals = useMemo(() => cartTotals(cart, shopSettings), [cart, shopSettings]);
   const qtyFor = id => cart.find(line => line.productId === String(id))?.qty || 0;
 
   const handleAdd = product => add(product, 1);
@@ -320,11 +322,12 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
   const productId = String(params?.productId || '');
   const { products, loading, error, load } = useShopCatalog(notify);
   const { cart, add, setQty } = useSyncedCart(ownerId);
+  const shopSettings = useShopSettings();
 
   // A different product resets the gallery to its cover photo.
   useEffect(() => { setActiveImage(0); }, [productId]);
 
-  const totals = useMemo(() => cartTotals(cart), [cart]);
+  const totals = useMemo(() => cartTotals(cart, shopSettings), [cart, shopSettings]);
   const product = useMemo(() => products.find(value => String(value.id) === productId) || null, [products, productId]);
   const images = useMemo(() => (product?.images?.length ? product.images : product?.image ? [product.image] : []), [product]);
   const [activeImage, setActiveImage] = useState(0);
@@ -410,15 +413,21 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
       </div>
 
       <section className="shop-detail-card">
-        <h3><Truck size={15} /> Delivery</h3>
-        <p><Zap size={13} /> Next-day delivery{city ? ` to ${city}` : ' to your salon'}{product.price >= FREE_DELIVERY_ABOVE ? ' · FREE on this item' : ` · free above ${formatCurrency(FREE_DELIVERY_ABOVE)}`}</p>
-        <p><Banknote size={13} /> Cash on delivery available · online payment via UPI, cards &amp; netbanking</p>
-        <p><ShieldCheck size={13} /> Free cancellation until the order goes out for delivery</p>
-      </section>
-
-      <section className="shop-detail-card">
         <h3>About this product</h3>
         <p>{product.description || `${categoryLabel(product.category)} pick${product.salonName ? ` from ${product.salonName}` : ' from the Naai Shop catalog'} — delivered to your salon in 1–2 days.`}</p>
+      </section>
+
+      {/* Delivery facts sit AFTER the description so the terms are read with
+          the product they belong to (never a surprise at checkout). Every
+          line is driven by the admin-managed shop settings, so the page can
+          not promise what the bill will not honour. */}
+      <section className="shop-detail-card" aria-label="Delivery information">
+        <h3><Truck size={15} /> Delivery</h3>
+        <p><Zap size={13} /> Next-day delivery{city ? ` to ${city}` : ' to your salon'}{product.price >= shopSettings.freeDeliveryAbove ? ' · FREE on this item' : ` · free above ${formatCurrency(shopSettings.freeDeliveryAbove)}`}</p>
+        <p><Banknote size={13} /> {shopSettings.codThreshold > 0 && product.price > shopSettings.codThreshold
+          ? 'Online payment via UPI, cards & netbanking'
+          : 'Cash on delivery available · online payment via UPI, cards & netbanking'}</p>
+        <p><ShieldCheck size={13} /> Free cancellation until the order goes out for delivery</p>
       </section>
 
       {similar.length > 0 && (

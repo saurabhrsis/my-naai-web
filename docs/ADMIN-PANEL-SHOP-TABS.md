@@ -59,6 +59,7 @@ with a "portal password" field (write-only) + activate/deactivate toggle.
 | Detail | `/api/shop-orders/admin-get-by-id` | `{ orderId }` |
 | Assign / re-assign | `/api/shop-orders/admin-assign-distributor` | `{ orderId, distributorId, notes? }` |
 | Move status | `/api/shop-orders/admin-update-status` | `{ orderId, status, notes? }` |
+| Distributor advances | `/api/shop-orders/distributor-update-status` | `{ orderId, status: PICKED|SHIPPED|DELIVERED }` | next-step-only (ASSIGNED→PICKED→SHIPPED→DELIVERED), distributor's own orders only; the admin's token works here too (recorded as the distributor's action) |
 
 Order shape (admin view): the salon-view fields **plus** `status` (internal
 track), `customerStatus` (salon track), `distributor {distributorId, name,
@@ -107,24 +108,56 @@ Distributor home (token from above):
 - Each order card: salon + address + items + totals + payment method.
   Buttons: **Accept** (`distributor-accept`) and **Reject**
   (`distributor-reject`, reason required, min 3 chars) — only visible while
-  `AWAITING_ACCEPTANCE`; after that show the current status.
+  `AWAITING_ACCEPTANCE`; after acceptance the single next-step button shows
+  instead — **Mark Picked Up → Mark Shipped → Mark Delivered**
+  (`distributor-update-status`), one tap per step, every step landing in the
+  order timeline and the salon's tracker; after that show the current status.
+
+## 5. Shop Settings tab (bill rules)
+
+One settings row on the backend (`shop_settings`, self-seeded on first read
+with free-above ₹499 / delivery ₹49 / no discount / COD unlimited / no COD
+fee). The web shop reads the same row, so these are the values that bill.
+
+| Action | Endpoint | Body | Notes |
+| --- | --- | --- | --- |
+| Read | `/api/shop-settings/get` | `{}` | **public** — the web shop calls it without a token; returns the current row |
+| Save | `/api/shop-settings/admin-update` | any subset of `{ freeDeliveryAbove, deliveryFee, discountPercent, codThreshold, codCharges }` | admin only; partial upsert — unsent fields keep their value; each sent value must be a number ≥ 0 and `discountPercent` ≤ 100, otherwise the whole request is rejected with 400 |
+
+Field semantics (shown in the panel, mirrored on the shop):
+- `freeDeliveryAbove` — orders with an **after-discount** subtotal at/above
+  this pay no delivery fee (0 = delivery always free).
+- `deliveryFee` — flat fee below the threshold.
+- `discountPercent` — order-wide discount off the item total (0 = none).
+- `codThreshold` — COD is refused above this item total (0 = no limit).
+- `codCharges` — flat COD surcharge added to COD orders (0 = none).
 
 ## Flow (what the user asked for)
 
-1. Salon owner places an order in the MyNaai app → it appears on the
-   dashboard as `PENDING_ASSIGNMENT` (event: ORDER_PLACED).
-2. Admin picks a distributor (location / capability) → assigns →
+1. Admin sets the bill rules once in **Shop Settings** (free-shipping
+   threshold, delivery fee, discount %, COD limit, COD charges) — the shop
+   bills, and its delivery/COD copy, from these values.
+2. Salon owner places an order in the MyNaai app → it appears on the
+   dashboard as `PENDING_ASSIGNMENT` (event: ORDER_PLACED); the server
+   recomputed the bill from the settings and refused the order up front if
+   it was a COD order over the limit.
+3. Admin picks a distributor (location / capability) → assigns →
    `AWAITING_ACCEPTANCE`; the distributor sees it in their portal queue.
-3. Distributor checks the order → **Accept** (`ASSIGNED`, salon sees
+4. Distributor checks the order → **Accept** (`ASSIGNED`, salon sees
    CONFIRMED) or **Reject** with a reason (back to `PENDING_ASSIGNMENT`;
    reason recorded in the event timeline).
-4. On rejection the admin re-assigns another distributor → repeat step 3.
-5. Admin moves the parcel: PICKED → SHIPPED → DELIVERED; every step is in
-   the record with who/when/why.
+5. On rejection the admin re-assigns another distributor → repeat step 4.
+6. The distributor moves the parcel themselves — **Picked Up → Shipped →
+   Delivered** — one tap per step from their portal (next-step-only, their
+   own orders only); the admin can still move it from the dashboard
+   (`admin-update-status`); every step is in the record with who/when.
 
 ## Delivery status
 
 - **Backend**: delivered in `backend-shop-api/` of this repo (install + `/test-db`).
-- **Frontend**: delivered in `admin-panel-shop-tabs/` of this repo — 14 files
-  (7 new + 7 overwrites, nothing deleted) for `my-naai-frontend`, built and
-  verified end-to-end against a live instance of the backend.
+- **Frontend**: delivered in `admin-panel-shop-tabs/` of this repo — 16 files
+  (8 new + 7 overwrites + `vite.config.js`, nothing deleted) for
+  `my-naai-frontend`, verified end-to-end against a live instance of the
+  backend (shop settings get/save, order creation with the COD gate, the
+  distributor accept → picked → shipped → delivered chain, and the salon's
+  tracker mirroring each step).

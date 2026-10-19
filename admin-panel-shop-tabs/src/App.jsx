@@ -25,6 +25,7 @@ import Notifications from "./pages/PushNotifications.jsx";
 import ShopProducts from "./pages/ShopProducts.jsx";
 import Distributors from "./pages/Distributors.jsx";
 import ShopOrders from "./pages/ShopOrders.jsx";
+import ShopSettings from "./pages/ShopSettings.jsx";
 import DistributorPortal from "./pages/DistributorPortal.jsx";
 
 const ProtectedRoute = ({ children }) => {
@@ -180,6 +181,14 @@ const router = createBrowserRouter(
       element: (
         <ProtectedRoute>
           <ShopOrders />
+        </ProtectedRoute>
+      ),
+    },
+    {
+      path: "/shop-settings",
+      element: (
+        <ProtectedRoute>
+          <ShopSettings />
         </ProtectedRoute>
       ),
     },
