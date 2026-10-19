@@ -2169,6 +2169,40 @@ img.image-fallback-tile {
   .shop-cart-footer { left: auto; right: 26px; bottom: 26px; width: min(420px, calc(100vw - 52px)); }
 }
 
+/* ── Mobile: compact list rows instead of 2-up vertical cards ──
+   A fixed square thumbnail on the left keeps every card the same short
+   height no matter what aspect ratio the admin uploaded — a 4:3 marketing
+   image used to stretch a vertical card down the whole screen. The
+   ADD / stepper shrinks to a right-aligned pill so the row stays scannable. */
+@media (max-width: 639px) {
+  /* The tagline duplicates the title on small screens — drop it. */
+  .shop-screen .page-header-leading p { display: none; }
+
+  .shop-grid { grid-template-columns: 1fr; gap: 9px; }
+  .skeleton-card.shop-skeleton { min-height: 104px; }
+
+  .shop-card { flex-direction: row; border-radius: 14px; }
+  .shop-card:hover { transform: none; box-shadow: none; }
+
+  .shop-card-media { width: 104px; flex: 0 0 104px; aspect-ratio: 1 / 1; }
+  .shop-card-image { transition: none; }
+  .shop-card:hover .shop-card-image { transform: none; }
+
+  .shop-card-body { gap: 4px; padding: 9px 12px 10px; }
+  .shop-card-body h3 { font-size: 13.5px; min-height: 2.7em; }
+  .shop-card-salon { font-size: 9.5px; }
+  .shop-card-price-row { margin-top: 0; }
+  .shop-card-price-row strong { font-size: 14px; }
+
+  .shop-card-action { padding-top: 6px; justify-content: flex-end; }
+  .shop-card-action > .shop-add-button,
+  .shop-card-action > .shop-stepper,
+  .shop-card-action > .shop-stock-chip { flex: none; }
+  .shop-card-action > .shop-add-button { min-width: 72px; min-height: 31px; padding: 0 14px; }
+  .shop-card-action > .shop-stepper { width: 104px; min-height: 31px; }
+  .shop-card-action > .shop-stepper button { flex: 0 0 31px; }
+}
+
 /* ── Product details page (the full page a product card opens) ── */
 .shop-detail-page { padding-bottom: 148px; }
 .skeleton-card.shop-detail-skeleton { min-height: 280px; }
