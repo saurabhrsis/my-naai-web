@@ -146,23 +146,23 @@ const ShopOrders = () => {
       <div className="page-content d-flex flex-column p-2 p-md-3" style={{ height: "calc(100vh - 70px)", overflow: "hidden" }}>
         <div className="card shadow-sm mb-3 bg-white border-0 flex-shrink-0" style={{ borderRadius: "12px" }}>
           <div className="card-body p-3">
-            <div className="row g-3">
-              <div className="col-12 col-md-4">
+            {/* Flex instead of row/col: the panel's CSS build does not carry
+                the Bootstrap grid utilities, so widths are inline. */}
+            <div className="d-flex flex-column gap-2">
+              <div style={{ flex: "0 0 auto", width: "100%", maxWidth: 420 }}>
                 <SearchInput value={search} onChange={setSearch} placeholder="Search by order ID..." />
               </div>
-              <div className="col-12">
-                <div className="d-flex flex-wrap gap-2 align-items-center">
-                  {STATUS_FILTERS.map((f) => (
-                    <button
-                      key={f.key}
-                      onClick={() => { setStatusFilter(f.key); setCurrentPage(1); }}
-                      className={`btn btn-sm ${statusFilter === f.key ? "btn-success" : "btn-outline-secondary"}`}
-                    >
-                      {f.label}
-                    </button>
-                  ))}
-                  <div className="ms-auto"><Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} size="sm" /></div>
-                </div>
+              <div className="d-flex flex-wrap gap-2 align-items-center">
+                {STATUS_FILTERS.map((f) => (
+                  <button
+                    key={f.key}
+                    onClick={() => { setStatusFilter(f.key); setCurrentPage(1); }}
+                    className={`btn btn-sm ${statusFilter === f.key ? "btn-success" : "btn-outline-secondary"}`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+                <div style={{ marginLeft: "auto" }}><Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} size="sm" /></div>
               </div>
             </div>
           </div>
@@ -177,8 +177,8 @@ const ShopOrders = () => {
               No shop orders match this filter.
             </div>
           ) : (
-            <div className="table-responsive">
-              <table className="table align-middle mb-0" style={{ fontSize: "0.9rem" }}>
+            <div style={{ overflowX: "auto" }}>
+              <table className="table align-middle mb-0" style={{ fontSize: "0.9rem", width: "100%", minWidth: 640 }}>
                 <thead>
                   <tr className="text-muted small" style={{ textTransform: "uppercase", letterSpacing: "0.4px" }}>
                     <th>Order</th>

@@ -92,28 +92,30 @@ const DistributorModal = ({ showModal, setShowModal, initialDistributor = null, 
       </Modal.Header>
       <Form onSubmit={handleSubmit}>
         <Modal.Body>
-          <div className="row g-3">
-            <div className="col-md-6">
+          {/* Flex instead of row/col: the panel's CSS build does not carry
+              the Bootstrap grid utilities, so widths are inline. */}
+          <div className="d-flex flex-wrap gap-3">
+            <div style={{ flex: "1 1 240px", minWidth: 0 }}>
               <Form.Label className="fw-semibold small">Name *</Form.Label>
               <Form.Control type="text" name="name" value={formData.name} onChange={handleChange} placeholder="e.g. Ravi Gupta" required />
             </div>
-            <div className="col-md-6">
+            <div style={{ flex: "1 1 240px", minWidth: 0 }}>
               <Form.Label className="fw-semibold small">Phone *</Form.Label>
               <Form.Control type="tel" name="phone" value={formData.phone} onChange={handleChange} placeholder="10-digit mobile number" required />
             </div>
-            <div className="col-md-6">
+            <div style={{ flex: "1 1 240px", minWidth: 0 }}>
               <Form.Label className="fw-semibold small">Email (used as an alternate login ID)</Form.Label>
               <Form.Control type="email" name="email" value={formData.email} onChange={handleChange} placeholder="optional" />
             </div>
-            <div className="col-md-6">
+            <div style={{ flex: "1 1 240px", minWidth: 0 }}>
               <Form.Label className="fw-semibold small">Area / City</Form.Label>
               <Form.Control type="text" name="area" value={formData.area} onChange={handleChange} placeholder="e.g. Nagpur, Maharashtra" />
             </div>
-            <div className="col-md-6">
+            <div style={{ flex: "1 1 240px", minWidth: 0 }}>
               <Form.Label className="fw-semibold small">Delivery Capability</Form.Label>
               <Form.Control type="text" name="deliveryCapability" value={formData.deliveryCapability} onChange={handleChange} placeholder="e.g. Same-day within 20km, 2-wheelers x2" />
             </div>
-            <div className="col-md-6">
+            <div style={{ flex: "1 1 240px", minWidth: 0 }}>
               <Form.Label className="fw-semibold small">
                 {isEdit ? "New Password (leave blank to keep the old one)" : "Login Password *"}
               </Form.Label>
@@ -126,11 +128,11 @@ const DistributorModal = ({ showModal, setShowModal, initialDistributor = null, 
                 autoComplete="new-password"
               />
             </div>
-            <div className="col-12">
+            <div style={{ flex: "1 1 100%", minWidth: 0 }}>
               <Form.Label className="fw-semibold small">Address</Form.Label>
               <Form.Control as="textarea" rows={2} name="address" value={formData.address} onChange={handleChange} placeholder="Warehouse / pickup address" />
             </div>
-            <div className="col-12">
+            <div style={{ flex: "1 1 100%", minWidth: 0 }}>
               <div className="alert alert-light border small mb-0">
                 This distributor will log in to the Distributor Portal with their <strong>phone or email</strong> and this
                 password. Their portal only shows orders that you assign to them.

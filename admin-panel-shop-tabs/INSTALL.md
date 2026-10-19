@@ -63,15 +63,22 @@ vite.config.js
 ```
 
 > Prefer applying the patch instead? `SHOP-TABS-FRONTEND.patch` is the
-> **increment for this delivery** — it applies on top of the shop-tabs
-> bundle you already installed (order detail modal revamp, Shop Settings
-> tab, distributor progression). From your admin frontend repo root:
+> **layout/UX increment** — it applies on top of the shop bundle you already
+> installed (the one with the Shop Settings tab + distributor progression,
+> commit `860b719` of this repo). It re-lays-out every shop screen with flex
+> widths that render correctly in the panel's CSS build. From your admin
+> frontend repo root:
 > `git apply /path/to/admin-panel-shop-tabs/SHOP-TABS-FRONTEND.patch`
 > A fresh install? Just use the copy script above — it carries the complete
 > 16-file state.
 
 **No new npm packages are needed** — the bundle only uses libraries the panel already has
 (react-bootstrap, react-toastify, lucide-react).
+
+> **Layout note:** the shop screens deliberately lay out with `d-flex` + explicit inline
+> widths instead of the Bootstrap `row`/`col-*` grid — the panel's CSS build does not
+> carry the grid utilities, and `row`/`col` columns collapse to content width there.
+> Keep new shop UI on the same flex pattern.
 
 ## Build & deploy
 

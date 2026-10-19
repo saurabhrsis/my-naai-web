@@ -44,6 +44,26 @@ const actorName = (ev) => {
   return name ? name : ACTOR_LABELS[ev.actorType] || "System";
 };
 
+// Product thumbnails: when the image URL is missing/broken the old code
+// rendered a broken-image glyph; swap it for a tidy package placeholder.
+const ItemThumb = ({ src, size = 32 }) => {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) {
+    return (
+      <div
+        style={{
+          width: size, height: size, borderRadius: 6, background: "#eef1ee",
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          marginRight: 8, verticalAlign: "middle", flexShrink: 0
+        }}
+      >
+        <Package size={size - 16} color="#9aa39a" />
+      </div>
+    );
+  }
+  return <img src={src} alt="" onError={() => setFailed(true)} style={{ width: size, height: size, objectFit: "cover", borderRadius: 6, marginRight: 8, verticalAlign: "middle", flexShrink: 0 }} />;
+};
+
 const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onRecordDecision }) => {
   const [showAssign, setShowAssign] = useState(false);
   const [distributors, setDistributors] = useState([]);
@@ -156,6 +176,10 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
     return btns;
   };
 
+  // NOTE on layout: the admin panel's CSS build does not reliably carry the
+  // Bootstrap grid (row/col-*) and input-group utilities, so this modal lays
+  // its sections out with plain flex + explicit inline widths that behave
+  // identically at every screen size.
   return (
     // Fullscreen below the sm breakpoint — on a phone the order, the bill
     // and the actions all fit in one scroll instead of a cramped popup.
@@ -168,16 +192,16 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
-        <div className="row g-4">
-          {/* Left column: details + timeline */}
-          <div className="col-lg-7">
-            <div className="row g-3 mb-3">
-              <div className="col-sm-6">
+        <div className="d-flex flex-wrap gap-4" style={{ alignItems: "stretch" }}>
+          {/* Left panel: details + timeline */}
+          <div style={{ flex: "2 1 420px", minWidth: 0 }}>
+            <div className="d-flex flex-wrap gap-3 mb-3">
+              <div style={{ flex: "1 1 180px", minWidth: 0 }}>
                 <div className="small text-muted mb-1">Ordered By (Salon)</div>
                 <div className="fw-semibold">{order.salon?.salonName || "—"}</div>
                 <div className="text-muted small">{order.salon?.phoneNumber || ""}</div>
               </div>
-              <div className="col-sm-6">
+              <div style={{ flex: "1 1 180px", minWidth: 0 }}>
                 <div className="small text-muted mb-1">Delivery Contact</div>
                 <div className="fw-semibold">{order.address?.name || "—"}</div>
                 <div className="text-muted small">{order.address?.phone || ""}</div>
@@ -195,36 +219,36 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
 
             <div className="border rounded-2 p-2 mb-3" style={{ backgroundColor: "#fafaf8" }}>
               <div className="small text-muted mb-2">Items ({order.amounts?.itemCount ?? items.length})</div>
-              {/* table-responsive: the bill scrolls sideways on a phone
+              {/* overflowX: the bill scrolls sideways on a phone
                   instead of squeezing the item names. */}
-              <div className="table-responsive">
-              <table className="table table-sm mb-0 align-middle" style={{ fontSize: "0.87rem" }}>
-                <thead>
-                  <tr className="text-muted small">
-                    <th>Item</th>
-                    <th className="text-center">Qty</th>
-                    <th className="text-end">Price</th>
-                    <th className="text-end">Line Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((it, idx) => {
-                    const qty = Number(it.qty || 1);
-                    const price = Number(it.price || 0);
-                    return (
-                      <tr key={it.productId || idx}>
-                        <td className="pe-2" style={{ maxWidth: 260 }}>
-                          {it.image && <img src={it.image} alt="" style={{ width: 32, height: 32, objectFit: "cover", borderRadius: 6, marginRight: 8, verticalAlign: "middle" }} />}
-                          {it.name}
-                        </td>
-                        <td className="text-center">{qty}</td>
-                        <td className="text-end">{money(it.price)}</td>
-                        <td className="text-end fw-semibold">{money(price * qty)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              <div style={{ overflowX: "auto" }}>
+                <table className="table table-sm mb-0 align-middle" style={{ fontSize: "0.87rem", width: "100%", minWidth: 340 }}>
+                  <thead>
+                    <tr className="text-muted small">
+                      <th>Item</th>
+                      <th className="text-center">Qty</th>
+                      <th className="text-end">Price</th>
+                      <th className="text-end">Line Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((it, idx) => {
+                      const qty = Number(it.qty || 1);
+                      const price = Number(it.price || 0);
+                      return (
+                        <tr key={it.productId || idx}>
+                          <td className="pe-2" style={{ maxWidth: 260 }}>
+                            <ItemThumb src={it.image} size={32} />
+                            {it.name}
+                          </td>
+                          <td className="text-center">{qty}</td>
+                          <td className="text-end">{money(it.price)}</td>
+                          <td className="text-end fw-semibold">{money(price * qty)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </div>
 
@@ -284,7 +308,7 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
                       </div>
                       {idx < events.length - 1 && <div style={{ width: 2, flex: 1, minHeight: 18, backgroundColor: "#e3e6e3" }} />}
                     </div>
-                    <div style={{ paddingBottom: 14 }}>
+                    <div style={{ paddingBottom: 14, minWidth: 0 }}>
                       <div className="fw-semibold">{evMeta.label}</div>
                       <div className="text-muted">
                         {actorName(ev)} • {dateTime(ev.createdAt)}
@@ -305,8 +329,8 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
             </div>
           </div>
 
-          {/* Right column: actions */}
-          <div className="col-lg-5">
+          {/* Right panel: distributor + actions */}
+          <div style={{ flex: "1 1 300px", minWidth: 0 }}>
             <div className="border rounded-3 p-3 mb-3" style={{ backgroundColor: "#fafaf8" }}>
               <div className="small text-muted mb-1">Distributor</div>
               {order.distributor ? (
@@ -335,6 +359,7 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
                     <select
                       id="distributor-select"
                       className="form-select form-select-sm mb-2"
+                      style={{ width: "100%" }}
                       value={selectedDistributor}
                       onChange={(e) => setSelectedDistributor(e.target.value)}
                     >
@@ -346,7 +371,7 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
                       ))}
                     </select>
                   )}
-                  <div className="d-grid d-sm-flex gap-2">
+                  <div className="d-grid gap-2" style={{ maxWidth: 360 }}>
                     <Button variant="success" size="sm" onClick={confirmAssign} disabled={assigning || !selectedDistributor || distributorLoading}>
                       {assigning ? "Requesting…" : "Assign"}
                     </Button>
@@ -357,7 +382,7 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
                 </div>
               ) : (
                 <div className="mt-3">
-                  <Button variant="success" size="sm" onClick={openAssign} disabled={busy} className="w-100">
+                  <Button variant="success" size="sm" onClick={openAssign} disabled={busy} style={{ width: "100%" }}>
                     <UserPlus size={14} className="me-1" />
                     {order.distributor ? "Re-assign / Request Another" : "Assign Distributor"}
                   </Button>
@@ -366,9 +391,12 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
             </div>
 
             <div className="small text-muted mb-2 fw-semibold" style={{ textTransform: "uppercase", letterSpacing: "0.4px" }}>Actions</div>
-            {/* Full-width stacked on phones, wrapping row on desktop. */}
-            <div className="d-grid gap-2 d-md-flex flex-md-wrap">
-              {statusActionButtons()}
+            {/* Two-up on a wide panel, one-up on a narrow one — big tap
+                targets at every size, no cramped rows. */}
+            <div className="d-flex flex-wrap gap-2">
+              {statusActionButtons().map((b, i) => (
+                <div key={i} style={{ flex: "1 1 calc(50% - 4px)", minWidth: 140, width: "100%" }}>{b}</div>
+              ))}
             </div>
 
             {showReject && (
@@ -376,25 +404,27 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
                 <div className="small fw-semibold mb-2">Rejection Reason (recorded on the order history)</div>
                 <textarea
                   className="form-control form-control-sm mb-2"
+                  style={{ width: "100%" }}
                   rows={3}
                   value={rejectReason}
                   onChange={(e) => setRejectReason(e.target.value)}
                   placeholder="e.g. Out of stock of Herbal Oil, cannot deliver to this pincode..."
                 />
-                <div className="d-grid d-sm-flex gap-2">
-                  <Button variant="danger" size="sm" onClick={recordReject} disabled={busy}>{busy ? "Saving..." : "Confirm Rejection"}</Button>
-                  <Button variant="outline-secondary" size="sm" onClick={() => { setShowReject(false); setRejectReason(""); }} disabled={busy}>Cancel</Button>
+                <div className="d-flex flex-column gap-2">
+                  <Button variant="danger" size="sm" onClick={recordReject} disabled={busy} style={{ width: "100%" }}>{busy ? "Saving..." : "Confirm Rejection"}</Button>
+                  <Button variant="outline-secondary" size="sm" onClick={() => { setShowReject(false); setRejectReason(""); }} disabled={busy} style={{ width: "100%" }}>Cancel</Button>
                 </div>
               </div>
             )}
-
-            <div className="alert small mb-0 mt-3" style={{ backgroundColor: "#f6f8f6", borderColor: "#e3e8e3" }}>
-              <strong>How the flow works:</strong> assign a distributor → it waits in <em>Awaiting Distributor</em> while they check
-              the order in the Distributor Portal. They Accept (→ Assigned) or Reject (back to To Assign with their reason).
-              After accepting, the distributor carries it forward — Picked Up → Shipped → Delivered — from the portal,
-              and you can record any of those moves here too (over the phone).
-            </div>
           </div>
+        </div>
+
+        {/* Full-width at the bottom — readable at every width. */}
+        <div className="alert small mb-0" style={{ backgroundColor: "#f6f8f6", borderColor: "#e3e8e3", marginTop: 16 }}>
+          <strong>How the flow works:</strong> assign a distributor → it waits in <em>Awaiting Distributor</em> while they check
+          the order in the Distributor Portal. They Accept (→ Assigned) or Reject (back to To Assign with their reason).
+          After accepting, the distributor carries it forward — Picked Up → Shipped → Delivered — from the portal,
+          and you can record any of those moves here too (over the phone).
         </div>
       </Modal.Body>
     </Modal>

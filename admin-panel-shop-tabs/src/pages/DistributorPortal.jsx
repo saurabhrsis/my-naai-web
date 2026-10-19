@@ -44,6 +44,26 @@ const NEXT_STEP = {
   SHIPPED: { to: "DELIVERED", label: "Mark Delivered", icon: CheckCircle2, variant: "button23" }
 };
 
+// Product thumbnails: a broken/missing image URL renders a tidy package
+// placeholder instead of the browser's broken-image glyph.
+const ItemThumb = ({ src, size = 30 }) => {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) {
+    return (
+      <div
+        style={{
+          width: size, height: size, borderRadius: 6, background: "#eef1ee",
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          marginRight: 8, verticalAlign: "middle", flexShrink: 0
+        }}
+      >
+        <Package size={size - 14} color="#9aa39a" />
+      </div>
+    );
+  }
+  return <img src={src} alt="" onError={() => setFailed(true)} style={{ width: size, height: size, objectFit: "cover", borderRadius: 6, marginRight: 8, verticalAlign: "middle", flexShrink: 0 }} />;
+};
+
 const OrderCard = ({ order, onAccept, onReject, onAdvance, busy }) => {
   const [showReject, setShowReject] = useState(false);
   const [reason, setReason] = useState("");
@@ -59,10 +79,13 @@ const OrderCard = ({ order, onAccept, onReject, onAdvance, busy }) => {
     onReject(order.orderId, reason.trim());
   };
 
+  // NOTE on layout: the admin panel's CSS build does not reliably carry the
+  // Bootstrap grid (row/col-*) utilities, so this card lays its sections out
+  // with plain flex + explicit inline widths that behave at every screen size.
   return (
     <div className="card border-0 shadow-sm mb-3" style={{ borderRadius: "12px" }}>
-      <div className="card-body p-3">
-        <div className="d-flex flex-wrap justify-content-between align-items-center mb-2 gap-2">
+      <div className="card-body p-3 d-flex flex-column gap-3">
+        <div className="d-flex flex-wrap justify-content-between align-items-center gap-2">
           <div className="d-flex align-items-center gap-2 flex-wrap">
             <span className="fw-semibold">Order #{order.orderId}</span>
             <span className={`badge ${STATUS_BADGES[order.status] || "bg-secondary-subtle text-secondary"}`}>
@@ -72,13 +95,13 @@ const OrderCard = ({ order, onAccept, onReject, onAdvance, busy }) => {
           <div className="text-muted small">{dateTime(order.createdAt)}</div>
         </div>
 
-        <div className="row g-3 mb-2">
-          <div className="col-sm-6">
+        <div className="d-flex flex-wrap gap-3">
+          <div style={{ flex: "1 1 220px", minWidth: 0 }}>
             <div className="small text-muted">From Salon</div>
             <div className="small fw-semibold">{order.salon?.salonName || "—"}</div>
             <div className="small text-muted">{order.salon?.phoneNumber || ""}</div>
           </div>
-          <div className="col-sm-6">
+          <div style={{ flex: "1 1 220px", minWidth: 0 }}>
             <div className="small text-muted">Deliver To</div>
             <div className="small fw-semibold">{order.address?.name || "—"}</div>
             <div className="small text-muted">
@@ -88,15 +111,15 @@ const OrderCard = ({ order, onAccept, onReject, onAdvance, busy }) => {
           </div>
         </div>
 
-        <div className="border rounded-2 p-2 mb-2" style={{ backgroundColor: "#fafaf8" }}>
+        <div className="border rounded-2 p-2" style={{ backgroundColor: "#fafaf8", width: "100%" }}>
           {/* Table scrolls sideways on narrow phones instead of squeezing. */}
-          <div className="table-responsive">
-            <table className="table table-sm mb-0 align-middle" style={{ fontSize: "0.87rem" }}>
+          <div style={{ overflowX: "auto" }}>
+            <table className="table table-sm mb-0 align-middle" style={{ fontSize: "0.87rem", width: "100%", minWidth: 280 }}>
               <tbody>
                 {items.map((it, idx) => (
                   <tr key={it.productId || idx}>
                     <td className="pe-2">
-                      {it.image && <img src={it.image} alt="" style={{ width: 30, height: 30, objectFit: "cover", borderRadius: 6, marginRight: 8, verticalAlign: "middle" }} />}
+                      <ItemThumb src={it.image} size={30} />
                       {it.name}
                     </td>
                     <td className="text-center small">{it.qty}</td>

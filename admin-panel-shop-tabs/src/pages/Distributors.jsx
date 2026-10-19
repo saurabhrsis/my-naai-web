@@ -93,11 +93,13 @@ const Distributors = () => {
       <div className="page-content d-flex flex-column p-2 p-md-3" style={{ height: "calc(100vh - 70px)", overflow: "hidden" }}>
         <div className="card shadow-sm mb-3 bg-white border-0 flex-shrink-0" style={{ borderRadius: "12px" }}>
           <div className="card-body p-3">
-            <div className="row g-3 align-items-center">
-              <div className="col-12 col-md-5">
+            {/* Flex instead of row/col: the panel's CSS build does not carry
+                the Bootstrap grid utilities, so widths are inline. */}
+            <div className="d-flex flex-wrap align-items-center gap-3">
+              <div style={{ flex: "1 1 240px", minWidth: 0 }}>
                 <SearchInput value={search} onChange={setSearch} placeholder="Search by name, phone, area..." />
               </div>
-              <div className="col-12 col-md-4 d-flex flex-wrap gap-2">
+              <div className="d-flex flex-wrap gap-2" style={{ flex: "1 1 260px", minWidth: 0 }}>
                 {FILTERS.map((f) => (
                   <button
                     key={f.key}
@@ -108,7 +110,7 @@ const Distributors = () => {
                   </button>
                 ))}
               </div>
-              <div className="col-12 col-md-3 d-flex justify-content-md-end gap-2">
+              <div className="d-flex align-items-center gap-2" style={{ flex: "1 1 auto", minWidth: 180, justifyContent: "flex-end" }}>
                 <button className="button23" onClick={() => { setEditingDistributor(null); setShowModal(true); }}>
                   <Plus size={15} className="me-1" /> Add Distributor
                 </button>
@@ -127,8 +129,8 @@ const Distributors = () => {
               No distributors found. Add one to start fulfilling salon orders.
             </div>
           ) : (
-            <div className="table-responsive">
-              <table className="table align-middle mb-0" style={{ fontSize: "0.9rem" }}>
+            <div style={{ overflowX: "auto" }}>
+              <table className="table align-middle mb-0" style={{ fontSize: "0.9rem", width: "100%", minWidth: 640 }}>
                 <thead>
                   <tr className="text-muted small" style={{ textTransform: "uppercase", letterSpacing: "0.4px" }}>
                     <th>Distributor</th>

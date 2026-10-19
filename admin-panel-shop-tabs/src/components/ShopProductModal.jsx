@@ -111,8 +111,10 @@ const ShopProductModal = ({ showModal, setShowModal, initialProduct = null, onSu
       </Modal.Header>
       <Form onSubmit={handleSubmit}>
         <Modal.Body>
-          <div className="row g-3">
-            <div className="col-12">
+          {/* Flex instead of row/col: the panel's CSS build does not carry
+              the Bootstrap grid utilities, so widths are inline. */}
+          <div className="d-flex flex-wrap gap-3">
+            <div style={{ flex: "1 1 100%", minWidth: 0 }}>
               <Form.Label className="fw-semibold small">Product Name *</Form.Label>
               <Form.Control
                 type="text"
@@ -123,23 +125,23 @@ const ShopProductModal = ({ showModal, setShowModal, initialProduct = null, onSu
                 required
               />
             </div>
-            <div className="col-6">
+            <div style={{ flex: "1 1 180px", minWidth: 0 }}>
               <Form.Label className="fw-semibold small">Selling Price (₹) *</Form.Label>
               <Form.Control type="number" min="1" step="0.01" name="price" value={formData.price} onChange={handleChange} placeholder="899" required />
             </div>
-            <div className="col-6">
+            <div style={{ flex: "1 1 180px", minWidth: 0 }}>
               <Form.Label className="fw-semibold small">MRP (₹)</Form.Label>
               <Form.Control type="number" min="1" step="0.01" name="mrp" value={formData.mrp} onChange={handleChange} placeholder="1099 (optional, enables discount badge)" />
             </div>
-            <div className="col-12">
+            <div style={{ flex: "1 1 100%", minWidth: 0 }}>
               <Form.Label className="fw-semibold small">Product Image URL</Form.Label>
               <Form.Control type="url" name="productImage" value={formData.productImage} onChange={handleChange} placeholder="https://... (blank = no image)" />
             </div>
-            <div className="col-md-4 col-6">
+            <div style={{ flex: "1 1 180px", minWidth: 0 }}>
               <Form.Label className="fw-semibold small">Category</Form.Label>
               <Form.Control type="text" name="category" value={formData.category} onChange={handleChange} placeholder="Hair Care" />
             </div>
-            <div className="col-md-4 col-6">
+            <div style={{ flex: "1 1 180px", minWidth: 0 }}>
               <Form.Label className="fw-semibold small">Gender</Form.Label>
               <Form.Select name="gender" value={formData.gender} onChange={handleChange}>
                 <option value="">Any</option>
@@ -148,15 +150,15 @@ const ShopProductModal = ({ showModal, setShowModal, initialProduct = null, onSu
                 <option value="UNISEX">Unisex</option>
               </Form.Select>
             </div>
-            <div className="col-md-4 col-6">
+            <div style={{ flex: "1 1 180px", minWidth: 0 }}>
               <Form.Label className="fw-semibold small">Rating (0–5)</Form.Label>
               <Form.Control type="number" min="0" max="5" step="0.1" name="rating" value={formData.rating} onChange={handleChange} placeholder="4.5" />
             </div>
-            <div className="col-12">
+            <div style={{ flex: "1 1 100%", minWidth: 0 }}>
               <Form.Label className="fw-semibold small">Description</Form.Label>
               <Form.Control as="textarea" rows={3} name="description" value={formData.description} onChange={handleChange} placeholder="What the salon owners should know about this product..." />
             </div>
-            <div className="col-12">
+            <div style={{ flex: "1 1 100%", minWidth: 0 }}>
               <Form.Check
                 type="switch"
                 id="isAvailable"

@@ -30,7 +30,6 @@ const FIELDS = [
   {
     key: "discountPercent",
     label: "Discount Percentage",
-    prefix: "",
     suffix: "%",
     max: 100,
     step: 0.5,
@@ -137,6 +136,10 @@ const ShopSettings = () => {
     toast.info("Reloaded the saved settings.");
   };
 
+  // NOTE on layout: the admin panel's CSS build does not reliably carry the
+  // Bootstrap grid (row/col-*) or input-group utilities, so the fields lay
+  // themselves out with plain flex + explicit inline widths that behave the
+  // same at every screen size.
   return (
     <Layout>
       <div className="page-content d-flex flex-column p-2 p-md-3" style={{ height: "calc(100vh - 70px)", overflow: "hidden" }}>
@@ -144,7 +147,7 @@ const ShopSettings = () => {
           <div className="card-body p-3">
             <div className="d-flex align-items-center gap-2">
               <SlidersHorizontal size={20} className="text-primary" />
-              <div>
+              <div style={{ minWidth: 0 }}>
                 <h5 className="mb-0 fw-semibold">Shop Settings</h5>
                 <div className="text-muted small">
                   Delivery, discount and Cash-on-delivery rules for the Naai Shop. Saved instantly to every shop order.
@@ -158,39 +161,61 @@ const ShopSettings = () => {
           {isLoading ? (
             <div className="text-center py-5"><Loader size="sm" /></div>
           ) : (
-            <div className="row g-3">
-              {FIELDS.map((f) => {
-                const Icon = f.icon;
-                return (
-                  <div className="col-12 col-lg-6" key={f.key}>
-                    <div className="border rounded p-3 h-100" style={{ borderColor: "#e9ecef" }}>
-                      <label className="form-label d-flex align-items-center gap-2 fw-semibold mb-2">
-                        <Icon size={16} className="text-primary" />
-                        {f.label}
-                      </label>
-                      <div className="input-group">
-                        {f.prefix && <span className="input-group-text">{f.prefix}</span>}
-                        <input
-                          type="number"
-                          min="0"
-                          step={f.step}
-                          className="form-control form-control-lg"
-                          style={f.prefix ? {} : { textAlign: "right" }}
-                          value={values?.[f.key] ?? ""}
-                          onChange={(e) => setField(f.key, e.target.value)}
-                          placeholder="0"
-                          aria-label={f.label}
-                        />
-                        {f.suffix && <span className="input-group-text">{f.suffix}</span>}
+            <div className="d-flex flex-column gap-3">
+              <div className="d-flex flex-wrap gap-3">
+                {FIELDS.map((f) => {
+                  const Icon = f.icon;
+                  return (
+                    <div key={f.key} style={{ flex: "1 1 300px", minWidth: 0 }}>
+                      <div className="border rounded-3 p-3" style={{ borderColor: "#e9ecef", height: "100%" }}>
+                        <label className="form-label d-flex align-items-center gap-2 fw-semibold mb-2 mb-2">
+                          <Icon size={16} className="text-primary" />
+                          {f.label}
+                        </label>
+                        <div className="d-flex align-items-stretch gap-2" style={{ maxWidth: 380 }}>
+                          {f.prefix && (
+                            <span
+                              style={{
+                                display: "inline-flex", alignItems: "center", padding: "0 14px",
+                                background: "#f1f3f0", border: "1px solid #ced4da", borderRadius: 8,
+                                fontWeight: 600, color: "#495057", flexShrink: 0
+                              }}
+                            >
+                              {f.prefix}
+                            </span>
+                          )}
+                          <input
+                            type="number"
+                            min="0"
+                            step={f.step}
+                            className="form-control form-control-lg"
+                            style={{ flex: 1, minWidth: 0, borderRadius: 8 }}
+                            value={values?.[f.key] ?? ""}
+                            onChange={(e) => setField(f.key, e.target.value)}
+                            placeholder="0"
+                            aria-label={f.label}
+                          />
+                          {f.suffix && (
+                            <span
+                              style={{
+                                display: "inline-flex", alignItems: "center", padding: "0 14px",
+                                background: "#f1f3f0", border: "1px solid #ced4da", borderRadius: 8,
+                                fontWeight: 600, color: "#495057", flexShrink: 0
+                              }}
+                            >
+                              {f.suffix}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-muted small mt-2">{f.hint}</div>
                       </div>
-                      <div className="text-muted small mt-2">{f.hint}</div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
 
-              <div className="col-12">
-                <div className="d-flex flex-wrap gap-2 pt-1">
+              <div>
+                <div className="d-flex flex-wrap align-items-center gap-2">
                   <button className="button23" onClick={handleSave} disabled={saving}>
                     <Save size={15} className="me-1" /> {saving ? "Saving…" : "Save settings"}
                   </button>
