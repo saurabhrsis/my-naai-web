@@ -89,6 +89,34 @@ describe('normalizeShopProduct', () => {
     expect(product.salonName).toBe('Golden Scissors');
   });
 
+  it('normalises free-text backend categories that reach the RegExp rule (the production crash)', () => {
+    // The exact category the admin panel created in production. It matches no
+    // keyword in tools-equipment, then "kit"/"combo"/"bundle" miss and the
+    // kits-sets RegExp used to be passed to String.prototype.includes, which
+    // threw "The first argument to String.prototype.includes must not be a
+    // regular expression" and blanked the WHOLE shop tab.
+    const product = normalizeShopProduct({
+      productId: 'sp-live',
+      productName: 'Herbal Oil',
+      price: '950.00',
+      mrp: '1050.00',
+      category: 'Hair Colour and Chemical Products',
+      gender: 'MALE',
+      isAvailable: true,
+    });
+    expect(product.category).toBe('hair-colour');
+    expect(product.gender).toBe('men');
+    expect(product.price).toBe(950);
+
+    // …and a category that actually hits the RegExp rule still classifies.
+    const sets = normalizeShopProduct({ id: 'p-sets', name: 'Bundle', price: 100, category: 'Grooming Kits and Sets' });
+    expect(sets.category).toBe('kits-sets');
+
+    // "Setting spray" in a category must NOT light up the whole-word sets rule.
+    const spray = normalizeShopProduct({ id: 'p-spray', name: 'Spray', price: 100, category: 'Hair Setting Sprays' });
+    expect(spray.category).toBe('hair-care');
+  });
+
   it('infers when the backend sends no facets and uses the seller salon last', () => {
     const inferred = normalizeShopProduct({ id: 'p2', name: 'Trim Kit', price: 499 });
     expect(inferred.category).toBe('kits-sets');

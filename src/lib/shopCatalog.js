@@ -69,6 +69,15 @@ function words(value) {
   return String(value || '').toLowerCase();
 }
 
+// Rules mix plain strings (substring match) and RegExp (whole-word match).
+// A RegExp must go through .test — String.prototype.includes THROWS on one,
+// which is what used to take the entire shop tab down for any product whose
+// category (e.g. "Hair Colour and Chemical Products") reached a RegExp rule.
+function keywordMatches(text, keyword) {
+  if (keyword instanceof RegExp) return keyword.test(text);
+  return text === keyword || text.includes(keyword);
+}
+
 // Explicit values the backend or the salon editor may send, normalised to the
 // shop's ids. Anything unrecognised falls through to inference.
 function readExplicitCategory(value) {
@@ -76,7 +85,7 @@ function readExplicitCategory(value) {
   if (!text) return '';
   const direct = SHOP_CATEGORIES.find(category => category.id === text || category.label.toLowerCase() === text);
   if (direct) return direct.id;
-  const rule = CATEGORY_RULES.find(([, keywords]) => keywords.some(keyword => text === keyword || text.includes(keyword)));
+  const rule = CATEGORY_RULES.find(([, keywords]) => keywords.some(keyword => keywordMatches(text, keyword)));
   return rule ? rule[0] : '';
 }
 
@@ -101,7 +110,7 @@ function sellerGender(product) {
 export function inferCategory(name) {
   const text = words(name);
   for (const [category, keywords] of CATEGORY_RULES) {
-    if (keywords.some(keyword => (keyword instanceof RegExp ? keyword.test(text) : text.includes(keyword)))) return category;
+    if (keywords.some(keyword => keywordMatches(text, keyword))) return category;
   }
   return 'hair-care';
 }
