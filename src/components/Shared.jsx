@@ -241,7 +241,29 @@ export const ImageWithFallback = React.forwardRef(function ImageWithFallback({ s
   );
 });
 
-export function PageHeader({ title, subtitle, onBack, action, eyebrow, compact = false }) {
+// `subtitleBelow` moves the subtitle onto its own full-width row under the
+// title line. The default keeps it in the title block (and centres the action
+// against the whole block); the shop headers use this mode so My cart /
+// My orders sit exactly level with the "Naai Shop" heading whatever the
+// subtitle wraps to.
+export function PageHeader({ title, subtitle, onBack, action, eyebrow, compact = false, subtitleBelow = false }) {
+  if (subtitleBelow) {
+    return (
+      <header className={cx('page-header', 'page-header-split', compact && 'page-header-compact')}>
+        <div className="page-header-top">
+          <div className="page-header-leading">
+            {onBack && <button className="icon-btn ghost" onClick={onBack} aria-label="Go back"><ArrowLeft size={19} /></button>}
+            <div>
+              {eyebrow && <span className="eyebrow">{eyebrow}</span>}
+              <h1>{title}</h1>
+            </div>
+          </div>
+          {action && <div className="page-header-action">{action}</div>}
+        </div>
+        {subtitle && <p className="page-header-subtitle">{subtitle}</p>}
+      </header>
+    );
+  }
   return (
     <header className={cx('page-header', compact && 'page-header-compact')}>
       <div className="page-header-leading">

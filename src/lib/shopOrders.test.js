@@ -151,7 +151,9 @@ describe('order lifecycle', () => {
     expect(at(DELIVERY_AT_MINUTES)).toBe('delivered');
     const delivered = getOrderStatus(order, new Date(NOW + DELIVERY_AT_MINUTES * 60000).getTime());
     expect(delivered.progress).toBe(100);
-    expect(delivered.eta instanceof Date).toBe(true);
+    // No invented arrival time on the status object (removed with the
+    // "Arriving by Tomorrow, 08:51 pm" line).
+    expect(delivered.eta).toBeUndefined();
     expect(ACTIVE_ORDER_STATUSES).toContain('shipped');
   });
 

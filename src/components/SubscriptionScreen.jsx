@@ -39,8 +39,10 @@ import { Button, GOLD, PageHeader, cx, formatCurrency, getErrorMessage } from '.
 // displays always use the mobile app's names and prices.
 
 const SUPPORT_PHONE = '8380017393';
-// Same logo the mobile app shows inside Razorpay Checkout.
-const CHECKOUT_IMAGE = 'https://res.cloudinary.com/dfdkzozqi/image/upload/v1773818628/my_naai_pay_gateway_ucntco.png';
+// The logo Razorpay renders inside its checkout sheet. Razorpay loads the
+// image from its own iframe, so it must be an absolute URL — the new logo
+// served by this app, not the retired dark-M file on the CDN.
+const CHECKOUT_IMAGE = `${typeof window !== 'undefined' ? window.location.origin : ''}/assets/my_naai.png`;
 // The public key lives in src/lib/razorpay.js (`getRazorpayKeyId`) so the
 // shop checkout and the plan flows resolve it identically.
 

@@ -37,8 +37,11 @@ export const DEFAULT_SHOP_SETTINGS = {
   codCharges: 0,
 };
 
-// Minutes after placement at which each step becomes current. Delivered is
-// the ETA: 26 hours covers a next-day slot without over-promising.
+// Minutes after placement at which each step becomes current — a coarse
+// progress signal only. The shop never prints an arrival CLOCK TIME: an
+// "Arriving by Tomorrow, 08:51 pm" line was invented from `placedAt + 26 h`
+// and read as a promise the backend never made (delivery is handled by the
+// platform's own dispatch), so all ETA display was removed.
 export const STATUS_TIMELINE = [
   { key: 'placed', label: 'Order placed', atMinutes: 0 },
   { key: 'packed', label: 'Packing your order', atMinutes: 30 },
@@ -338,14 +341,13 @@ export function customerStatusToTrackerKey(status) {
 // `placedAt`. `now` is a timestamp so the tracker (and its tests) move on
 // demand.
 export function getOrderStatus(order, now = Date.now()) {
-  if (!order) return { key: 'placed', label: 'Order placed', stepIndex: 0, progress: 0, eta: null };
+  if (!order) return { key: 'placed', label: 'Order placed', stepIndex: 0, progress: 0 };
   if (order.cancelledAt || String(order.serverStatus || '').toUpperCase() === 'CANCELLED') {
-    return { key: 'cancelled', label: 'Cancelled', stepIndex: -1, progress: 0, eta: null };
+    return { key: 'cancelled', label: 'Cancelled', stepIndex: -1, progress: 0 };
   }
 
   const serverKey = customerStatusToTrackerKey(order.serverStatus);
   const placedAt = new Date(order.placedAt).getTime() || 0;
-  const eta = new Date(placedAt + DELIVERY_AT_MINUTES * 60000);
 
   if (serverKey) {
     const stepIndex = STATUS_TIMELINE.findIndex(step => step.key === serverKey);
@@ -354,7 +356,6 @@ export function getOrderStatus(order, now = Date.now()) {
       label: STATUS_TIMELINE[stepIndex].label,
       stepIndex,
       progress: Math.round((stepIndex / (STATUS_TIMELINE.length - 1)) * 100),
-      eta,
     };
   }
 
@@ -368,7 +369,6 @@ export function getOrderStatus(order, now = Date.now()) {
     label: STATUS_TIMELINE[stepIndex].label,
     stepIndex,
     progress: Math.min(100, Math.round((elapsedMinutes / DELIVERY_AT_MINUTES) * 100)),
-    eta,
   };
 }
 
@@ -403,15 +403,4 @@ export function cancelOrder(salonId, orderId, { now = Date.now(), reason = '' } 
   }
   writeJson(orderKey(salonId), orders);
   return order;
-}
-
-// ETA formatting shared by the tracker and the order cards ("by 6:40 pm,
-// Tue 17 Oct" style).
-export function formatEta(eta) {
-  if (!(eta instanceof Date) || Number.isNaN(eta.getTime())) return '';
-  const now = new Date();
-  const tomorrow = new Date(now);
-  tomorrow.setDate(now.getDate() + 1);
-  const day = eta.toDateString() === tomorrow.toDateString() ? 'Tomorrow' : eta.toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short' });
-  return `${day}, ${eta.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}`;
 }

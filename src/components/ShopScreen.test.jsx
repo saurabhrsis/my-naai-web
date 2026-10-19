@@ -410,7 +410,34 @@ describe('ShopCheckoutScreen', () => {
     addToCart('salon-1', { id: 'sp2', name: 'Keratin Shampoo 200ml', price: 499, mrp: 600, image: '', category: 'hair-care', gender: 'unisex' });
   };
 
-  it('places a COD order and shows the success card', async () => {
+  it('asks for a confirmation box before placing a COD order', async () => {
+    seedCart();
+    const { container } = await render(<ShopCheckoutScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+
+    await act(async () => { container.querySelector('input[value="cod"]').click(); });
+    const place = buttonsContaining('Place order', container)[0];
+    await act(async () => { place.click(); });
+    await flush();
+
+    // The confirmation box is up and NOTHING has been written yet.
+    const sheet = document.querySelector('.confirm-sheet');
+    expect(sheet).toBeTruthy();
+    expect(sheet.textContent).toContain('Place this order with cash on delivery?');
+    // 199 + 499 = ₹698, free delivery — the amount the partner will hand over.
+    expect(sheet.textContent).toContain('₹ 698');
+    expect(readOrders('salon-1')).toHaveLength(0);
+    expect(readCart('salon-1')).toHaveLength(2);
+
+    // "Go back" leaves the cart untouched and creates no order.
+    await act(async () => { buttonByText('Go back', sheet).click(); });
+    await flush();
+    expect(document.querySelector('.confirm-sheet')).toBeNull();
+    expect(readOrders('salon-1')).toHaveLength(0);
+    expect(readCart('salon-1')).toHaveLength(2);
+    expect(container.textContent).not.toContain('Order placed');
+  });
+
+  it('places a COD order after the confirmation box and shows the success card', async () => {
     seedCart();
     const navigate = vi.fn();
     const notify = vi.fn();
@@ -421,6 +448,12 @@ describe('ShopCheckoutScreen', () => {
     await act(async () => { container.querySelector('input[value="cod"]').click(); });
     const place = buttonsContaining('Place order', container)[0];
     await act(async () => { place.click(); });
+    await flush();
+
+    // Confirming in the sheet is what actually creates the order.
+    const sheet = document.querySelector('.confirm-sheet');
+    expect(sheet).toBeTruthy();
+    await act(async () => { buttonByText('Place order', sheet).click(); });
     await flush();
 
     expect(container.textContent).toContain('Order placed');
@@ -511,7 +544,9 @@ describe('orders + tracker', () => {
     const notify = vi.fn();
     const { container } = await render(<ShopOrderScreen session={SESSION} params={{ orderId: order.id }} navigate={navigate} notify={notify} />);
 
-    expect(container.textContent).toContain('Arriving by');
+    // No auto-generated arrival time: the tracker shows the status only.
+    expect(container.textContent).not.toContain('Arriving by');
+    expect(container.textContent).not.toMatch(/\bTomorrow,\s/);
     expect(container.querySelectorAll('.shop-tracker-step')).toHaveLength(4);
     expect(container.querySelectorAll('.shop-tracker-step.done')).toHaveLength(1);
 

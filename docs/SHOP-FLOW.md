@@ -43,9 +43,10 @@ Cart ── Blinkit-style rows: quantity stepper (minus at 1 removes the
    ▼
 Checkout ── delivery address (prefilled from the salon profile, editable)
            └── Pay online (Razorpay, UPI/cards/netbanking)
-           └── Cash on delivery
+           └── Cash on delivery ── confirmation box: amount, "Go back" /
+               "Place order" (no order is written until it is confirmed)
    ▼
-Order placed ── success card with order id + "Arriving by …"
+Order placed ── success card with order id + delivery address
    ▼
 My orders ── Active / All / Delivered / Cancelled tabs
    ▼
@@ -61,8 +62,27 @@ Order detail ── 4-step tracker (Placed → Packed → Out for delivery → D
   order time, so display and charge always match.
 - **Timeline:** server-tracked orders follow the salon status track (see
   below); local-only orders fall back to a deterministic timeline from
-  `placedAt` — packed after 30 min, out for delivery after 3 h, delivered/ETA
-  at 26 h. The tracker re-renders every 30 s while open.
+  `placedAt` — packed after 30 min, out for delivery after 3 h, delivered at
+  26 h. The tracker re-renders every 30 s while open.
+- **No invented arrival time.** The portal used to print
+  `Arriving by Tomorrow, 08:51 pm` on the success card, the order cards and the
+  tracker — a clock time calculated as `placedAt + 26 h`, which read as a
+  delivery promise nobody had made. Those lines are gone: the success card
+  names the delivery address, the order cards and tracker show the live status
+  label only, and `formatEta` was removed from `shopOrders.js` so no screen
+  can reintroduce a derived arrival clock.
+- **Cash on delivery is confirmed first.** Tapping *Place order* with COD
+  selected opens the app's own confirmation sheet — "Place this order with cash
+  on delivery?" with the exact amount to be collected in cash, a *Go back*
+  (keeps the cart and address untouched, writes nothing) and a *Place order*
+  that creates the order. The sheet is asked before the button enters its
+  loading state, and it also runs for a COD order placed from the checkout
+  screen opened by a deep link.
+- **Header layout:** on the shop grid the *My cart* / *My orders* shortcuts sit
+  on the heading's line and are vertically centred with "Naai Shop" at every
+  width (the subtitle runs on its own row underneath). Phones use icon-only
+  buttons with the cart count as a badge, so the heading keeps its full width.
+  *My orders* has no subtitle — title and Refresh share one row.
 - **Cancellation:** server-tracked orders cancel while the salon track is
   `PENDING` / `CONFIRMED` / `PROCESSING` (parcel not yet out for delivery);
   local-only orders while *placed* or *packed*. A paid order that is
@@ -70,6 +90,12 @@ Order detail ── 4-step tracker (Placed → Packed → Out for delivery → D
   5–7 working days, per the copy shown).
 
 ## Filters
+
+The grid keeps the same **vertical product card at every width — two per row
+on phones** (square photo, two-line name, price/MRP, full-width ADD ↔ stepper),
+then 3-up from 640px and 5-up from 1024px. Phones previously collapsed to one
+full-width horizontal list row per product; the two-up portrait card is the
+client-specified mobile layout.
 
 The whole filter area is one compact strip of **three labelled selects**
 (Category · For · Price) — no chip rows and no sort control, so the grid

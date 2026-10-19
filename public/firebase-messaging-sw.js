@@ -9,7 +9,7 @@
  * - Works on Android Chrome, Edge, Samsung Internet, Firefox, iOS Safari (PWA), Chrome on iOS (PWA)
  */
 
-const CACHE_NAME = 'mynaai-shell-v7';
+const CACHE_NAME = 'mynaai-shell-v8';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -17,11 +17,10 @@ const APP_SHELL = [
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/assets/brand/naai-mark.svg',
+  '/assets/brand/naai-logo.svg',
   '/assets/brand/naai-logo-dark.svg',
-  '/assets/my_naai_circle.png',
   '/assets/my_naai.png',
   '/assets/new_background.jpeg',
-  '/assets/salon_page_bg.png',
   '/assets/audio/buzzer.wav',
   '/assets/audio/buzzer_old.wav'
 ];
@@ -438,7 +437,7 @@ function showFallbackNotification(title, body, data, type) {
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(APP_SHELL).catch(() => {}))
+      .then(cache => Promise.all(APP_SHELL.map(url => cache.add(url).catch(() => {}))))
       .then(() => self.skipWaiting())
   );
 });

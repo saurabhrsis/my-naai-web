@@ -246,13 +246,25 @@ export function ShopScreen({ session, navigate, notify }) {
 
   return (
     <div className="screen shop-screen">
+      {/* Cart and orders sit on the HEADING's line at every width and are
+          vertically centred with it. Phones keep the two icons only (the cart
+          count rides as a badge) so "Naai Shop" is never squeezed or pushed
+          onto a second row — that is the whole mobile budget of this header. */}
       <PageHeader
         title="Naai Shop"
         subtitle="Grooming stock for your salon, supplied by My Naai."
+        subtitleBelow
         action={
           <div className="shop-header-actions">
-            <button type="button" className="refresh-text-button" onClick={() => navigate('shopCart')}><ShoppingBag size={15} /> My cart{totals.itemCount > 0 ? ` · ${totals.itemCount}` : ''}</button>
-            <button type="button" className="refresh-text-button" onClick={() => navigate('shopOrders')}><Package size={15} /> My orders</button>
+            <button type="button" className="refresh-text-button shop-header-action" onClick={() => navigate('shopCart')} aria-label={`My cart${totals.itemCount > 0 ? `, ${totals.itemCount} item${totals.itemCount === 1 ? '' : 's'}` : ''}`}>
+              <ShoppingBag size={15} />
+              <span className="shop-header-action-label">My cart</span>
+              {totals.itemCount > 0 && <em className="shop-header-count">{totals.itemCount}</em>}
+            </button>
+            <button type="button" className="refresh-text-button shop-header-action" onClick={() => navigate('shopOrders')} aria-label="My orders">
+              <Package size={15} />
+              <span className="shop-header-action-label">My orders</span>
+            </button>
           </div>
         }
       />
