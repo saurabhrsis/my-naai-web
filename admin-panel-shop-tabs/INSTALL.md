@@ -37,7 +37,7 @@ Wiring (small changes to existing files):
 > Run this from the folder of the copied bundle, **next to** your `my-naai-frontend` checkout:
 > `./copy-to-frontend.sh /path/to/my-naai-frontend`
 
-Or copy the 16 files manually (paths below are relative to the repo root):
+Or copy the 15 files manually (paths below are relative to the repo root):
 
 **New files (8):**
 ```
@@ -63,22 +63,29 @@ vite.config.js
 ```
 
 > Prefer applying the patch instead? `SHOP-TABS-FRONTEND.patch` is the
-> **layout/UX increment** — it applies on top of the shop bundle you already
-> installed (the one with the Shop Settings tab + distributor progression,
-> commit `860b719` of this repo). It re-lays-out every shop screen with flex
-> widths that render correctly in the panel's CSS build. From your admin
-> frontend repo root:
+> **bulletproof-layout increment** — it applies on top of the shop bundle you
+> already installed (the layout fix from commit `b20d1d9` of this repo). It
+> re-builds the Shop Settings page and the order detail modal (plus the
+> distributor portal and list pages) so that every structural style is inline
+> **with `!important`**, which beats any rule in the panel's CSS — including
+> its `!important` ones. From your admin frontend repo root:
 > `git apply /path/to/admin-panel-shop-tabs/SHOP-TABS-FRONTEND.patch`
-> A fresh install? Just use the copy script above — it carries the complete
-> 16-file state.
+> If `git apply` reports a conflict on `src/pages/ShopSettings.jsx` (because a
+> newer copy of that single file was placed by hand earlier), just run the
+> copy script above — it overwrites files and always lands the complete
+> 15-file state. A fresh install? Use the copy script too.
 
 **No new npm packages are needed** — the bundle only uses libraries the panel already has
 (react-bootstrap, react-toastify, lucide-react).
 
-> **Layout note:** the shop screens deliberately lay out with `d-flex` + explicit inline
-> widths instead of the Bootstrap `row`/`col-*` grid — the panel's CSS build does not
-> carry the grid utilities, and `row`/`col` columns collapse to content width there.
-> Keep new shop UI on the same flex pattern.
+> **Layout note (important for future changes):** the panel's deployed CSS
+> contains rules that override both utility classes and *ordinary* inline
+> styles on nested divs and inputs — that is what made the shop screens
+> collapse. Every shop screen therefore sets its structural styles (display,
+> width, flex, gap, overflow) inline **with `!important`**, which sits above
+> every author-stylesheet rule. When you add or edit shop UI, keep that
+> pattern: no `row`/`col-*` grid, no reliance on any class for width or
+> display, and structural inline styles carrying `!important`.
 
 ## Build & deploy
 

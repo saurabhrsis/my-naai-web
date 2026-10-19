@@ -40,5 +40,5 @@ cp "$SRC/src/contexts/UserContext.jsx"           "$TARGET/src/contexts/"
 cp "$SRC/vite.config.js"                         "$TARGET/"
 
 echo
-echo "Done. 14 files copied (7 new + 7 overwritten). Nothing deleted."
+echo "Done. 15 files copied (8 new + 7 overwritten). Nothing deleted."
 echo "Next: cd $TARGET && npm run build"

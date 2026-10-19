@@ -143,16 +143,18 @@ const ShopOrders = () => {
 
   return (
     <Layout>
-      <div className="page-content d-flex flex-column p-2 p-md-3" style={{ height: "calc(100vh - 70px)", overflow: "hidden" }}>
-        <div className="card shadow-sm mb-3 bg-white border-0 flex-shrink-0" style={{ borderRadius: "12px" }}>
-          <div className="card-body p-3">
+      <div className="page-content" style={{ display: "flex !important", flexDirection: "column !important", gap: "12px !important", width: "100% !important", height: "calc(100vh - 70px) !important", overflow: "hidden !important", boxSizing: "border-box !important" }}>
+      {/* NOTE: structural styles are inline with !important — the panel's deployed CSS
+          overrides ordinary classes and inline styles on nested divs. */}
+        <div className="card shadow-sm bg-white border-0" style={{ flex: "0 0 auto !important", width: "100% !important", borderRadius: "12px !important", boxSizing: "border-box !important", marginBottom: "0 !important" }}>
+          <div className="card-body" style={{ display: "block !important", width: "100% !important", padding: "12px !important" }}>
             {/* Flex instead of row/col: the panel's CSS build does not carry
                 the Bootstrap grid utilities, so widths are inline. */}
-            <div className="d-flex flex-column gap-2">
-              <div style={{ flex: "0 0 auto", width: "100%", maxWidth: 420 }}>
+            <div style={{ display: "flex !important", flexDirection: "column !important", gap: "8px !important", width: "100% !important" }}>
+              <div style={{ flex: "0 0 auto !important", width: "100% !important", maxWidth: "420px !important" }}>
                 <SearchInput value={search} onChange={setSearch} placeholder="Search by order ID..." />
               </div>
-              <div className="d-flex flex-wrap gap-2 align-items-center">
+              <div style={{ display: "flex !important", flexWrap: "wrap !important", gap: "8px !important", alignItems: "center !important", width: "100% !important" }}>
                 {STATUS_FILTERS.map((f) => (
                   <button
                     key={f.key}
@@ -168,7 +170,7 @@ const ShopOrders = () => {
           </div>
         </div>
 
-        <div className="flex-grow-1 p-3 shadow-sm border-0" style={{ overflowY: "auto", backgroundColor: "#ffffff", borderRadius: "12px" }}>
+        <div className="p-3" style={{ flex: "1 1 auto !important", minHeight: "0 !important", overflowY: "auto !important", backgroundColor: "#ffffff !important", borderRadius: "12px !important", width: "100% !important", boxSizing: "border-box !important" }}>
           {isLoading ? (
             <div className="text-center py-5"><Loader size="sm" /></div>
           ) : orders.length === 0 ? (
@@ -177,8 +179,8 @@ const ShopOrders = () => {
               No shop orders match this filter.
             </div>
           ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table className="table align-middle mb-0" style={{ fontSize: "0.9rem", width: "100%", minWidth: 640 }}>
+            <div style={{ overflowX: "auto !important", width: "100% !important" }}>
+              <table className="table align-middle mb-0" style={{ fontSize: "0.9rem !important", width: "100% !important", minWidth: "640px !important" }}>
                 <thead>
                   <tr className="text-muted small" style={{ textTransform: "uppercase", letterSpacing: "0.4px" }}>
                     <th>Order</th>

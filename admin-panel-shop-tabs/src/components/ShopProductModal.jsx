@@ -113,8 +113,8 @@ const ShopProductModal = ({ showModal, setShowModal, initialProduct = null, onSu
         <Modal.Body>
           {/* Flex instead of row/col: the panel's CSS build does not carry
               the Bootstrap grid utilities, so widths are inline. */}
-          <div className="d-flex flex-wrap gap-3">
-            <div style={{ flex: "1 1 100%", minWidth: 0 }}>
+          <div style={{ display: "flex !important", flexWrap: "wrap !important", gap: "12px !important", width: "100% !important" }}>
+            <div style={{ flex: "1 1 100% !important", minWidth: "0 !important", width: "100% !important" }}>
               <Form.Label className="fw-semibold small">Product Name *</Form.Label>
               <Form.Control
                 type="text"
@@ -122,43 +122,42 @@ const ShopProductModal = ({ showModal, setShowModal, initialProduct = null, onSu
                 value={formData.productName}
                 onChange={handleChange}
                 placeholder="e.g. Herbal Hair Oil 200ml"
-                required
-              />
+                required style={{ width: "100% !important", display: "block !important", boxSizing: "border-box !important" }} />
             </div>
-            <div style={{ flex: "1 1 180px", minWidth: 0 }}>
+            <div style={{ flex: "1 1 180px !important", minWidth: "0 !important", width: "100% !important" }}>
               <Form.Label className="fw-semibold small">Selling Price (₹) *</Form.Label>
-              <Form.Control type="number" min="1" step="0.01" name="price" value={formData.price} onChange={handleChange} placeholder="899" required />
+              <Form.Control type="number" min="1" step="0.01" name="price" value={formData.price} onChange={handleChange} placeholder="899" required style={{ width: "100% !important", display: "block !important", boxSizing: "border-box !important" }} />
             </div>
-            <div style={{ flex: "1 1 180px", minWidth: 0 }}>
+            <div style={{ flex: "1 1 180px !important", minWidth: "0 !important", width: "100% !important" }}>
               <Form.Label className="fw-semibold small">MRP (₹)</Form.Label>
-              <Form.Control type="number" min="1" step="0.01" name="mrp" value={formData.mrp} onChange={handleChange} placeholder="1099 (optional, enables discount badge)" />
+              <Form.Control type="number" min="1" step="0.01" name="mrp" value={formData.mrp} onChange={handleChange} placeholder="1099 (optional, enables discount badge)" style={{ width: "100% !important", display: "block !important", boxSizing: "border-box !important" }} />
             </div>
-            <div style={{ flex: "1 1 100%", minWidth: 0 }}>
+            <div style={{ flex: "1 1 100% !important", minWidth: "0 !important", width: "100% !important" }}>
               <Form.Label className="fw-semibold small">Product Image URL</Form.Label>
-              <Form.Control type="url" name="productImage" value={formData.productImage} onChange={handleChange} placeholder="https://... (blank = no image)" />
+              <Form.Control type="url" name="productImage" value={formData.productImage} onChange={handleChange} placeholder="https://... (blank = no image)" style={{ width: "100% !important", display: "block !important", boxSizing: "border-box !important" }} />
             </div>
-            <div style={{ flex: "1 1 180px", minWidth: 0 }}>
+            <div style={{ flex: "1 1 180px !important", minWidth: "0 !important", width: "100% !important" }}>
               <Form.Label className="fw-semibold small">Category</Form.Label>
-              <Form.Control type="text" name="category" value={formData.category} onChange={handleChange} placeholder="Hair Care" />
+              <Form.Control type="text" name="category" value={formData.category} onChange={handleChange} placeholder="Hair Care" style={{ width: "100% !important", display: "block !important", boxSizing: "border-box !important" }} />
             </div>
-            <div style={{ flex: "1 1 180px", minWidth: 0 }}>
+            <div style={{ flex: "1 1 180px !important", minWidth: "0 !important", width: "100% !important" }}>
               <Form.Label className="fw-semibold small">Gender</Form.Label>
-              <Form.Select name="gender" value={formData.gender} onChange={handleChange}>
+              <Form.Select name="gender" value={formData.gender} onChange={handleChange} style={{ width: "100% !important", display: "block !important", boxSizing: "border-box !important" }}>
                 <option value="">Any</option>
                 <option value="MALE">Men</option>
                 <option value="FEMALE">Women</option>
                 <option value="UNISEX">Unisex</option>
               </Form.Select>
             </div>
-            <div style={{ flex: "1 1 180px", minWidth: 0 }}>
+            <div style={{ flex: "1 1 180px !important", minWidth: "0 !important", width: "100% !important" }}>
               <Form.Label className="fw-semibold small">Rating (0–5)</Form.Label>
-              <Form.Control type="number" min="0" max="5" step="0.1" name="rating" value={formData.rating} onChange={handleChange} placeholder="4.5" />
+              <Form.Control type="number" min="0" max="5" step="0.1" name="rating" value={formData.rating} onChange={handleChange} placeholder="4.5" style={{ width: "100% !important", display: "block !important", boxSizing: "border-box !important" }} />
             </div>
-            <div style={{ flex: "1 1 100%", minWidth: 0 }}>
+            <div style={{ flex: "1 1 100% !important", minWidth: "0 !important", width: "100% !important" }}>
               <Form.Label className="fw-semibold small">Description</Form.Label>
-              <Form.Control as="textarea" rows={3} name="description" value={formData.description} onChange={handleChange} placeholder="What the salon owners should know about this product..." />
+              <Form.Control as="textarea" rows={3} name="description" value={formData.description} onChange={handleChange} placeholder="What the salon owners should know about this product..." style={{ width: "100% !important", display: "block !important", boxSizing: "border-box !important" }} />
             </div>
-            <div style={{ flex: "1 1 100%", minWidth: 0 }}>
+            <div style={{ flex: "1 1 100% !important", minWidth: "0 !important", width: "100% !important" }}>
               <Form.Check
                 type="switch"
                 id="isAvailable"

@@ -79,59 +79,62 @@ const OrderCard = ({ order, onAccept, onReject, onAdvance, busy }) => {
     onReject(order.orderId, reason.trim());
   };
 
-  // NOTE on layout: the admin panel's CSS build does not reliably carry the
-  // Bootstrap grid (row/col-*) utilities, so this card lays its sections out
-  // with plain flex + explicit inline widths that behave at every screen size.
+  // NOTE on layout: the panel's CSS build does not reliably carry utility-class
+  // widths, so every structural property on this card (display/flex/gap/width)
+  // styles. The items table is styled by hand instead of the .table class.
+  const tdStyle = { padding: "6px 6px !important", fontSize: "0.87rem !important", borderBottom: "1px solid #f0f2f0 !important", verticalAlign: "middle !important" };
   return (
-    <div className="card border-0 shadow-sm mb-3" style={{ borderRadius: "12px" }}>
-      <div className="card-body p-3 d-flex flex-column gap-3">
-        <div className="d-flex flex-wrap justify-content-between align-items-center gap-2">
-          <div className="d-flex align-items-center gap-2 flex-wrap">
+    <div className="card border-0 shadow-sm mb-3" style={{ borderRadius: "12px !important", width: "100% !important", boxSizing: "border-box !important" }}>
+      <div className="card-body p-3" style={{ display: "flex !important", flexDirection: "column !important", gap: "12px !important", width: "100% !important" }}>
+        <div style={{ display: "flex !important", flexWrap: "wrap !important", justifyContent: "space-between !important", alignItems: "center !important", gap: "8px !important", width: "100% !important" }}>
+          <div style={{ display: "flex !important", alignItems: "center !important", gap: "8px !important", flexWrap: "wrap !important", minWidth: "0 !important" }}>
             <span className="fw-semibold">Order #{order.orderId}</span>
-            <span className={`badge ${STATUS_BADGES[order.status] || "bg-secondary-subtle text-secondary"}`}>
+            <span className={`badge ${STATUS_BADGES[order.status] || "bg-secondary-subtle text-secondary"}`} style={{ whiteSpace: "nowrap !important" }}>
               {STATUS_LABELS[order.status] || order.status}
             </span>
           </div>
-          <div className="text-muted small">{dateTime(order.createdAt)}</div>
+          <div className="text-muted small" style={{ minWidth: "0 !important" }}>{dateTime(order.createdAt)}</div>
         </div>
 
-        <div className="d-flex flex-wrap gap-3">
-          <div style={{ flex: "1 1 220px", minWidth: 0 }}>
-            <div className="small text-muted">From Salon</div>
-            <div className="small fw-semibold">{order.salon?.salonName || "—"}</div>
-            <div className="small text-muted">{order.salon?.phoneNumber || ""}</div>
+        <div style={{ display: "flex !important", flexWrap: "wrap !important", gap: "12px !important", width: "100% !important" }}>
+          <div style={{ flex: "1 1 220px !important", minWidth: "0 !important", width: "100% !important" }}>
+            <div className="small text-muted" style={{ width: "100% !important" }}>From Salon</div>
+            <div className="small fw-semibold" style={{ width: "100% !important", wordBreak: "break-word !important" }}>{order.salon?.salonName || "—"}</div>
+            <div className="small text-muted" style={{ width: "100% !important" }}>{order.salon?.phoneNumber || ""}</div>
           </div>
-          <div style={{ flex: "1 1 220px", minWidth: 0 }}>
-            <div className="small text-muted">Deliver To</div>
-            <div className="small fw-semibold">{order.address?.name || "—"}</div>
-            <div className="small text-muted">
+          <div style={{ flex: "1 1 220px !important", minWidth: "0 !important", width: "100% !important" }}>
+            <div className="small text-muted" style={{ width: "100% !important" }}>Deliver To</div>
+            <div className="small fw-semibold" style={{ width: "100% !important", wordBreak: "break-word !important" }}>{order.address?.name || "—"}</div>
+            <div className="small text-muted" style={{ width: "100% !important" }}>
               {order.address?.line1}{order.address?.city ? `, ${order.address.city}` : ""} – {order.address?.pincode || ""}
             </div>
-            {order.address?.phone && <div className="small text-muted">Contact: {order.address.phone}</div>}
+            {order.address?.phone && <div className="small text-muted" style={{ width: "100% !important" }}>Contact: {order.address.phone}</div>}
           </div>
         </div>
 
-        <div className="border rounded-2 p-2" style={{ backgroundColor: "#fafaf8", width: "100%" }}>
+        <div style={{ width: "100% !important", border: "1px solid #e3e8e3 !important", borderRadius: "10px !important", padding: "10px !important", backgroundColor: "#fafaf8 !important", boxSizing: "border-box !important" }}>
           {/* Table scrolls sideways on narrow phones instead of squeezing. */}
-          <div style={{ overflowX: "auto" }}>
-            <table className="table table-sm mb-0 align-middle" style={{ fontSize: "0.87rem", width: "100%", minWidth: 280 }}>
+          <div style={{ overflowX: "auto !important", width: "100% !important" }}>
+            <table style={{ fontSize: "0.87rem !important", width: "100% !important", minWidth: "280px !important", borderCollapse: "collapse !important" }}>
               <tbody>
                 {items.map((it, idx) => (
                   <tr key={it.productId || idx}>
-                    <td className="pe-2">
-                      <ItemThumb src={it.image} size={30} />
-                      {it.name}
+                    <td style={tdStyle}>
+                      <div style={{ display: "flex !important", alignItems: "center !important", gap: "8px !important", width: "100% !important" }}>
+                        <ItemThumb src={it.image} size={30} />
+                        <span style={{ minWidth: "0 !important", wordBreak: "break-word !important" }}>{it.name}</span>
+                      </div>
                     </td>
-                    <td className="text-center small">{it.qty}</td>
-                    <td className="text-end small fw-semibold">{money(Number(it.price || 0) * Number(it.qty || 1))}</td>
+                    <td style={{ ...tdStyle, textAlign: "center !important", whiteSpace: "nowrap !important" }}>{it.qty}</td>
+                    <td style={{ ...tdStyle, textAlign: "right !important", fontWeight: "600 !important", whiteSpace: "nowrap !important" }}>{money(Number(it.price || 0) * Number(it.qty || 1))}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <div className="d-flex flex-wrap gap-3 small pt-1 border-top" style={{ borderColor: "#eee" }}>
-            <span><span className="text-muted">Total: </span><span className="fw-semibold">{money(order.amounts?.total)}</span></span>
-            <span>
+          <div style={{ display: "flex !important", flexWrap: "wrap !important", gap: "12px !important", fontSize: "0.83rem !important", paddingTop: "8px !important", borderTop: "1px solid #eee !important", width: "100% !important" }}>
+            <span style={{ minWidth: "0 !important" }}><span className="text-muted">Total: </span><span className="fw-semibold">{money(order.amounts?.total)}</span></span>
+            <span style={{ minWidth: "0 !important" }}>
               <span className="text-muted">Payment: </span>
               {order.payment?.status === "PAID"
                 ? <span className="text-success fw-semibold">{order.payment.method} • Already paid</span>
@@ -141,37 +144,48 @@ const OrderCard = ({ order, onAccept, onReject, onAdvance, busy }) => {
         </div>
 
         {awaiting && (
-          <div>
-            {/* Full-width stacked buttons on phones, inline on desktop. */}
-            <div className="d-grid d-sm-flex gap-2">
-              <button className="button23" onClick={() => onAccept(order.orderId)} disabled={busy} style={{ padding: "10px 18px" }}>
-                <CheckCircle2 size={15} className="me-1" /> Accept Order
-              </button>
-              <button
-                className="button22"
-                onClick={() => setShowReject((v) => !v)}
-                disabled={busy}
-                style={{ color: "#c0392b", borderColor: "#e6b3ad", background: "#fdf3f1", padding: "10px 18px" }}
-              >
-                <XCircle size={15} className="me-1" /> Reject
-              </button>
+          <div style={{ width: "100% !important" }}>
+            {/* Full-width stacked buttons on phones, side-by-side on wide cards. */}
+            <div style={{ display: "flex !important", flexWrap: "wrap !important", gap: "8px !important", width: "100% !important" }}>
+              <div style={{ flex: "1 1 calc(50% - 4px) !important", minWidth: "140px !important", width: "100% !important" }}>
+                <button className="button23" onClick={() => onAccept(order.orderId)} disabled={busy}
+                  style={{ padding: "10px 18px !important", width: "100% !important", display: "inline-flex !important", alignItems: "center !important", justifyContent: "center !important", gap: "6px !important" }}>
+                  <CheckCircle2 size={15} /> Accept Order
+                </button>
+              </div>
+              <div style={{ flex: "1 1 calc(50% - 4px) !important", minWidth: "140px !important", width: "100% !important" }}>
+                <button
+                  className="button22"
+                  onClick={() => setShowReject((v) => !v)}
+                  disabled={busy}
+                  style={{ color: "#c0392b !important", borderColor: "#e6b3ad !important", background: "#fdf3f1 !important", padding: "10px 18px !important", width: "100% !important", display: "inline-flex !important", alignItems: "center !important", justifyContent: "center !important", gap: "6px !important" }}
+                >
+                  <XCircle size={15} /> Reject
+                </button>
+              </div>
             </div>
             {showReject && (
-              <div className="mt-2 border rounded-3 p-2" style={{ backgroundColor: "#fdf3f1", borderColor: "#e6b3ad" }}>
+              <div style={{ marginTop: "8px !important", border: "1px solid #e6b3ad !important", borderRadius: "12px !important", padding: "10px !important", backgroundColor: "#fdf3f1 !important", width: "100% !important", boxSizing: "border-box !important" }}>
                 <textarea
-                  className="form-control form-control-sm mb-2"
+                  className="form-control form-control-sm"
                   rows={2}
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
                   placeholder="Reason (MyNaai admin will see this, e.g. out of stock, cannot cover this area...)"
+                  style={{ width: "100% !important", marginBottom: "8px !important", boxSizing: "border-box !important" }}
                 />
-                <div className="d-grid d-sm-flex gap-2">
-                  <button className="btn btn-sm btn-danger" onClick={submitReject} disabled={busy}>
-                    {busy ? "Sending..." : "Confirm Rejection"}
-                  </button>
-                  <button className="btn btn-sm btn-outline-secondary" onClick={() => { setShowReject(false); setReason(""); }} disabled={busy}>
-                    Cancel
-                  </button>
+                <div style={{ display: "flex !important", flexWrap: "wrap !important", gap: "8px !important", width: "100% !important" }}>
+                  <div style={{ flex: "1 1 calc(50% - 4px) !important", minWidth: "140px !important", width: "100% !important" }}>
+                    <button className="btn btn-sm btn-danger" onClick={submitReject} disabled={busy} style={{ width: "100% !important", display: "inline-flex !important", alignItems: "center !important", justifyContent: "center !important" }}>
+                      {busy ? "Sending..." : "Confirm Rejection"}
+                    </button>
+                  </div>
+                  <div style={{ flex: "1 1 calc(50% - 4px) !important", minWidth: "140px !important", width: "100% !important" }}>
+                    <button className="btn btn-sm btn-outline-secondary" onClick={() => { setShowReject(false); setReason(""); }} disabled={busy}
+                      style={{ width: "100% !important", display: "inline-flex !important", alignItems: "center !important", justifyContent: "center !important" }}>
+                      Cancel
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -180,12 +194,15 @@ const OrderCard = ({ order, onAccept, onReject, onAdvance, busy }) => {
 
         {/* After accepting: one tap moves the parcel to the next step. */}
         {step && (
-          <div className="d-grid d-sm-flex gap-2 align-items-center">
-            <button className={step.variant} onClick={() => onAdvance(order.orderId, step.to)} disabled={busy} style={{ padding: "10px 18px" }}>
-              {(() => { const Icon = step.icon; return <Icon size={15} className="me-1" />; })()}
-              {step.label}
-            </button>
-            <span className="small text-muted d-none d-sm-inline">
+          <div style={{ display: "flex !important", flexWrap: "wrap !important", alignItems: "center !important", gap: "8px !important", width: "100% !important" }}>
+            <div style={{ flex: "1 1 220px !important", minWidth: "0 !important", width: "100% !important" }}>
+              <button className={step.variant} onClick={() => onAdvance(order.orderId, step.to)} disabled={busy}
+                style={{ padding: "10px 18px !important", width: "100% !important", display: "inline-flex !important", alignItems: "center !important", justifyContent: "center !important", gap: "6px !important" }}>
+                {(() => { const Icon = step.icon; return <Icon size={15} />; })()}
+                {step.label}
+              </button>
+            </div>
+            <span className="small text-muted" style={{ minWidth: "0 !important" }}>
               Next: {STATUS_LABELS[step.to]} — the salon sees the update immediately.
             </span>
           </div>
@@ -335,29 +352,38 @@ const DistributorPortal = () => {
         </button>
       </nav>
 
-      <div className="container-fluid px-3 px-md-4 py-3" style={{ maxWidth: 900 }}>
-        {/* Segmented tabs: full-width on phones, compact on desktop. */}
-        <div className="d-grid d-md-flex gap-2 mb-3">
-          <button
-            className={`btn btn-sm d-flex align-items-center justify-content-center gap-2 ${tab === "queue" ? "btn-success" : "btn-outline-secondary"}`}
-            onClick={() => setTab("queue")}
-          >
-            <Package size={14} className="d-none d-sm-inline" />
-            Waiting for your reply
-            {queueCount != null && queueCount > 0 && (
-              <span className={`badge rounded-pill ${tab === "queue" ? "bg-white text-success" : "bg-success"}`}>{queueCount}</span>
-            )}
-          </button>
-          <button
-            className={`btn btn-sm d-flex align-items-center justify-content-center gap-2 ${tab === "all" ? "btn-success" : "btn-outline-secondary"}`}
-            onClick={() => setTab("all")}
-          >
-            <Store size={14} className="d-none d-sm-inline" />
-            All my orders
-            {activeCount != null && activeCount > 0 && (
-              <span className={`badge rounded-pill ${tab === "all" ? "bg-white text-success" : "bg-primary"}`}>{activeCount}</span>
-            )}
-          </button>
+      {/* NOTE on layout: the panel's deployed CSS overrides ordinary inline
+          styles on divs/inputs, so every structural declaration here is
+          inline WITH !important (which beats any author-stylesheet rule). */}
+      <div className="container-fluid px-3 px-md-4 py-3" style={{ maxWidth: "900px !important", width: "100% !important" }}>
+        {/* Segmented tabs: full-width on phones, side-by-side when they fit. */}
+        <div style={{ display: "flex !important", flexWrap: "wrap !important", gap: "8px !important", marginBottom: "12px !important", width: "100% !important" }}>
+          <div style={{ flex: "1 1 240px !important", minWidth: "200px !important", width: "100% !important" }}>
+            <button
+              className={`btn btn-sm ${tab === "queue" ? "btn-success" : "btn-outline-secondary"}`}
+              onClick={() => setTab("queue")}
+              style={{ display: "inline-flex !important", alignItems: "center !important", justifyContent: "center !important", gap: "8px !important", width: "100% !important" }}
+            >
+              <Package size={14} />
+              Waiting for your reply
+              {queueCount != null && queueCount > 0 && (
+                <span className={`badge rounded-pill ${tab === "queue" ? "bg-white text-success" : "bg-success"}`}>{queueCount}</span>
+              )}
+            </button>
+          </div>
+          <div style={{ flex: "1 1 240px !important", minWidth: "200px !important", width: "100% !important" }}>
+            <button
+              className={`btn btn-sm ${tab === "all" ? "btn-success" : "btn-outline-secondary"}`}
+              onClick={() => setTab("all")}
+              style={{ display: "inline-flex !important", alignItems: "center !important", justifyContent: "center !important", gap: "8px !important", width: "100% !important" }}
+            >
+              <Store size={14} />
+              All my orders
+              {activeCount != null && activeCount > 0 && (
+                <span className={`badge rounded-pill ${tab === "all" ? "bg-white text-success" : "bg-primary"}`}>{activeCount}</span>
+              )}
+            </button>
+          </div>
         </div>
 
         {isLoading ? (
@@ -387,3 +413,4 @@ const DistributorPortal = () => {
 };
 
 export default DistributorPortal;
+

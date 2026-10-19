@@ -94,28 +94,28 @@ const DistributorModal = ({ showModal, setShowModal, initialDistributor = null, 
         <Modal.Body>
           {/* Flex instead of row/col: the panel's CSS build does not carry
               the Bootstrap grid utilities, so widths are inline. */}
-          <div className="d-flex flex-wrap gap-3">
-            <div style={{ flex: "1 1 240px", minWidth: 0 }}>
+          <div style={{ display: "flex !important", flexWrap: "wrap !important", gap: "12px !important", width: "100% !important" }}>
+            <div style={{ flex: "1 1 240px !important", minWidth: "0 !important", width: "100% !important" }}>
               <Form.Label className="fw-semibold small">Name *</Form.Label>
-              <Form.Control type="text" name="name" value={formData.name} onChange={handleChange} placeholder="e.g. Ravi Gupta" required />
+              <Form.Control type="text" name="name" value={formData.name} onChange={handleChange} placeholder="e.g. Ravi Gupta" required style={{ width: "100% !important", display: "block !important", boxSizing: "border-box !important" }} />
             </div>
-            <div style={{ flex: "1 1 240px", minWidth: 0 }}>
+            <div style={{ flex: "1 1 240px !important", minWidth: "0 !important", width: "100% !important" }}>
               <Form.Label className="fw-semibold small">Phone *</Form.Label>
-              <Form.Control type="tel" name="phone" value={formData.phone} onChange={handleChange} placeholder="10-digit mobile number" required />
+              <Form.Control type="tel" name="phone" value={formData.phone} onChange={handleChange} placeholder="10-digit mobile number" required style={{ width: "100% !important", display: "block !important", boxSizing: "border-box !important" }} />
             </div>
-            <div style={{ flex: "1 1 240px", minWidth: 0 }}>
+            <div style={{ flex: "1 1 240px !important", minWidth: "0 !important", width: "100% !important" }}>
               <Form.Label className="fw-semibold small">Email (used as an alternate login ID)</Form.Label>
-              <Form.Control type="email" name="email" value={formData.email} onChange={handleChange} placeholder="optional" />
+              <Form.Control type="email" name="email" value={formData.email} onChange={handleChange} placeholder="optional" style={{ width: "100% !important", display: "block !important", boxSizing: "border-box !important" }} />
             </div>
-            <div style={{ flex: "1 1 240px", minWidth: 0 }}>
+            <div style={{ flex: "1 1 240px !important", minWidth: "0 !important", width: "100% !important" }}>
               <Form.Label className="fw-semibold small">Area / City</Form.Label>
-              <Form.Control type="text" name="area" value={formData.area} onChange={handleChange} placeholder="e.g. Nagpur, Maharashtra" />
+              <Form.Control type="text" name="area" value={formData.area} onChange={handleChange} placeholder="e.g. Nagpur, Maharashtra" style={{ width: "100% !important", display: "block !important", boxSizing: "border-box !important" }} />
             </div>
-            <div style={{ flex: "1 1 240px", minWidth: 0 }}>
+            <div style={{ flex: "1 1 240px !important", minWidth: "0 !important", width: "100% !important" }}>
               <Form.Label className="fw-semibold small">Delivery Capability</Form.Label>
-              <Form.Control type="text" name="deliveryCapability" value={formData.deliveryCapability} onChange={handleChange} placeholder="e.g. Same-day within 20km, 2-wheelers x2" />
+              <Form.Control type="text" name="deliveryCapability" value={formData.deliveryCapability} onChange={handleChange} placeholder="e.g. Same-day within 20km, 2-wheelers x2" style={{ width: "100% !important", display: "block !important", boxSizing: "border-box !important" }} />
             </div>
-            <div style={{ flex: "1 1 240px", minWidth: 0 }}>
+            <div style={{ flex: "1 1 240px !important", minWidth: "0 !important", width: "100% !important" }}>
               <Form.Label className="fw-semibold small">
                 {isEdit ? "New Password (leave blank to keep the old one)" : "Login Password *"}
               </Form.Label>
@@ -125,14 +125,13 @@ const DistributorModal = ({ showModal, setShowModal, initialDistributor = null, 
                 value={formData.password}
                 onChange={handleChange}
                 placeholder={isEdit ? "min 6 characters" : "min 6 characters"}
-                autoComplete="new-password"
-              />
+                autoComplete="new-password" style={{ width: "100% !important", display: "block !important", boxSizing: "border-box !important" }} />
             </div>
-            <div style={{ flex: "1 1 100%", minWidth: 0 }}>
+            <div style={{ flex: "1 1 100% !important", minWidth: "0 !important", width: "100% !important" }}>
               <Form.Label className="fw-semibold small">Address</Form.Label>
-              <Form.Control as="textarea" rows={2} name="address" value={formData.address} onChange={handleChange} placeholder="Warehouse / pickup address" />
+              <Form.Control as="textarea" rows={2} name="address" value={formData.address} onChange={handleChange} placeholder="Warehouse / pickup address" style={{ width: "100% !important", display: "block !important", boxSizing: "border-box !important" }} />
             </div>
-            <div style={{ flex: "1 1 100%", minWidth: 0 }}>
+            <div style={{ flex: "1 1 100% !important", minWidth: "0 !important", width: "100% !important" }}>
               <div className="alert alert-light border small mb-0">
                 This distributor will log in to the Distributor Portal with their <strong>phone or email</strong> and this
                 password. Their portal only shows orders that you assign to them.
