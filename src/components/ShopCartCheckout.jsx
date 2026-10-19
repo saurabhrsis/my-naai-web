@@ -211,6 +211,9 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
   const [payState, setPayState] = useState('idle'); // idle | opening | in-checkout | app-switched | confirming
   const [placed, setPlaced] = useState(null);
   const shopSettings = useShopSettings();
+  // Cash on delivery is confirmed through the app's own sheet (never
+  // window.confirm, which installed PWAs can suppress).
+  const confirm = useConfirm();
 
   // The bill is payment-aware: choosing COD adds the admin-set COD charges,
   // so the "To pay" figure and the Razorpay amount always match what the
@@ -298,6 +301,21 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     finalizeOrder({ method: 'COD', status: 'PENDING', paymentId: '', amount: totals.total });
   };
 
+  // Cash on delivery is a commitment to receive (and pay for) the parcel, so
+  // it gets an explicit confirmation box before anything is written — the
+  // same in-app sheet the rest of the portal uses for irreversible actions.
+  // The order is only created when the partner taps "Place order"; "Go back"
+  // leaves the cart and the address exactly as they were.
+  const confirmCod = () => confirm({
+    title: 'Place this order with cash on delivery?',
+    message: `${formatCurrency(totals.total)} will be collected in cash when the order reaches your salon. Place it only if you are ready to receive it — the order can be cancelled until it goes out for delivery.`,
+    confirmLabel: 'Place order',
+    cancelLabel: 'Go back',
+    tone: 'info',
+    icon: Banknote,
+    defaultAction: 'confirm',
+  });
+
   const onlineAvailable = Boolean(razorpayKey);
 
   const submit = async event => {
@@ -308,6 +326,9 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     if (lines.length === 0) return notify?.('error', 'Your cart is empty.');
     if (payment === 'cod' && codLocked) return notify?.('error', `Cash on delivery is only available for orders up to ${formatCurrency(shopSettings.codThreshold)} — please pay online.`);
     if (payment === 'online' && !onlineAvailable) return notify?.('error', 'Online payment is not configured on this device — use Cash on Delivery.');
+    // Ask BEFORE the button goes into its loading state, so the sheet is not
+    // sitting on top of a spinner that can never finish.
+    if (payment === 'cod' && !(await confirmCod())) return;
     setBusy(true);
     try {
       if (payment === 'online') await payOnline();

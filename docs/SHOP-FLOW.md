@@ -43,7 +43,8 @@ Cart ── Blinkit-style rows: quantity stepper (minus at 1 removes the
    ▼
 Checkout ── delivery address (prefilled from the salon profile, editable)
            └── Pay online (Razorpay, UPI/cards/netbanking)
-           └── Cash on delivery
+           └── Cash on delivery ── confirmation box: amount, "Go back" /
+               "Place order" (no order is written until it is confirmed)
    ▼
 Order placed ── success card with order id + delivery address
    ▼
@@ -70,6 +71,18 @@ Order detail ── 4-step tracker (Placed → Packed → Out for delivery → D
   names the delivery address, the order cards and tracker show the live status
   label only, and `formatEta` was removed from `shopOrders.js` so no screen
   can reintroduce a derived arrival clock.
+- **Cash on delivery is confirmed first.** Tapping *Place order* with COD
+  selected opens the app's own confirmation sheet — "Place this order with cash
+  on delivery?" with the exact amount to be collected in cash, a *Go back*
+  (keeps the cart and address untouched, writes nothing) and a *Place order*
+  that creates the order. The sheet is asked before the button enters its
+  loading state, and it also runs for a COD order placed from the checkout
+  screen opened by a deep link.
+- **Header layout:** on the shop grid the *My cart* / *My orders* shortcuts sit
+  on the heading's line and are vertically centred with "Naai Shop" at every
+  width (the subtitle runs on its own row underneath). Phones use icon-only
+  buttons with the cart count as a badge, so the heading keeps its full width.
+  *My orders* has no subtitle — title and Refresh share one row.
 - **Cancellation:** server-tracked orders cancel while the salon track is
   `PENDING` / `CONFIRMED` / `PROCESSING` (parcel not yet out for delivery);
   local-only orders while *placed* or *packed*. A paid order that is

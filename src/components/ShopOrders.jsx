@@ -96,7 +96,9 @@ export function ShopOrdersScreen({ session, navigate, notify }) {
 
   return (
     <div className="screen shop-orders-screen">
-      <PageHeader title="My orders" subtitle="Track and manage every Naai Shop order." onBack={() => navigate('shop')} action={<button className="refresh-text-button" onClick={load}>Refresh</button>} />
+      {/* No subtitle: on a phone it cost a whole line above the tabs for copy
+          that repeats the title. Title, back and Refresh share one row. */}
+      <PageHeader title="My orders" onBack={() => navigate('shop')} action={<button type="button" className="refresh-text-button" onClick={load}>Refresh</button>} />
       <div className="booking-tabs shop-order-tabs">
         <button className={filter === 'active' ? 'active' : ''} onClick={() => setFilter('active')}>Active <span>{buckets.active.length}</span></button>
         <button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All <span>{buckets.all.length}</span></button>
