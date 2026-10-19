@@ -22,9 +22,7 @@ import {
   cartCount,
   cartTotals,
   clearCart,
-  formatEta,
   freeDeliveryGap,
-  getOrderStatus,
   placeOrder,
   readCart,
 } from '../lib/shopOrders';
@@ -321,15 +319,23 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
 
   // ── Success view ──────────────────────────────────────────────────────────
   if (placed) {
-    const etaText = formatEta(getOrderStatus(placed).eta);
     return (
       <div className="screen shop-checkout-screen">
         <div className="shop-success">
           <CheckCircle2 size={56} className="shop-success-icon" />
           <h2>Order placed</h2>
           <p className="shop-success-id">Order {placed.id}</p>
+          {/* Address only — no invented arrival time. An exact "Arriving by
+              Tomorrow, 08:51 pm" used to be calculated from the placement
+              clock, which read as a delivery promise the platform never made.
+              The street and the city are one flex child so the gap between
+              children does not land before the comma. */}
           <p className="shop-success-eta">
-            <Truck size={16} /> Arriving by <strong>{etaText || 'the next working day'}</strong> at {placed.address.line1 || 'your salon'}, {placed.address.city}
+            <Truck size={16} />{' '}
+            <span>
+              Delivering to <strong>{placed.address.line1 || 'your salon'}</strong>
+              {placed.address.city ? `, ${placed.address.city}` : ''}
+            </span>
           </p>
           <div className="shop-success-bill">
             {/* Frozen bill: exactly what this order was billed for, even if

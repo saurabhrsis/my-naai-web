@@ -45,7 +45,7 @@ Checkout ── delivery address (prefilled from the salon profile, editable)
            └── Pay online (Razorpay, UPI/cards/netbanking)
            └── Cash on delivery
    ▼
-Order placed ── success card with order id + "Arriving by …"
+Order placed ── success card with order id + delivery address
    ▼
 My orders ── Active / All / Delivered / Cancelled tabs
    ▼
@@ -61,8 +61,15 @@ Order detail ── 4-step tracker (Placed → Packed → Out for delivery → D
   order time, so display and charge always match.
 - **Timeline:** server-tracked orders follow the salon status track (see
   below); local-only orders fall back to a deterministic timeline from
-  `placedAt` — packed after 30 min, out for delivery after 3 h, delivered/ETA
-  at 26 h. The tracker re-renders every 30 s while open.
+  `placedAt` — packed after 30 min, out for delivery after 3 h, delivered at
+  26 h. The tracker re-renders every 30 s while open.
+- **No invented arrival time.** The portal used to print
+  `Arriving by Tomorrow, 08:51 pm` on the success card, the order cards and the
+  tracker — a clock time calculated as `placedAt + 26 h`, which read as a
+  delivery promise nobody had made. Those lines are gone: the success card
+  names the delivery address, the order cards and tracker show the live status
+  label only, and `formatEta` was removed from `shopOrders.js` so no screen
+  can reintroduce a derived arrival clock.
 - **Cancellation:** server-tracked orders cancel while the salon track is
   `PENDING` / `CONFIRMED` / `PROCESSING` (parcel not yet out for delivery);
   local-only orders while *placed* or *packed*. A paid order that is

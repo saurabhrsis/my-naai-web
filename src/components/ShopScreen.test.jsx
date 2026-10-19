@@ -511,7 +511,9 @@ describe('orders + tracker', () => {
     const notify = vi.fn();
     const { container } = await render(<ShopOrderScreen session={SESSION} params={{ orderId: order.id }} navigate={navigate} notify={notify} />);
 
-    expect(container.textContent).toContain('Arriving by');
+    // No auto-generated arrival time: the tracker shows the status only.
+    expect(container.textContent).not.toContain('Arriving by');
+    expect(container.textContent).not.toMatch(/\bTomorrow,\s/);
     expect(container.querySelectorAll('.shop-tracker-step')).toHaveLength(4);
     expect(container.querySelectorAll('.shop-tracker-step.done')).toHaveLength(1);
 

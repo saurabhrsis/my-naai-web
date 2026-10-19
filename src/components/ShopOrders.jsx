@@ -3,7 +3,6 @@ import {
   Banknote,
   CheckCircle2,
   ChevronRight,
-  Clock3,
   CreditCard,
   MapPin,
   Package,
@@ -19,7 +18,6 @@ import {
   canCancelOrder,
   cancelOrder,
   findOrder,
-  formatEta,
   getOrderStatus,
   readOrders,
   saveOrders,
@@ -116,7 +114,6 @@ export function ShopOrdersScreen({ session, navigate, notify }) {
                 <span className="shop-order-copy">
                   <span className="shop-order-top"><strong>{order.id}</strong>{statusPill(status)}</span>
                   <small>{formatDate(order.placedAt)} · {order.items.reduce((sum, item) => sum + item.qty, 0)} item{order.items.reduce((sum, item) => sum + item.qty, 0) === 1 ? '' : 's'} · {formatCurrency(order.amounts.total)}</small>
-                  {status.key !== 'cancelled' && <small className="shop-order-eta"><Clock3 size={12} /> {status.key === 'delivered' ? 'Delivered' : `Arriving by ${formatEta(status.eta)}`}</small>}
                 </span>
                 <ChevronRight size={18} className="shop-order-chevron" />
               </button>
@@ -231,9 +228,6 @@ export function ShopOrderScreen({ session, params, navigate, notify }) {
           </div>
           {statusPill(status)}
         </div>
-        {status.key !== 'cancelled' && status.key !== 'delivered' && (
-          <p className="shop-tracker-eta"><Truck size={15} /> Arriving by <strong>{formatEta(status.eta)}</strong></p>
-        )}
         {status.key === 'delivered' && <p className="shop-tracker-eta"><CheckCircle2 size={15} /> Delivered — enjoy the stock at {order.salonName || 'your salon'}</p>}
         {status.key === 'cancelled' && (
           <p className="shop-tracker-eta cancelled">

@@ -2408,7 +2408,6 @@ img.image-fallback-tile {
 .shop-order-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .shop-order-top strong { color: var(--white); font-size: 12.5px; letter-spacing: .02em; }
 .shop-order-copy small { color: var(--muted); font-size: 10.5px; }
-.shop-order-eta { display: inline-flex; align-items: center; gap: 5px; color: var(--shop-green-soft) !important; font-weight: 700; }
 .shop-order-chevron { color: var(--muted); flex: none; }
 
 /* ── Order detail + tracker ── */
