@@ -19,6 +19,33 @@ npm test
 
 A Vitest (+ jsdom) suite covers the notification routing/buzzer/token logic and the in-app confirmation dialog (including a guard that fails if a native `window.confirm`/`alert`/`prompt` call comes back). The full mobile→web parity map and what was and wasn't testable here are in [`docs/TESTING-AND-PARITY.md`](docs/TESTING-AND-PARITY.md).
 
+## Naai Shop (salon supply store)
+
+Salon partners get a **Shop** tab — a Blinkit/Zepto-style store for grooming
+stock supplied by the MyNaai Platform: search and a compact **Category · For ·
+Price** filter strip, ADD → quantity stepper, a full **product details page**
+(photo gallery for multi-image products, price + MRP savings, seller, delivery
+facts, same-category suggestions — add to cart straight from the page), a
+"My cart (N)" shortcut beside "My orders", a floating "N items · ₹X → View
+cart" bar, cart with bill details, checkout with **Online (Razorpay) or
+Cash on Delivery**, a **My orders** list with a live 4-step status tracker
+(Placed → Packed → Out for delivery → Delivered), and **cancel order** before
+dispatch. Delivery is ₹49, free above ₹499. Catalog classification honours an
+explicit `category`/`gender` on the product (the salon product editor can set
+both, and upload **multiple product photos** — first one is the cover) and
+falls back to keyword inference, so every filter works against the current
+API. Orders live client-side per salon account until a backend
+`/api/orders` controller lands — the storage boundary that would be swapped is
+isolated in `src/lib/shopOrders.js`. Full design, data model and the backend
+integration path are in [`docs/SHOP-FLOW.md`](docs/SHOP-FLOW.md).
+
+To preview the whole flow without the production API (demo salon login with
+any number + any OTP, fixture catalog):
+
+```bash
+MYNAAI_DEV_MOCK_API=1 npm run dev
+```
+
 ## Environment
 
 Create `.env.local` when pointing to another environment:

@@ -2222,18 +2222,18 @@ describe('the in-app booking request alert', () => {
     }
   });
 
-  it('signs the salon out, with a reason, when this device\u2019s token no longer matches the login token', async () => {
-    // Browser tab → installed app: the PWA mints its own push token while the
-    // session it inherited points the backend at the old one. When the quiet
-    // hand-over cannot be confirmed, the app asks for one fresh OTP login.
+  it('stays signed in when this device\u2019s token no longer matches the login token', async () => {
+    // Regression guard for the production "getting logged out after sometime /
+    // after refresh" bug: the old code listened for mynai:device-token-changed
+    // (a rotated PWA/Firebase push token) and evicted the salon. The quiet
+    // re-sync in lib/deviceToken now hands the new token over instead, so no
+    // event about the push token may ever clear the session.
     await mount();
     expect(container.querySelector('.queue-screen, .screen')).toBeTruthy();
     await act(async () => { window.dispatchEvent(new CustomEvent('mynaai:device-token-changed', { detail: { token: 'pwa-token', previous: 'tab-token' } })); });
     await flush();
-    expect(localStorage.getItem('mynaai')).toBeNull();
-    expect(container.textContent).toContain('sign in again');
-    expect(container.querySelector('.form-notice')).toBeTruthy();
-    expect(container.textContent).toContain('Salon partner');
+    expect(localStorage.getItem('mynaai')).toBeTruthy();
+    expect(container.querySelector('.login-screen')).toBeNull();
   });
 
   it('does not stack a second copy of the request the salon already has open', async () => {

@@ -332,9 +332,25 @@ img { display: block; max-width: 100%; }
 .home-screen { position: relative; }
 .home-band { margin-bottom: 16px; padding: 16px 14px; border: 1px solid var(--line); border-radius: 22px; }
 .home-hero-band { background: radial-gradient(130% 150% at 100% 0%, rgba(232, 185, 126, .09), transparent 55%), linear-gradient(180deg, #151b1a, #101514); }
-.home-hero-band .ad-carousel-wrap { margin-bottom: 2px; }
+/* The hero is STACKED at every width — greeting → banner → search row — so
+   the DOM order below is the visual order on phones, tablets AND laptops.
+   The banner is the band's middle element, the search row its last. */
+.home-hero-band .ad-carousel-wrap { margin: 2px 0 16px; }
+.home-hero-band.has-ads .home-search-row { margin-bottom: 0; }
 .home-salons-band { background: #0f1313; }
 .home-salons-band .inline-notice { margin-top: -3px; }
+/* The alerts + location prompts share one wrapper so wide screens can set
+   them SIDE BY SIDE as two even cards — a full-width bar with a hole in the
+   middle reads as broken on a laptop. Phones keep them stacked (and compact,
+   see the <=559px block below). */
+.home-notices { display: grid; gap: 8px; margin: -3px 0 15px; }
+.home-notices .inline-notice { margin: 0; }
+@media (min-width: 900px) {
+  .home-notices { grid-template-columns: 1fr 1fr; align-items: stretch; }
+  /* The alert copy is a long sentence: in the half-width card it must wrap
+     inside its span (min-width: 0) rather than push the buttons off the card. */
+  .home-notices .location-fallback-copy { flex: 1 1 auto; min-width: 0; }
+}
 .home-topline { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 17px; }
 .home-topline > div:first-child { min-width: 0; }
 .home-topline h1 { margin: 7px 0 5px; font-size: clamp(28px, 7vw, 43px); letter-spacing: -.055em; line-height: 1; }
@@ -351,18 +367,35 @@ img { display: block; max-width: 100%; }
 .search-field input { min-width: 0; flex: 1; height: 44px; border: 0; outline: 0; color: var(--white); background: transparent; font-size: 13px; }
 .search-field input::placeholder { color: #707a79; }
 .search-field button { display: flex; padding: 2px; color: var(--muted); background: transparent; }
-.ad-carousel-wrap { margin-bottom: 22px; }
+/* The banner is a FULL-WIDTH strip on every device: on phones the strip is
+   exactly the artwork's shape; the device's height budget caps taller
+   strips. Below 1024px the whole artwork stays visible and any leftover
+   sides get the blurred copy of it (`.ad-backdrop`); on laptop and larger
+   the image itself fills the strip (cover — see .ad-image). Per-device
+   height budgets in the media queries below. */
+.ad-carousel-wrap {
+  --ad-max-height: 280px;
+  width: 100%;
+  margin: 0 0 22px;
+}
 .ad-carousel { position: relative; overflow: hidden; border-radius: 16px; background: #1e2625; touch-action: pan-y; cursor: grab; }
 .ad-carousel:active { cursor: grabbing; }
 .ad-track { display: flex; transition: transform .35s ease; }
-/* The ad frame takes the artwork's OWN shape: `--ad-ratio` is measured from the
-   image once it loads (clamped to a sane banner range), so an ad is shown whole
-   instead of being cropped by a fixed strip — the desktop complaint. The
-   blurred backdrop only fills whatever the height cap leaves over on an unusual
-   shape, and `contain` guarantees no part of the creative is ever cut. */
-.ad-slide { position: relative; min-width: 100%; height: auto; aspect-ratio: var(--ad-ratio, 3 / 2); min-height: 150px; max-height: var(--ad-max-height, 240px); overflow: hidden; background: #1e2625; }
-.ad-backdrop { position: absolute; inset: -8%; background-position: center; background-size: cover; filter: blur(26px) saturate(1.15); opacity: .45; }
+/* Slide: the strip takes the artwork's own ratio (measured, clamped; min
+   across the slide set so the page never jumps between slides) up to the
+   device's height budget. When the budget caps a wide strip, `contain` shows
+   the complete artwork centered and the blurred backdrop fills the leftover
+   sides — full image, no crop, no black. */
+.ad-slide { position: relative; min-width: 100%; height: auto; aspect-ratio: var(--ad-ratio, 1.5); min-height: 120px; max-height: var(--ad-max-height, 280px); overflow: hidden; background: #1e2625; }
+.ad-backdrop { position: absolute; inset: -8%; background-position: center; background-size: cover; filter: blur(26px) saturate(1.15); opacity: .95; }
+/* Phones/tablets keep the artwork's exact shape (contain = whole image, no
+   crop). On LAPTOP AND LARGER the image itself fills the full-width strip —
+   the centered crop trims only the top/bottom edges (the creatives carry
+   their message in the middle), so there are never dead side panels. */
 .ad-image { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: contain; }
+@media (min-width: 1024px) {
+  .ad-image { object-fit: cover; object-position: center; }
+}
 .carousel-dots { display: flex; justify-content: center; gap: 6px; margin-top: 10px; }
 .carousel-dot { width: 7px; height: 7px; padding: 0; border-radius: 7px; background: #555; }
 .carousel-dot.active { width: 18px; background: var(--gold); }
@@ -1061,6 +1094,22 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .site-footer-col a { font-size: 11px; }
   .site-footer-bottom { flex-wrap: wrap; }
 }
+/* Phone home: keep it lean. The alerts/location prompts shrink to a slim
+   icon + button row (the long copy only appears inside the sheet when
+   something actually fails), the trust strip goes away, and the review
+   wall folds behind one "Read what people say" button until tapped. */
+@media (max-width: 559px) {
+  .inline-notice.alerts-invite-notice,
+  .inline-notice.location-fallback-notice { gap: 8px; padding: 7px 10px; margin-bottom: 8px; }
+  .inline-notice.alerts-invite-notice .location-fallback-copy,
+  .inline-notice.location-fallback-notice .location-fallback-copy { display: none; }
+  .inline-notice.alerts-invite-notice button,
+  .inline-notice.location-fallback-notice button { font-size: 12px; }
+  .inline-notice.alerts-invite-notice .notice-dismiss { color: var(--muted-light); font-weight: 600; }
+  .home-trust-row { display: none; }
+  .testimonial-toggle { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--muted-light); font-size: 12.5px; font-weight: 700; }
+  .testimonial-toggle:hover { color: var(--gold); border-color: rgba(232, 185, 126, .4); }
+}
 @media (min-width: 900px) {
   .site-footer-grid { grid-template-columns: 1.6fr 1fr 1fr 1fr; }
   .site-info-hero { padding: 34px 30px; }
@@ -1405,9 +1454,15 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
 .modal-form { display: flex; flex-direction: column; gap: 15px; }
 .modal-form .form-actions { display: flex; gap: 8px; margin-top: 4px; }
 .form-actions .btn { flex: 1; }
-.image-upload-box { position: relative; min-height: 130px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; overflow: hidden; border: 1px dashed rgba(232,185,126,.42); border-radius: 13px; color: var(--gold); background: #101414; font-size: 11px; cursor: pointer; }
-.image-upload-box img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-.image-upload-box input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.image-multi-upload { display: flex; flex-wrap: wrap; gap: 9px; }
+.image-multi-thumb { position: relative; width: 74px; height: 74px; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255, 255, 255, .1); background: #101414; }
+.image-multi-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: center; }
+.image-multi-cover { position: absolute; top: 5px; left: 5px; padding: 2px 7px; border-radius: 7px; background: var(--shop-green); color: #08130c; font-size: 8.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.image-multi-remove { position: absolute; top: 5px; right: 5px; width: 22px; height: 22px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(8, 10, 10, .78); color: #fff; cursor: pointer; }
+.image-multi-remove:hover { background: rgba(242, 123, 116, .9); }
+.image-multi-add { position: relative; width: 74px; height: 74px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border: 1px dashed rgba(46, 204, 113, .45); border-radius: 12px; color: var(--shop-green-soft); background: rgba(46, 204, 113, .05); font-size: 10px; font-weight: 700; cursor: pointer; }
+.image-multi-add input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.product-more-images { position: absolute; top: 8px; right: 8px; padding: 3px 8px; border-radius: 8px; background: rgba(8, 10, 10, .82); color: var(--white); font-size: 9.5px; font-weight: 800; backdrop-filter: blur(6px); }
 .switch-form-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px; border: 1px solid rgba(255, 255, 255, .08); border-radius: 12px; background: #141918; }
 .switch-form-row > span { display: flex; flex-direction: column; gap: 4px; }
 .switch-form-row strong { color: #ffffff; font-size: 13px; }
@@ -1517,7 +1572,9 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .home-topline { margin-bottom: 23px; }
   .home-search-row { max-width: 760px; }
   .home-band { padding: 22px; border-radius: 26px; margin-bottom: 22px; }
-  .ad-carousel-wrap { --ad-max-height: min(420px, 50vh); }
+  /* Tablet (still stacked): a taller banner budget than phones; the width
+     cap keeps the ratio intact, so the art scales down instead of cropping. */
+  .ad-carousel-wrap { --ad-max-height: min(340px, 45vh); }
   .salon-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
   .product-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
   .detail-hero { flex-direction: row; }
@@ -1622,32 +1679,20 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
      rail so a 1366px laptop does not read like a stretched phone. */
   .section-heading h2 { font-size: 24px; }
   .home-band { padding: 24px 26px; margin-bottom: 18px; }
-  .ad-carousel-wrap { --ad-max-height: min(380px, 44vh); }
-  /* Laptop layout for the hero band: the greeting keeps the full width and the
-     promo moves BESIDE the search row, so the screen is used horizontally
-     instead of stacking a full-width strip under the filters — which is what
-     pushed the salon list so far down the page (and cropped every ad).
-     The guest shell has no sidebar, so it can split from 1024px; the signed-in
-     shell waits for 1200px in its own block below, where the sidebar has left
-     enough room. Either way the width on offer decides, not the window. */
-  .guest-shell .home-hero-band.has-ads { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, clamp(340px, 38%, 520px)); column-gap: 24px; align-items: start; }
-  .guest-shell .home-hero-band.has-ads .home-topline { grid-column: 1 / -1; margin-bottom: 16px; }
-  /* The search row fills its column (its own 760px cap would leave a gap before
-     the promo), so the filter and the ad read as one row. */
-  .guest-shell .home-hero-band.has-ads .home-search-row { max-width: 100%; margin-bottom: 0; }
-  .guest-shell .home-hero-band.has-ads .ad-carousel-wrap { margin-bottom: 0; }
+  /* Laptop hero = the SAME stacked order as phones, at laptop scale:
+     greeting -> FULL-WIDTH banner -> search + gender row. (The old split
+     layout — banner in a right column beside the filters — left the banner
+     small and the left side empty, so it was retired.) The height budget
+     keeps the strip from swallowing the page; the whole artwork stays
+     visible and its blurred copy fills any leftover sides. */
+  .ad-carousel-wrap { --ad-max-height: min(420px, 46vh); }
   .home-topline h1 { font-size: 40px; }
   .home-topline { margin-bottom: 18px; }
 }
 
 @media (min-width: 1200px) {
-  .app-shell .home-hero-band.has-ads { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, clamp(340px, 38%, 520px)); column-gap: 24px; align-items: start; }
-  .app-shell .home-hero-band.has-ads .home-topline { grid-column: 1 / -1; margin-bottom: 16px; }
-  .app-shell .home-hero-band.has-ads .home-search-row { max-width: 100%; margin-bottom: 0; }
-  .app-shell .home-hero-band.has-ads .ad-carousel-wrap { margin-bottom: 0; }
-  /* A wider laptop gets a slightly taller promo, still measured from the
-     artwork so nothing is cropped. */
-  .ad-carousel-wrap { --ad-max-height: min(400px, 44vh); }
+  /* The signed-in shell uses the same stacked full-width hero as the guest
+     shell (the >=1024 block above) — no separate split layout. */
   .sidebar { width: 274px; }
   .workspace { width: calc(100% - 274px); }
   .workspace-content { padding-right: 6%; padding-left: 6%; }
@@ -2036,3 +2081,320 @@ img.image-fallback-tile {
 .form-notice svg { flex: none; margin-top: 1px; color: var(--gold); }
 .form-notice span { flex: 1; }
 .form-notice button { flex: none; padding: 2px; color: var(--muted); background: transparent; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Naai Shop — Blinkit/Zepto-style commerce for salon partners
+   Dark-surface adaptation of the quick-commerce language: compact grid,
+   green ADD ↔ stepper, "N items · ₹X → VIEW CART" bar, tracker timeline.
+   ═══════════════════════════════════════════════════════════════════════ */
+:root {
+  --shop-green: #23b45c;
+  --shop-green-soft: #35d975;
+  --shop-green-wash: rgba(46, 204, 113, .13);
+  --shop-yellow: #f7c948;
+}
+
+.shop-screen { padding-bottom: 148px; }
+
+/* Delivery promise strip under the header (Blinkit's "10 min" bar). */
+.shop-search { margin-bottom: 12px; }
+.shop-search:focus-within { border-color: rgba(46, 204, 113, .6); box-shadow: 0 0 0 3px rgba(46, 204, 113, .08); }
+
+/* Compact filter row — three labelled selects on one line (no chip rows,
+   no sort control), so the whole filter area is a single 38px strip. */
+.shop-filters-selects { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.shop-filter-select { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.shop-filter-select > span { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+.shop-filter-select select { width: 100%; height: 38px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--white); font-size: 11.5px; font-weight: 700; padding: 0 8px; cursor: pointer; transition: border-color .15s; }
+.shop-filter-select select:hover, .shop-filter-select select:focus { border-color: rgba(46, 204, 113, .55); outline: none; }
+.shop-filter-select select option { color: #f4f7f6; background: #101414; }
+.shop-header-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+
+.shop-count-line { display: flex; align-items: center; gap: 8px; margin: 8px 2px 12px; color: var(--muted); font-size: 11px; }
+.shop-count-line strong { color: var(--white); font-size: 12px; }
+.shop-clear-filters { margin-left: auto; padding: 0; color: var(--shop-green-soft); background: transparent; font-size: 11px; font-weight: 700; }
+
+/* The grid — 2-up on phones (Blinkit density), 4–6 up on desktop. */
+.shop-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+@media (min-width: 640px) { .shop-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; } }
+@media (min-width: 1024px) { .shop-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.skeleton-card.shop-skeleton { min-height: 262px; }
+
+.shop-card { position: relative; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 16px; background: var(--card); overflow: hidden; transition: border-color .18s, transform .18s; }
+.shop-card:hover { border-color: rgba(46, 204, 113, .45); transform: translateY(-2px); box-shadow: 0 12px 32px rgba(0, 0, 0, .35); }
+.shop-card.out-of-stock { opacity: .62; }
+.shop-off-badge { position: absolute; top: 8px; left: 8px; z-index: 2; padding: 3px 7px; border-radius: 8px; background: var(--shop-green); color: #08130c; font-size: 9.5px; font-weight: 800; letter-spacing: .02em; }
+.shop-off-badge.inline { position: static; display: inline-block; margin-left: 0; vertical-align: middle; }
+.shop-card-media { position: relative; display: block; width: 100%; aspect-ratio: 1 / 1; padding: 0; border: 0; background: #101414; cursor: pointer; overflow: hidden; }
+.shop-card-image { width: 100%; height: 100%; object-fit: cover; object-position: center; transition: transform .25s ease; }
+.shop-card:hover .shop-card-image { transform: scale(1.045); }
+.shop-stock-veil { position: absolute; inset: auto 8px 8px; padding: 4px 9px; border-radius: 9px; background: rgba(8, 10, 10, .82); color: var(--muted-light); font-size: 10px; font-weight: 700; backdrop-filter: blur(6px); }
+.shop-card-body { display: flex; flex-direction: column; gap: 5px; flex: 1; padding: 11px 12px 12px; }
+.shop-card-body h3 { margin: 0; font-size: 13px; line-height: 1.35; color: var(--white); cursor: pointer; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.7em; }
+.shop-card-body h3:hover { color: var(--shop-green-soft); }
+.shop-card-salon { margin: 0; color: var(--muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Wraps as a group on narrow 2-up cards so long INR prices + MRP + the
+   % off badge never push the rating pill out of the card. */
+.shop-card-price-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 4px 6px; margin-top: 2px; flex-wrap: wrap; }
+.shop-card-price-row > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 6px; min-width: 0; }
+.shop-card-price-row strong { color: var(--white); font-size: 14.5px; white-space: nowrap; }
+.shop-card-price-row s { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.shop-rating { display: inline-flex; align-items: center; gap: 3px; padding: 2.5px 6px; border-radius: 7px; background: rgba(46, 204, 113, .14); color: var(--shop-green-soft); font-size: 10px; font-weight: 800; }
+.shop-rating svg { fill: currentColor; }
+.shop-card-action { margin-top: auto; padding-top: 8px; display: flex; }
+.shop-card-action > .shop-add-button, .shop-card-action > .shop-stepper, .shop-card-action > .shop-stock-chip { flex: 1; }
+
+/* The Blinkit ADD button and its − 1 + stepper. */
+.shop-add-button { min-height: 34px; min-width: 78px; padding: 0 18px; border: 1.5px solid var(--shop-green); border-radius: 10px; color: #eafff2; background: rgba(35, 180, 92, .16); font-size: 12px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; transition: background .15s, color .15s; }
+.shop-add-button:hover { background: var(--shop-green); color: #08130c; }
+/* − and + pin to the card's edges, the count floats in the middle; the
+   34px height matches the ADD button so the card row never jumps. */
+.shop-stepper { display: flex; align-items: stretch; min-height: 34px; border: 1.5px solid var(--shop-green); border-radius: 10px; overflow: hidden; background: rgba(35, 180, 92, .16); }
+.shop-stepper button { flex: 0 0 34px; display: inline-flex; align-items: center; justify-content: center; color: var(--shop-green-soft); background: transparent; }
+.shop-stepper button:hover { background: var(--shop-green); color: #08130c; }
+.shop-stepper span { flex: 1 1 auto; display: inline-flex; align-items: center; justify-content: center; color: var(--white); font-size: 13px; font-weight: 800; }
+.shop-stepper.small { min-height: 29px; }
+.shop-stepper.small button { flex: 0 0 29px; }
+.shop-add-button.small { min-height: 29px; min-width: 64px; font-size: 11px; }
+.shop-stock-chip { padding: 5px 10px; border-radius: 9px; border: 1px dashed var(--line); color: var(--muted); font-size: 10.5px; font-weight: 700; }
+
+/* Floating "3 items · ₹1,240 → VIEW CART" bar, parked above the bottom nav. */
+.shop-cart-bar { position: fixed; z-index: 39; left: max(10px, var(--safe-left, 0px)); right: max(10px, var(--safe-right, 0px)); bottom: calc(max(9px, var(--safe-bottom, 0px)) + 66px); display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; border-radius: 16px; background: var(--shop-green); color: #08130c; box-shadow: 0 14px 40px rgba(35, 180, 92, .35); font-size: 13px; }
+.shop-cart-bar:active { transform: scale(.99); }
+.shop-cart-bar-left { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; }
+.shop-cart-bar-left svg { flex: none; }
+.shop-cart-bar-cta { display: inline-flex; align-items: center; gap: 3px; font-weight: 800; font-size: 12.5px; letter-spacing: .03em; }
+@media (min-width: 900px) {
+  .shop-cart-bar { left: auto; right: 26px; bottom: 26px; width: min(420px, calc(100vw - 52px)); }
+  .shop-cart-footer { left: auto; right: 26px; bottom: 26px; width: min(420px, calc(100vw - 52px)); }
+}
+
+/* ── Mobile: compact list rows instead of 2-up vertical cards ──
+   A fixed square thumbnail on the left keeps every card the same short
+   height no matter what aspect ratio the admin uploaded — a 4:3 marketing
+   image used to stretch a vertical card down the whole screen. The
+   ADD / stepper shrinks to a right-aligned pill so the row stays scannable. */
+@media (max-width: 639px) {
+  /* The tagline duplicates the title on small screens — drop it. */
+  .shop-screen .page-header-leading p { display: none; }
+
+  .shop-grid { grid-template-columns: 1fr; gap: 9px; }
+  .skeleton-card.shop-skeleton { min-height: 104px; }
+
+  .shop-card { flex-direction: row; border-radius: 14px; }
+  .shop-card:hover { transform: none; box-shadow: none; }
+
+  .shop-card-media { width: 104px; flex: 0 0 104px; aspect-ratio: 1 / 1; }
+  .shop-card-image { transition: none; }
+  .shop-card:hover .shop-card-image { transform: none; }
+
+  .shop-card-body { gap: 4px; padding: 9px 12px 10px; }
+  .shop-card-body h3 { font-size: 13.5px; min-height: 2.7em; }
+  .shop-card-salon { font-size: 9.5px; }
+  .shop-card-price-row { margin-top: 0; }
+  .shop-card-price-row strong { font-size: 14px; }
+
+  .shop-card-action { padding-top: 6px; justify-content: flex-end; }
+  .shop-card-action > .shop-add-button,
+  .shop-card-action > .shop-stepper,
+  .shop-card-action > .shop-stock-chip { flex: none; }
+  .shop-card-action > .shop-add-button { min-width: 72px; min-height: 31px; padding: 0 14px; }
+  .shop-card-action > .shop-stepper { width: 104px; min-height: 31px; }
+  .shop-card-action > .shop-stepper button { flex: 0 0 31px; }
+}
+
+/* ── Product details page (the full page a product card opens) ── */
+.shop-detail-page { padding-bottom: 148px; }
+.skeleton-card.shop-detail-skeleton { min-height: 280px; }
+.shop-detail-hero { position: relative; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; background: #101414; aspect-ratio: 4 / 3; max-height: 400px; }
+.shop-detail-hero-image { width: 100%; height: 100%; object-fit: cover; object-position: center; }
+.shop-off-badge-hero { top: 10px; right: 10px; left: auto; }
+.shop-detail-thumbs { display: flex; gap: 8px; margin-top: 9px; }
+.shop-detail-thumb { width: 52px; height: 52px; flex: none; padding: 0; border: 2px solid var(--line); border-radius: 10px; overflow: hidden; background: #101414; cursor: pointer; }
+.shop-detail-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: center; }
+.shop-detail-thumb.active { border-color: var(--shop-green); box-shadow: 0 0 0 3px rgba(46, 204, 113, .18); }
+.shop-detail-tags { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 10px; }
+.shop-detail-tag { padding: 4px 11px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted-light); background: var(--card); font-size: 10.5px; font-weight: 700; }
+.shop-detail-tag.in-stock { color: var(--shop-green-soft); border-color: rgba(46, 204, 113, .4); background: var(--shop-green-wash); }
+.shop-detail-tag.out-stock { color: var(--red); border-color: rgba(242, 123, 116, .35); background: rgba(242, 123, 116, .08); }
+.shop-detail-name { margin: 0 0 4px; color: var(--white); font-size: 21px; line-height: 1.3; }
+.shop-detail-seller { margin: 0 0 14px; color: var(--muted); font-size: 11.5px; }
+.shop-detail-price-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
+.shop-detail-price-row strong { color: var(--white); font-size: 23px; }
+.shop-detail-price-row s { margin-left: 8px; color: var(--muted); font-size: 13px; }
+.shop-detail-action { margin-bottom: 16px; display: flex; }
+.shop-detail-action > * { flex: 1; }
+.shop-detail-card { margin-bottom: 13px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.shop-detail-card h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 9px; color: var(--white); font-size: 13px; }
+.shop-detail-card h3 svg { color: var(--shop-green-soft); flex: none; }
+.shop-detail-card p { display: flex; align-items: flex-start; gap: 8px; margin: 5px 0 0; color: var(--muted-light); font-size: 12px; line-height: 1.5; }
+.shop-detail-card p svg { color: var(--shop-green-soft); flex: none; margin-top: 2px; }
+.shop-detail-similar-title { margin: 22px 0 12px; color: var(--white); font-size: 15.5px; }
+/* Large quantity control for the details page (Blinkit's in-page ADD is bigger). */
+.shop-add-button.large { min-height: 44px; min-width: 128px; font-size: 13px; }
+.shop-stepper.large { min-height: 44px; }
+.shop-stepper.large button { flex: 0 0 44px; }
+.shop-stepper.large span { font-size: 15px; }
+.shop-stock-chip.large { min-height: 44px; display: inline-flex; align-items: center; min-width: 128px; justify-content: center; }
+
+/* ── Cart ── */
+.shop-cart-screen { padding-bottom: 176px; }
+.shop-checkout-screen { padding-bottom: 96px; }
+.shop-cart-footer { position: fixed; z-index: 39; left: max(10px, var(--safe-left, 0px)); right: max(10px, var(--safe-right, 0px)); bottom: calc(max(9px, var(--safe-bottom, 0px)) + 66px); display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px 11px 18px; border: 1px solid var(--line); border-radius: 18px; background: var(--card); box-shadow: 0 18px 48px rgba(0, 0, 0, .45); }
+.shop-cart-footer-amount { display: flex; flex-direction: column; line-height: 1.15; }
+.shop-cart-footer-amount small { color: var(--muted); font-size: 9.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.shop-cart-footer-amount strong { color: var(--white); font-size: 17px; }
+.shop-cart-footer-amount span { color: var(--muted-light); font-size: 10.5px; font-weight: 700; }
+.shop-cart-footer .btn { flex: none; border-radius: 12px; }
+.shop-delivery-note { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 14px; padding: 12px 14px; border: 1px solid rgba(46, 204, 113, .3); border-radius: 14px; background: var(--shop-green-wash); }
+.shop-delivery-note svg { color: var(--shop-green-soft); flex: none; margin-top: 1px; }
+.shop-delivery-note-body { flex: 1; min-width: 0; }
+.shop-delivery-note p { margin: 0 0 7px; color: var(--muted-light); font-size: 11.5px; line-height: 1.45; }
+.shop-delivery-note p strong { color: var(--white); }
+.shop-delivery-note.unlocked p { margin-bottom: 0; }
+.shop-delivery-progress { height: 6px; border-radius: 4px; background: rgba(46, 204, 113, .16); overflow: hidden; }
+.shop-delivery-progress span { display: block; height: 100%; border-radius: 4px; background: var(--shop-green); transition: width .3s ease; }
+.shop-cart-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+.shop-cart-list-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 2px 2px 8px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.shop-cart-list-head strong { color: var(--white); font-size: 12px; }
+.shop-cart-clear { padding: 0; color: var(--muted); font-size: 10.5px; font-weight: 700; background: none; }
+.shop-cart-clear:hover, .shop-cart-clear:active { color: #f87171; }
+/* Item row: thumbnail + copy (name / price+MRP+Remove / stepper+line total).
+   On laptops the whole list sits in a left column next to a sticky summary. */
+.shop-cart-layout { display: grid; grid-template-columns: minmax(0, 1fr); }
+.shop-cart-aside .shop-bill-card { margin-bottom: 0; }
+.shop-cart-item { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
+.shop-cart-item .shop-stepper { flex: none; }
+.shop-cart-image { width: 72px; height: 72px; flex: none; border-radius: 12px; object-fit: cover; object-position: center; background: #101414; }
+.shop-cart-copy { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.shop-cart-copy h3 { margin: 0; font-size: 13px; line-height: 1.35; color: var(--white); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.shop-cart-price-line { display: flex; align-items: baseline; gap: 6px; margin: 0; color: var(--muted); flex-wrap: wrap; }
+.shop-cart-price-line strong { color: var(--white); font-size: 13.5px; white-space: nowrap; }
+.shop-cart-price-line span { font-size: 10px; }
+.shop-cart-price-line s { color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+.shop-cart-remove { align-self: center; margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 0; color: var(--muted-light); font-size: 10.5px; font-weight: 700; background: none; }
+.shop-cart-remove:hover, .shop-cart-remove:active { color: #f87171; }
+.shop-cart-remove svg { flex: none; }
+/* Bottom row: quantity control left, the line total pinned to the right —
+   one compact line instead of the old stacked right-hand column. */
+.shop-cart-item-row { display: flex; align-items: center; gap: 8px; margin-top: 7px; flex-wrap: wrap; }
+.shop-cart-line-total { color: var(--white); font-size: 13.5px; font-weight: 800; white-space: nowrap; margin-left: auto; }
+
+/* Phones: hide the duplicated count line under the title, tighten the rows. */
+@media (max-width: 639px) {
+  .shop-cart-screen .page-header-leading p { display: none; }
+  .shop-cart-item { gap: 10px; padding: 10px 12px; }
+  .shop-cart-image { width: 64px; height: 64px; border-radius: 10px; }
+  .shop-cart-item-row { margin-top: 5px; }
+}
+
+/* Laptops: items in the left column, the order summary becomes a sticky
+   right-hand column; the to-pay bar floats bottom-right under it. */
+@media (min-width: 900px) {
+  .shop-cart-layout { grid-template-columns: minmax(0, 1fr) 360px; gap: 28px; align-items: start; }
+  .shop-cart-aside { position: sticky; top: 24px; }
+  .shop-cart-item { gap: 14px; padding: 16px; }
+  .shop-cart-image { width: 84px; height: 84px; }
+  .shop-cart-screen { padding-bottom: 30px; }
+  .shop-cart-footer { position: sticky; bottom: 24px; left: auto; right: auto; margin-left: auto; max-width: 360px; box-shadow: 0 14px 40px rgba(0, 0, 0, .38); }
+}
+
+/* Bill card (cart + checkout + order). */
+.shop-bill-card { margin: 0 0 14px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.shop-bill-card h3 { margin: 0 0 10px; color: var(--muted); font-size: 10.5px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.shop-bill-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 0; color: var(--muted-light); font-size: 12px; }
+.shop-bill-row s { margin-left: 6px; color: var(--muted); }
+.shop-bill-row.saving { color: var(--shop-green-soft); }
+.shop-bill-free { color: var(--shop-green-soft) !important; font-weight: 800; }
+.shop-bill-row.total { margin-top: 8px; padding-top: 10px; border-top: 1px dashed var(--line); color: var(--white); font-size: 13px; }
+.shop-bill-saved { margin: 9px 0 0; padding-top: 9px; border-top: 1px dashed var(--line); color: var(--shop-green-soft); font-size: 11px; font-weight: 700; }
+
+.shop-proceed-button { width: 100%; }
+
+/* ── Checkout ── */
+.shop-address-card { padding: 15px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
+.shop-address-card h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 13px; color: var(--white); font-size: 14px; }
+.shop-address-card h3 svg { color: var(--shop-green-soft); }
+.shop-address-card .form-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 520px) { .shop-address-card .form-two-col { grid-template-columns: 1fr; } }
+.shop-checkout-summary { margin: 14px 0; }
+.shop-checkout-summary .shop-bill-card { margin-bottom: 0; }
+
+.shop-pay-options { display: flex; flex-direction: column; gap: 9px; margin-bottom: 13px; }
+.shop-pay-option { display: flex; align-items: center; gap: 11px; padding: 13px; border: 1.5px solid var(--line); border-radius: 14px; background: var(--panel); cursor: pointer; transition: border-color .15s, background .15s; }
+.shop-pay-option input { position: absolute; opacity: 0; pointer-events: none; }
+.shop-pay-option.active { border-color: var(--shop-green); background: rgba(35, 180, 92, .07); }
+.shop-pay-icon { color: var(--muted-light); flex: none; }
+.shop-pay-option.active .shop-pay-icon { color: var(--shop-green-soft); }
+.shop-pay-copy { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.shop-pay-copy strong { color: var(--white); font-size: 13px; }
+.shop-pay-copy small { color: var(--muted); font-size: 10.5px; }
+.shop-pay-tick { color: transparent; flex: none; }
+.shop-pay-option.disabled { opacity: .55; cursor: not-allowed; }
+.shop-pay-tick.on { color: var(--shop-green-soft); }
+
+.shop-pay-status { display: flex; align-items: center; gap: 8px; margin-bottom: 11px; padding: 10px 12px; border-radius: 11px; background: var(--shop-green-wash); color: var(--muted-light); font-size: 11.5px; }
+.shop-checkout-terms { display: flex; align-items: center; gap: 7px; margin: 11px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
+.shop-checkout-terms svg { color: var(--shop-green-soft); flex: none; }
+
+/* Order-placed success card. */
+.shop-success { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 34px 16px 20px; text-align: center; }
+.shop-success-icon { color: var(--shop-green-soft); filter: drop-shadow(0 6px 22px rgba(46, 204, 113, .4)); animation: shop-pop .4s ease; }
+@keyframes shop-pop { from { transform: scale(.5); opacity: 0; } }
+.shop-success h2 { margin: 0; color: var(--white); font-size: 22px; }
+.shop-success-id { margin: 0; color: var(--gold); font-size: 12.5px; font-weight: 800; letter-spacing: .05em; }
+.shop-success-eta { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 14px; border-radius: 12px; background: var(--shop-green-wash); color: var(--muted-light); font-size: 12px; line-height: 1.5; }
+.shop-success-eta svg { color: var(--shop-green-soft); flex: none; }
+.shop-success-bill { width: 100%; max-width: 420px; }
+.shop-success-payment { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--muted-light); font-size: 12px; }
+.shop-success-payment svg { color: var(--shop-green-soft); flex: none; }
+.shop-success-actions { display: flex; gap: 9px; flex-wrap: wrap; justify-content: center; margin-top: 6px; }
+
+/* ── My orders ── */
+.shop-order-tabs { margin-top: 12px; }
+.shop-order-list { display: flex; flex-direction: column; gap: 9px; }
+.shop-order-card { display: flex; align-items: center; gap: 12px; padding: 13px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); text-align: left; }
+.shop-order-card:hover { border-color: rgba(46, 204, 113, .4); }
+.shop-order-icon { width: 42px; height: 42px; flex: none; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; background: var(--shop-green-wash); color: var(--shop-green-soft); }
+.shop-order-copy { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.shop-order-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.shop-order-top strong { color: var(--white); font-size: 12.5px; letter-spacing: .02em; }
+.shop-order-copy small { color: var(--muted); font-size: 10.5px; }
+.shop-order-eta { display: inline-flex; align-items: center; gap: 5px; color: var(--shop-green-soft) !important; font-weight: 700; }
+.shop-order-chevron { color: var(--muted); flex: none; }
+
+/* ── Order detail + tracker ── */
+.shop-tracker-card { margin-bottom: 13px; padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
+.shop-tracker-card.is-delivered { border-color: rgba(46, 204, 113, .45); }
+.shop-tracker-card.is-cancelled { border-color: rgba(242, 123, 116, .4); }
+.shop-tracker-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.shop-tracker-head h2 { margin: 3px 0 0; color: var(--white); font-size: 17px; }
+.shop-tracker-eta { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; padding: 9px 12px; border-radius: 11px; background: var(--shop-green-wash); color: var(--muted-light); font-size: 11.5px; }
+.shop-tracker-eta svg { color: var(--shop-green-soft); flex: none; }
+.shop-tracker-eta.cancelled { background: rgba(242, 123, 116, .08); }
+.shop-tracker-eta.cancelled svg { color: var(--red); }
+.shop-tracker { display: flex; margin-top: 18px; }
+.shop-tracker-step { position: relative; flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8px; color: var(--muted); font-size: 9.5px; font-weight: 700; text-align: center; padding: 0 3px; }
+.shop-tracker-step i { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--line); background: var(--panel); position: relative; z-index: 1; transition: background .25s, border-color .25s; }
+.shop-tracker-step:not(:first-child)::before { content: ''; position: absolute; top: 12px; right: 50%; width: 100%; height: 2.5px; background: var(--line); }
+.shop-tracker-step.done i { background: var(--shop-green); border-color: var(--shop-green); }
+.shop-tracker-step.done:not(:first-child)::before { background: var(--shop-green); }
+.shop-tracker-step.current { color: var(--shop-green-soft); }
+.shop-tracker-step.current i { background: var(--shop-green); border-color: var(--shop-green-soft); box-shadow: 0 0 0 5px rgba(46, 204, 113, .18); animation: shop-pulse 1.8s infinite; }
+@keyframes shop-pulse { 0%, 100% { box-shadow: 0 0 0 4px rgba(46, 204, 113, .16); } 50% { box-shadow: 0 0 0 8px rgba(46, 204, 113, .05); } }
+@media (max-width: 560px) { .shop-tracker-step { font-size: 8.5px; } }
+
+.shop-order-items, .shop-order-address, .shop-order-payment { margin-bottom: 13px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.shop-order-items h3, .shop-order-address h3, .shop-order-payment h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 11px; color: var(--white); font-size: 13px; }
+.shop-order-items h3 svg, .shop-order-address h3 svg, .shop-order-payment h3 svg { color: var(--shop-green-soft); }
+.shop-order-item { display: flex; align-items: center; gap: 11px; padding: 7px 0; }
+.shop-order-item-copy { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.shop-order-item-copy strong { color: var(--white); font-size: 12px; }
+.shop-order-item-copy small { color: var(--muted); font-size: 10.5px; }
+.shop-order-item > span { color: var(--muted-light); font-size: 12px; font-weight: 700; }
+.shop-order-bill { margin-top: 10px; padding-top: 4px; border-top: 1px dashed var(--line); }
+.shop-order-address p, .shop-order-payment p { margin: 4px 0 0; color: var(--muted-light); font-size: 12px; line-height: 1.5; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.shop-cancel-button { width: 100%; margin-bottom: 10px; }
+.shop-support-note { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.shop-support-note svg { color: var(--shop-green-soft); flex: none; }
+.shop-support-note a { display: inline-flex; align-items: center; gap: 4px; color: var(--gold); font-weight: 700; }

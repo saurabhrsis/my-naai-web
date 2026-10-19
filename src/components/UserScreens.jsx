@@ -299,10 +299,10 @@ function AdCarousel({ ads }) {
         <div className="ad-track" style={{ transform: `translateX(-${active * 100}%)` }}>
           {slides.map((src, index) => (
             <div className="ad-slide" key={`${src}-${index}`}>
-              {/* The frame is a wide band on a laptop and a phone-shaped box on
-                  mobile, so `cover` used to crop a third of the artwork away on
-                  desktop. The blurred backdrop (the same image, scaled up)
-                  fills the frame while the artwork itself is shown whole. */}
+              {/* Phones/tablets: `contain` in an exact-ratio strip — the FULL
+                  artwork, never cropped. Laptop and up (media query in
+                  styles.css): the image fills the full-width strip with a
+                  centered crop, so no dead side panels on large screens. */}
               <span className="ad-backdrop" style={{ backgroundImage: `url("${src}")` }} aria-hidden="true" />
               <ImageWithFallback src={src} fallback="" alt="" className="ad-image" loading="eager" ref={slideRef(`${src}-${index}`)} onLoad={readRatio(`${src}-${index}`)} />
             </div>
@@ -748,33 +748,36 @@ export function HomeScreen({ session, navigate, notify }) {
 
   return (
     <div className="screen home-screen">
-      {/* Section 1 — the discovery band: greeting, search and the male/female
-          filter (which replaced the old dead-end "For you" button), with the
-          ad carousel as its visual anchor. */}
+      {/* Section 1 — the discovery band. The same stacked order at every
+          width: greeting, then the FULL-WIDTH ad banner (its height budget
+          per device lives in the CSS), then the search + male/female filter
+          row. */}
       <section className={cx('home-band', 'home-hero-band', ads.length > 0 && 'has-ads')} aria-label="Find a salon">
         <div className="home-topline"><div><span className="eyebrow">{isGuest ? 'SALON BOOKINGS, SIMPLIFIED' : 'NEARBY GROOMING'}</span><h1>{isGuest ? 'Find your salon' : `Hi ${firstName(userName)}`}</h1><p className="muted-line"><LocateFixed size={14} /> {location ? 'Using your current location' : isGuest ? 'Browse trusted salons around you — login only when you book' : 'Discover trusted specialists around you'}</p></div></div>
-        <div className="home-search-row"><label className="search-field"><Search size={18} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Find salon, specialist..." aria-label="Search salons" />{search && <button onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label><GenderToggle value={gender} onChange={setGender} /></div>
         <AdCarousel ads={ads} />
+        <div className="home-search-row"><label className="search-field"><Search size={18} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Find salon, specialist..." aria-label="Search salons" />{search && <button onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label><GenderToggle value={gender} onChange={setGender} /></div>
       </section>
       {/* Section 2 — the salon listings, on its own panel so the page reads as
           distinct website sections instead of one long app feed. */}
       <section className="home-band home-salons-band" aria-label="Salons near you">
         <div className="section-heading"><div><span className="eyebrow">CURATED FOR YOU</span><h2>Salons near you</h2></div><span className="result-count">{loading ? 'Updating…' : `${visibleSalons.length}${totalSalons && totalSalons > visibleSalons.length ? ` of ${totalSalons}` : ''} places`}</span></div>
         {loadError && <div className="inline-notice"><CircleAlert size={16} /> {loadError} <button onClick={() => loadData()}>Try again</button></div>}
-        {!loading && alertsInviteVisible && (
-          <div className="inline-notice alerts-invite-notice">
-            <BellRing size={16} />
-            <span className="location-fallback-copy">
-              <span>{alertsState === 'default'
-                ? 'Turn on booking alerts to hear about confirmations, delays and reminders — your browser will ask once.'
-                : 'Booking alerts are off. Turn them on so bookings, delays and reminders reach this phone.'}</span>
-              {alertsNote && <small className="location-request-note" role="status">{alertsNote}</small>}
-            </span>
-            <button onClick={enableAlerts} disabled={alertsBusy}>{alertsBusy ? 'Asking…' : alertsState === 'default' ? 'Turn on' : 'How to allow'}</button>
-            <button className="notice-dismiss" onClick={dismissAlertsInvite} aria-label="Not now">Not now</button>
-          </div>
-        )}
-        {!loading && !location && <div className="inline-notice location-fallback-notice"><MapPin size={16} /> <span className="location-fallback-copy"><span>Location is off, so this list is not sorted by distance — optional, and browsing works without it.</span>{locationRequestNote && <small className="location-request-note" role="status">{locationRequestNote}</small>}</span><button onClick={enableLocation} disabled={locationBusy}>{locationBusy ? 'Checking…' : 'Use my location'}</button></div>}
+        <div className="home-notices">
+          {!loading && alertsInviteVisible && (
+            <div className="inline-notice alerts-invite-notice">
+              <BellRing size={16} />
+              <span className="location-fallback-copy">
+                <span>{alertsState === 'default'
+                  ? 'Turn on booking alerts to hear about confirmations, delays and reminders — your browser will ask once.'
+                  : 'Booking alerts are off. Turn them on so bookings, delays and reminders reach this phone.'}</span>
+                {alertsNote && <small className="location-request-note" role="status">{alertsNote}</small>}
+              </span>
+              <button onClick={enableAlerts} disabled={alertsBusy}>{alertsBusy ? 'Asking…' : alertsState === 'default' ? 'Turn on' : 'How to allow'}</button>
+              <button className="notice-dismiss" onClick={dismissAlertsInvite} aria-label="Not now">Not now</button>
+            </div>
+          )}
+          {!loading && !location && <div className="inline-notice location-fallback-notice"><MapPin size={16} /> <span className="location-fallback-copy"><span>Location is off, so this list is not sorted by distance — optional, and browsing works without it.</span>{locationRequestNote && <small className="location-request-note" role="status">{locationRequestNote}</small>}</span><button onClick={enableLocation} disabled={locationBusy}>{locationBusy ? 'Checking…' : 'Use my location'}</button></div>}
+        </div>
         {loading ? <div className="salon-grid">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} />)}</div> : visibleSalons.length ? <>
           <div className="salon-grid">{visibleSalons.map(salon => <SalonCard key={salon.id} salon={salon} saved={savedId === salon.id || salon.isSaved} onSelect={openSalon} onBook={bookSalon} onShare={item => shareSalon(item, notify)} onBookmark={bookmark} userLocation={location} />)}</div>
           {/* Paging footer: a full-width tap target on phones, an automatic
@@ -1667,6 +1670,19 @@ export function TestimonialSection() {
   const [index, setIndex] = useState(0);
   const count = TESTIMONIALS.length;
 
+  // Phones get a leaner home: the review wall folds behind one button
+  // ("Read what customers & salon owners say") until it is tapped open.
+  // Desktop keeps the full section and never sees the toggle.
+  const [isCompact, setIsCompact] = useState(() => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 559px)').matches);
+  const [compactOpen, setCompactOpen] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const mq = window.matchMedia('(max-width: 559px)');
+    const onChange = event => setIsCompact(event.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
   // One card plus one gap. Measured, not assumed: the card width changes the
   // moment the one-per-screen phone rule or the three-up desktop rule applies.
   const stepSize = useCallback(() => {
@@ -1738,8 +1754,16 @@ export function TestimonialSection() {
   };
   const stopAuto = () => { userDroveRef.current = true; };
   if (isApp) return null;
+  const testimonialsShown = !isCompact || compactOpen;
   return (
-    <section className="testimonial-section" aria-label="What people say about My Naai" onPointerDown={stopAuto}>
+    <section className={cx('testimonial-section', isCompact && !compactOpen && 'testimonial-collapsed')} aria-label="What people say about My Naai" onPointerDown={stopAuto}>
+      {isCompact && (
+        <button type="button" className="testimonial-toggle" onClick={() => setCompactOpen(open => !open)} aria-expanded={compactOpen}>
+          <Quote size={15} aria-hidden="true" /> {compactOpen ? 'Hide reviews' : 'Read what customers & salon owners say'}
+        </button>
+      )}
+      {testimonialsShown && (
+      <>
       <div className="section-heading">
         <div><span className="eyebrow">REAL STORIES</span><h2>What customers & salon owners say</h2></div>
         <div className="testimonial-nav">
@@ -1770,6 +1794,8 @@ export function TestimonialSection() {
             <button key={`testimonial-dot-${item.name}`} type="button" aria-label={`Show review ${dotIndex + 1} of ${count}`} className={cx('carousel-dot', dotIndex === index && 'active')} onClick={() => { stopAuto(); goTo(dotIndex); }} />
           ))}
         </div>
+      )}
+      </>
       )}
     </section>
   );

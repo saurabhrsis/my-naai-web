@@ -15,6 +15,7 @@ import {
   Menu,
   Package,
   Scissors,
+  ShoppingBag,
   Sparkles,
   Store,
   UsersRound,
@@ -46,7 +47,7 @@ import { BOOKING_ALERT_WINDOW_MS, BookingRequestAlert } from './components/Booki
 // The deviceToken rule is shared (lib/apiPayload) so the Alerts & permissions
 // card's end-to-end test alert follows the same mobile contract as sign-in.
 import { normalizeDeviceToken, withDeviceToken } from './lib/apiPayload';
-import { TOKEN_CHANGED_EVENT, clearDeviceTokenSync, holdRelogin, keepDeviceTokenSynced, rememberLoginToken } from './lib/deviceToken';
+import { clearDeviceTokenSync, holdRelogin, keepDeviceTokenSynced, rememberLoginToken } from './lib/deviceToken';
 import { alertIdentity, claimAlertDelivery, playBuzzer, unlockBuzzer } from './lib/buzzer';
 import { resetLiveUpdatesSocket } from './lib/socket';
 import { armStoredReminders } from './lib/reminders';
@@ -78,6 +79,9 @@ import {
   SalonProductsScreen,
   SalonQueueScreen,
 } from './components/SalonScreens';
+import { ShopProductDetailScreen, ShopScreen } from './components/ShopScreen';
+import { ShopCartScreen, ShopCheckoutScreen } from './components/ShopCartCheckout';
+import { ShopOrderScreen, ShopOrdersScreen } from './components/ShopOrders';
 import { SubscriptionScreen } from './components/SubscriptionScreen';
 import { ConfirmProvider, LOGOUT_CONFIRM, useConfirm } from './components/ConfirmDialog';
 import { SALON_ABOUT_CONTENT, SALON_FAQ_CONTENT, SALON_TERMS_CONTENT } from './lib/salonContent';
@@ -96,6 +100,7 @@ const USER_NAV = [
 const SALON_NAV = [
   { name: 'queue', label: 'Customer queue', short: 'Queue', icon: UsersRound },
   { name: 'history', label: 'History', short: 'History', icon: History },
+  { name: 'shop', label: 'Naai Shop', short: 'Shop', icon: ShoppingBag },
   { name: 'salonProducts', label: 'Products', short: 'Products', icon: Package },
   { name: 'account', label: 'Account', short: 'Account', icon: CircleUserRound },
 ];
@@ -141,7 +146,7 @@ function saveSession(session) {
 // falls back to the role's home instead of rendering a screen the shell has
 // no branch for.
 const USER_ROUTE_NAMES = ['home', 'bookings', 'products', 'account', 'detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'privacy', 'contact'];
-const SALON_ROUTE_NAMES = ['queue', 'history', 'salonProducts', 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
+const SALON_ROUTE_NAMES = ['queue', 'history', 'shop', 'shopProduct', 'shopCart', 'shopCheckout', 'shopOrders', 'shopOrder', 'salonProducts', 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
 // Every route a visitor may open WITHOUT an account — salons are browsable
 // first, login only appears when they try to book (the client's headline
 // ask). The info pages are public too: the site footer links About/FAQ/Terms/
@@ -476,31 +481,15 @@ function AppRoot() {
       }
     };
     const onSessionExpired = () => { deletePushToken().catch(error => console.debug(getErrorMessage(error, 'Could not clear the browser notification token.'))); resetLiveUpdatesSocket(); setSession(null); setRoute({ name: 'home', params: {} }); };
-    // This device's notification token is no longer the one the backend has
-    // (typically: the salon opened the installed app after signing in from
-    // the browser tab — the app has its own push subscription) and the quiet
-    // re-sync could not hand it over. The backend only reliably learns a token
-    // from login, so sign out and bring the user straight back to sign in;
-    // the next OTP carries the new token. The current token stays banked so
-    // the login can send it without another permission prompt.
-    const onTokenChanged = () => {
-      const current = readStoredSession();
-      if (!current) return;
-      clearDeviceTokenSync();
-      clearSession();
-      resetLiveUpdatesSocket();
-      try { sessionStorage.setItem(RELOGIN_NOTICE_KEY, TOKEN_CHANGED_NOTICE); } catch { /* storage blocked */ }
-      setSession(null);
-      setRoute({ name: 'login', params: { role: current.role, reason: 'device-token' } });
-      window.history.replaceState({}, '', routeToPath('login', { role: current.role }));
-    };
+    // (A rotated push notification token no longer signs the user out — the
+    // quiet re-sync in lib/deviceToken hands the new token over instead. The
+    // old token-changed sign-out listener lived here and was the cause of
+    // salons being logged out "after sometime" and "after refresh".)
     window.addEventListener('storage', onStorage);
     window.addEventListener('mynaai:session-expired', onSessionExpired);
-    window.addEventListener(TOKEN_CHANGED_EVENT, onTokenChanged);
     return () => {
       window.removeEventListener('storage', onStorage);
       window.removeEventListener('mynaai:session-expired', onSessionExpired);
-      window.removeEventListener(TOKEN_CHANGED_EVENT, onTokenChanged);
     };
   }, []);
   const install = async () => {
@@ -1441,6 +1430,12 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     }
     if (route.name === 'queue') return <SalonQueueScreen {...props} />;
     if (route.name === 'history') return <SalonHistoryScreen {...props} />;
+    if (route.name === 'shop') return <ShopScreen {...props} />;
+    if (route.name === 'shopProduct') return <ShopProductDetailScreen {...props} params={route.params} />;
+    if (route.name === 'shopCart') return <ShopCartScreen {...props} />;
+    if (route.name === 'shopCheckout') return <ShopCheckoutScreen {...props} />;
+    if (route.name === 'shopOrders') return <ShopOrdersScreen {...props} />;
+    if (route.name === 'shopOrder') return <ShopOrderScreen {...props} params={route.params} />;
     if (route.name === 'salonProducts') return <SalonProductsScreen {...props} />;
     if (route.name === 'account') return <SalonAccountScreen {...props} onLogout={onLogout} />;
     if (route.name === 'notifications') return <NotificationsScreen {...props} />;
@@ -1610,6 +1605,8 @@ function MobileShellBar({ session, nav, route, navigate, onLogout, notifyInstall
 // shipped a lowercase "bookings" / "queue" sitting next to "Discover",
 // "Products" and "Account" — visible on every phone and tablet. Each nav entry
 // now carries its own `short` label and the bar just renders it.
-function MobileNav({ nav, route, navigate }) { return <nav className="mobile-nav">{nav.map(item => <button key={item.name} className={route.name === item.name ? 'active' : ''} aria-current={route.name === item.name ? 'page' : undefined} onClick={() => navigate(item.name)}><item.icon size={20} /><span>{item.short || item.label}</span></button>)}</nav>; }
+// The column count follows the nav's length: customer roles show four tabs,
+// salon partners five (Queue, History, Shop, Products, Account).
+function MobileNav({ nav, route, navigate }) { return <nav className="mobile-nav" style={{ gridTemplateColumns: `repeat(${nav.length}, minmax(0, 1fr))` }}>{nav.map(item => <button key={item.name} className={route.name === item.name ? 'active' : ''} aria-current={route.name === item.name ? 'page' : undefined} onClick={() => navigate(item.name)}><item.icon size={20} /><span>{item.short || item.label}</span></button>)}</nav>; }
 
 function PartnerInfo({ type, navigate }) { const content = type === 'about' ? SALON_ABOUT_CONTENT : type === 'faq' ? SALON_FAQ_CONTENT : SALON_TERMS_CONTENT; return <div className="screen info-screen"><div className="page-header"><div className="page-header-leading"><button className="icon-btn ghost" onClick={() => navigate(-1)} aria-label="Go back"><ChevronRight size={19} className="rotate-180" /></button><div><span className="eyebrow">{content.eyebrow}</span><h1>{content.title}</h1></div></div></div><div className="info-intro"><Sparkles size={18} /><p>{content.intro || 'Everything you need to know about partnering with My Naai.'}</p></div><div className="info-sections">{content.sections.map(section => <section key={section.title}><h2>{section.title}</h2><p>{section.text}</p></section>)}</div><div className="info-contact"><span className="info-contact-icon"><HelpCircle size={18} /></span><div><strong>Need more help?</strong><p>Call our partner team on 8380017393</p></div><button onClick={() => window.open('tel:8380017393')}><ChevronRight size={17} /></button></div></div>; }

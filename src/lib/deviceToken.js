@@ -57,11 +57,6 @@ export function rememberLoginToken(session, token) {
   if (session && token) writeSyncedStamp(syncStamp(session, token));
 }
 
-// Fired on `window` when this device's token no longer matches the one the
-// backend has, and the quiet re-sync could not fix it. The shell signs the
-// user out with an explanation so the next login registers the new token.
-export const TOKEN_CHANGED_EVENT = 'mynaai:device-token-changed';
-
 // Has the server been told about THIS token for THIS account? True when the
 // login carried it, or a later sync succeeded.
 export function serverHasToken(session, token) {
@@ -75,44 +70,22 @@ export function serverHasToken(session, token) {
 // PWA has its own push subscription, so its token is new, while the session
 // it inherited still points the backend at the old browser token.
 //
-// The backend only reliably learns a token at login, so when we KNOW the
-// token changed (a login token was banked and the live one differs), the
-// answer is a fresh login — not a profile update whose effect we cannot
-// verify. Guard rails, so this can never lock anyone out:
-//   · no banked login token (a session from before this shipped, or a login
-//     that could not read a token yet) → never sign out; just sync quietly;
-//   · at most ONE sign-out per token, remembered in storage, so a login that
-//     again cannot read the token cannot loop;
-//   · nothing here depends on the network, so being offline changes nothing.
-const RELOGIN_ASKED_KEY = 'mynaai:relogin-asked-for-token';
-
-function reloginAskedFor(token) {
-  try { return localStorage.getItem(RELOGIN_ASKED_KEY) === token; } catch { return false; }
+// Historically that forced a full sign-out ("You opened My Naai on a new app
+// or browser…"), which is exactly what made signed-in salons lose their
+// session "after sometime" and "after refresh": a rotated push token is not
+// a reason to evict a live account. The live token is now always handed over
+// quietly — the register-device endpoint when the backend has it, the
+// profile-update endpoints when it does not — and the user stays signed in.
+// The login-token baseline still stops redundant API calls, and nothing here
+// depends on the network, so being offline changes nothing.
+export function holdRelogin() {
+  // Legacy no-op: token changes no longer sign anyone out, so there is
+  // nothing to hold while a booking answer is in flight.
 }
 
-function rememberReloginAsked(token) {
-  try { localStorage.setItem(RELOGIN_ASKED_KEY, token); } catch { /* storage blocked */ }
-}
-
-// While the salon is answering a booking request (the 60-second card or the
-// request screen) a sign-out would cost them the booking. The shell holds the
-// re-login until that is over; the next focus/token event re-checks.
-let reloginHeld = false;
-export function holdRelogin(held) { reloginHeld = Boolean(held); }
-
-async function reconcileToken(session, token, { notifyChange }) {
+async function reconcileToken(session, token) {
   if (serverHasToken(session, token)) return 'ok';
-  const previous = readLoginToken();
-  if (previous && previous !== token && !reloginAskedFor(token)) {
-    if (reloginHeld) return 'held';
-    rememberReloginAsked(token);
-    notifyChange?.({ token, previous, reason: 'token-changed' });
-    return 'changed';
-  }
-  // No baseline to compare with (or we already asked once for this token):
-  // hand the token over quietly and leave the user signed in either way.
-  await syncDeviceToken(session, token, { force: true });
-  return 'synced';
+  return syncDeviceToken(session, token, { force: true });
 }
 
 // Send `token` for `session` unless the server already has exactly that pair.
@@ -157,10 +130,7 @@ export function keepDeviceTokenSynced(session) {
   try { configured = Boolean(push.isPushConfigured?.()); } catch { configured = false; }
   if (typeof window === 'undefined' || !configured || !session?.userId) return () => {};
   let cancelled = false;
-  const notifyChange = detail => {
-    try { window.dispatchEvent(new CustomEvent(TOKEN_CHANGED_EVENT, { detail })); } catch { /* ignore */ }
-  };
-  const sync = token => { if (!cancelled && token) reconcileToken(session, token, { notifyChange }).catch(() => {}); };
+  const sync = token => { if (!cancelled && token) reconcileToken(session, token).catch(() => {}); };
   const onToken = event => sync(event?.detail?.token);
   window.addEventListener(TOKEN_EVENT, onToken);
   const mint = async () => {

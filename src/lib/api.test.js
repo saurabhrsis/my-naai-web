@@ -182,3 +182,36 @@ describe('request timeout and network failures', () => {
     expect(JSON.parse(init.body)).toMatchObject({ deviceToken: 'fcm-web-token', platform: 'web' });
   });
 });
+
+// Regression guard for the production "getting logged out after refresh" bug:
+// a JWT_FAILED answer may only wipe the session when it rejects the exact
+// token the failed request carried.
+describe('JWT_FAILED session clearing', () => {
+  const jwtFailed = { status: 'JWT_FAILED', message: 'Invalid token' };
+
+  it('clears the session when the backend rejects the token the request carried', async () => {
+    setToken('current-token');
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(JSON.stringify(jwtFailed), { status: 401 }))));
+    await expect(api.customerList({ salonId: 'salon-1' })).rejects.toThrow();
+    expect(localStorage.getItem('mynaai')).toBeNull();
+  });
+
+  it('does not clear a newer session when a stale in-flight call fails', async () => {
+    setToken('old-token');
+    let resolveFetch;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => { resolveFetch = resolve; })));
+    const pending = api.customerList({ salonId: 'salon-1' });
+    // The user logs in again while the old call is still in flight.
+    setToken('new-token');
+    resolveFetch(new Response(JSON.stringify(jwtFailed), { status: 401 }));
+    await expect(pending).rejects.toThrow();
+    expect(getToken()).toBe('new-token');
+  });
+
+  it('an anonymous call failing with JWT_FAILED leaves the stored session alone', async () => {
+    setToken('current-token');
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(JSON.stringify({ status: 'JWT_FAILED', message: 'Access token required' }), { status: 401 }))));
+    await expect(api.sendRegisterOtp({ phoneNumber: '9999999999' })).rejects.toThrow();
+    expect(getToken()).toBe('current-token');
+  });
+});

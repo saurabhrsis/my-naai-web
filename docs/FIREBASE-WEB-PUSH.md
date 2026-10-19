@@ -209,13 +209,13 @@ checks, removes duplicate token rows, and clears duplicate legacy
 
 **Login is the primary registration — and it now always carries the live token.** The backend stores the `deviceToken` from OTP verify / onboarding / salon creation and sends every notification to it, so those three requests now re-read the browser's *current* FCM token (`getToken()` with a few patient retries while the worker starts) instead of a value banked minutes earlier or a cached `FCM_TOKEN` that may have rotated. This is what makes a fresh sign-in reliably "register" a phone, tablet or laptop.
 
-**The portal also keeps that token current after login.** `src/lib/deviceToken.js` posts `{ deviceToken, platform: 'web', userType, userId }` to `POST /api/notifications/register-device` (with the session's bearer token) when a signed-in account has no banked login token, when a token lands after the user allows notifications from the Account card, and when the app returns to the foreground. If Firebase rotates a token that was already banked at login, the portal raises its token-change recovery UI and asks for a fresh OTP login; that makes the next authoritative auth request carry the new live token instead of silently assuming a profile update succeeded. The same `(account, token)` pair is never sent twice, and a server that answers 404 is remembered for the session so the portal stops asking.
+**The portal also keeps that token current after login — and never logs the user out over it.** `src/lib/deviceToken.js` posts `{ deviceToken, platform: 'web', userType, userId }` to `POST /api/notifications/register-device` (with the session's bearer token) when a signed-in account has no banked login token, when a token lands after the user allows notifications from the Account card, and when the app returns to the foreground. If Firebase rotates a token that was already banked at login (PWA install, browser token rotation), the portal **hands the new token over quietly** through the same endpoint — the session stays exactly as it was. An earlier build signed the user out here ("You opened My Naai on a new app or browser…"), which is what produced the "getting logged out after sometime / after refresh" reports; that recovery path is gone. The same `(account, token)` pair is never sent twice, and a server that answers 404 is remembered for the session so the portal stops asking.
 
 This matters because the auth flow is the only place the token used to reach the server. A salon who signed in first and allowed notifications afterwards, or whose browser token rotated, or who signed in on a laptop after the phone, had a **granted permission and a server that could not reach them** — the classic "permission is given but no notification arrives".
 
-When the server answers 404 for `register-device`, the portal falls back to the profile-update endpoints the mobile app already has — `POST /api/salons/update-salon` `{ salonId, deviceToken }` for a salon and `POST /api/users/update` `{ userId, deviceToken }` for a customer — which write the same `deviceToken` column login writes. **No backend change is required** for the fallback; the dedicated endpoint is only needed if you want per-device (multi-token) storage. The **Turn on alerts** button on both Account screens sends the token the moment it is minted, and the Notification status card shows a **Server has this token** line.
+When the server answers 404 for `register-device`, the portal falls back to the profile-update endpoints the mobile app already has — `POST /api/salons/update-salon` `{ salonId, deviceToken }` for a salon and `POST /api/users/update` `{ userId, deviceToken }` for a customer. Be aware of what that fallback can and cannot do on this backend: `salons` has **no** `deviceToken` column and neither update controller maps the field, so for salons the fallback is a silent no-op (it returns 200 and the session stays alive, but push registration is unchanged). The `register-device` route is therefore the one backend change that actually makes post-login token sync work for salons; it is small, additive and tested. The **Turn on alerts** button on both Account screens sends the token the moment it is minted, and the Notification status card shows a **Server has this token** line.
 
-A drop-in Express handler is in `backend/registerDevice.js`. It writes to the existing single `deviceToken` column, or to a `DeviceToken` table when the project has one (recommended for salons that use the phone and the laptop together). In the table path, the token is globally unique, duplicate rows are removed/deactivated, and an account can retain multiple active devices. In the single-column fallback, registering the token clears that same token from any other account before writing it to the authenticated account; this prevents duplicate ownership but cannot provide multi-device fan-out. For the table path, notification senders must query all active rows for the recipient and deactivate only tokens FCM reports as permanently unregistered.
+A drop-in Express handler is in `backend/registerDevice.js`, written against this codebase's real schema. For **salon** accounts it upserts the `device_tokens` table the push pipeline already reads (`DeviceToken` model: `deviceId`, `salonId`, `deviceToken`, `isActive`) — a token re-registered under another salon **moves** (one token = one installation), a token already on the salon is re-affirmed active, and a brand-new device gets the same 10-device cap login enforces (oldest evicted at the limit). If a deployment adds a `deviceToken` column to salons, the handler mirrors it automatically. For **user** accounts (the `device_tokens` table is salon-only) it writes the existing `users.device_token` column, first clearing any stale copy of the same token on another account so one token can never own two recipients. Mount it exactly as `notification.routes.js` documents: `notificationRouter.post('/register-device', authenticateUserOrSalon, registerDevice)` — the identity always comes from the bearer token; the body's `userType`/`userId` are verified against it, never trusted.
 ## 4.2 On-device notification diagnostics
 
 "Notifications are not working" can come from five different layers — HTTPS, the Firebase build config, the browser permission, the messaging service worker and the FCM token — spread across the browser, the deployment and the backend. Both Account screens (salon and customer) therefore render a collapsible **Notification status** card (`src/components/NotificationDiagnostics.jsx`) that names the failing layer on the device the person is holding.
@@ -289,7 +289,7 @@ The same mapping is implemented in `getNotificationRoute()` for foreground messa
 - A new login can generate a fresh FCM token and send it to the backend.
 - The backend should handle an invalid/expired FCM token response from Firebase by removing that token from its records.
 
-There is no separate token-refresh button. `keepDeviceTokenSynced` re-reads the live token on an authenticated app start, foreground return and push-token event. A normal refresh returns the same Firebase token, so the stored login baseline remains valid and no sign-out or duplicate registration occurs. A confirmed token with no login baseline is handed to `register-device`; when a banked login token genuinely changes, the recovery UI asks for a fresh OTP login so the next authoritative request stores the new token.
+There is no separate token-refresh button and no token-triggered sign-out. `keepDeviceTokenSynced` re-reads the live token on an authenticated app start, foreground return and push-token event. A normal refresh returns the same Firebase token, so the stored login baseline remains valid and no duplicate registration occurs. A confirmed token with no login baseline — or a token that rotated after login — is handed to `register-device` (then the profile-update fallback); the session never changes because of it. A failed hand-over (offline) simply retries on the next start or foreground return.
 
 ## 7. Service-worker scope warning
 
@@ -380,26 +380,33 @@ push subscription, so a salon that signed in from the browser tab and then
 opened the installed app is carrying a session whose token the backend has
 never seen.
 
-What the web app does about it (`src/lib/deviceToken.js`):
+What the web app does about it (`src/lib/deviceToken.js`) — **no sign-out,
+ever, over a push token**:
 
-1. The token sent with login is banked as `FCM_TOKEN_LOGIN` (`rememberLoginToken`).
+1. The token sent with login is banked as `FCM_TOKEN_LOGIN`
+   (`rememberLoginToken`).
 2. `keepDeviceTokenSynced` compares the live Firebase token against it on
    start, on focus and whenever the token rotates.
-3. If they differ and this token has not already triggered recovery, the portal
-   dispatches `mynaai:device-token-changed`; `AppShell` signs the user out and
-   opens the sign-in screen with a notice explaining why. The next OTP login
-   carries the new live token, and the backend replaces the old login token.
-4. If there is no banked login token, the portal can quietly register the live
-   token through `register-device` (then the profile-update fallback). A failed
-   quiet hand-over never signs the user out.
+3. If they differ, the portal quietly registers the live token through
+   `register-device` (then the profile-update fallback if that answers 404).
+   The session stays exactly as it was; the same `(account, token)` pair is
+   never sent twice.
+
+Why the sign-out was removed: the earlier version dispatched
+`mynaai:device-token-changed` and `AppShell` logged the salon out with a
+"You opened My Naai on a new app or browser" notice. In production that
+became the "getting logged out after sometime / after refresh" bug — token
+rotation (PWA install, Firebase rotation) evicted a live account over a
+notification detail, and the profile-update fallback could not have confirmed
+the hand-over on this backend anyway. The quiet hand-over is now the only
+path; a failed hand-over (offline) simply retries on the next start or
+foreground return, and nothing here depends on the network.
 
 Guard rails (so this can never become a blocker):
 
-- No banked login token (session from before this shipped, or a login that
-  could not read a token) → never signs out; only the quiet hand-over runs.
-- At most one sign-out per new token (`mynaai:relogin-asked-for-token`), so a
-  login that again cannot read the token cannot loop.
-- The sign-out is held while a booking request is being answered (the alert
-  card or the request screen) and re-checked on the next focus.
-- Nothing depends on the network; offline changes nothing.
-- Logout clears the banked token, so a fresh login always sets a new baseline.
+- A failed hand-over never signs the user out — it retries on the next
+  start/foreground check.
+- The same `(account, token)` pair is never sent twice
+  (`FCM_TOKEN_SYNCED` stamp).
+- Logout clears the banked token and sync stamps, so a fresh login always
+  sets a new baseline.
