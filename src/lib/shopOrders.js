@@ -17,6 +17,8 @@
 // `getOrderStatus(order, now)` stays pure — the screens pass `now`
 // (default Date.now()) so tests are exact.
 
+import { toPoint } from './geo';
+
 const CART_PREFIX = 'mynaaiShopCart:';
 const ORDERS_PREFIX = 'mynaaiShopOrders:';
 
@@ -271,7 +273,12 @@ export function upsertLocalOrder(salonId, order) {
 // validated here — the forms validate too, but a hand-edited storage entry
 // must not break the tracker.
 function normalizeAddress(address = {}) {
-  return {
+  // The delivery point travels with the address so the admin panel and the
+  // delivery partner can put the order on a map. It is kept OUT of the text
+  // fields (a coordinate is not part of the address the salon typed) and is
+  // `null` rather than 0 when unknown — 0,0 is a real place in the Atlantic.
+  const point = toPoint(address);
+  const clean = {
     name: String(address.name || '').trim(),
     phone: String(address.phone || '').trim(),
     line1: String(address.line1 || '').trim(),
@@ -279,6 +286,14 @@ function normalizeAddress(address = {}) {
     state: String(address.state || '').trim(),
     pincode: String(address.pincode || '').trim(),
   };
+  // Only carry the pair when it exists: an order from a salon without GPS
+  // keeps exactly the shape it always had, and no client reads a missing
+  // coordinate as (0, 0).
+  if (point) {
+    clean.latitude = point.latitude;
+    clean.longitude = point.longitude;
+  }
+  return clean;
 }
 
 // `now` is injectable so the deterministic timeline can be tested exactly;

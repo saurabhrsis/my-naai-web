@@ -24,6 +24,7 @@
 // exported for the unit tests.
 
 import { api } from './api';
+import { toPoint } from './geo';
 import { readLocalSession } from './session';
 import { normalizeCartLine, customerStatusToTrackerKey, SERVER_STATUS_TO_STEP_INDEX } from './shopOrders';
 
@@ -84,7 +85,18 @@ export function mapServerOrder(order = {}) {
       city: String(order.address?.city || ''),
       state: String(order.address?.state || ''),
       pincode: String(order.address?.pincode || ''),
+      // Only present when the server actually stored a point; an order with
+      // no coordinates keeps the exact shape it always had.
+      ...(toPoint({ latitude: order.address?.latitude, longitude: order.address?.longitude })
+        ? {
+            latitude: toPoint({ latitude: order.address.latitude, longitude: order.address.longitude }).latitude,
+            longitude: toPoint({ latitude: order.address.latitude, longitude: order.address.longitude }).longitude,
+          }
+        : {}),
     },
+    // The point the admin and the delivery partner see on their map (the
+    // server computes it from the order snapshot, falling back to the salon).
+    deliveryLocation: toPoint(order.deliveryLocation) || null,
     payment: {
       method: order.payment?.method === 'COD' ? 'COD' : 'ONLINE',
       status: String(order.payment?.status || 'PENDING'),
@@ -186,6 +198,9 @@ export async function registerServerOrder(order) {
     await api.shopOrderCreate({
       orderId: order.id,
       items: order.items,
+      // Coordinates ride along with the address so an order placed from a
+      // salon whose profile predates the coordinate requirement still lands
+      // on the admin's map. The server prefers the salon's own record.
       address: order.address,
       payment: {
         method: order.payment?.method === 'COD' ? 'COD' : 'ONLINE',

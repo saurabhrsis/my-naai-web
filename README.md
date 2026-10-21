@@ -46,6 +46,32 @@ any number + any OTP, fixture catalog):
 MYNAAI_DEV_MOCK_API=1 npm run dev
 ```
 
+## Distributor location, KM and nearest-first dispatch
+
+Shop orders are delivered by **distributors**, and the admin assigns the parcel
+to the partner closest to the delivery point. The coordinates that make that
+possible now live in three places, described end to end in
+[`docs/DISTRIBUTOR-LOCATION.md`](docs/DISTRIBUTOR-LOCATION.md):
+
+- the **salon portal** (this repo) captures and shows the delivery point — a map
+  card at checkout, on the shop order, and on the salon account screen;
+- the **admin panel** pins each distributor on a map while adding them, shows a
+  **Distance** column and sorts nearest first, and shows the KM next to every
+  candidate in the *Assign distributor* drawer;
+- the **backend** stores `distributors.latitude/longitude` and a delivery-point
+  snapshot per order, and returns `distanceKm` on both.
+
+Distances are great-circle kilometres from one shared implementation
+(`src/lib/geo.js` here), rendered on a **free** map stack: Leaflet +
+OpenStreetMap in the admin/distributor surfaces, an OSM embed in this portal —
+no API key, no billing account. The admin panel and backend changes are shipped
+as ready-to-apply patches in [`patches/`](patches):
+
+```bash
+git am patches/backend-distributor-location.patch      # my_naai_backend
+git am patches/admin-panel-distributor-location.patch  # my-naai-frontend (+ npm install for leaflet)
+```
+
 ## Environment
 
 Create `.env.local` when pointing to another environment:

@@ -27,6 +27,7 @@ import {
   readCart,
 } from '../lib/shopOrders';
 import { useShopSettings } from '../lib/shopSettings';
+import { formatCoordinates, mapsUrl, toPoint } from '../lib/geo';
 import { clearServerCart, registerServerOrder } from '../lib/shopServerSync';
 import {
   Button,
@@ -36,7 +37,9 @@ import {
   PageHeader,
   cx,
   formatCurrency,
+  getBrowserLocation,
 } from './Shared';
+import { LocationMap } from './LocationMap.jsx';
 import { useConfirm } from './ConfirmDialog';
 import { ShopQuantityControl, shopOwnerId, shopSalonName, useSyncedCart } from './ShopScreen';
 
@@ -199,6 +202,9 @@ function initialAddressFromSession(session) {
     city: profile.city || '',
     state: profile.state || '',
     pincode: profile.pincode || '',
+    // The delivery point: the salon's saved GPS location, editable here so a
+    // delivery to a different gate still has somewhere to send the partner.
+    ...(toPoint(profile) || { latitude: null, longitude: null }),
   };
 }
 
@@ -229,6 +235,26 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
   }, [payment, codLocked]);
 
   const setAddressField = (key, value) => setAddress(current => ({ ...current, [key]: value }));
+
+  // The delivery pin. Browser GPS is asked from this tap (gesture-safe) and the
+  // result is stored on the address, so the order carries the exact point the
+  // admin panel and the delivery partner will navigate to.
+  const deliveryPoint = toPoint(address);
+  const [locating, setLocating] = useState(false);
+  const useMyLocationForDelivery = async () => {
+    setLocating(true);
+    try {
+      const fix = await getBrowserLocation();
+      if (!fix) {
+        notify?.('error', 'Could not read this device\u2019s location. Allow location access and try again.');
+        return;
+      }
+      setAddress(current => ({ ...current, latitude: fix.latitude, longitude: fix.longitude }));
+      notify?.('success', 'Delivery pin set to your current location.');
+    } finally {
+      setLocating(false);
+    }
+  };
 
   const validate = () => {
     if (!address.name.trim()) return 'Add the recipient\u2019s name.';
@@ -408,6 +434,29 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
             <div className="form-two-col">
               <Field label="State"><input value={address.state} onChange={event => setAddressField('state', event.target.value)} placeholder="State" /></Field>
               <Field label="Pincode" required><input inputMode="numeric" maxLength={6} value={address.pincode} onChange={event => setAddressField('pincode', event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="6-digit pincode" /></Field>
+            </div>
+          </div>
+          {/* Delivery location — the point the admin and the delivery partner
+              see on their map. Prefilled from the salon profile; adjustable
+              here because a delivery may go to a different gate. */}
+          <div className="checkout-location">
+            <h3><MapPin size={15} /> Delivery location</h3>
+            <p className="location-preview-coords">
+              {deliveryPoint ? formatCoordinates(deliveryPoint) : 'No delivery pin yet'}
+            </p>
+            <p className="location-preview-caption">
+              Our delivery partner navigates to this point. It is the salon GPS location unless you set it here.
+            </p>
+            <LocationMap value={deliveryPoint} height={160} ariaLabel="Delivery location map" />
+            <div className="checkout-location-actions">
+              <Button type="button" variant="secondary" size="small" onClick={useMyLocationForDelivery} loading={locating}>
+                <MapPin size={14} /> {locating ? 'Locating…' : 'Use my current location'}
+              </Button>
+              {deliveryPoint && (
+                <a className="location-preview-link" href={mapsUrl(deliveryPoint)} target="_blank" rel="noopener noreferrer">
+                  Open in Maps
+                </a>
+              )}
             </div>
           </div>
           <div className="shop-checkout-summary">

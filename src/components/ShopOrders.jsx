@@ -27,6 +27,8 @@ import { cancelServerOrder, fetchAllServerOrders, fetchServerOrderById } from '.
 import { Button, EmptyState, ImageWithFallback, PageHeader, StatusPill, cx, formatCurrency, formatDate, getErrorMessage } from './Shared';
 import { shopOwnerId } from './ShopScreen';
 import { useConfirm } from './ConfirmDialog';
+import { LocationPreview } from './LocationMap.jsx';
+import { deliveryPointOf } from '../lib/geo';
 
 // Server history wins over the local copy on a shared id (the backend is the
 // account-level truth); local-only orders (placed offline / before sign-in)
@@ -291,6 +293,24 @@ export function ShopOrderScreen({ session, params, navigate, notify }) {
             </p>
           )}
       </section>
+      <section className="shop-order-address">
+        <h3><MapPin size={15} /> Delivery to</h3>
+        <p><strong>{order.address.name}</strong> · {order.address.phone}</p>
+        <p>{order.address.line1}{order.address.city ? `, ${order.address.city}` : ''}{order.address.state ? `, ${order.address.state}` : ''} — {order.address.pincode}</p>
+      </section>
+
+      {/* The delivery point on a map. It is the SAME point the admin panel and
+          the delivery partner navigate to — shown here so the salon can
+          confirm the pin before (and after) the parcel is on its way. */}
+      <LocationPreview
+        value={deliveryPointOf(order)}
+        title="Delivery location"
+        caption={
+          deliveryPointOf(order)
+            ? 'Our delivery partner navigates to this point. Ask support to update it if the gate or building is wrong.'
+            : 'No pin saved yet — update the salon GPS location so the delivery partner can find you.'
+        }
+      />
 
       {cancellable && (
         <Button variant="danger" loading={cancelling} onClick={cancel} className="shop-cancel-button"><XCircle size={16} /> Cancel order</Button>

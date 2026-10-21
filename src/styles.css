@@ -2469,3 +2469,29 @@ img.image-fallback-tile {
 .shop-support-note { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .shop-support-note svg { color: var(--shop-green-soft); flex: none; }
 .shop-support-note a { display: inline-flex; align-items: center; gap: 4px; color: var(--gold); font-weight: 700; }
+
+/* ------------------------------------------------------------------ *
+ * Location previews — the salon's own point and the delivery point of a
+ * shop order. Read-only OpenStreetMap embeds: the salon confirms a point
+ * here, the admin panel and the distributor portal are where pins are
+ * placed and moved.
+ * ------------------------------------------------------------------ */
+.location-preview { margin-bottom: 13px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.location-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.location-preview-head h3 { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--white); font-size: 13px; }
+.location-preview-head h3 svg { color: var(--shop-green-soft); }
+.location-preview-link { display: inline-flex; align-items: center; gap: 5px; color: var(--gold); font-size: 11px; font-weight: 700; }
+.location-preview-coords { margin: 0 0 4px; color: var(--muted-light); font-size: 11.5px; letter-spacing: .2px; font-variant-numeric: tabular-nums; }
+.location-preview-caption { margin: 0 0 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.location-preview .location-map { margin-top: 8px; }
+.location-map { position: relative; overflow: hidden; width: 100%; border-radius: 12px; border: 1px solid var(--line); background: #0f1418; }
+.location-map iframe { display: block; width: 100%; height: 100%; border: 0; filter: saturate(.94); }
+.location-map-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; padding: 18px 14px; text-align: center; color: var(--muted); }
+.location-map-empty svg { color: var(--gold); }
+.location-map-empty span { color: var(--white); font-size: 12.5px; font-weight: 700; }
+.location-map-empty small { font-size: 10.5px; line-height: 1.5; }
+.location-order-note { display: flex; align-items: flex-start; gap: 7px; margin-top: 9px; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
+.location-order-note svg { color: var(--shop-green-soft); flex: none; margin-top: 1px; }
+.checkout-location { margin: 0 0 12px; }
+.checkout-location-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 9px; }
+.checkout-location-actions .ghost-button, .checkout-location-actions button { font-size: 11px; }
