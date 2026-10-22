@@ -52,8 +52,20 @@ const PRODUCT_PLACEHOLDER = '/assets/brand/product-placeholder.svg';
  * the bill exactly as the order was billed — the settings may have moved
  * since.
  * ------------------------------------------------------------------ */
-export function ShopBillCard({ lines, settings, method, title = 'Bill details', amounts }) {
+export function ShopBillCard({ lines, settings, method, title = 'Bill details', amounts, stage = 'checkout' }) {
   const totals = amounts || cartTotals(lines, settings, { method });
+  // TWO STAGES, ON PURPOSE.
+  //
+  // `cart`   — the salon is still deciding. Only the products are on the bill:
+  //            item total, the admin's item discount, MRP savings. Delivery is
+  //            NOT added here, because it depends on the address, the payment
+  //            method and the admin's free-delivery threshold, and charging it
+  //            in the cart made a ₹99 item look like a ₹199 cart. The row says
+  //            where the fee appears instead of quoting a number the salon has
+  //            not agreed to yet.
+  // `checkout` — the full bill, once the delivery details and payment method
+  //            are known: delivery fee, COD charges and the real "To pay".
+  const atCheckout = stage === 'checkout';
   return (
     <section className="shop-bill-card">
       <h3>{title}</h3>
@@ -65,14 +77,32 @@ export function ShopBillCard({ lines, settings, method, title = 'Bill details', 
         </div>
       )}
       {totals.savings > 0 && <div className="shop-bill-row saving"><span>MRP savings</span><span>− {formatCurrency(totals.savings)}</span></div>}
-      <div className="shop-bill-row">
-        <span>Delivery fee</span>
-        {totals.deliveryFee === 0 && lines.length > 0
-          ? <span className="shop-bill-free">FREE</span>
-          : <span>{totals.deliveryFee === 0 ? '—' : formatCurrency(totals.deliveryFee)}</span>}
-      </div>
-      {totals.codFee > 0 && <div className="shop-bill-row"><span>COD charges</span><span>{formatCurrency(totals.codFee)}</span></div>}
-      <div className="shop-bill-row total"><span>To pay</span><strong>{formatCurrency(totals.total)}</strong></div>
+      {atCheckout ? (
+        <>
+          <div className="shop-bill-row">
+            <span>Delivery fee</span>
+            {totals.deliveryFee === 0 && lines.length > 0
+              ? <span className="shop-bill-free">FREE</span>
+              : <span>{totals.deliveryFee === 0 ? '—' : formatCurrency(totals.deliveryFee)}</span>}
+          </div>
+          {totals.codFee > 0 && <div className="shop-bill-row"><span>COD charges</span><span>{formatCurrency(totals.codFee)}</span></div>}
+          <div className="shop-bill-row total"><span>To pay</span><strong>{formatCurrency(totals.total)}</strong></div>
+        </>
+      ) : (
+        <>
+          <div className="shop-bill-row pending">
+            <span>Delivery fee</span>
+            <span>At checkout</span>
+          </div>
+          <div className="shop-bill-row total"><span>Items total</span><strong>{formatCurrency(totals.subtotal)}</strong></div>
+          <p className="shop-bill-note">
+            Product value only — delivery is calculated on the next step, once your address is confirmed.
+            {totals.freeDeliveryAbove > 0 && totals.deliveryFee > 0
+              ? ` Free delivery above ${formatCurrency(totals.freeDeliveryAbove)}.`
+              : ''}
+          </p>
+        </>
+      )}
       {totals.savings > 0 && <p className="shop-bill-saved">You saved {formatCurrency(totals.savings)} on this order</p>}
     </section>
   );
@@ -169,14 +199,20 @@ export function ShopCartScreen({ session, navigate, notify }) {
           </div>
         </div>
         <aside className="shop-cart-aside">
-          <ShopBillCard lines={lines} settings={shopSettings} />
+          {/* Cart stage: products only. Delivery is billed at checkout. */}
+          <ShopBillCard lines={lines} settings={shopSettings} stage="cart" />
         </aside>
       </div>
       <div className="shop-cart-footer">
         <div className="shop-cart-footer-amount">
-          <small>To pay</small>
-          <strong>{formatCurrency(totals.total)}</strong>
-          <span>{cartCount(lines)} item{cartCount(lines) === 1 ? '' : 's'}</span>
+          {/* The cart figure is the product value. It is NOT the amount that
+              will be charged: delivery (and any COD charge) is added on the
+              checkout page, and quoting a bigger number here — a ₹99 product
+              showing as ₹199 with a delivery fee nobody chose — read as a
+              hidden charge. */}
+          <small>Items total</small>
+          <strong>{formatCurrency(totals.subtotal)}</strong>
+          <span>{cartCount(lines)} item{cartCount(lines) === 1 ? '' : 's'} · delivery at checkout</span>
         </div>
         <Button size="large" onClick={() => navigate('shopCheckout')}>
           Proceed to checkout <ChevronRight size={17} />
@@ -424,16 +460,23 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
       <section className="shop-address-card">
         <h3><MapPin size={15} /> Delivery address</h3>
         <form onSubmit={submit}>
-          <div className="form-two-col">
-            <Field label="Recipient name" required><input value={address.name} onChange={event => setAddressField('name', event.target.value)} placeholder="e.g. Ramesh Kumar" autoFocus /></Field>
-            <Field label="Contact number" required><input inputMode="numeric" maxLength={10} value={address.phone} onChange={event => setAddressField('phone', event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="10-digit mobile" /></Field>
-          </div>
-          <Field label="Address" required><input value={address.line1} onChange={event => setAddressField('line1', event.target.value)} placeholder="Shop / salon address" /></Field>
-          <div className="form-two-col">
-            <Field label="City" required><input value={address.city} onChange={event => setAddressField('city', event.target.value)} placeholder="City" /></Field>
+          {/* Every field group is a direct child of one column with a real gap.
+              Address fields used to be block elements with no spacing between
+              them (only the two-column grids had a gap), which put each label
+              flush against the input above it — on a phone that read as one
+              long run of text. */}
+          <div className="checkout-fields">
             <div className="form-two-col">
-              <Field label="State"><input value={address.state} onChange={event => setAddressField('state', event.target.value)} placeholder="State" /></Field>
-              <Field label="Pincode" required><input inputMode="numeric" maxLength={6} value={address.pincode} onChange={event => setAddressField('pincode', event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="6-digit pincode" /></Field>
+              <Field label="Recipient name" required><input autoComplete="name" value={address.name} onChange={event => setAddressField('name', event.target.value)} placeholder="e.g. Ramesh Kumar" autoFocus /></Field>
+              <Field label="Contact number" required><input autoComplete="tel" inputMode="numeric" maxLength={10} value={address.phone} onChange={event => setAddressField('phone', event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="10-digit mobile" /></Field>
+            </div>
+            <Field label="Shop / salon address" required><input autoComplete="street-address" value={address.line1} onChange={event => setAddressField('line1', event.target.value)} placeholder="Building, street, landmark" /></Field>
+            {/* City · State · Pincode share one even row on a wide screen and
+                stack on a phone — no nested grid, so the columns line up. */}
+            <div className="form-three-even">
+              <Field label="City" required><input autoComplete="address-level2" value={address.city} onChange={event => setAddressField('city', event.target.value)} placeholder="City" /></Field>
+              <Field label="State"><input autoComplete="address-level1" value={address.state} onChange={event => setAddressField('state', event.target.value)} placeholder="State" /></Field>
+              <Field label="Pincode" required><input autoComplete="postal-code" inputMode="numeric" maxLength={6} value={address.pincode} onChange={event => setAddressField('pincode', event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="6-digit pincode" /></Field>
             </div>
           </div>
           {/* Delivery location — the point the admin and the delivery partner

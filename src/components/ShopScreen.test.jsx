@@ -333,12 +333,14 @@ describe('ShopCartScreen', () => {
     expect(container.querySelectorAll('.shop-cart-item')).toHaveLength(2);
     expect(container.textContent).toContain('MRP savings');
     expect(container.textContent).toContain('FREE'); // 698 is above the threshold
-    // Blinkit-style footer: to-pay amount + item count + proceed CTA.
+    // Blinkit-style footer: ITEM total + count + proceed CTA. Delivery is a
+    // checkout charge and must not be baked into this figure.
     const footer = container.querySelector('.shop-cart-footer');
     expect(footer).toBeTruthy();
-    expect(footer.textContent).toContain('To pay');
+    expect(footer.textContent).toContain('Items total');
     expect(footer.textContent).toContain('₹ 698');
     expect(footer.textContent).toContain('2 items');
+    expect(footer.textContent).toContain('delivery at checkout');
     const proceed = buttonsContaining('Proceed to checkout', container)[0];
     await act(async () => { proceed.click(); });
     expect(navigate).toHaveBeenCalledWith('shopCheckout');
@@ -354,11 +356,12 @@ describe('ShopCartScreen', () => {
     expect(items).toHaveLength(2);
     expect(items[0].querySelector('.shop-cart-line-total').textContent).toBe('₹ 199');
 
-    // + on the first line → line total ₹ 398, footer 398 + 499 (free delivery).
+    // + on the first line → line total ₹ 398; the cart total is the product
+    // value only (398 + 499), with delivery billed at checkout.
     const [, plus] = items[0].querySelectorAll('.shop-stepper button');
     await act(async () => { plus.click(); });
     expect(container.querySelector('.shop-cart-item .shop-cart-line-total').textContent).toBe('₹ 398');
-    expect(container.querySelector('.shop-cart-footer').textContent).toContain('₹ 897'); // 398 + 499, free delivery
+    expect(container.querySelector('.shop-cart-footer').textContent).toContain('₹ 897'); // 398 + 499 products
 
     // The free-delivery note switches to the "unlocked" state (₹1,197 > ₹499).
     expect(container.querySelector('.shop-delivery-note.unlocked')).toBeTruthy();
@@ -368,7 +371,8 @@ describe('ShopCartScreen', () => {
     const [minus] = items[1].querySelectorAll('.shop-stepper button');
     await act(async () => { minus.click(); });
     expect(container.querySelectorAll('.shop-cart-item')).toHaveLength(1);
-    expect(container.querySelector('.shop-cart-footer').textContent).toContain('₹ 447'); // 398 + ₹49 delivery below the threshold
+    // Still the product value — the ₹49 fee belongs to the checkout step.
+    expect(container.querySelector('.shop-cart-footer').textContent).toContain('₹ 398');
     expect(container.querySelector('.shop-delivery-note.unlocked')).toBeNull();
 
     // The explicit Remove button deletes the remaining line → empty state.
@@ -383,6 +387,34 @@ describe('ShopCartScreen', () => {
     expect(container.textContent).toContain('Your cart is empty');
   });
 
+  // The reported bug: one ₹99 product, and the cart strip showed ₹199 because
+  // a delivery charge was added before checkout had even started. The strip now
+  // quotes the product value; the fee appears on the checkout bill.
+  it('never adds delivery to the cart or the cart bar — the fee appears at checkout', async () => {
+    addToCart('salon-1', { id: 'sp9', name: 'Shaving Foam 100g', price: 99, mrp: 0, image: '', category: 'shaving', gender: 'men' });
+    const cart = await render(<ShopCartScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    const footer = cart.container.querySelector('.shop-cart-footer');
+    expect(footer.textContent).toContain('₹ 99');
+    expect(footer.textContent).not.toContain('₹ 148');
+    const bill = cart.container.querySelector('.shop-bill-card');
+    expect(bill.textContent).toContain('₹ 99');
+    expect(bill.textContent).not.toContain('₹ 148');
+    expect(bill.textContent).toContain('At checkout');
+
+    // The shop's floating bar quotes the same product value.
+    const shop = await render(<ShopScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    const bar = shop.container.querySelector('.shop-cart-bar');
+    expect(bar.textContent).toContain('₹ 99');
+    expect(bar.textContent).toContain('delivery at checkout');
+
+    // …and the checkout bill is where the fee finally lands.
+    const checkout = await render(<ShopCheckoutScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    const summary = checkout.container.querySelector('.shop-checkout-summary');
+    expect(summary.textContent).toContain('₹ 49');
+    expect(summary.textContent).toContain('₹ 148');
+    expect(summary.textContent).toContain('To pay');
+  });
+
   it('bills the cart from the admin shop settings (discount, fee, threshold)', async () => {
     shopSettingsGet.mockResolvedValue({
       status: 'SUCCESS',
@@ -391,12 +423,16 @@ describe('ShopCartScreen', () => {
     addToCart('salon-1', { id: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men' });
     const { container } = await render(<ShopCartScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
 
-    // ₹199 − 10% (₹20) = ₹179 < ₹500 → +₹40 fee → ₹219 to pay.
+    // ₹199 − 10% (₹20) = ₹179 of products. The cart does NOT add the ₹40 fee:
+    // it shows the item total and says the fee is calculated at checkout.
     const bill = container.querySelector('.shop-bill-card');
     expect(bill.textContent).toContain('Order discount (10%)');
     expect(bill.textContent).toContain('− ₹ 20');
-    expect(bill.textContent).toContain('₹ 40');
-    expect(container.querySelector('.shop-cart-footer').textContent).toContain('₹ 219');
+    expect(bill.textContent).toContain('Delivery fee');
+    expect(bill.textContent).toContain('At checkout');
+    expect(bill.textContent).not.toContain('₹ 40');
+    expect(bill.textContent).toContain('₹ 179');
+    expect(container.querySelector('.shop-cart-footer').textContent).toContain('₹ 179');
     // The free-delivery progress runs on the after-discount subtotal: 500 − 179.
     expect(container.querySelector('.shop-delivery-note').textContent).toContain('₹ 321');
     // COD is not chosen at cart level yet, so no COD charges line.

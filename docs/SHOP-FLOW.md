@@ -35,13 +35,16 @@ Shop tab ── search / Category · For · Price selects (one compact strip)
    │                                        │  delivery facts, description,
    │                                        │  "You may also like", cart bar
    ▼
-"3 items · ₹1,240 → View cart" floating bar
+"3 items · ₹897 + delivery at checkout → View cart" floating bar
    ▼
 Cart ── Blinkit-style rows: quantity stepper (minus at 1 removes the
-           line), per-line totals, free-delivery progress bar, bill (item total,
-           MRP savings + "you saved" line, delivery fee), to-pay footer bar
+           line), per-line totals, free-delivery progress note, bill (item
+           total, MRP savings + "you saved" line, delivery marked
+           "At checkout"), items-total footer bar
    ▼
-Checkout ── delivery address (prefilled from the salon profile, editable)
+Checkout ── delivery address (prefilled from the salon profile, editable),
+           plus the delivery-location map/pin
+           └── the FULL bill: delivery fee, COD charges, "To pay"
            └── Pay online (Razorpay, UPI/cards/netbanking)
            └── Cash on delivery ── confirmation box: amount, "Go back" /
                "Place order" (no order is written until it is confirmed)
@@ -112,9 +115,19 @@ a **My cart** shortcut (with the live item count) beside **My orders**.
 
 Delivery facts (the free-delivery threshold, order-by) come from the
 admin-managed `shop_settings` row (default free above ₹499), so the shop no
-longer renders a delivery banner — only the bill card and the details-page
-delivery card still state the fee/free rule, and they read it live from the
-same settings the backend bills against.
+longer renders a delivery banner — only the details-page delivery card still
+states the fee/free rule, and it reads it live from the same settings the
+backend bills against.
+
+**The cart never quotes a delivery charge.** `ShopBillCard` has two stages:
+`cart` bills the products only (item total, order discount, MRP savings) and
+marks the delivery row **At checkout**; `checkout` adds the delivery fee, the
+COD charge and the real **To pay**. The floating cart bar and the cart footer
+quote the same product value (`subtotal`). Adding a delivery fee the moment an
+item was added is what made a ₹99 product read “₹199” in the cart strip — a
+price that moves when the shopper has not agreed to anything yet cannot be
+trusted, and the fee genuinely depends on details checkout collects (address,
+payment method, free-delivery threshold).
 
 All filtering is client-side over the catalog (`applyShopFilters` in
 `shopCatalog.js` — pure, fully unit-tested). The catalog endpoint

@@ -2495,3 +2495,55 @@ img.image-fallback-tile {
 .checkout-location { margin: 0 0 12px; }
 .checkout-location-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 9px; }
 .checkout-location-actions .ghost-button, .checkout-location-actions button { font-size: 11px; }
+
+/* ------------------------------------------------------------------ *
+ * Shop cart ⇄ checkout: honest numbers and a calmer form
+ *
+ * The cart quotes the ITEM value only. Delivery (and any COD charge) is a
+ * checkout-time number: quoting it in the cart made a ₹99 item look like a
+ * ₹199 cart, and a price that moves like that cannot be trusted.
+ * ------------------------------------------------------------------ */
+.shop-cart-bar-note { display: block; margin-top: 1px; font-size: 9.5px; font-weight: 600; letter-spacing: .02em; opacity: .75; }
+.shop-bill-row.pending { color: var(--muted); }
+.shop-bill-row.pending > span:last-child { color: var(--muted-light); font-size: 11px; font-weight: 700; letter-spacing: .01em; }
+.shop-bill-note { margin: 8px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.55; }
+
+/* ── Checkout form: even rhythm between field groups ── */
+/* Direct children get a real gap. Address fields used to be plain block
+   elements with no spacing, so every label sat flush against the input above
+   it — on a phone the whole form read as one run of text. */
+.shop-address-card form { display: flex; flex-direction: column; gap: 14px; }
+.checkout-fields { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.shop-address-card .checkout-fields .form-two-col { gap: 12px; }
+.form-three-even { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; min-width: 0; }
+/* Section blocks are separated by the form gap, not by competing margins. */
+.shop-address-card form > .shop-checkout-summary,
+.shop-address-card form > .checkout-location,
+.shop-address-card form > .shop-pay-options { margin: 0; }
+.checkout-location { padding-top: 14px; border-top: 1px dashed var(--line); }
+.checkout-location h3 { margin: 0 0 6px !important; }
+.checkout-location .location-map { margin-top: 10px; }
+.checkout-location .location-preview-caption { margin-bottom: 0; }
+
+/* ── Phones: shorter inputs, tighter labels, same tap comfort ──
+   50px boxes plus a label per field made checkout scroll far more than the
+   data needs. 44px is still a comfortable touch target, and the text size is
+   unchanged (shrinking it below 15px makes iOS Safari zoom on focus). */
+@media (max-width: 560px) {
+  .shop-address-card { padding: 13px 12px; border-radius: 14px; }
+  .shop-address-card form { gap: 12px; }
+  .checkout-fields { gap: 12px; }
+  .form-three-even { grid-template-columns: 1fr; gap: 12px; }
+  .shop-address-card .field { gap: 6px; }
+  .shop-address-card .field-label { font-size: 11px; letter-spacing: .05em; }
+  .shop-address-card .field input,
+  .shop-address-card .field select { min-height: 44px; padding: 0 12px; border-radius: 10px; }
+  .shop-address-card h3 { font-size: 13px; margin-bottom: 10px; }
+  .checkout-location h3 { margin-bottom: 5px !important; }
+  .shop-checkout-terms { font-size: 10px; }
+  .shop-pay-option { padding: 11px; gap: 9px; border-radius: 12px; }
+  .shop-pay-copy strong { font-size: 12.5px; }
+  .shop-pay-copy small { font-size: 10px; }
+  .shop-bill-card { padding: 13px; }
+  .shop-checkout-summary { margin: 0; }
+}
