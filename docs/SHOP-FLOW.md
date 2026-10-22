@@ -58,7 +58,9 @@ Cart ── Blinkit-style rows: quantity stepper (minus at 1 removes the
 Checkout ── delivery address (prefilled from the salon profile, editable;
            state is picked from the Indian state list, and a legacy value
            such as “MH” is mapped onto “Maharashtra”),
-           plus the delivery-location map/pin
+           plus the delivery-location map — a tap drops the pin anywhere
+           (`LocationPicker`; it starts at the buyer's own location), so the
+           point fulfilment navigates to is chosen, not only auto-detected
            └── the FULL bill: delivery fee, COD charges, "To pay"
            └── Pay online (Razorpay, UPI/cards/netbanking)
            └── Cash on delivery ── confirmation box: amount, "Go back" /

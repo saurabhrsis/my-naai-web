@@ -47,10 +47,23 @@ If `git am` complains (for example because the target branch has moved), use
 | --- | --- | --- |
 | Admin panel | **Leaflet** + OpenStreetMap raster tiles | Needs a *picker*: click to drop, drag to move, GPS, place search (Nominatim), typed coordinates. No API key or billing account. |
 | Distributor portal | same component, read-only | Shows the delivery point, the partner's own fix and the KM between them; one button refreshes the live location. |
-| Salon portal (this repo) | OpenStreetMap **embed iframe** | The salon only confirms a point; an SDK would be weight on a phone for no benefit. |
+| Salon portal (this repo) | OpenStreetMap **embed iframe** for previews, plus a hand-rolled tile map where a pin has to be **placed** | Confirming a point needs an embed; dropping one (`LocationPicker`) needs pan/tap math, which is ~200 lines in `src/lib/tileMap.js` — cheaper than shipping Leaflet to a PWA that has no map SDK. |
 
 Google Maps is still reachable through a plain deep link ("Open in Maps" /
 "Navigate") on every surface — no key involved.
+
+**No location is a dead end any more.** A salon with no saved pin used to read
+"No location saved yet" over a grey box. Now:
+
+- the salon portal's **Edit profile → Address & Location** shows the picker,
+  starting at the saved pin, else the device's (already-granted) location, else
+  Nagpur — pan, tap (or Enter on the keyboard) and the pin lands on the gate;
+- the **salon account** card draws the area instead of an empty box, with no
+  marker (a pin in the middle of Nagpur would claim the salon is already
+  there), and its button opens the picker;
+- **shop checkout** lets a customer drop the delivery pin the same way, so the
+  point the admin and the delivery partner navigate to is chosen, not just
+  auto-detected.
 
 ## Data
 

@@ -113,15 +113,18 @@ export function mapsUrl(source) {
 
 // An OpenStreetMap embed for the in-app preview — no API key, no billing
 // account, no SDK. The bbox is the point, padded so the marker is not glued to
-// the edge of the frame (a zero-height box renders blank).
-export function openStreetMapEmbedUrl(source, { span = 0.008 } = {}) {
+// the edge of the frame (a zero-height box renders blank). `marker: false`
+// draws the area with NO pin, which is what an "add your location" map needs:
+// a marker in the middle of Nagpur would claim the salon is already there.
+export function openStreetMapEmbedUrl(source, { span = 0.008, marker = true } = {}) {
   const point = toPoint(source);
   if (!point) return '';
   const left = (point.longitude - span).toFixed(6);
   const right = (point.longitude + span).toFixed(6);
   const top = (point.latitude + span).toFixed(6);
   const bottom = (point.latitude - span).toFixed(6);
-  return `https://www.openstreetmap.org/export/embed.html?bbox=${left},${bottom},${right},${top}&layer=mapnik&marker=${point.latitude},${point.longitude}`;
+  const pin = marker ? `&marker=${point.latitude},${point.longitude}` : '';
+  return `https://www.openstreetmap.org/export/embed.html?bbox=${left},${bottom},${right},${top}&layer=mapnik${pin}`;
 }
 
 // A stored pin is only useful while it is fresh; the salon should be able to

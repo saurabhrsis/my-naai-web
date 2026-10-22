@@ -87,8 +87,10 @@ possible now live in three places, described end to end in
 
 Distances are great-circle kilometres from one shared implementation
 (`src/lib/geo.js` here), rendered on a **free** map stack: Leaflet +
-OpenStreetMap in the admin/distributor surfaces, an OSM embed in this portal —
-no API key, no billing account. The admin panel and backend changes are shipped
+OpenStreetMap in the admin/distributor surfaces, an OSM embed in this portal
+plus a small hand-rolled tile map (`src/lib/tileMap.js`, `LocationPicker`) where
+a partner or a customer has to **drop a pin** — no API key, no billing account,
+no map SDK in the PWA bundle. The admin panel and backend changes are shipped
 as ready-to-apply patches in [`patches/`](patches):
 
 ```bash

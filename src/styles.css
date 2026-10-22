@@ -2557,6 +2557,38 @@ img.image-fallback-tile {
 .location-map-empty svg { color: var(--gold); }
 .location-map-empty span { color: var(--white); font-size: 12.5px; font-weight: 700; }
 .location-map-empty small { font-size: 10.5px; line-height: 1.5; }
+
+/* An unpinned map is still a map: it shows the area the pin should be dropped
+   in (and says so) instead of the old grey "no location saved" box. */
+.location-map-unpinned iframe { filter: grayscale(.35) brightness(.86); }
+.location-map-badge { position: absolute; z-index: 3; left: 8px; top: 8px; display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-radius: 8px; background: rgba(8, 12, 11, .86); color: var(--muted-light); font-size: 10px; font-weight: 700; letter-spacing: .02em; }
+
+/* ── Pin picker ─────────────────────────────────────────────────────────────
+   Plain OpenStreetMap raster tiles (see src/lib/tileMap.js): pan with a drag,
+   tap to drop the pin, keys for the keyboard. No map SDK, no API key. */
+.location-picker { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 2px; }
+.location-picker.is-disabled { opacity: .6; pointer-events: none; }
+.location-picker-map { position: relative; overflow: hidden; width: 100%; border: 1px solid var(--line); border-radius: 12px; background: #10171a; cursor: crosshair; touch-action: none; -webkit-user-select: none; user-select: none; }
+.location-picker-map:focus-visible { outline: 2px solid var(--shop-green); outline-offset: 2px; }
+.location-picker-map.is-dragging { cursor: grabbing; }
+.location-picker-tile { position: absolute; z-index: 1; width: 256px; height: 256px; max-width: none; pointer-events: none; }
+.location-picker-pin { position: absolute; z-index: 5; display: grid; place-items: center; color: var(--gold); transform: translate(-50%, -100%); filter: drop-shadow(0 5px 10px rgba(0, 0, 0, .65)); pointer-events: none; }
+.location-picker-hint { position: absolute; z-index: 4; left: 50%; bottom: 10px; max-width: calc(100% - 22px); padding: 5px 10px; border-radius: 9px; background: rgba(8, 12, 11, .84); color: #eafff2; font-size: 11px; font-weight: 700; text-align: center; transform: translateX(-50%); }
+.location-picker-tools { position: absolute; z-index: 6; top: 8px; right: 8px; display: grid; gap: 4px; }
+.location-picker-tools button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid rgba(255, 255, 255, .16); border-radius: 8px; background: rgba(12, 16, 15, .9); color: var(--white); cursor: pointer; }
+.location-picker-tools button:hover:not(:disabled) { border-color: rgba(46, 204, 113, .5); color: var(--shop-green-soft); }
+.location-picker-tools button:disabled { opacity: .4; cursor: default; }
+/* OSM's tile policy needs the credit to stay on the map. */
+.location-picker-attr { position: absolute; z-index: 4; right: 6px; bottom: 4px; padding: 1px 5px; border-radius: 4px; background: rgba(255, 255, 255, .78); color: #3a3a3a; font-size: 8.5px; font-weight: 600; }
+.location-picker-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.location-picker-locate, .location-picker-clear { display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; border: 1px solid var(--line); border-radius: 9px; background: transparent; color: var(--white); font-size: 11.5px; font-weight: 700; cursor: pointer; }
+.location-picker-locate { border-color: rgba(46, 204, 113, .42); color: var(--shop-green-soft); }
+.location-picker-locate:disabled { opacity: .6; cursor: default; }
+.location-picker-clear { color: var(--muted-light); }
+.location-picker-clear:hover { border-color: rgba(255, 120, 100, .45); color: #ffb4a8; }
+.location-picker-read { margin-left: auto; color: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.location-picker-error { margin: 0; color: #ffb4a8; font-size: 11px; line-height: 1.45; }
+.checkout-location .location-picker { margin-top: 8px; }
 .location-order-note { display: flex; align-items: flex-start; gap: 7px; margin-top: 9px; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
 .location-order-note svg { color: var(--shop-green-soft); flex: none; margin-top: 1px; }
 .checkout-location { margin: 0 0 12px; }

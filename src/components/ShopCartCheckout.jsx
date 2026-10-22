@@ -48,7 +48,7 @@ import {
   formatCurrency,
   getBrowserLocation,
 } from './Shared';
-import { LocationMap } from './LocationMap.jsx';
+import { LocationPicker } from './LocationPicker.jsx';
 import { useConfirm } from './ConfirmDialog';
 import { ShopQuantityControl, shopOwnerId, shopSalonName, useSyncedCart } from './ShopScreen';
 
@@ -671,17 +671,26 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
               {deliveryPoint ? formatCoordinates(deliveryPoint) : 'No delivery pin yet'}
             </p>
             <p className="location-preview-caption">{copy.locationCaption}</p>
-            <LocationMap value={deliveryPoint} height={160} ariaLabel="Delivery location map" />
-            <div className="checkout-location-actions">
-              <Button type="button" variant="secondary" size="small" onClick={useMyLocationForDelivery} loading={locating}>
-                <MapPin size={14} /> {locating ? 'Locating…' : 'Use my current location'}
-              </Button>
-              {deliveryPoint && (
+            <LocationPicker
+              value={deliveryPoint}
+              onChange={next => setAddress(current => ({
+                ...current,
+                latitude: next ? next.latitude : null,
+                longitude: next ? next.longitude : null,
+              }))}
+              height={180}
+              label="Tap the map to drop the delivery pin"
+              locateLabel={locating ? 'Locating…' : 'Use my current location'}
+              onLocate={useMyLocationForDelivery}
+              locating={locating}
+            />
+            {deliveryPoint && (
+              <div className="checkout-location-actions">
                 <a className="location-preview-link" href={mapsUrl(deliveryPoint)} target="_blank" rel="noopener noreferrer">
                   Open in Maps
                 </a>
-              )}
-            </div>
+              </div>
+            )}
           </div>
           <div className="shop-checkout-summary">
             <ShopBillCard lines={lines} settings={shopSettings} method={payment === 'cod' ? 'COD' : 'ONLINE'} />
