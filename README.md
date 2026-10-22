@@ -41,6 +41,10 @@ delivery → Delivered), and **cancel order** before dispatch.
   **Shop now** band on the home page. Browsing is free; the first
   add-to-cart asks for a sign-in and returns them to the product.
 
+Those public reads are the open `/api/shop-public/products/list` and
+`/api/shop-public/settings/get` (no token, cached, rate-limited), with a
+fallback to the partner catalog endpoint so either deployment order works.
+
 Delivery rules (fee, free-delivery threshold, discounts, COD limit and charges)
 come from the admin's shop settings and are applied on the checkout page only.
 Orders are **real backend records** (`shop_orders`) created through

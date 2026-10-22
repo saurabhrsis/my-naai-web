@@ -35,7 +35,12 @@ export function normalizeShopSettings(data) {
 export function fetchShopSettings({ force = false } = {}) {
   if (cached && !force) return Promise.resolve(cached);
   if (inFlight) return inFlight;
+  // Two doors, one answer: the partner endpoint, then the public one the
+  // website storefront reads. Either may be missing on a deployment mid-rollout;
+  // the defaults below are the exact bill an untouched settings row produces,
+  // so falling back can never quote a price the server would not honour.
   inFlight = api.shopSettingsGet()
+    .catch(() => api.shopSettingsGetPublic())
     .then(response => {
       cached = normalizeShopSettings(response?.data);
       return cached;

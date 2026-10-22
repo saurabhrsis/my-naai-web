@@ -1,0 +1,133 @@
+/* Shop Orders — the customer-order pieces.
+ *
+ * Neutral, light-dashboard styling that inherits the panel's own font. The
+ * only colour decision is the Customer badge (blue): it must read as "a person,
+ * not a business" next to the salon rows without competing with the status
+ * pills. Override any of these in the panel's stylesheet if the palette
+ * differs — nothing depends on the exact values. */
+
+.soc-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.6;
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+
+.soc-cell {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.soc-cell-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.soc-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.soc-phone {
+  color: #6b7280;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.soc-phone:hover {
+  color: #111827;
+  text-decoration: underline;
+}
+
+.soc-summary {
+  padding: 12px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.soc-summary-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.soc-summary-label {
+  color: #6b7280;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+
+.soc-summary-name {
+  margin: 0 0 2px;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.soc-summary-line {
+  margin: 0 0 4px;
+  color: #374151;
+  font-size: 12.5px;
+}
+
+.soc-summary-line a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.soc-summary-line a:hover {
+  text-decoration: underline;
+}
+
+.soc-summary-note {
+  margin: 0;
+  color: #6b7280;
+  font-size: 11.5px;
+}
+
+.soc-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.soc-filter-label {
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.soc-select {
+  height: 32px;
+  padding: 0 26px 0 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  color: #111827;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.soc-select:focus {
+  border-color: #2563eb;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, .15);
+}

@@ -32,7 +32,17 @@ POST /api/shop-cart/get | add | set-qty | remove | clear
 POST /api/shop-orders/create | list | get-by-id | cancel
 POST /api/shop-products/list        (now also needed without a token)
 POST /api/shop-settings/get         (already public)
+
+# the website's own no-token door (new)
+POST|GET /api/shop-public/products/list
+POST|GET /api/shop-public/settings/get
 ```
+
+The public website reads `/api/shop-public/*` while nobody is signed in and
+falls back to `/api/shop-products/list` if that mount is not deployed yet; a
+signed-in account reads the partner endpoint and falls back the other way. So
+either deployment order leaves the storefront working, and anonymous browsing
+never depends on the partner middleware chain.
 
 The create body is the same contract for both buyers (no `salonId`, no
 `buyerId` — the token decides):
@@ -104,10 +114,10 @@ customerId: { type: DataTypes.STRING(36), allowNull: true, field: 'customerId' }
 ## 3. Buyer identity helper (new file)
 
 `src/utils/shopBuyer.js` — one place that answers "who is calling?". Every cart
-and order controller uses it, so no endpoint has to guess. Copy it from
-[`backend/shop-customer/resolveShopBuyer.js`](../backend/shop-customer/resolveShopBuyer.js)
-(it also exports `buyerWhere` / `buyerColumns`, so services never branch on the
-role themselves).
+and order controller uses it, so no endpoint has to guess. The ready file is
+[`backend/shop-customer/src/utils/shopBuyer.js`](../backend/shop-customer/src/utils/shopBuyer.js)
+(it also exports `buyerWhere`, `buyerColumns`, `buyerOwnsOrder` and
+`buyerActor`, so services never branch on the role themselves).
 
 ```js
 /**
@@ -142,7 +152,10 @@ const resolveShopBuyer = (req) => {
 module.exports = { resolveShopBuyer };
 ```
 
-Controllers then look like this (one example; the rest follow the same shape):
+The nine controllers are also written out in full under
+[`backend/shop-customer/src/controller/`](../backend/shop-customer/src/controller)
+— drop them over the existing files. They look like this (one example; the
+rest follow the same shape):
 
 ```js
 // src/controller/shopOrder/createShopOrder.js
@@ -234,23 +247,38 @@ The client already maps `buyerType` and falls back to
 
 ---
 
-## 4. Public catalog (two lines)
+## 4. Public catalog — the website without a token
 
-The website storefront is browsable **before login**, so these two routes must
-not sit behind the auth middleware:
+The storefront is browsable **before login**, so there are two layers:
 
-```js
-// src/routes/shopProduct.routes.js
-router.post('/list', shopProductController.list);          // was: auth, list
+1. **Drop the guard from the partner list route** (one line), so existing
+   clients that already call `/api/shop-products/list` anonymously keep
+   working:
 
-// src/routes/shopSettings.routes.js  (already public in the current build —
-// keep it that way)
-router.post('/get', shopSettingsController.get);
-```
+   ```js
+   // src/routes/shopProduct.routes.js
+   router.post('/list', shopProductController.list);        // was: auth, list
+   ```
+
+2. **A dedicated public mount** for the website, so its reads never depend on
+   that route's middleware chain:
+
+   ```js
+   // src/routes/shopPublic.routes.js  (ready file in this repo)
+   app.use('/api/shop-public', shopPublicRouter);
+   // POST|GET /products/list   → the same list handler
+   // POST|GET /settings/get    → the same settings handler
+   ```
+
+   [`backend/shop-customer/src/routes/shopPublic.routes.js`](../backend/shop-customer/src/routes/shopPublic.routes.js)
+   re-uses the two existing handlers (so the response shape cannot drift), adds
+   a 60 s cache header on the catalog (5 min on the rules), a per-IP rate limit
+   (`publicReadLimiter.middleware.js`) and a GET mirror of each POST.
 
 `shop-products/list` returns only published/available columns — no cost price,
 no admin fields — so opening it is safe. Everything that *writes* stays behind
-`auth`.
+`auth`. The shop rules (`shop-settings/get`) are terms of sale: the shop cannot
+quote an honest bill without them, so they are public by design.
 
 ### Razorpay webhook
 
@@ -270,7 +298,10 @@ const where = buyerType === 'CUSTOMER' ? { customerId: buyerId } : { salonId: sa
 
 ## 5. Admin panel (my-naai-frontend)
 
-Three small additions; no new tab.
+Three small additions; no new tab. The copy-in components live in
+[`admin-panel-shop-customers/`](../admin-panel-shop-customers/README.md)
+(`BuyerCell`, `BuyerSummary`, `BuyerTypeFilter`, plus `buyerOf(order)` for the
+CSV/export path).
 
 1. **Shop Orders → table row**: show the buyer. `buyerType === 'CUSTOMER'`
    renders the customer's name with a neutral **Customer** badge; a salon order
@@ -294,7 +325,7 @@ address, both of which a customer order has.
 1. Apply the migration + models (columns are nullable/defaulted — deploy is safe
    with the old code still running).
 2. Deploy the backend changes above.
-3. Open `/api/shop-products/list` and `/api/shop-settings/get` publicly.
+3. Open `/api/shop-products/list` publicly and mount `/api/shop-public/*`.
 4. Deploy the web portal (this repo). Until step 2 lands, a customer can browse
    the shop and fill a cart, but checkout returns the backend's refusal —
    which the checkout screen now shows explicitly ("Order not placed", cart

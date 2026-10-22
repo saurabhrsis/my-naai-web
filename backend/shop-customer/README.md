@@ -1,90 +1,108 @@
-# Backend: the Naai Shop for customers
+# Backend: the Naai Shop for customers + the public storefront
 
-Drop-in pieces for the API repo (`rightserveinfotechsystems/my_naai_backend`).
-The reasoning, the full contract and the acceptance checks live in
-[`docs/SHOP-CUSTOMERS.md`](../../docs/SHOP-CUSTOMERS.md); this folder holds the
-part you copy.
+Copy-in files for `rightserveinfotechsystems/my_naai_backend`. The reasoning and
+the full contract live in [`docs/SHOP-CUSTOMERS.md`](../../docs/SHOP-CUSTOMERS.md);
+this folder is the code.
 
-| File | Goes to |
-| --- | --- |
-| `resolveShopBuyer.js` | `src/utils/shopBuyer.js` |
-| `migration.sql` | run once against the database (no Sequelize migration needed if you use `sequelize.sync({ alter })` — the model changes below must match either way) |
+Everything is additive: the salon flow keeps working through the same
+endpoints, and every existing row keeps meaning "a salon ordered this".
+
+## File map
+
+| Here | Goes to | What |
+| --- | --- | --- |
+| `migration.sql` | run once | nullable `salonId`, `buyerType`, `customerId`, buyer-aware cart key |
+| `src/utils/shopBuyer.js` | `src/utils/shopBuyer.js` | who is shopping, from the token |
+| `src/validations/shopBuyer.validation.js` | `src/validations/shopBuyer.validation.js` | cart-line + order-body checks |
+| `src/controller/shopCart/*.js` | `src/controller/shopCart/` | 5 replacements — same endpoints, buyer from the token |
+| `src/controller/shopOrder/createShopOrder.js` | `src/controller/shopOrder/` | replaces the salon-only create |
+| `src/controller/shopOrder/listShopOrders.js` | `src/controller/shopOrder/` | "my orders" for either buyer |
+| `src/controller/shopOrder/getShopOrderById.js` | `src/controller/shopOrder/` | owner-only read |
+| `src/controller/shopOrder/cancelShopOrder.js` | `src/controller/shopOrder/` | owner-only cancel |
+| `src/routes/shopPublic.routes.js` | `src/routes/shopPublic.routes.js` | **the website's no-auth API** |
+| `src/utils/middleware/publicReadLimiter.middleware.js` | same path | rate limit for the open reads |
+| `src/services/README.md` | — | the six service edits, as code |
 
 ## 1. Models
 
 ```js
-// src/database/models/shopOrder.model.js  and  shopCart.model.js
-buyerType: { type: DataTypes.ENUM('SALON', 'CUSTOMER'), allowNull: false, defaultValue: 'SALON' },
-customerId: { type: DataTypes.STRING(36), allowNull: true },
+// src/database/models/shopOrder.model.js   (+ shopCart.model.js)
+buyerType: { type: DataTypes.ENUM('SALON', 'CUSTOMER'), allowNull: false, defaultValue: 'SALON', field: 'buyerType' },
+customerId: { type: DataTypes.STRING(36), allowNull: true, field: 'customerId' },
 // salonId becomes allowNull: true
 
-// associations (after the existing Salon association)
+// associations, after the existing Salon one
 ShopOrder.belongsTo(User, { as: 'customer', foreignKey: 'customerId' });
+ShopCart.belongsTo(User, { as: 'customer', foreignKey: 'customerId' });
 ```
 
-## 2. Controllers — every one that reads `req.user.salonId`
+The tables are created with `sync({ alter: true })` at boot, so the columns
+appear on deploy; run `migration.sql` where sync is not used (it also builds the
+cart's buyer-aware unique key).
 
-| Controller | Change |
-| --- | --- |
-| `shopOrder/createShopOrder.js` | `const buyer = resolveShopBuyer(req)` → pass `...buyer` to the service; 401 when null |
-| `shopOrder/listShopOrders.js` | `listForSalon(salonId, page)` → `listForBuyer(buyer, page)` |
-| `shopOrder/getShopOrderById.js` | fetch, then assert `order.customerId === buyer.buyerId` for a customer (same check the salon path already does) |
-| `shopOrder/cancelShopOrder.js` | same ownership check |
-| `shopCart/getCart.js`, `addToCart.js`, `setCartQty.js`, `removeFromCart.js`, `clearCart.js` | `buyerWhere(buyer)` in the query, `buyerColumns(buyer)` on insert |
+## 2. Routes
+
+The cart and order routes keep their paths and bodies — only the guard has to
+let **both** roles in:
 
 ```js
-// src/controller/shopOrder/createShopOrder.js — the whole shape
-const { resolveShopBuyer } = require('../../utils/shopBuyer');
-const shopOrderService = require('../../services/shopOrder.service');
+// src/routes/shopCart.routes.js
+const { authenticateUserOrSalon } = require('../utils/middleware/...'); // the guard
+shopCartRouter.post('/get',      authenticateUserOrSalon, getCart);
+shopCartRouter.post('/add',      authenticateUserOrSalon, addToCart);
+shopCartRouter.post('/set-qty',  authenticateUserOrSalon, setCartQty);
+shopCartRouter.post('/remove',   authenticateUserOrSalon, removeFromCart);
+shopCartRouter.post('/clear',    authenticateUserOrSalon, clearCart);
 
-const createShopOrder = async (req, res) => {
-  const buyer = resolveShopBuyer(req);
-  if (!buyer) {
-    return res.status(401).json({ status: 'FAILED', message: 'Sign in to place this order.' });
-  }
-  const order = await shopOrderService.createOrder({ ...buyer, ...req.body });
-  return res.json({ status: 'SUCCESS', data: order });
-};
+// src/routes/shopOrder.routes.js — same guard on the buyer routes
+shopOrderRouter.post('/create',     authenticateUserOrSalon, createShopOrder);
+shopOrderRouter.post('/list',       authenticateUserOrSalon, listShopOrders);
+shopOrderRouter.post('/get-by-id',  authenticateUserOrSalon, getShopOrderById);
+shopOrderRouter.post('/cancel',     authenticateUserOrSalon, cancelShopOrder);
+// …the /admin-* routes keep authenticateAdmin, the distributor ones keep theirs.
 ```
 
-## 3. Services
+If the guard is named differently in this build, use whichever one already
+accepts a salon **or** a user token (the notifications route uses it). The point
+is that both roles reach the controller; the controller decides the buyer.
 
-`shopOrder.service.js`
+## 3. The website's no-auth API (new)
 
-- `createOrder({ buyerType, buyerId, isSalon, orderId, items, address, payment, notes })`
-  - `...buyerColumns(buyer)` on create;
-  - **salon**: unchanged (delivery point from the salon record, then the pin);
-  - **customer**: delivery point = the pin in `address`; do not look up a salon;
-  - event actor for a customer:
-    `{ actorType: 'CUSTOMER', actorId: customerId, actorLabel: customer.fullName }`;
-  - the customer's name/phone are copied from `users` into the order snapshot.
-- `listForSalon` → `listForBuyer(buyer, page)` using `buyerWhere(buyer)`.
-- `getById` / `cancel`: keep the existing salon ownership check, add the
-  customer equivalent (`customerId`).
-- `listForAdmin`: include `{ model: db.User, as: 'customer', attributes: ['userId', 'fullName', 'phoneNumber'] }`
-  and return `buyerType`. `decorateForFulfilment` already builds the map and the
-  KM distance from `deliveryLatitude/Longitude`, which a customer order has — so
-  the admin dashboard and the distributor portal work unchanged.
-- Optional filter: `buyerType` on `admin-list`.
+Web visitors browse before they have an account, so the storefront needs reads
+that never ask for a token:
 
-`shopCart.service.js` — takes `buyer` instead of `salonId`; the response shape
-(`{ lines: [...] }`) is unchanged.
+```
+POST|GET /api/shop-public/products/list    → { data: { products, pagination } }
+POST|GET /api/shop-public/settings/get     → { data: { freeDeliveryAbove, deliveryFee, … } }
+```
 
-## 4. Public catalog
-
-The website storefront is browsable before login:
+Mount it with one line in `app.js`, next to the other routers:
 
 ```js
-router.post('/list', shopProductController.list);   // no auth middleware
+app.use('/api/shop-public', shopPublicRouter);
 ```
 
-`shop-settings/get` is already public — keep it that way.
+The handlers are the **same** ones `/api/shop-products/list` and
+`/api/shop-settings/get` already use — only the middleware chain differs — so
+the response shape cannot drift. The router adds a 60 s cache header on the
+catalog (5 min on the rules) and a per-IP rate limit.
+
+> Also make the partner catalog endpoint public
+> (`router.post('/list', listShopProducts)` with no guard): the web app tries
+> it first and falls back to `/api/shop-public/*`, so either deployment order
+> leaves the storefront working. Everything that **writes** stays guarded.
+
+## 4. Services
+
+See [`src/services/README.md`](src/services/README.md) — `createOrder`,
+`listForBuyer`, `getById`, `cancelOrder`, the admin include/filter and the whole
+cart service, as copy-paste code.
 
 ## 5. Razorpay webhook
 
-The checkout sends `notes = { flow, salonId? , buyerId, buyerType, items }`.
-`salonId` is present only for a salon (the existing webhook keeps matching
-exactly as today); a customer payment matches on `buyerId` + `buyerType`:
+The checkout sends `notes = { flow: 'shop-order', buyerId, buyerType, salonId?, items }`.
+`salonId` is present only for a salon, so the existing lookup is unchanged; a
+customer payment matches on the buyer:
 
 ```js
 const { buyerType = 'SALON', buyerId, salonId } = payment.notes || {};
@@ -93,9 +111,30 @@ const where = buyerType === 'CUSTOMER' ? { customerId: buyerId } : { salonId: sa
 
 ## 6. Done when
 
-- a USER token can add to the cart, place an order and list only its own orders;
-- the order lands in `shop_orders` with `buyerType='CUSTOMER'`, `customerId`
-  set, `salonId` NULL, `deliveryLatitude/Longitude` filled from the pin;
-- the admin dashboard lists it with the customer's name and can assign a
-  distributor exactly like a salon order;
-- `POST /api/shop-products/list` answers without a token.
+```bash
+# 1. the open storefront answers with no Authorization header at all
+curl -X POST $API/api/shop-public/products/list -H 'Content-Type: application/json' -d '{"page":1}'
+curl      "$API/api/shop-public/products/list?page=1"
+curl -X POST $API/api/shop-public/settings/get
+
+# 2. a customer (USER token) holds a cart
+curl -X POST $API/api/shop-cart/add -H "Authorization: Bearer $USER_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"productId":"<uuid>","qty":2}'
+
+# 3. …and places a real order (no salonId in the body)
+curl -X POST $API/api/shop-orders/create -H "Authorization: Bearer $USER_TOKEN" \
+  -H 'Content-Type: application/json' -d @order.json
+
+# 4. the order is theirs, and only theirs
+curl -X POST $API/api/shop-orders/list -H "Authorization: Bearer $USER_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"page":1}'
+# → data.orders[0].buyerType === "CUSTOMER", customerId set, salon === null
+
+# 5. a salon still sees only its own, exactly as before
+curl -X POST $API/api/shop-orders/list -H "Authorization: Bearer $SALON_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"page":1}'
+
+# 6. the admin dashboard shows both kinds, and can filter them
+curl -X POST $API/api/shop-orders/admin-list -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"page":1,"buyerType":"CUSTOMER"}'
+```

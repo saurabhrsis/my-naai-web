@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  ArrowUpDown,
   Banknote,
+  ChevronDown,
   ChevronRight,
+  IndianRupee,
   Minus,
   Package,
   Plus,
@@ -10,13 +13,17 @@ import {
   ShieldCheck,
   ShoppingBag,
   Star,
+  Tag,
   Truck,
+  User,
+  X,
   Zap,
 } from 'lucide-react';
 import { api, getFileUrl } from '../lib/api';
 import {
   PRICE_RANGES,
   SHOP_GENDERS,
+  SORT_OPTIONS,
   applyShopFilters,
   categoryChipsFor,
   categoryLabel,
@@ -82,35 +89,58 @@ export function ShopQuantityControl({ qty, onAdd, onSet, disabled = false, small
 }
 
 // ── Product card ─────────────────────────────────────────────────────────────
+// The card is the whole shop: photo, name, category, price and the ADD ↔
+// stepper. The rating rides on the photo as a translucent pill so the body
+// keeps exactly two lines for the things a shopper compares across a 2-up
+// grid — the name and the price. The photo gets a soft bottom shade so the
+// discount badge reads on a white product shot as well as a dark one.
 export function ShopProductCard({ product, qty, onAdd, onSetQty, onOpen }) {
   const off = discountPercent(product);
   return (
     <article className={cx('shop-card', !product.available && 'out-of-stock')}>
-      {off > 0 && <span className="shop-off-badge">{off}% off</span>}
       <button type="button" className="shop-card-media" onClick={() => onOpen?.(product)} aria-label={`View ${product.name}`}>
         <ImageWithFallback src={getFileUrl(product.image)} fallback={PRODUCT_PLACEHOLDER} alt={product.name} className="shop-card-image" />
+        <span className="shop-card-shade" aria-hidden="true" />
+        {off > 0 && <span className="shop-off-badge">{off}% off</span>}
+        {product.rating > 0 && (
+          <span className="shop-card-rating">
+            <Star size={10} /> {Number(product.rating).toFixed(1)}
+          </span>
+        )}
         {!product.available && <span className="shop-stock-veil">Out of stock</span>}
       </button>
       <div className="shop-card-body">
         <h3 onClick={() => onOpen?.(product)}>{product.name}</h3>
         <p className="shop-card-salon">{categoryLabel(product.category)}{product.salonName ? ` · ${product.salonName}` : ''}</p>
         <div className="shop-card-price-row">
-          <div>
-            <strong>{formatCurrency(product.price)}</strong>
-            {product.mrp > 0 && <s>{formatCurrency(product.mrp)}</s>}
-            {off > 0 && <em className="shop-off-badge inline">{off}% off</em>}
-          </div>
-          {product.rating > 0 && (
-            <span className="shop-rating">
-              <Star size={11} /> {Number(product.rating).toFixed(1)}
-            </span>
-          )}
+          <strong>{formatCurrency(product.price)}</strong>
+          {product.mrp > 0 && <s>{formatCurrency(product.mrp)}</s>}
         </div>
         <div className="shop-card-action">
           <ShopQuantityControl qty={qty} onAdd={() => onAdd(product)} onSet={next => onSetQty(product, next)} disabled={!product.available} />
         </div>
       </div>
     </article>
+  );
+}
+
+// ── One labelled filter ─────────────────────────────────────────────────────
+// Kept as native <select>s (the app's filter language) but with a leading icon
+// and its own caret, so the strip reads as four tools rather than four boxes
+// that happen to contain text. The icon is decorative: the accessible name is
+// the visible label, and the screen-reader label is the short one.
+function ShopFilterSelect({ label, ariaLabel, icon: Icon, value, onChange, children }) {
+  return (
+    <label className="shop-filter-select">
+      <span className="shop-filter-label">{label}</span>
+      <span className="shop-select-shell">
+        <Icon size={13} className="shop-select-icon" aria-hidden="true" />
+        <select value={value} onChange={onChange} aria-label={ariaLabel}>
+          {children}
+        </select>
+        <ChevronDown size={13} className="shop-select-caret" aria-hidden="true" />
+      </span>
+    </label>
   );
 }
 
@@ -139,36 +169,63 @@ export function ShopCartBar({ totals, onOpen }) {
 
 // Loads the shop catalog the same way the grid does — the product details
 // page needs the full list anyway (it powers "you may also like").
-export function useShopCatalog(notify) {
+//
+// Two doors, one catalog. A visitor on the public website asks the open
+// `/api/shop-public/products/list` first (no token, cacheable, no partner
+// middleware in the way); a signed-in account asks the usual endpoint first.
+// If the first door is shut — the other deployment has not shipped yet — the
+// second one gets a single try, so neither side of a rolling deploy can leave
+// the shop empty. The grid shows the WHOLE catalog, not just page 1, so
+// products added later still appear; at most 10 pages (200 products) are read.
+export const SHOP_CATALOG_MAX_PAGES = 10;
+
+async function loadShopCatalog(endpoint) {
+  const readPage = async page => {
+    const response = await endpoint({ page, searchString: '' });
+    const body = response && typeof response === 'object' ? (response.data ?? {}) : null;
+    const rows = body?.products || (Array.isArray(body) ? body : null);
+    // A dev server / proxy that answers an unknown path with HTML (or any
+    // shape that is not a catalog) must be treated as a failure, not as an
+    // empty shop — otherwise the fallback door is never tried.
+    if (!Array.isArray(rows)) throw new Error('Unexpected catalog response');
+    return { rows, totalPages: body.pagination?.totalPages || 1 };
+  };
+
+  const first = await readPage(1);
+  const pages = Math.min(first.totalPages, SHOP_CATALOG_MAX_PAGES);
+  const rest = await Promise.all(
+    Array.from({ length: pages - 1 }, (_, i) => readPage(i + 2).then(value => value.rows).catch(() => []))
+  );
+  const list = [...first.rows, ...rest.flat()];
+  // Marker that identifies the deployed build (older builds called the
+  // marketplace endpoint and silently showed the wrong — empty — list).
+  console.debug(`[mynaai-web] Naai Shop: loaded ${list.length} product(s)`);
+  return list;
+}
+
+export function useShopCatalog(notify, { guest = false } = {}) {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
+    const first = guest ? api.shopProductListPublic : api.shopProductList;
+    const second = guest ? api.shopProductList : api.shopProductListPublic;
     try {
-      // The shop browses the COMPANY catalog (shop_products) — separate from
-      // the salons' customer-facing products the app lists under /api/products.
-      // The grid shows the WHOLE catalog, not just page 1, so products added
-      // later still appear; at most 10 pages (200 products) are fetched, the
-      // remaining pages in parallel.
-      const first = await api.shopProductList({ page: 1, searchString: '' });
-      const firstBody = first?.data || {};
-      const rows = firstBody.products || (Array.isArray(firstBody) ? firstBody : []);
-      const totalPages = firstBody.pagination?.totalPages || 1;
-      const pages = Math.min(totalPages, 10);
-      const rest = await Promise.all(
-        Array.from({ length: pages - 1 }, (_, i) =>
-          api.shopProductList({ page: i + 2, searchString: '' })
-            .then(r => r?.data?.products || (Array.isArray(r?.data) ? r.data : []))
-            .catch(() => [])
-        )
-      );
-      const list = [...rows, ...rest.flat()];
+      let list;
+      try {
+        list = await loadShopCatalog(first);
+      } catch (firstError) {
+        // Anonymous browse must survive either deployment order: fall through
+        // to the other door once, then report the original failure.
+        try {
+          list = await loadShopCatalog(second);
+        } catch {
+          throw firstError;
+        }
+      }
       setProducts(list.map(normalizeShopProduct));
-      // Marker that identifies the deployed build (older builds called the
-      // marketplace endpoint and silently showed the wrong — empty — list).
-      console.debug(`[mynaai-web] Naai Shop: loaded ${list.length} product(s) from /api/shop-products/list`);
     } catch (err) {
       setProducts([]);
       setError(getErrorMessage(err, 'The shop list could not be loaded.'));
@@ -176,7 +233,7 @@ export function useShopCatalog(notify) {
     } finally {
       setLoading(false);
     }
-  }, [notify]);
+  }, [notify, guest]);
   useEffect(() => { load(); }, [load]);
   return { products, loading, error, load };
 }
@@ -231,19 +288,23 @@ export function ShopScreen({ session, navigate, notify }) {
   const ownerId = shopOwnerId(session);
   const copy = shopCopy(session);
   const guest = isShopGuest(session);
-  const { products, loading, error, load } = useShopCatalog(notify);
+  const { products, loading, error, load } = useShopCatalog(notify, { guest });
   const { cart, add, setQty } = useSyncedCart(ownerId);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('all');
   const [gender, setGender] = useState('all');
   const [priceRange, setPriceRange] = useState('all');
+  const [sort, setSort] = useState('popular');
 
   const shopSettings = useShopSettings();
   const categories = useMemo(() => categoryChipsFor(products), [products]);
   const visible = useMemo(
-    () => applyShopFilters(products, { search, category, gender, priceRange }),
-    [products, search, category, gender, priceRange],
+    () => applyShopFilters(products, { search, category, gender, priceRange, sort }),
+    [products, search, category, gender, priceRange, sort],
   );
+  // Any facet other than the default sort counts as an active filter — that is
+  // when the "Clear" action earns its place on the results line.
+  const filtersActive = Boolean(search) || category !== 'all' || gender !== 'all' || priceRange !== 'all' || sort !== 'popular';
   const totals = useMemo(() => cartTotals(cart, shopSettings), [cart, shopSettings]);
   const qtyFor = id => cart.find(line => line.productId === String(id))?.qty || 0;
 
@@ -270,6 +331,7 @@ export function ShopScreen({ session, navigate, notify }) {
     setCategory('all');
     setGender('all');
     setPriceRange('all');
+    setSort('popular');
   };
 
   return (
@@ -296,39 +358,44 @@ export function ShopScreen({ session, navigate, notify }) {
           </div>
         }
       />
-      <label className="search-field shop-search">
-        <Search size={17} />
-        <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search shampoo, clippers, beard oil…" aria-label="Search shop products" />
-      </label>
+      {/* Search + four filters in one block, with the clear action inside the
+          field it clears: an empty search shows no ✕, a term shows one. */}
+      <div className="shop-toolbar">
+        <div className="search-field shop-search">
+          <Search size={17} />
+          <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search shampoo, clippers, beard oil…" aria-label="Search shop products" />
+          {search && (
+            <button type="button" className="shop-search-clear" onClick={() => setSearch('')} aria-label="Clear search">
+              <X size={15} />
+            </button>
+          )}
+        </div>
 
-      <section className="shop-filters-selects" aria-label="Filter products">
-        <label className="shop-filter-select">
-          <span>Category</span>
-          <select value={category} onChange={event => setCategory(event.target.value)} aria-label="Category">
+        <section className="shop-filters-selects" aria-label="Filter products">
+          <ShopFilterSelect label="Category" ariaLabel="Category" icon={Tag} value={category} onChange={event => setCategory(event.target.value)}>
             <option value="all">All categories</option>
             {categories.map(item => (
               <option key={item.id} value={item.id}>{item.label}</option>
             ))}
-          </select>
-        </label>
-        <label className="shop-filter-select">
-          <span>For</span>
-          <select value={gender} onChange={event => setGender(event.target.value)} aria-label="Gender">
+          </ShopFilterSelect>
+          <ShopFilterSelect label="For" ariaLabel="Gender" icon={User} value={gender} onChange={event => setGender(event.target.value)}>
             <option value="all">All</option>
             {SHOP_GENDERS.map(item => (
               <option key={item.id} value={item.id}>{item.label}</option>
             ))}
-          </select>
-        </label>
-        <label className="shop-filter-select">
-          <span>Price</span>
-          <select value={priceRange} onChange={event => setPriceRange(event.target.value)} aria-label="Price">
+          </ShopFilterSelect>
+          <ShopFilterSelect label="Price" ariaLabel="Price" icon={IndianRupee} value={priceRange} onChange={event => setPriceRange(event.target.value)}>
             {PRICE_RANGES.map(item => (
               <option key={item.id} value={item.id}>{item.label}</option>
             ))}
-          </select>
-        </label>
-      </section>
+          </ShopFilterSelect>
+          <ShopFilterSelect label="Sort" ariaLabel="Sort products" icon={ArrowUpDown} value={sort} onChange={event => setSort(event.target.value)}>
+            {SORT_OPTIONS.map(item => (
+              <option key={item.id} value={item.id}>{item.label}</option>
+            ))}
+          </ShopFilterSelect>
+        </section>
+      </div>
 
       {loading ? (
         <div className="shop-grid">{[1, 2, 3, 4, 5, 6].map(item => <SkeletonCard key={item} className="shop-skeleton" />)}</div>
@@ -336,7 +403,12 @@ export function ShopScreen({ session, navigate, notify }) {
         <EmptyState icon={ShoppingBag} title="The shop is out of reach" message={`${error} Check your connection and try again.`} action={<Button onClick={load}><RefreshCw size={15} /> Retry</Button>} />
       ) : visible.length ? (
         <>
-          <div className="shop-count-line"><strong>{visible.length}</strong> {visible.length === 1 ? 'product' : 'products'}{(category !== 'all' || gender !== 'all' || priceRange !== 'all' || search) && <button type="button" className="shop-clear-filters" onClick={resetFilters}>Clear filters</button>}</div>
+          <div className="shop-count-line">
+            <span className="shop-count-text"><strong>{visible.length}</strong> {visible.length === 1 ? 'product' : 'products'}</span>
+            {filtersActive && (
+              <button type="button" className="shop-clear-filters" onClick={resetFilters}>Clear filters</button>
+            )}
+          </div>
           <div className="shop-grid">
             {visible.map(product => (
               <ShopProductCard key={product.id} product={product} qty={qtyFor(product.id)} onAdd={handleAdd} onSetQty={handleSetQty} onOpen={openProduct} />
@@ -344,7 +416,14 @@ export function ShopScreen({ session, navigate, notify }) {
           </div>
         </>
       ) : (
-        <EmptyState icon={Search} title="No products match" message="Try a different search, category or price range." action={<Button variant="secondary" onClick={resetFilters}>Clear filters</Button>} />
+        <EmptyState
+          icon={Search}
+          title="Nothing here yet"
+          message={category === 'all'
+            ? 'No product matches this search and price. Try a broader filter.'
+            : `The ${categories.find(item => item.id === category)?.label || 'selected'} shelf is empty right now — try another category.`}
+          action={<Button variant="secondary" onClick={resetFilters}>Show all products</Button>}
+        />
       )}
 
       <ShopCartBar totals={totals} onOpen={openCart} />
@@ -362,7 +441,7 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
   const copy = shopCopy(session);
   const guest = isShopGuest(session);
   const productId = String(params?.productId || '');
-  const { products, loading, error, load } = useShopCatalog(notify);
+  const { products, loading, error, load } = useShopCatalog(notify, { guest });
   const { cart, add, setQty } = useSyncedCart(ownerId);
   const shopSettings = useShopSettings();
 

@@ -9,9 +9,11 @@ import { ShopOrderScreen, ShopOrdersScreen } from './ShopOrders';
 import { addToCart, clearShopStorage, findOrder, placeOrder, readCart, readOrders, setOrderSyncState } from '../lib/shopOrders';
 import { resetShopSettingsCache } from '../lib/shopSettings';
 
-const { shopProductList, shopSettingsGet, shopOrderCreate } = vi.hoisted(() => ({
+const { shopProductList, shopProductListPublic, shopSettingsGet, shopSettingsGetPublic, shopOrderCreate } = vi.hoisted(() => ({
   shopProductList: vi.fn(),
+  shopProductListPublic: vi.fn(),
   shopSettingsGet: vi.fn(),
+  shopSettingsGetPublic: vi.fn(),
   shopOrderCreate: vi.fn(),
 }));
 
@@ -29,7 +31,12 @@ vi.mock('../lib/api', async () => {
   // answers the new endpoint; the old marketplace one is left as-is.
   // shopSettingsGet answers the admin-managed shop rules (tests that need
   // custom rules re-mock it; the default is the historic 499/49 bill).
-  return { ...actual, api: { ...actual.api, shopProductList, shopSettingsGet } };
+  // The public storefront endpoints (the ones the website calls with no token)
+  // mirror the partner ones here, so a guest test never reaches the network.
+  return {
+    ...actual,
+    api: { ...actual.api, shopProductList, shopProductListPublic, shopSettingsGet, shopSettingsGetPublic },
+  };
 });
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -97,6 +104,8 @@ beforeEach(() => {
   resetShopSettingsCache(); // each test re-fetches its own rules
   shopProductList.mockReset();
   shopProductList.mockResolvedValue({ status: 'SUCCESS', data: { products: PRODUCT_FIXTURES } });
+  shopProductListPublic.mockReset();
+  shopProductListPublic.mockImplementation(payload => shopProductList(payload));
   // Shop rules default to the historic bill (₹49 free delivery, above ₹499,
   // no discount, no COD limit) — tests that need other rules re-mock this.
   shopSettingsGet.mockReset();
@@ -104,6 +113,8 @@ beforeEach(() => {
     status: 'SUCCESS',
     data: { freeDeliveryAbove: 499, deliveryFee: 49, discountPercent: 0, codThreshold: 0, codCharges: 0 },
   });
+  shopSettingsGetPublic.mockReset();
+  shopSettingsGetPublic.mockImplementation(() => shopSettingsGet());
   // The backend accepts orders by default; a rejection test overrides this.
   shopOrderCreate.mockReset();
   shopOrderCreate.mockResolvedValue({ ok: true, code: 'OK', order: null });
@@ -196,6 +207,40 @@ describe('ShopScreen', () => {
     await setFilter('Gender', 'all');
     await setFilter('Price', 'under500');
     expect(Array.from(container.querySelectorAll('.shop-card h3')).map(node => node.textContent)).toEqual(['Keratin Shampoo 200ml', 'Beard Oil 30ml', 'Argan Hair Serum 100ml', 'Repair Hair Mask 250ml', 'Face Scrub']);
+  });
+
+  it('sorts the grid with the Sort select and clears the search from its own ✕', async () => {
+    const { container } = await render(<ShopScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    const selectByLabel = label => Array.from(container.querySelectorAll('select'))
+      .find(item => item.getAttribute('aria-label') === label);
+    const titles = () => Array.from(container.querySelectorAll('.shop-card h3')).map(node => node.textContent);
+
+    // Default order is Popular (rating, high to low).
+    expect(titles()[0]).toBe('Keratin Shampoo 200ml');
+    const sort = selectByLabel('Sort products');
+    expect(sort).toBeTruthy();
+    sort.value = 'price-asc';
+    await act(async () => { sort.dispatchEvent(new Event('change', { bubbles: true })); });
+    // ₹99 wax is out of stock, so the cheapest buyable item leads the grid.
+    expect(titles()[0]).toBe('Beard Oil 30ml');
+    expect(titles().at(-1)).toBe('Hair Clipper Pro');
+
+    // A search narrows the grid; the field's own ✕ brings the catalog back
+    // without touching the other filters.
+    const search = container.querySelector('input[aria-label="Search shop products"]');
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      setter.call(search, 'shampoo');
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(titles()).toEqual(['Keratin Shampoo 200ml']);
+
+    const clear = container.querySelector('.shop-search-clear');
+    expect(clear).toBeTruthy();
+    await act(async () => { clear.click(); });
+    expect(titles()).toHaveLength(6);
+    // The sort choice survives clearing the search (only the term was cleared).
+    expect(selectByLabel('Sort products').value).toBe('price-asc');
   });
 
   it('opens the product details page when a card is tapped', async () => {
@@ -758,6 +803,30 @@ describe('the shop for customers and website visitors', () => {
     expect(navigate).toHaveBeenCalledWith('login', { returnTo: '/shop' });
     // Nothing was written: a guest cart would follow the browser, not a person.
     expect(readCart('guest')).toHaveLength(0);
+  });
+
+  it('reads the open storefront endpoint for a visitor, and falls back to the partner one', async () => {
+    // The public door answers first — no token is involved. The two mocks are
+    // separated here (the shared default delegates one to the other).
+    shopProductListPublic.mockReset();
+    shopProductListPublic.mockResolvedValue({ status: 'SUCCESS', data: { products: PRODUCT_FIXTURES } });
+    shopProductList.mockReset();
+    shopProductList.mockResolvedValue({ status: 'SUCCESS', data: { products: PRODUCT_FIXTURES } });
+    await render(<ShopScreen session={null} navigate={vi.fn()} notify={vi.fn()} />);
+    expect(shopProductListPublic).toHaveBeenCalledWith({ page: 1, searchString: '' });
+    expect(shopProductList).not.toHaveBeenCalled();
+
+    // A backend that has not shipped `/api/shop-public/*` yet answers 404;
+    // the visitor still gets the catalog through the old route instead of an
+    // empty shop.
+    document.body.innerHTML = '';
+    shopProductListPublic.mockReset();
+    shopProductList.mockReset();
+    shopProductListPublic.mockRejectedValue(Object.assign(new Error('Request failed (404)'), { status: 404 }));
+    shopProductList.mockResolvedValue({ status: 'SUCCESS', data: { products: PRODUCT_FIXTURES } });
+    const { container } = await render(<ShopScreen session={null} navigate={vi.fn()} notify={vi.fn()} />);
+    expect(container.textContent).toContain('Beard Oil 30ml');
+    expect(container.querySelector('.shop-card')).toBeTruthy();
   });
 
   it('sends a visitor to sign in from the cart and orders shortcuts', async () => {

@@ -209,6 +209,15 @@ under `/api/products/*`) are NOT the shop catalog. The shop browses the
 **company's** `shop_products` table via `POST /api/shop-products/list`
 (`api.shopProductList`) — no `salonId` anywhere in it.
 
+**The catalog is also open to the public website.** A visitor with no token
+reads `POST|GET /api/shop-public/products/list` (and `/settings/get` for the
+bill rules) — the same handlers as the partner route, mounted without the auth
+chain, cached for a minute and rate-limited per IP. The web app asks that door
+first while nobody is signed in and falls back to `/api/shop-products/list`, so
+a deployment that has not shipped the public mount yet still shows the catalog;
+a signed-in account does the reverse. Contract and rollout:
+[`SHOP-CUSTOMERS.md`](SHOP-CUSTOMERS.md).
+
 **How the client stays in sync** (`src/lib/shopServerSync.js`):
 
 - the localStorage copy (`mynaaiShopCart:<salonId>`,
