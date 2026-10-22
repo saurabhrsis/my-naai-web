@@ -81,6 +81,9 @@ import {
 } from './components/SalonScreens';
 import { ShopProductDetailScreen, ShopScreen } from './components/ShopScreen';
 import { ShopCartScreen, ShopCheckoutScreen } from './components/ShopCartCheckout';
+import { shopStorageOwnerId } from './lib/shopBuyer';
+import { adoptGuestCart } from './lib/shopOrders';
+import { pushCartAdd } from './lib/shopServerSync';
 import { ShopOrderScreen, ShopOrdersScreen } from './components/ShopOrders';
 import { SubscriptionScreen } from './components/SubscriptionScreen';
 import { ConfirmProvider, LOGOUT_CONFIRM, useConfirm } from './components/ConfirmDialog';
@@ -158,10 +161,12 @@ const SALON_ROUTE_NAMES = ['queue', 'history', ...SHOP_ROUTE_NAMES, 'salonProduc
 // ask). The info pages are public too: the site footer links About/FAQ/Terms/
 // Privacy and a website's legal pages must never sit behind a login. `login`
 // is handled by AppRoot itself, not by the guest shell.
-// A visitor may browse the shop and open a product page — the catalog is a
-// public storefront. Everything that writes to an account (cart, checkout,
-// orders) stays behind the login.
-const GUEST_ROUTE_NAMES = ['home', 'salon', 'shop', 'shopProduct', 'about', 'faq', 'terms', 'privacy', 'contact', 'partner'];
+// A visitor may browse the shop, open a product page AND fill a cart — the
+// catalog and the basket are a public storefront; the account is asked for at
+// the moment of purchase. So the cart and the checkout screen (which renders
+// the sign-in gate for a visitor) are public routes too. `/shopOrders` is NOT:
+// order history belongs to an account and lives in the signed-in dashboard.
+const GUEST_ROUTE_NAMES = ['home', 'salon', 'shop', 'shopProduct', 'shopCart', 'shopCheckout', 'about', 'faq', 'terms', 'privacy', 'contact', 'partner'];
 const PUBLIC_ROUTE_NAMES = [...GUEST_ROUTE_NAMES, 'login'];
 
 function defaultRouteForRole(role) {
@@ -406,6 +411,14 @@ function AppRoot() {
     }
     const stored = saveSession(resolvedSession);
     setSession(stored);
+    // A visitor who filled a cart before signing in keeps every line: the
+    // basket moves off this browser's guest slot onto the account (and up to
+    // the server) BEFORE the resume route renders, so a resume into checkout
+    // shows the same items rather than an empty cart. `adoptGuestCart` is a
+    // no-op when there was nothing in the guest slot.
+    adoptGuestCart(shopStorageOwnerId(stored)).forEach(line => {
+      pushCartAdd(String(line.productId), line.qty);
+    });
     // Guests who landed here from a salon page (Book now → login) go straight
     // back to that exact salon; everyone else lands on their role home.
     const resume = resolveResumeRoute(stored.role, popPendingRoute());
@@ -645,7 +658,14 @@ export function GuestShell({ route, navigate, notifyInstall, showBuzzerCheck = f
             ? <ShopScreen session={null} navigate={guestNavigate} notify={notify} />
             : route.name === 'shopProduct'
               ? <ShopProductDetailScreen session={null} params={route.params} navigate={guestNavigate} notify={notify} />
-              : ['about', 'faq', 'terms', 'privacy', 'contact'].includes(route.name)
+              : route.name === 'shopCart'
+                ? <ShopCartScreen session={null} navigate={guestNavigate} notify={notify} />
+                : route.name === 'shopCheckout'
+                  // A visitor never sees the address/payment form: this screen
+                  // renders the sign-in gate and explains why an account is
+                  // needed, then resumes here after auth.
+                  ? <ShopCheckoutScreen session={null} navigate={guestNavigate} notify={notify} />
+                  : ['about', 'faq', 'terms', 'privacy', 'contact'].includes(route.name)
                 ? <InfoScreen type={route.name} navigate={guestNavigate} />
                 : <HomeScreen session={null} navigate={guestNavigate} notify={notify} />}
       {/* The signed-out buzzer check lives on the page a tester can actually

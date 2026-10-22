@@ -83,8 +83,21 @@ export function shopCopy(session) {
       : 'delivered to your address in 1–2 days',
     sellerFallback: 'Supplied by My Naai',
     deliveredLine: salon ? 'Delivered — enjoy the stock at' : 'Delivered — enjoy your order',
-    // A visitor can look at everything; the cart needs an account so the
-    // basket belongs to a person, not to this browser.
+    // A visitor can look at everything AND fill a cart; the account is asked
+    // for at the moment of purchase, when its value is obvious (the order has
+    // to reach a person and be trackable afterwards).
     signInToBuy: 'Sign in to add products to your cart — it takes one OTP.',
+    guestCartNote: 'Your cart stays on this device until you sign in — the account is asked for at checkout.',
+    // The gate itself. `guestCheckoutPoints` is rendered as a short list, so
+    // the visitor knows exactly what the account buys them before tapping.
+    guestCheckoutTitle: 'Sign in to place this order',
+    guestCheckoutLead: 'One OTP signs you in — and creates your account if you are new. Nothing in your cart is lost.',
+    guestCheckoutPoints: [
+      'Your phone number is what the delivery partner calls and what the OTP proves.',
+      'Your cart moves to the account, so the order can be tracked and cancelled before dispatch.',
+      'You can reorder from My orders later, from the app or this site.',
+    ],
+    guestCheckoutCta: 'Sign in / Create account',
+    guestCheckoutBack: 'Keep shopping',
   };
 }

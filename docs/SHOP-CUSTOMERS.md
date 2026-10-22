@@ -59,6 +59,27 @@ The create body is the same contract for both buyers (no `salonId`, no
 
 ---
 
+### The visitor's cart and the purchase gate (web)
+
+A visitor on the public website can browse `/shop`, open `/shopProduct` and
+**fill a cart** — no account, no OTP. The cart lives in the browser under the
+`guest` key (`shopCart:guest`), exactly the shape an account's cart uses.
+`/shopCheckout` is a public route that renders the **gate** for a visitor: why
+an account is needed (a phone the delivery partner can call, an order that can
+be tracked and cancelled, My orders later), the cart lines and the bill — and
+one **Sign in / Create account** action that requests the USER role and stashes
+`/shopCheckout` as the resume route.
+
+On a successful sign-in `completeAuth` calls `adoptGuestCart(ownerId)`
+(`src/lib/shopOrders.js`): the guest lines are merged into the account's cart
+(a duplicate keeps the larger quantity), pushed to the server cart, and the
+guest slot is cleared — so the resumed checkout shows the same items and a
+shared device never holds two copies of the basket. Order history is not public:
+`/shopOrders` stays behind the login and the shop header only offers it to a
+signed-in account.
+
+---
+
 ## 2. Database
 
 PostgreSQL. Two nullable columns and a relaxed foreign key — no existing row is
@@ -270,6 +291,18 @@ The storefront is browsable **before login**, so there are two layers:
 no admin fields — so opening it is safe. Everything that *writes* stays behind
 `auth`. The shop rules (`shop-settings/get`) are terms of sale: the shop cannot
 quote an honest bill without them, so they are public by design.
+
+### The facets are the server's job
+
+The storefront sends the whole question on every browse — `page`, `pageSize`,
+`searchString`, `category`, `gender`, `priceRange`, `sort`, `inStock` — and both
+doors (`/api/shop-public/products/list` and `/api/shop-products/list`) go through
+**one** controller, so a visitor's request and a signed-in request are the same
+query. `pagination.applied` echoes what the server applied; the web shop pages
+the answer when it sees that marker and falls back to downloading the catalog
+and filtering in the browser when it does not, so **either repo can deploy
+first**. See `patches/README.md` (`backend-shop-catalog-filters.patch`) for the
+exact SQL and the superset rule for `category`/`gender`.
 
 ### Razorpay webhook
 

@@ -1,6 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowUpDown,
   Banknote,
   ChevronDown,
   ChevronRight,
@@ -21,14 +20,16 @@ import {
 } from 'lucide-react';
 import { api, getFileUrl } from '../lib/api';
 import {
+  DEFAULT_SHOP_FILTERS,
   PRICE_RANGES,
   SHOP_GENDERS,
-  SORT_OPTIONS,
   applyShopFilters,
   categoryChipsFor,
   categoryLabel,
   discountPercent,
   normalizeShopProduct,
+  shopCatalogQuery,
+  shopFiltersActive,
 } from '../lib/shopCatalog';
 import { addToCart, cartTotals, readCart, removeCartLine, saveCart, setCartQty } from '../lib/shopOrders';
 import { buyerName, isShopGuest, shopCopy, shopStorageOwnerId } from '../lib/shopBuyer';
@@ -144,6 +145,38 @@ function ShopFilterSelect({ label, ariaLabel, icon: Icon, value, onChange, child
   );
 }
 
+// The category rail: the fastest way to move around a catalog, above the
+// selects on every width. The select stays as the labelled, keyboard- and
+// screen-reader-friendly control (and keeps the long-tail categories the
+// admin invents); the chips are the one-tap path to the same state, and the
+// two always show the same active category because they read one variable.
+function ShopCategoryRail({ categories, value, onChange }) {
+  return (
+    <div className="shop-category-rail" role="group" aria-label="Shop categories">
+      <button
+        type="button"
+        className={cx('shop-chip', value === 'all' && 'active')}
+        aria-pressed={value === 'all'}
+        onClick={() => onChange('all')}
+      >
+        All
+      </button>
+      {categories.map(item => (
+        <button
+          key={item.id}
+          type="button"
+          className={cx('shop-chip', value === item.id && 'active')}
+          aria-pressed={value === item.id}
+          onClick={() => onChange(value === item.id ? 'all' : item.id)}
+        >
+          <Tag size={12} aria-hidden="true" />
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // ── Floating "3 items · ₹1,240 → View cart" bar (shop + product page) ──────
 //
 // The number is the ITEM value (`subtotal`), never the checkout total. The bar
@@ -167,75 +200,161 @@ export function ShopCartBar({ totals, onOpen }) {
   );
 }
 
-// Loads the shop catalog the same way the grid does — the product details
-// page needs the full list anyway (it powers "you may also like").
+// Loads the shop catalog through the API, with the facets the user picked.
 //
 // Two doors, one catalog. A visitor on the public website asks the open
 // `/api/shop-public/products/list` first (no token, cacheable, no partner
 // middleware in the way); a signed-in account asks the usual endpoint first.
 // If the first door is shut — the other deployment has not shipped yet — the
 // second one gets a single try, so neither side of a rolling deploy can leave
-// the shop empty. The grid shows the WHOLE catalog, not just page 1, so
-// products added later still appear; at most 10 pages (200 products) are read.
+// the shop empty. Both doors receive the SAME body (see `shopCatalogQuery`),
+// so a visitor's filtered page and the same page after signing in cannot
+// disagree.
+//
+// Search, category, gender, price range and pagination are the SERVER's job:
+// the list the user is looking at is page N of the server's answer, not a
+// client-side slice of page 1. The server marks every response it filtered
+// with `pagination.applied`; a deployment that has not shipped the filter
+// patch yet answers without that marker, and the shop then falls back to the
+// old behaviour (read the catalog, narrow it here) instead of showing an
+// unfiltered shelf. Either way the grid applies the same predicate once more
+// before rendering, so what is on screen always matches the controls.
 export const SHOP_CATALOG_MAX_PAGES = 10;
 
-async function loadShopCatalog(endpoint) {
-  const readPage = async page => {
-    const response = await endpoint({ page, searchString: '' });
-    const body = response && typeof response === 'object' ? (response.data ?? {}) : null;
-    const rows = body?.products || (Array.isArray(body) ? body : null);
-    // A dev server / proxy that answers an unknown path with HTML (or any
-    // shape that is not a catalog) must be treated as a failure, not as an
-    // empty shop — otherwise the fallback door is never tried.
-    if (!Array.isArray(rows)) throw new Error('Unexpected catalog response');
-    return { rows, totalPages: body.pagination?.totalPages || 1 };
-  };
+const catalogBody = response => (response && typeof response === 'object' ? (response.data ?? {}) : null);
 
-  const first = await readPage(1);
-  const pages = Math.min(first.totalPages, SHOP_CATALOG_MAX_PAGES);
-  const rest = await Promise.all(
-    Array.from({ length: pages - 1 }, (_, i) => readPage(i + 2).then(value => value.rows).catch(() => []))
-  );
-  const list = [...first.rows, ...rest.flat()];
-  // Marker that identifies the deployed build (older builds called the
-  // marketplace endpoint and silently showed the wrong — empty — list).
-  console.debug(`[mynaai-web] Naai Shop: loaded ${list.length} product(s)`);
-  return list;
+const catalogRowCount = body => (Array.isArray(body?.products) ? body.products.length : 0);
+
+async function readCatalogPage(endpoint, query) {
+  const response = await endpoint(query);
+  const body = catalogBody(response);
+  const rows = body?.products || (Array.isArray(body) ? body : null);
+  // A dev server / proxy that answers an unknown path with HTML (or any shape
+  // that is not a catalog) must be treated as a failure, not as an empty shop —
+  // otherwise the fallback door is never tried.
+  if (!Array.isArray(rows)) throw new Error('Unexpected catalog response');
+  const pagination = body.pagination || {};
+  return {
+    rows,
+    // Did the server actually apply the facets? It says so by echoing them.
+    serverFiltered: Boolean(pagination.applied || body.applied),
+    page: Math.max(1, Number(pagination.page) || query.page || 1),
+    totalPages: Math.max(1, Number(pagination.totalPages) || 1),
+    total: Number.isFinite(Number(pagination.totalProducts)) ? Number(pagination.totalProducts) : catalogRowCount(body),
+  };
 }
 
-export function useShopCatalog(notify, { guest = false } = {}) {
+// Ask the doors in order; the first one that answers owns the rest of the
+// session's paging (a second page must come from the same deployment).
+async function readWithDoors(doors, query) {
+  let firstError = null;
+  for (const door of doors) {
+    try {
+      return { door, result: await readCatalogPage(door, query) };
+    } catch (error) {
+      if (!firstError) firstError = error;
+    }
+  }
+  throw firstError || new Error('Unexpected catalog response');
+}
+
+// Legacy path: the deployed API ignored the facets, so the whole catalog is
+// read here and filtered in the browser (the pre-existing behaviour). Page 1
+// is the answer that told us the server is not filtering, so it is reused
+// rather than asked for twice.
+async function readWholeCatalog(door, query, firstPage) {
+  const first = firstPage || await readCatalogPage(door, query);
+  const pages = Math.min(first.totalPages, SHOP_CATALOG_MAX_PAGES);
+  const rest = await Promise.all(
+    Array.from({ length: pages - 1 }, (_, i) => readCatalogPage(door, { ...query, page: i + 2 }).then(value => value.rows).catch(() => []))
+  );
+  return [...first.rows, ...rest.flat()];
+}
+
+function catalogDoors(guest) {
+  return guest ? [api.shopProductListPublic, api.shopProductList] : [api.shopProductList, api.shopProductListPublic];
+}
+
+/**
+ * The shop catalog, as the server sees it.
+ *
+ * `filters` is re-sent on every change (search is debounced by the screen, so
+ * a keystroke does not turn into a request per character) and each change
+ * starts again from page 1 — page 3 of the previous query means nothing for
+ * the new one. `all: true` is for the product details page, which needs the
+ * whole catalog to resolve a deep link and to suggest similar items.
+ */
+export function useShopCatalog(notify, { guest = false, filters = DEFAULT_SHOP_FILTERS, all = false } = {}) {
+  const query = useMemo(() => shopCatalogQuery(filters), [
+    filters?.search, filters?.category, filters?.gender, filters?.priceRange, filters?.sort,
+  ]);
+  const queryKey = JSON.stringify(query);
+  const doors = useMemo(() => catalogDoors(guest), [guest]);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
+  const [pages, setPages] = useState({ page: 1, totalPages: 1, total: 0, serverFiltered: false });
+  const requestRef = useRef(0);
+
   const load = useCallback(async () => {
+    const request = requestRef.current + 1;
+    requestRef.current = request;
     setLoading(true);
     setError('');
-    const first = guest ? api.shopProductListPublic : api.shopProductList;
-    const second = guest ? api.shopProductList : api.shopProductListPublic;
     try {
-      let list;
-      try {
-        list = await loadShopCatalog(first);
-      } catch (firstError) {
-        // Anonymous browse must survive either deployment order: fall through
-        // to the other door once, then report the original failure.
-        try {
-          list = await loadShopCatalog(second);
-        } catch {
-          throw firstError;
-        }
+      const { door, result } = await readWithDoors(doors, query);
+      let rows = result.rows;
+      let nextPages = { page: result.page, totalPages: result.totalPages, total: result.total, serverFiltered: result.serverFiltered };
+      if (all || !result.serverFiltered) {
+        // The details page needs the full catalog; an older backend needs the
+        // full catalog too, because the narrowing has to happen here.
+        rows = await readWholeCatalog(door, query, result);
+        nextPages = { page: 1, totalPages: 1, total: rows.length, serverFiltered: result.serverFiltered };
       }
-      setProducts(list.map(normalizeShopProduct));
+      if (requestRef.current !== request) return; // a newer filter won
+      setProducts(rows.map(normalizeShopProduct));
+      setPages(nextPages);
+      // Marker that identifies the deployed build (older builds called the
+      // marketplace endpoint and silently showed the wrong — empty — list).
+      console.debug(`[my-naai-web] Naai Shop: ${rows.length} product(s), page ${nextPages.page}/${nextPages.totalPages}${nextPages.serverFiltered ? ' (server filtered)' : ' (client filtered)'}`);
     } catch (err) {
+      if (requestRef.current !== request) return;
       setProducts([]);
+      setPages({ page: 1, totalPages: 1, total: 0, serverFiltered: false });
       setError(getErrorMessage(err, 'The shop list could not be loaded.'));
       notify?.('error', 'The shop list could not be loaded.');
     } finally {
-      setLoading(false);
+      if (requestRef.current === request) setLoading(false);
     }
-  }, [notify, guest]);
+    // `query` is rebuilt from the same inputs `queryKey` is built from, so the
+    // key is the honest dependency list (the object identity changes every
+    // render and would re-fetch on every keystroke-free render).
+  }, [doors, queryKey, all, notify]);
+
   useEffect(() => { load(); }, [load]);
-  return { products, loading, error, load };
+
+  // "Load more" asks for the NEXT page of the same query. Without server-side
+  // filtering there is nothing to ask for — the whole catalog is already here.
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !pages.serverFiltered || pages.page >= pages.totalPages) return;
+    setLoadingMore(true);
+    try {
+      const { result } = await readWithDoors(doors, { ...query, page: pages.page + 1 });
+      setProducts(current => {
+        const seen = new Set(current.map(item => String(item.id)));
+        const extra = result.rows.map(normalizeShopProduct).filter(item => !seen.has(String(item.id)));
+        return [...current, ...extra];
+      });
+      setPages(current => ({ ...current, page: result.page, totalPages: result.totalPages, total: result.total }));
+    } catch (err) {
+      notify?.('error', getErrorMessage(err, 'The next page could not be loaded.'));
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [doors, loadingMore, notify, pages.page, pages.serverFiltered, pages.totalPages, query]);
+
+  return { products, loading, loadingMore, error, load, loadMore, pages, serverFiltered: pages.serverFiltered };
 }
 
 // Cart that stays with the ACCOUNT, not the browser. The local copy (and the
@@ -288,39 +407,49 @@ export function ShopScreen({ session, navigate, notify }) {
   const ownerId = shopOwnerId(session);
   const copy = shopCopy(session);
   const guest = isShopGuest(session);
-  const { products, loading, error, load } = useShopCatalog(notify, { guest });
-  const { cart, add, setQty } = useSyncedCart(ownerId);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('all');
   const [gender, setGender] = useState('all');
   const [priceRange, setPriceRange] = useState('all');
-  const [sort, setSort] = useState('popular');
+  // The field keeps every keystroke (it is the user's text); the QUERY only
+  // takes the value once typing settles. Tapping a filter sends the last
+  // settled term, so a select never races the debounce.
+  const [term, setTerm] = useState('');
+  useEffect(() => {
+    const timer = window.setTimeout(() => setTerm(search.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
+  // Every facet the user can see is part of the request — one object, sent to
+  // the API on both doors, and the same object the grid narrows with.
+  const filters = useMemo(() => ({
+    search: term,
+    category,
+    gender,
+    priceRange,
+    sort: DEFAULT_SHOP_FILTERS.sort,
+  }), [term, category, gender, priceRange]);
+
+  const { products, loading, loadingMore, error, load, loadMore, pages, serverFiltered } = useShopCatalog(notify, { guest, filters });
+  const { cart, add, setQty } = useSyncedCart(ownerId);
   const shopSettings = useShopSettings();
   const categories = useMemo(() => categoryChipsFor(products), [products]);
-  const visible = useMemo(
-    () => applyShopFilters(products, { search, category, gender, priceRange, sort }),
-    [products, search, category, gender, priceRange, sort],
-  );
-  // Any facet other than the default sort counts as an active filter — that is
-  // when the "Clear" action earns its place on the results line.
-  const filtersActive = Boolean(search) || category !== 'all' || gender !== 'all' || priceRange !== 'all' || sort !== 'popular';
+  // The server already applied these filters when it could (and the request
+  // carried all of them); the same predicate runs here once more so the grid
+  // can never show a product the controls exclude — including on a backend
+  // that has not shipped the filter patch and answered with an unfiltered page.
+  const visible = useMemo(() => applyShopFilters(products, filters), [products, filters]);
+  const filtersActive = shopFiltersActive(filters);
   const totals = useMemo(() => cartTotals(cart, shopSettings), [cart, shopSettings]);
   const qtyFor = id => cart.find(line => line.productId === String(id))?.qty || 0;
 
-  // A visitor may browse the whole catalog; the cart belongs to an account
-  // (that is what makes it follow the person to the app), so the first ADD on
-  // the public website asks them to sign in and returns them here.
-  const needAccount = () => {
-    if (!guest) return false;
-    notify?.('info', copy.signInToBuy);
-    navigate('login', { returnTo: '/shop' });
-    return true;
-  };
-  const openCart = () => (guest ? needAccount() : navigate('shopCart'));
-  const openOrders = () => (guest ? needAccount() : navigate('shopOrders'));
+  // A visitor may browse the whole catalog AND fill a cart: the account is
+  // asked for at checkout (see ShopCheckoutScreen), where its value — an
+  // address to deliver to, an order to track — is obvious. Nothing here needs
+  // a session, so nothing here sends the visitor to a login form.
+  const openCart = () => navigate('shopCart');
 
-  const handleAdd = product => { if (needAccount()) return; add(product, 1); };
+  const handleAdd = product => add(product, 1);
   const handleSetQty = (product, next) => setQty(product.id, next);
   // Tapping a product opens its full details page (deep-linkable, back button,
   // similar products) instead of an inline sheet.
@@ -328,18 +457,23 @@ export function ShopScreen({ session, navigate, notify }) {
 
   const resetFilters = () => {
     setSearch('');
+    setTerm('');
     setCategory('all');
     setGender('all');
     setPriceRange('all');
-    setSort('popular');
   };
+
+  const remaining = Math.max(0, pages.total - products.length);
 
   return (
     <div className="screen shop-screen">
-      {/* Cart and orders sit on the HEADING's line at every width and are
-          vertically centred with it. Phones keep the two icons only (the cart
-          count rides as a badge) so "Naai Shop" is never squeezed or pushed
-          onto a second row — that is the whole mobile budget of this header. */}
+      {/* Cart (and My orders, for an account) sit on the HEADING's line at
+          every width and are vertically centred with it. Phones keep the two
+          icons only (the cart count rides as a badge) so "Naai Shop" is never
+          squeezed or pushed onto a second row.
+          My orders is NOT a public shortcut: order history lives in the
+          signed-in dashboard, so a visitor never sees a door they cannot
+          open — the cart is enough here. */}
       <PageHeader
         title={copy.title}
         subtitle={copy.subtitle}
@@ -351,22 +485,31 @@ export function ShopScreen({ session, navigate, notify }) {
               <span className="shop-header-action-label">My cart</span>
               {totals.itemCount > 0 && <em className="shop-header-count">{totals.itemCount}</em>}
             </button>
-            <button type="button" className="refresh-text-button shop-header-action" onClick={openOrders} aria-label="My orders">
-              <Package size={15} />
-              <span className="shop-header-action-label">My orders</span>
-            </button>
+            {!guest && (
+              <button type="button" className="refresh-text-button shop-header-action" onClick={() => navigate('shopOrders')} aria-label="My orders">
+                <Package size={15} />
+                <span className="shop-header-action-label">My orders</span>
+              </button>
+            )}
           </div>
         }
       />
-      {/* Search + four filters in one block, with the clear action inside the
-          field it clears: an empty search shows no ✕, a term shows one. */}
+
+      {/* One toolbar: search + the three facets. The clear action lives inside
+          the field it clears (an empty search shows no ✕, a term shows one). */}
       <div className="shop-toolbar">
         <div className="search-field shop-search">
-          <Search size={17} />
-          <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search shampoo, clippers, beard oil…" aria-label="Search shop products" />
+          <Search size={16} aria-hidden="true" />
+          <input
+            type="search"
+            value={search}
+            onChange={event => setSearch(event.target.value)}
+            placeholder="Search shampoo, clippers, beard oil…"
+            aria-label="Search shop products"
+          />
           {search && (
-            <button type="button" className="shop-search-clear" onClick={() => setSearch('')} aria-label="Clear search">
-              <X size={15} />
+            <button type="button" className="shop-search-clear" onClick={() => { setSearch(''); setTerm(''); }} aria-label="Clear search">
+              <X size={14} />
             </button>
           )}
         </div>
@@ -389,16 +532,22 @@ export function ShopScreen({ session, navigate, notify }) {
               <option key={item.id} value={item.id}>{item.label}</option>
             ))}
           </ShopFilterSelect>
-          <ShopFilterSelect label="Sort" ariaLabel="Sort products" icon={ArrowUpDown} value={sort} onChange={event => setSort(event.target.value)}>
-            {SORT_OPTIONS.map(item => (
-              <option key={item.id} value={item.id}>{item.label}</option>
-            ))}
-          </ShopFilterSelect>
         </section>
       </div>
 
+      <ShopCategoryRail categories={categories} value={category} onChange={setCategory} />
+
+      {/* A visitor is told, once and up front, that the cart is theirs to
+          fill — the account is asked for at the moment of purchase. */}
+      {guest && (
+        <p className="shop-guest-note">
+          <ShoppingBag size={13} aria-hidden="true" />
+          Fill your cart freely — you will be asked to sign in only when you place the order.
+        </p>
+      )}
+
       {loading ? (
-        <div className="shop-grid">{[1, 2, 3, 4, 5, 6].map(item => <SkeletonCard key={item} className="shop-skeleton" />)}</div>
+        <div className="shop-grid">{[1, 2, 3, 4, 5, 6, 7, 8].map(item => <SkeletonCard key={item} className="shop-skeleton" />)}</div>
       ) : error ? (
         <EmptyState icon={ShoppingBag} title="The shop is out of reach" message={`${error} Check your connection and try again.`} action={<Button onClick={load}><RefreshCw size={15} /> Retry</Button>} />
       ) : visible.length ? (
@@ -414,11 +563,20 @@ export function ShopScreen({ session, navigate, notify }) {
               <ShopProductCard key={product.id} product={product} qty={qtyFor(product.id)} onAdd={handleAdd} onSetQty={handleSetQty} onOpen={openProduct} />
             ))}
           </div>
+          {serverFiltered && pages.page < pages.totalPages && (
+            <div className="shop-load-more">
+              <Button variant="secondary" onClick={loadMore} disabled={loadingMore}>
+                {loadingMore
+                  ? <><RefreshCw size={15} className="spin" /> Loading more…</>
+                  : <>Show more products{remaining > 0 ? ` (${remaining})` : ''}</>}
+              </Button>
+            </div>
+          )}
         </>
       ) : (
         <EmptyState
           icon={Search}
-          title="Nothing here yet"
+          title="Nothing matches these filters"
           message={category === 'all'
             ? 'No product matches this search and price. Try a broader filter.'
             : `The ${categories.find(item => item.id === category)?.label || 'selected'} shelf is empty right now — try another category.`}
@@ -441,7 +599,9 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
   const copy = shopCopy(session);
   const guest = isShopGuest(session);
   const productId = String(params?.productId || '');
-  const { products, loading, error, load } = useShopCatalog(notify, { guest });
+  // `all`: a deep link must resolve a product that is not on the first page,
+  // and "you may also like" reads the whole shelf, not the current page.
+  const { products, loading, error, load } = useShopCatalog(notify, { guest, all: true });
   const { cart, add, setQty } = useSyncedCart(ownerId);
   const shopSettings = useShopSettings();
 
@@ -462,15 +622,11 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
   ), [products, product]);
   const qtyFor = id => cart.find(line => line.productId === String(id))?.qty || 0;
 
-  const needAccount = () => {
-    if (!guest) return false;
-    notify?.('info', copy.signInToBuy);
-    navigate('login', { returnTo: `/shopProduct?productId=${encodeURIComponent(productId)}` });
-    return true;
-  };
-  const openCart = () => (guest ? needAccount() : navigate('shopCart'));
+  // Same rule as the grid: a visitor may add to the cart. The account is
+  // asked for at checkout, not on the first ADD.
+  const openCart = () => navigate('shopCart');
 
-  const handleAdd = value => { if (needAccount()) return; add(value, 1); };
+  const handleAdd = value => { add(value, 1); };
   const handleSetQty = (value, next) => setQty(value.id, next);
   const openProduct = value => navigate('shopProduct', { productId: value.id });
 
@@ -540,6 +696,12 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
       <div className="shop-detail-action">
         <ShopQuantityControl qty={qtyFor(product.id)} onAdd={() => handleAdd(product)} onSet={next => handleSetQty(product, next)} disabled={!product.available} large />
       </div>
+      {guest && (
+        <p className="shop-guest-note">
+          <ShoppingBag size={13} aria-hidden="true" />
+          Add it to your cart now — signing in is only needed to place the order.
+        </p>
+      )}
 
       <section className="shop-detail-card">
         <h3>About this product</h3>

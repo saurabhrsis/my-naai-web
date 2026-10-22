@@ -2,6 +2,7 @@ import React from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { addToCart } from './lib/shopOrders';
 
 const { salonProfile, userSalonList, userSalonListPublic, userLogin, verifyLogin, userAds, getBookingRequestById, bookingRequestOwnerAction } = vi.hoisted(() => ({ salonProfile: vi.fn(), userSalonList: vi.fn(), userSalonListPublic: vi.fn(), userLogin: vi.fn(), verifyLogin: vi.fn(), userAds: vi.fn(() => Promise.resolve({ status: 'SUCCESS', data: {} })), getBookingRequestById: vi.fn(() => Promise.resolve({ status: 'SUCCESS', data: {} })), bookingRequestOwnerAction: vi.fn(() => Promise.resolve({ status: 'SUCCESS' })) }));
 
@@ -566,7 +567,7 @@ describe('Guest browsing flow', () => {
     expect(roleButtons.some(b => b.classList.contains('active') && b.textContent.includes('Salon partner'))).toBe(true);
   });
 
-  it('opens the Naai Shop on the public website, and keeps the cart behind a login', async () => {
+  it('opens the Naai Shop and the cart on the public website, and gates the purchase', async () => {
     // The storefront is introduced on the home page a visitor already lands on.
     setPath('/');
     await mount();
@@ -593,12 +594,26 @@ describe('Guest browsing flow', () => {
     await flush();
     expect(container.querySelector('.shop-detail-page')).not.toBeNull();
 
-    // The cart and the order history write to an account, so they go through
-    // login and remember where the visitor was heading.
+    // The cart is public: a visitor may fill one before having an account.
     await act(async () => { goto('/shopCart'); });
     await flush();
+    expect(container.querySelector('.auth-page')).toBeNull();
+    expect(container.querySelector('.shop-cart-screen')).not.toBeNull();
+
+    // Checkout is where the account is asked for — and it asks on its own
+    // screen, with the reason, rather than bouncing straight to the OTP form.
+    addToCart('guest', { id: 'sp1', name: 'Beard Oil 30ml', price: 199, image: '', category: 'beard-grooming', gender: 'men' });
+    await act(async () => { goto('/shopCheckout'); });
+    await flush();
+    expect(container.querySelector('.auth-page')).toBeNull();
+    expect(container.querySelector('.shop-gate-card')).not.toBeNull();
+    expect(container.textContent).toContain('Sign in to place this order');
+
+    // Order history is NOT public: it belongs to the signed-in dashboard.
+    await act(async () => { goto('/shopOrders'); });
+    await flush();
     expect(container.querySelector('.auth-page')).not.toBeNull();
-    expect(sessionStorage.getItem('mynaaiPendingRoute')).toBe('/shopCart');
+    expect(sessionStorage.getItem('mynaaiPendingRoute')).toBe('/shopOrders');
   });
 
   it('opens the website info pages to guests without a login gate', async () => {

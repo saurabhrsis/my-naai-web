@@ -1,12 +1,17 @@
 # Patches for the other two repos
 
-Two ready-to-apply patches, each generated against the current `main` of its
-repo and verified with `git apply --check` on a clean checkout:
+Ready-to-apply patches, each generated against the current `main` of its repo
+and verified with `git apply --check` on a clean checkout:
 
 | Patch | Repo | What it does |
 | --- | --- | --- |
 | [`backend-shop-customers.patch`](backend-shop-customers.patch) | `rightserveinfotechsystems/my_naai_backend` | customers as a second buyer + the website's no-token API |
 | [`admin-panel-shop-customers.patch`](admin-panel-shop-customers.patch) | `rightserveinfotechsystems/my-naai-frontend` | the admin panel shows who bought each shop order |
+| [`backend-shop-catalog-filters.patch`](backend-shop-catalog-filters.patch) | `rightserveinfotechsystems/my_naai_backend` | **apply after the first one** — search, filters, sort and paging on the server |
+
+`backend-shop-catalog-filters.patch` is a follow-up: it edits
+`listShopProducts.js`, which `backend-shop-customers.patch` already rewrote, so
+apply them **in that order**.
 
 The earlier [`backend-distributor-location.patch`](backend-distributor-location.patch)
 and [`admin-panel-distributor-location.patch`](admin-panel-distributor-location.patch)
@@ -20,6 +25,10 @@ git clone https://github.com/rightserveinfotechsystems/my_naai_backend.git
 cd my_naai_backend
 git am /path/to/patches/backend-shop-customers.patch     # keeps the commit message
 # or: git apply /path/to/patches/backend-shop-customers.patch
+
+# backend, in this order (the second patch edits a file the first rewrote)
+git am /path/to/patches/backend-shop-customers.patch
+git am /path/to/patches/backend-shop-catalog-filters.patch
 
 # admin panel
 git clone https://github.com/rightserveinfotechsystems/my-naai-frontend.git
@@ -88,6 +97,57 @@ the columns via `sync({ alter: true })`.
 A row without `buyerType` is treated as a salon order, so the panel can ship
 before or with the backend.
 
+## Backend — catalog filters (1 patch, 2 files)
+
+The storefront's search box, the three filter selects and the product count are
+all driven by the API, so the API has to answer a filtered question.
+
+`shopProduct.service.listCatalog` now accepts and applies:
+
+| Field | Values | SQL |
+| --- | --- | --- |
+| `page` / `pageSize` | 1..N / 1..60 (default 20) | `LIMIT` / `OFFSET` |
+| `searchString` | free text | `product_name ILIKE %x%` OR `description ILIKE %x%` |
+| `category` | `hair-care`, `beard-grooming`, … | id, admin-typed label, empty, or unrecognised free text |
+| `gender` | `men` / `women` / `unisex` | `MALE` / `FEMALE` / `UNISEX`, plus `NULL` (client infers) |
+| `priceRange` | `under500`, `500to1000`, `over1000` | `< 500`, `BETWEEN 500 AND 1000`, `> 1000` |
+| `sort` | `popular`, `price-asc`, `price-desc` | `rating DESC, createdAt DESC` / `price` |
+| `inStock` | `true` | `is_available = true` |
+
+Category and gender are **supersets on purpose**: `shop_products.category` is
+optional free text and `gender` is nullable, and the client classifies those
+rows from the product name. Returning them lets the grid do the final, exact
+narrowing (it always did), so a filtered view can never hide a matching
+product. The cost is a few extra rows per page, never a missing one.
+
+`pagination` gains `applied` — the echo of what the server actually filtered:
+
+```json
+"pagination": { "page": 1, "limit": 24, "totalProducts": 63, "totalPages": 3,
+  "applied": { "searchString": "", "category": "hair-care", "gender": "men",
+               "priceRange": "under500", "sort": "popular", "inStock": true } }
+```
+
+The website reads that marker as a capability handshake: **with** it, the shop
+pages the server's answer ("Show more products"); **without** it (a backend
+older than this patch) the shop falls back to downloading the catalog and
+filtering in the browser, exactly as before. So the two repos can deploy in
+either order.
+
+`listShopProducts.js` — the one controller behind **both** doors
+(`/api/shop-products/list` and the token-free `/api/shop-public/products/list`)
+— forwards all eight fields, so a visitor's request and a signed-in request are
+byte-for-byte the same query.
+
+## Admin panel — nothing to change this round
+
+The catalog fields the filters now read (`category`, `gender`, `price`, `mrp`,
+`isAvailable`) are the ones the admin product form already writes, and the
+Customer buyer column / filter / detail block shipped in
+`admin-panel-shop-customers.patch`. If you later want the admin form to
+*choose* a category from the seven shop ids instead of typing one, that is a
+separate change — the filters accept a typed label today.
+
 ## Verify after applying
 
 ```bash
@@ -97,6 +157,11 @@ git show --stat HEAD && node --check src/services/shopOrder.service.js
 # the open storefront answers with NO Authorization header
 curl -X POST $API/api/shop-public/products/list -H 'Content-Type: application/json' -d '{"page":1}'
 curl      "$API/api/shop-public/products/list?page=1"
+
+# the facets reach the database, and the response says so
+curl -X POST $API/api/shop-public/products/list -H 'Content-Type: application/json' \
+  -d '{"page":1,"pageSize":24,"category":"hair-care","gender":"men","priceRange":"under500","sort":"price-asc","inStock":true}'
+# → data.pagination.applied carries the same five values back
 
 # a customer token holds a cart and places a real order
 curl -X POST $API/api/shop-cart/add -H "Authorization: Bearer $USER_TOKEN" \

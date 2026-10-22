@@ -5,6 +5,7 @@ import {
   ChevronRight,
   CreditCard,
   LoaderCircle,
+  Lock,
   MapPin,
   ShieldCheck,
   ShoppingBag,
@@ -31,7 +32,8 @@ import {
 } from '../lib/shopOrders';
 import { useShopSettings } from '../lib/shopSettings';
 import { normalizeStateName, stateOptionsWith } from '../lib/stateOptions';
-import { shopCopy } from '../lib/shopBuyer';
+import { isShopGuest, shopCopy } from '../lib/shopBuyer';
+import { stashPendingRoute } from '../lib/pendingRoute';
 import { formatCoordinates, mapsUrl, toPoint } from '../lib/geo';
 import { clearServerCart, queuePendingOrder, registerServerOrder } from '../lib/shopServerSync';
 import {
@@ -121,6 +123,7 @@ export function ShopBillCard({ lines, settings, method, title = 'Bill details', 
 export function ShopCartScreen({ session, navigate, notify }) {
   const ownerId = shopOwnerId(session);
   const copy = shopCopy(session);
+  const guest = isShopGuest(session);
   const { cart: lines, setQty, removeLine } = useSyncedCart(ownerId);
   const shopSettings = useShopSettings();
 
@@ -222,9 +225,15 @@ export function ShopCartScreen({ session, navigate, notify }) {
           <strong>{formatCurrency(totals.subtotal)}</strong>
           <span>{cartCount(lines)} item{cartCount(lines) === 1 ? '' : 's'} · delivery at checkout</span>
         </div>
-        <Button size="large" onClick={() => navigate('shopCheckout')}>
-          Proceed to checkout <ChevronRight size={17} />
-        </Button>
+        <div className="shop-cart-footer-action">
+          <Button size="large" onClick={() => navigate('shopCheckout')}>
+            Proceed to checkout <ChevronRight size={17} />
+          </Button>
+          {/* A visitor's cart is not a promise of an order yet: the account is
+              asked for on the next screen, so say it before the tap rather
+              than surprising them with a login form at checkout. */}
+          {guest && <small className="shop-cart-guest-note">You will sign in to place the order.</small>}
+        </div>
       </div>
     </div>
   );
@@ -258,6 +267,71 @@ export function initialAddressFromSession(session) {
     pincode: profile.pincode || '',
     ...(point || { latitude: null, longitude: null }),
   };
+}
+
+/* ------------------------------------------------------------------ *\
+ * The purchase gate — the one place the website asks for an account
+ *
+ * The storefront lets a visitor browse AND fill a cart; the account is asked
+ * for here, at the only moment it is genuinely needed: an order must belong to
+ * somebody the delivery partner can call, the platform can track and the
+ * buyer can re-order from My orders. The gift is explained BEFORE the form
+ * (address, tracking, notifications), because a login wall with no reason
+ * reads as a toll gate.
+ *
+ * Signing in is not a dead end: the cart stays exactly as it is and
+ * `completeAuth` merges it into the account (`adoptGuestCart`) before
+ * resuming this very screen — so the visitor lands back on checkout with the
+ * same basket and the address prefilled from their profile.
+ * ------------------------------------------------------------------ */
+export function ShopAccountGate({ navigate, lines, shopSettings, copy }) {
+  const returnTo = '/shopCheckout';
+  const signIn = () => {
+    // The resume target for the auth flow; `guestNavigate` stashes it too, and
+    // `completeAuth` resolves it for the USER role, so this works from the
+    // public shell as well as from any future signed-out branch.
+    stashPendingRoute(returnTo);
+    navigate('login', { returnTo, role: 'USER' });
+  };
+  return (
+    <div className="screen shop-checkout-screen">
+      <PageHeader title="Checkout" subtitle="One step before delivery" onBack={() => navigate('shopCart')} />
+      <section className="shop-gate-card">
+        <span className="shop-gate-icon" aria-hidden="true"><Lock size={19} /></span>
+        <h2>{copy.guestCheckoutTitle}</h2>
+        <p className="shop-gate-lead">{copy.guestCheckoutLead}</p>
+        <ul className="shop-gate-points">
+          {copy.guestCheckoutPoints.map(point => (
+            <li key={point}><CheckCircle2 size={14} aria-hidden="true" /><span>{point}</span></li>
+          ))}
+        </ul>
+        <div className="shop-gate-actions">
+          <Button size="large" onClick={signIn}>{copy.guestCheckoutCta} <ChevronRight size={17} /></Button>
+          <Button variant="secondary" onClick={() => navigate('shop')}>{copy.guestCheckoutBack}</Button>
+        </div>
+        <p className="shop-gate-footnote">
+          <ShoppingBag size={13} aria-hidden="true" />
+          <span>
+            {lines.length} item{lines.length === 1 ? '' : 's'} in your cart are kept on this device
+            {' '}and move to your account as soon as you sign in.
+          </span>
+        </p>
+      </section>
+      {/* The basket, item by item: what they picked is theirs and must not
+          disappear behind a login card. */}
+      <ul className="shop-gate-items" aria-label="Items in your cart">
+        {lines.map(line => (
+          <li key={line.productId}>
+            <ImageWithFallback src={getFileUrl(line.image)} fallback={PRODUCT_PLACEHOLDER} alt="" className="shop-gate-item-image" />
+            <span className="shop-gate-item-name">{line.name}</span>
+            <span className="shop-gate-item-qty">× {line.qty}</span>
+            <strong>{formatCurrency(line.price * line.qty)}</strong>
+          </li>
+        ))}
+      </ul>
+      <ShopBillCard lines={lines} settings={shopSettings} stage="cart" title="Your cart" />
+    </div>
+  );
 }
 
 export function ShopCheckoutScreen({ session, navigate, notify }) {
@@ -537,6 +611,12 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
         <EmptyState icon={ShoppingBag} title="Nothing to check out" message="Your cart is empty." action={<Button onClick={() => navigate('shop')}>Browse the shop</Button>} />
       </div>
     );
+  }
+
+  // Visitors do not check out here: the gate explains why and hands them a
+  // sign-in that comes back to this exact screen.
+  if (isShopGuest(session)) {
+    return <ShopAccountGate navigate={navigate} lines={lines} shopSettings={shopSettings} copy={copy} />;
   }
 
   const payLabel = payState === 'saving' ? 'Placing your order with My Naai…'

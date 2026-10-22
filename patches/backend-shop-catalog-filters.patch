@@ -1,0 +1,269 @@
+From e0238693e35762e0ff27d7d092e12842b594be7a Mon Sep 17 00:00:00 2001
+From: MyNaai <dev@mynaai.in>
+Date: Thu, 22 Oct 2026 13:59:26 +0000
+Subject: [PATCH] Shop catalog: filter, sort and page the catalog on the server
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The website storefront sends search, category, gender, price range and
+stock to the API and pages through the answer. The API ignored all of it
+and returned the newest 20 rows, so the shop had to fetch up to ten pages
+and narrow them in the browser — which made its pagination a lie and made
+every filter a full-catalog download.
+
+- shopProduct.service.listCatalog: accepts pageSize (clamped 1..60),
+  searchString (name OR description), category, gender, priceRange
+  (under500 / 500to1000 / over1000), sort (popular / price-asc /
+  price-desc) and inStock, all as SQL predicates, and echoes what it
+  applied in pagination.applied.
+- category is a SUPERSET filter: the id, the label an admin typed, rows
+  with no category and rows with unrecognised free text are all returned,
+  because the client classifies those from the product name. The grid
+  drops whatever it does not classify into the chosen shelf, so a
+  superset costs a little paging but never hides a matching product.
+- gender keeps NULL-gender rows for the same reason (the client infers
+  from the name).
+- pagination.applied is the capability handshake: a website that sees it
+  pages the answer; without it (an older deployment) the shop falls back
+  to reading the whole catalog and filtering locally.
+- listShopProducts: one controller serves the token-free
+  /api/shop-public/products/list and the authenticated
+  /api/shop-products/list, so both doors send and receive the identical
+  query.
+---
+ .../shopProduct/listShopProducts.js           |  26 ++-
+ src/services/shopProduct.service.js           | 160 ++++++++++++++++--
+ 2 files changed, 173 insertions(+), 13 deletions(-)
+
+diff --git a/src/controller/shopProduct/listShopProducts.js b/src/controller/shopProduct/listShopProducts.js
+index 4811782..79ca7bf 100644
+--- a/src/controller/shopProduct/listShopProducts.js
++++ b/src/controller/shopProduct/listShopProducts.js
+@@ -6,8 +6,30 @@ const shopProductService = require('../../services/shopProduct.service');
+ // fields, so no identity is required — the shop must open before sign-in.
+ const listShopProducts = async (request, respsone) => {
+     try {
+-        const { page, searchString } = request.body || {};
+-        const data = await shopProductService.listCatalog({ page, searchString });
++        // ONE controller for both doors (`/api/shop-products/list` with a
++        // token and the token-free `/api/shop-public/products/list`), so the
++        // website's browse and a signed-in browse send — and are answered with
++        // — exactly the same query.
++        const {
++            page,
++            pageSize,
++            searchString,
++            category,
++            gender,
++            priceRange,
++            sort,
++            inStock
++        } = request.body || {};
++        const data = await shopProductService.listCatalog({
++            page,
++            pageSize,
++            searchString,
++            category,
++            gender,
++            priceRange,
++            sort,
++            inStock
++        });
+ 
+         return respsone.status(200).json({
+             status: 'SUCCESS',
+diff --git a/src/services/shopProduct.service.js b/src/services/shopProduct.service.js
+index 58f5e99..08622ae 100644
+--- a/src/services/shopProduct.service.js
++++ b/src/services/shopProduct.service.js
+@@ -1,6 +1,9 @@
+-const { Op } = require('sequelize');
++const { Op, fn, col, where } = require('sequelize');
+ const db = require('../database/models');
+ const DEFAULT_LIMIT = parseInt(process.env.PAGE_LIMIT) || 20;
++// One page of the shop grid: the website asks for 24, the mobile app keeps the
++// server default. Above this a single request would return the whole catalog.
++const MAX_LIMIT = 60;
+ 
+ /**
+  * Shop catalog service — the company's products that SALONS purchase
+@@ -8,30 +11,165 @@ const DEFAULT_LIMIT = parseInt(process.env.PAGE_LIMIT) || 20;
+  * `products`). The catalog is company-wide: there is no salon scoping.
+  */
+ 
+-// The buying side (salon app/web, or a mobile user) browses the catalog.
+-// Filters stay coarse on purpose — the shop UI does its own chip/price
+-// filtering client-side; the server serves the shelf.
+-const listCatalog = async ({ page = 1, searchString = '' } = {}) => {
+-  const limit = DEFAULT_LIMIT;
++// The shop's category ids, with the labels an admin may have typed instead of
++// the id. Kept in step with the web/mobile taxonomy (src/lib/shopCatalog.js):
++// an id and its label must select the same rows, or the same filter would show
++// a different shelf on the website and in the app.
++const CATEGORY_LABELS = {
++  'hair-care': 'hair care',
++  'beard-grooming': 'beard & grooming',
++  'skin-face': 'skin & face',
++  'fragrance': 'fragrance',
++  'hair-colour': 'hair colour',
++  'tools-equipment': 'tools & equipment',
++  'kits-sets': 'kits & sets'
++};
++
++const KNOWN_CATEGORY_VALUES = [
++  ...Object.keys(CATEGORY_LABELS),
++  ...Object.values(CATEGORY_LABELS)
++];
++
++// priceRange ids come straight from the shop's dropdown.
++const PRICE_RANGES = {
++  under500: { [Op.lt]: 500 },
++  '500to1000': { [Op.between]: [500, 1000] },
++  over1000: { [Op.gt]: 1000 }
++};
++
++// The gender column stores MALE/FEMALE/UNISEX; the shop speaks men/women/unisex.
++const GENDER_VALUES = { men: 'MALE', women: 'FEMALE', unisex: 'UNISEX' };
++
++const SORTS = {
++  'price-asc': [['price', 'ASC'], ['productName', 'ASC']],
++  'price-desc': [['price', 'DESC'], ['productName', 'ASC']],
++  // "Popular" is the curated order the catalog is browsed in.
++  popular: [['rating', 'DESC'], ['createdAt', 'DESC']]
++};
++
++const asBool = (value) => value === true || value === 'true' || value === 1 || value === '1';
++
++/**
++ * A category is a SUPERSET filter.
++ *
++ * `category` on this table is optional and free-text ('' = "let the client
++ * classify it from the name"), so the server must return every row the
++ * client's own classifier could file under the requested category:
++ *   - the id, or the label an admin typed instead of the id;
++ *   - rows with no category at all;
++ *   - rows with text this service does not recognise (an admin's free-text
++ *     shelf) — those are mapped by the client's keyword rules.
++ * Anything the client then does not classify into the chosen category is
++ * dropped there, so the grid can never show a product the filter excludes.
++ * Being a superset only costs a little extra paging, never a missing product.
++ */
++const categoryWhere = (category) => {
++  const value = String(category || '').trim().toLowerCase();
++  if (!value) return null;
++  const wanted = [value, CATEGORY_LABELS[value]].filter(Boolean);
++  return {
++    [Op.or]: [
++      where(fn('lower', col('category')), { [Op.in]: wanted }),
++      { category: { [Op.is]: null } },
++      { category: '' },
++      where(fn('lower', col('category')), { [Op.notIn]: KNOWN_CATEGORY_VALUES })
++    ]
++  };
++};
++
++/**
++ * A gender filter keeps the rows whose gender is not set: those are inferred
++ * from the product name by the client (the same rule the shop always used), so
++ * excluding them here would hide products the user's filter actually matches.
++ */
++const genderWhere = (gender) => {
++  const value = GENDER_VALUES[String(gender || '').trim().toLowerCase()];
++  if (!value) return null;
++  return {
++    [Op.or]: [{ gender: value }, { gender: { [Op.is]: null } }]
++  };
++};
++
++// The buying side (salon app/web, a mobile user, or the public website with no
++// token) browses the catalog. Search, category, gender, price range, stock and
++// ordering are all decided HERE, so the list a caller is paging through is the
++// list its filters describe — the website used to receive the whole shelf and
++// narrow it in the browser, which made pagination a lie.
++const listCatalog = async ({
++  page = 1,
++  pageSize,
++  searchString = '',
++  category,
++  gender,
++  priceRange,
++  sort = 'popular',
++  inStock = false
++} = {}) => {
++  const requested = parseInt(pageSize, 10);
++  const limit = Math.min(MAX_LIMIT, Math.max(1, Number.isFinite(requested) ? requested : DEFAULT_LIMIT));
+   const safePage = parseInt(page, 10) > 0 ? parseInt(page, 10) : 1;
+   const offset = (safePage - 1) * limit;
+ 
+-  const where = { deletedAt: null };
++  const and = [];
++
+   const trimmedSearch = String(searchString || '').trim();
+   if (trimmedSearch) {
+-    where[Op.and] = [{ productName: { [Op.iLike]: `%${trimmedSearch}%` } }];
++    // The same two fields the client searches, so a term means the same thing
++    // before and after the facets ship.
++    and.push({
++      [Op.or]: [
++        { productName: { [Op.iLike]: `%${trimmedSearch}%` } },
++        { description: { [Op.iLike]: `%${trimmedSearch}%` } }
++      ]
++    });
+   }
+ 
++  const categoryClause = categoryWhere(category);
++  if (categoryClause) and.push(categoryClause);
++
++  const genderClause = genderWhere(gender);
++  if (genderClause) and.push(genderClause);
++
++  const range = PRICE_RANGES[String(priceRange || '').trim()];
++  if (range) and.push({ price: range });
++
++  // Out-of-stock products are not shoppable: they are not part of the result
++  // set the pagination counts.
++  if (asBool(inStock)) and.push({ isAvailable: true });
++
++  const whereClause = { deletedAt: null };
++  if (and.length) whereClause[Op.and] = and;
++
++  const sortKey = String(sort || '').trim();
++  const order = SORTS[sortKey] || SORTS.popular;
++
+   const { count: totalProducts, rows: products } = await db.ShopProduct.findAndCountAll({
+-    where,
+-    order: [['createdAt', 'DESC']],
++    where: whereClause,
++    order,
+     limit,
+     offset
+   });
+ 
+   return {
+     products,
+-    pagination: { page: safePage, limit, totalProducts, totalPages: Math.ceil(totalProducts / limit) || 0 }
++    pagination: {
++      page: safePage,
++      limit,
++      totalProducts,
++      totalPages: Math.ceil(totalProducts / limit) || 0,
++      // Echo of what the server actually applied. The website reads this to
++      // know whether it may page the answer (server filtering) or has to read
++      // the whole catalog and narrow it locally (an older deployment that
++      // ignores these fields).
++      applied: {
++        searchString: trimmedSearch,
++        category: String(category || ''),
++        gender: String(gender || ''),
++        priceRange: String(priceRange || ''),
++        sort: SORTS[sortKey] ? sortKey : 'popular',
++        inStock: asBool(inStock)
++      }
++    }
+   };
+ };
+ 
+-- 
+2.39.5
+
