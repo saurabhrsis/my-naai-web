@@ -346,6 +346,10 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
   // A rejected registration is a real outcome the salon must see — not a
   // console line. `orderError` is shown above the pay button, with Retry.
   const [orderError, setOrderError] = useState('');
+  // What KIND of rejection it was (the sync layer classifies it). A server
+  // that cannot take customer orders at all is not something a "Try again"
+  // button can fix, so the box changes shape for that case.
+  const [orderErrorCode, setOrderErrorCode] = useState('');
   const [retrying, setRetrying] = useState(false);
   const shopSettings = useShopSettings();
   // Cash on delivery is confirmed through the app's own sheet (never
@@ -410,6 +414,7 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
    * and shown with an honest "confirming" state.
    */
   const finalizeOrder = async (paymentInfo) => {
+    setOrderErrorCode('');
     const order = placeOrder(ownerId, {
       items: lines,
       address,
@@ -455,6 +460,7 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     // cannot is exactly the bug this replaces.
     removeLocalOrder(ownerId, order.id);
     setOrderError(result.message || 'My Naai could not accept this order.');
+    setOrderErrorCode(result.code || '');
     notify?.('error', result.message || 'My Naai could not accept this order.');
     return { ok: false, message: result.message };
   };
@@ -515,6 +521,7 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
       const problem = validate();
       if (problem) {
         setOrderError(problem);
+        setOrderErrorCode('VALIDATION');
         return;
       }
       await finalizeOrder({
@@ -618,6 +625,8 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
   if (isShopGuest(session)) {
     return <ShopAccountGate navigate={navigate} lines={lines} shopSettings={shopSettings} copy={copy} />;
   }
+
+  const serverSchemaGap = orderErrorCode === 'BUYER_SCHEMA';
 
   const payLabel = payState === 'saving' ? 'Placing your order with My Naai…'
     : payState === 'opening' ? 'Contacting payment gateway…'
@@ -725,14 +734,20 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
                 <strong>Order not placed</strong>
                 <p>{orderError}</p>
                 <p className="shop-order-error-help">
-                  Nothing has been charged and your cart is still here. Check the details above and try again,
-                  or call {SUPPORT_PHONE} if it keeps failing.
+                  {serverSchemaGap
+                    // The server cannot store a customer order at all yet —
+                    // retrying changes nothing, so say where the fix is and
+                    // how to get the parcel moving today.
+                    ? <>Nothing has been charged and your cart is still here. This needs a fix on our side — call {SUPPORT_PHONE} and we will place the order for you.</>
+                    : <>Nothing has been charged and your cart is still here. Check the details above and try again, or call {SUPPORT_PHONE} if it keeps failing.</>}
                 </p>
                 <div className="shop-order-error-actions">
-                  <Button type="button" size="small" loading={retrying} onClick={retryPlaceOrder}>
-                    Try again
-                  </Button>
-                  <Button type="button" size="small" variant="secondary" onClick={() => setOrderError('')}>
+                  {!serverSchemaGap && (
+                    <Button type="button" size="small" loading={retrying} onClick={retryPlaceOrder}>
+                      Try again
+                    </Button>
+                  )}
+                  <Button type="button" size="small" variant="secondary" onClick={() => { setOrderError(''); setOrderErrorCode(''); }}>
                     Dismiss
                   </Button>
                 </div>

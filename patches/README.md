@@ -148,6 +148,52 @@ Customer buyer column / filter / detail block shipped in
 *choose* a category from the seven shop ids instead of typing one, that is a
 separate change — the filters accept a typed label today.
 
+## If a customer order fails with `salon_id` / not-null
+
+```
+null value in column "salon_id" of relation "shop_orders" violates not-null constraint
+```
+
+The **code** patch is deployed but its **database migration was not run**.
+Sequelize's `allowNull: true` is a model declaration — it never alters a column
+that already exists, so Postgres still requires a salon on every order and the
+first customer order dies at the INSERT.
+
+Fix it once, either way:
+
+```bash
+# a) the SQL file (idempotent — safe to run even if part of it is already done)
+psql "$DATABASE_URL" -f patches/migrations/2026-10-22-shop-customers.sql
+
+# b) or hit the API's own sync endpoint once — it runs model.sync({ alter: true })
+curl https://<api-host>/test-db
+```
+
+The two statements that actually unblock it are:
+
+```sql
+ALTER TABLE shop_orders ALTER COLUMN salon_id DROP NOT NULL;
+ALTER TABLE shop_carts  ALTER COLUMN salon_id DROP NOT NULL;
+```
+
+`shop_carts` matters too: the customer's cart is mirrored to the server, and
+that push is fire-and-forget — without the second statement it fails silently
+and the cart only lives in the browser.
+
+Verify:
+
+```sql
+SELECT table_name, column_name, is_nullable
+FROM information_schema.columns
+WHERE table_name IN ('shop_orders', 'shop_carts')
+  AND column_name IN ('salon_id', 'buyer_type', 'customer_id');
+-- salon_id → YES, buyer_type → NO, customer_id → YES (on both tables)
+```
+
+Until it is run, the website says *"My Naai's shop is not set up for customer
+orders on this server yet"* and keeps the cart — it never shows the Postgres
+error and never invents an order.
+
 ## Verify after applying
 
 ```bash

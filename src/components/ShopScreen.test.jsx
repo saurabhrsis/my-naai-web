@@ -656,6 +656,35 @@ describe('ShopCheckoutScreen', () => {
     expect(container.textContent).toContain('Order placed');
   });
 
+  it('does not offer a pointless retry when the server cannot take customer orders', async () => {
+    seedCart();
+    shopOrderCreate.mockResolvedValue({
+      ok: false,
+      code: 'BUYER_SCHEMA',
+      retryable: false,
+      message: "My Naai's shop is not set up for customer orders on this server yet, so this order could not be saved.",
+      detail: 'null value in column "salon_id" of relation "shop_orders" violates not-null constraint',
+    });
+    const { container } = await render(<ShopCheckoutScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    await act(async () => { container.querySelector('input[value="cod"]').click(); });
+    await act(async () => { buttonsContaining('Place order', container)[0].click(); });
+    await flush();
+    await act(async () => { buttonByText('Place order', document.querySelector('.confirm-sheet')).click(); });
+    await flush();
+
+    const box = container.querySelector('.shop-order-error');
+    expect(box).toBeTruthy();
+    // Plain words, never the Postgres error …
+    expect(box.textContent).toMatch(/not set up for customer orders/i);
+    expect(box.textContent).not.toMatch(/salon_id|not-null/i);
+    // … no "Try again" (nothing changes until the server is fixed), and the
+    // cart is untouched.
+    expect(buttonByText('Try again', container)).toBeUndefined();
+    expect(box.textContent).toMatch(/call 8380017393/i);
+    expect(readCart('salon-1')).toHaveLength(2);
+    expect(readOrders('salon-1')).toHaveLength(0);
+  });
+
   it('offers the state as a dropdown and prefills the salon\u2019s state', async () => {
     seedCart();
     const { container } = await render(<ShopCheckoutScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);

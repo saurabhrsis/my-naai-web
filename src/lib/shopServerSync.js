@@ -303,6 +303,43 @@ const classify = (error) => {
   return 'UNKNOWN';
 };
 
+// A server whose CODE knows about customer buyers but whose DATABASE has not
+// been migrated yet passes every check and then dies in Postgres:
+//
+//   null value in column "salon_id" of relation "shop_orders"
+//   violates not-null constraint
+//
+// Sequelize's `allowNull: true` is a model declaration — it never alters an
+// existing column. That is a schema gap on the server (the fix is one
+// `ALTER TABLE … DROP NOT NULL`), not something the buyer can act on, so the
+// shopper gets a plain sentence and the technical detail goes to the console
+// where support can read it.
+const BUYER_SCHEMA_GAP = /null value in column ["']?salon_id["']?[\s\S]*not[-_ ]?null/i;
+export const BUYER_SCHEMA_MESSAGE = "My Naai's shop is not set up for customer orders on this server yet, so this order could not be saved.";
+
+/**
+ * Turn an API rejection into what the screen shows.
+ * `{ code, retryable, message, detail }` — `detail` is the server's own words,
+ * kept for the console / a support report, never rendered as the error.
+ */
+export function describeOrderRejection(error) {
+  const detail = errorMessageOf(error);
+  if (BUYER_SCHEMA_GAP.test(detail)) {
+    return {
+      code: 'BUYER_SCHEMA',
+      retryable: false,
+      message: BUYER_SCHEMA_MESSAGE,
+      detail,
+    };
+  }
+  return {
+    code: classify(error),
+    retryable: isRetryable(error),
+    message: detail || 'My Naai could not accept this order.',
+    detail,
+  };
+}
+
 // Once a server has told us it does not understand the delivery pin, stop
 // sending it for the rest of the session (one extra request per order, not two).
 let coordinatesSupported = true;
@@ -351,20 +388,10 @@ export async function registerServerOrder(order) {
       try {
         response = await attempt(false);
       } catch (retryError) {
-        return {
-          ok: false,
-          code: classify(retryError),
-          retryable: isRetryable(retryError),
-          message: errorMessageOf(retryError) || 'My Naai could not accept this order.',
-        };
+        return { ok: false, ...describeOrderRejection(retryError) };
       }
     } else {
-      return {
-        ok: false,
-        code: classify(error),
-        retryable: isRetryable(error),
-        message: errorMessageOf(error) || 'My Naai could not accept this order.',
-      };
+      return { ok: false, ...describeOrderRejection(error) };
     }
   }
 

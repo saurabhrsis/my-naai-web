@@ -353,7 +353,16 @@ in `my_naai_backend`, `git am patches/admin-panel-shop-customers.patch` in
 `my-naai-frontend`.
 
 1. Apply the migration + models (columns are nullable/defaulted — deploy is safe
-   with the old code still running). `GET /test-db` also creates them.
+   with the old code still running). Run the SQL **for real** —
+   [`patches/migrations/2026-10-22-shop-customers.sql`](../patches/migrations/2026-10-22-shop-customers.sql)
+   — or hit `GET /test-db` once (it runs `model.sync({ alter: true })`). The
+   models alone are not enough: `allowNull: true` never alters an existing
+   column, so a deployment that skips this step fails the first customer order
+   with `null value in column "salon_id" … violates not-null constraint`. The
+   two statements that matter are
+   `ALTER TABLE shop_orders ALTER COLUMN salon_id DROP NOT NULL;` and the same
+   on `shop_carts`; the file also adds the buyer columns, the FKs and the cart
+   key, and is idempotent.
 2. Deploy the backend changes above.
 3. Open `/api/shop-products/list` publicly and mount `/api/shop-public/*`.
 4. Deploy the web portal (this repo). Until step 2 lands, a customer can browse

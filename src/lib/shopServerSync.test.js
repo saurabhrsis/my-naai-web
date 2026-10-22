@@ -307,6 +307,29 @@ describe('order sync (signed in)', () => {
     expect(result.message).toContain('valid GUID');
   });
 
+  it('explains a server whose database has not been migrated for customer orders', async () => {
+    signedIn();
+    // Exactly what Postgres says when the code patch is deployed but
+    // `ALTER TABLE shop_orders ALTER COLUMN salon_id DROP NOT NULL` was not
+    // run: the shopper must never read this.
+    shopOrderCreate.mockRejectedValue(Object.assign(new Error(
+      'null value in column "salon_id" of relation "shop_orders" violates not-null constraint',
+    ), { status: 400 }));
+    const result = await registerServerOrder({
+      id: 'MN4',
+      items: [{ productId: PRODUCT_ID, name: 'A', price: 100, qty: 1 }],
+      address: { name: 'R', phone: '9876543210', line1: 'x', city: 'N', state: 'MH', pincode: '440010' },
+      payment: { method: 'COD', status: 'PENDING', amount: 100 },
+      amounts: { total: 100 },
+    });
+    expect(result).toMatchObject({ ok: false, code: 'BUYER_SCHEMA', retryable: false });
+    // A plain sentence for the buyer …
+    expect(result.message).toMatch(/not set up for customer orders/i);
+    expect(result.message).not.toMatch(/salon_id|not-null/i);
+    // … and the server's own words kept for support.
+    expect(result.detail).toContain('salon_id');
+  });
+
   it('refuses a line that is not a catalog product, before calling the API', async () => {
     signedIn();
     const result = await registerServerOrder({
