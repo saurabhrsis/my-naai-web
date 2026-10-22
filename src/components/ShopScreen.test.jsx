@@ -6,13 +6,22 @@ import { ConfirmProvider } from './ConfirmDialog';
 import { ShopProductDetailScreen, ShopQuantityControl, ShopScreen } from './ShopScreen';
 import { ShopCartScreen, ShopCheckoutScreen } from './ShopCartCheckout';
 import { ShopOrderScreen, ShopOrdersScreen } from './ShopOrders';
-import { addToCart, clearShopStorage, findOrder, placeOrder, readCart, readOrders } from '../lib/shopOrders';
+import { addToCart, clearShopStorage, findOrder, placeOrder, readCart, readOrders, setOrderSyncState } from '../lib/shopOrders';
 import { resetShopSettingsCache } from '../lib/shopSettings';
 
-const { shopProductList, shopSettingsGet } = vi.hoisted(() => ({
+const { shopProductList, shopSettingsGet, shopOrderCreate } = vi.hoisted(() => ({
   shopProductList: vi.fn(),
   shopSettingsGet: vi.fn(),
+  shopOrderCreate: vi.fn(),
 }));
+
+// The order is only real once `POST /api/shop-orders/create` accepts it, so the
+// checkout tests drive that call. It is mocked at the sync layer (a real
+// registration is covered in shopServerSync.test.js).
+vi.mock('../lib/shopServerSync', async () => {
+  const actual = await vi.importActual('../lib/shopServerSync');
+  return { ...actual, registerServerOrder: shopOrderCreate };
+});
 
 vi.mock('../lib/api', async () => {
   const actual = await vi.importActual('../lib/api');
@@ -88,6 +97,9 @@ beforeEach(() => {
     status: 'SUCCESS',
     data: { freeDeliveryAbove: 499, deliveryFee: 49, discountPercent: 0, codThreshold: 0, codCharges: 0 },
   });
+  // The backend accepts orders by default; a rejection test overrides this.
+  shopOrderCreate.mockReset();
+  shopOrderCreate.mockResolvedValue({ ok: true, code: 'OK', order: null });
   document.body.innerHTML = '';
 });
 
@@ -504,6 +516,59 @@ describe('ShopCheckoutScreen', () => {
     expect(navigate).toHaveBeenCalledWith('shopOrder', { orderId });
   });
 
+  it('hands the whole order to the backend call and marks it confirmed on success', async () => {
+    seedCart();
+    const { container } = await render(<ShopCheckoutScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    await act(async () => { container.querySelector('input[value="cod"]').click(); });
+    await act(async () => { buttonsContaining('Place order', container)[0].click(); });
+    await flush();
+    await act(async () => { buttonByText('Place order', document.querySelector('.confirm-sheet')).click(); });
+    await flush();
+
+    expect(shopOrderCreate).toHaveBeenCalledTimes(1);
+    const sent = shopOrderCreate.mock.calls[0][0];
+    const orderId = readOrders('salon-1')[0].id;
+    expect(sent.id).toBe(orderId);
+    expect(sent.items).toHaveLength(2);
+    expect(sent.items[0]).toMatchObject({ productId: 'sp1', price: 199, qty: 1 });
+    expect(sent.address).toMatchObject({ name: 'Ramesh Kumar', phone: '9876543210', city: 'Nagpur', state: 'Maharashtra', pincode: '440010' });
+    expect(sent.payment).toMatchObject({ method: 'COD', status: 'PENDING' });
+    expect(sent.amounts.total).toBe(698);
+
+    // The local copy now knows the backend has it (the wire body itself is
+    // asserted in shopServerSync.test.js).
+    expect(readOrders('salon-1')[0].syncState).toBe('synced');
+    expect(container.textContent).toContain('Order placed');
+  });
+
+  it('shows the backend\u2019s refusal and leaves the cart intact', async () => {
+    seedCart();
+    shopOrderCreate.mockResolvedValue({ ok: false, code: 'VALIDATION', retryable: false, message: 'items.0.productId must be a valid GUID' });
+    const notify = vi.fn();
+    const { container } = await render(<ShopCheckoutScreen session={SESSION} navigate={vi.fn()} notify={notify} />);
+    await act(async () => { container.querySelector('input[value="cod"]').click(); });
+    await act(async () => { buttonsContaining('Place order', container)[0].click(); });
+    await flush();
+    await act(async () => { buttonByText('Place order', document.querySelector('.confirm-sheet')).click(); });
+    await flush();
+
+    // No success card, an explicit error, and NOTHING left behind as an order.
+    expect(container.textContent).not.toContain('Order placed');
+    expect(container.querySelector('.shop-order-error')).toBeTruthy();
+    expect(container.querySelector('.shop-order-error').textContent).toContain('items.0.productId must be a valid GUID');
+    expect(readOrders('salon-1')).toHaveLength(0);
+    expect(readCart('salon-1')).toHaveLength(2);
+    expect(notify).toHaveBeenCalledWith('error', expect.stringContaining('valid GUID'));
+
+    // "Try again" re-sends the same placeable order.
+    shopOrderCreate.mockResolvedValue({ ok: true, code: 'OK', order: null });
+    await act(async () => { buttonByText('Try again', container).click(); });
+    await flush();
+    expect(shopOrderCreate).toHaveBeenCalledTimes(2);
+    expect(readOrders('salon-1')).toHaveLength(1);
+    expect(container.textContent).toContain('Order placed');
+  });
+
   it('offers the state as a dropdown and prefills the salon\u2019s state', async () => {
     seedCart();
     const { container } = await render(<ShopCheckoutScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
@@ -596,13 +661,18 @@ describe('ShopCheckoutScreen', () => {
 });
 
 describe('orders + tracker', () => {
-  const seedOrder = () => placeOrder('salon-1', {
-    items: [{ productId: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men', qty: 1 }],
-    address: { name: 'Ramesh Kumar', phone: '9876543210', line1: '12 Main Road', city: 'Nagpur', state: 'Maharashtra', pincode: '440010' },
-    payment: { method: 'COD', status: 'PENDING', amount: 248 },
-    amounts: { itemTotal: 199, savings: 0, deliveryFee: 49, total: 248 },
-    salonName: 'Golden Scissors',
-  });
+  const seedOrder = () => {
+    const placed = placeOrder('salon-1', {
+      items: [{ productId: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men', qty: 1 }],
+      address: { name: 'Ramesh Kumar', phone: '9876543210', line1: '12 Main Road', city: 'Nagpur', state: 'Maharashtra', pincode: '440010' },
+      payment: { method: 'COD', status: 'PENDING', amount: 248 },
+      amounts: { itemTotal: 199, savings: 0, deliveryFee: 49, total: 248 },
+      salonName: 'Golden Scissors',
+    });
+    // The backend accepted it — that is what makes it a real order. The live
+    // status arrives from the server, so the seed only carries the flag.
+    return setOrderSyncState('salon-1', placed.id, 'synced') || placed;
+  };
 
   it('lists orders in My orders with the live status', async () => {
     const order = seedOrder();
@@ -610,7 +680,7 @@ describe('orders + tracker', () => {
     const { container } = await render(<ShopOrdersScreen session={SESSION} navigate={navigate} notify={vi.fn()} />);
     expect(container.textContent).toContain(order.id);
     expect(container.textContent).toContain('Order placed');
-    await act(async () => { container.querySelector('.shop-order-card').click(); });
+    await act(async () => { container.querySelector('.shop-order-card-main').click(); });
     expect(navigate).toHaveBeenCalledWith('shopOrder', { orderId: order.id });
   });
 

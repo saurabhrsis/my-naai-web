@@ -206,15 +206,49 @@ under `/api/products/*`) are NOT the shop catalog. The shop browses the
 - every add / set-qty / remove / clear is pushed **fire-and-forget** at
   `POST /api/shop-cart/*` — a failed push never breaks the session (the local
   copy survives, the next mount re-syncs);
-- at checkout the order is written locally first (`placeOrder` generates the
-  `MN…` id), the success card renders instantly, and then the same id is
-  **registered** on the server (`POST /api/shop-orders/create`) — the local
-  and server records share one identity; a successful registration clears the
-  server cart;
+- at checkout the order is placed **through the backend**. `placeOrder`
+  generates the `MN…` id locally, and that id is immediately
+  **registered** on the server (`POST /api/shop-orders/create`) with the same
+  identity. `/api/shop-orders/create` is what makes the order real (the
+  `shop_orders` row the admin dashboard and the distributor work from), so the
+  success card waits for its answer:
+  - **accepted** → the local copy is marked `syncState: 'synced'`, the server
+    amounts/payment/status are merged in, the cart (local + server) is
+    cleared and the success card shows the order;
+  - **cash on delivery rejected** → nothing is placed. The local draft is
+    deleted, the cart and address stay exactly as they were, and the checkout
+    shows the backend's message with *Try again*;
+  - **online payment taken but registration failed** (network/5xx) → the order
+    is never thrown away: it is kept with `syncState: 'pending'`, queued in
+    `mynaaiShopPendingOrders` and retried by `flushPendingOrders()` on the next
+    visit to *My orders*;
+- the request body is built **from the API contract**, never from the local
+  order: `{ orderId, items[{productId,name,price,qty,…}], address{name,phone,
+  line1,city,state,pincode}, payment{method,status,paymentId,amount} }`. Joi
+  rejects unknown keys, and one stray key fails the whole order — the delivery
+  pin (`address.latitude/longitude`) is added only when it exists and the
+  registration is repeated without it if an older backend answers "not
+  allowed", so a pin can never cost the salon its order. A line whose
+  `productId` is not a catalog UUID is refused before the call with a message
+  naming the product;
+- **My orders never dresses up a draft as a real order**: anything without a
+  server confirmation shows a *Not confirmed* chip, a warning that nobody will
+  deliver it, and *Send to My Naai* / *Remove* actions;
 - guests (no session token) never touch the network and keep the pure
   localStorage behaviour; online payments stay order-less (Razorpay Checkout
   key + amount), and the `razorpay_payment_id` the client stores on the order
   is what the backend's signed webhook flips to PAID.
+
+> **Backend requirement (open).** `createShopOrderSchema` in the backend
+> validates the address object strictly, so a delivery pin
+> (`address.latitude` / `address.longitude`) is rejected as an unknown key and
+> the order is stored without it. The checkout therefore sends the pin only
+> when it exists and falls back to a pin-less body on "not allowed", which is
+> why a COD order now always lands in `shop_orders`. To store the pin on the
+> order, the backend has to add the two optional coordinates to that schema
+> (`latitude: Joi.number().min(-90).max(90)`,
+> `longitude: Joi.number().min(-180).max(180)`) and persist them on the order
+> snapshot; the client needs no change once it does.
 
 **Two status tracks.** The order carries an INTERNAL track (what the company
 admin and the assigned **distributor** see:

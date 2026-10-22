@@ -10,6 +10,7 @@ import {
   ShoppingBag,
   Trash2,
   Truck,
+  XCircle,
 } from 'lucide-react';
 import { getFileUrl } from '../lib/api';
 import {
@@ -25,11 +26,13 @@ import {
   freeDeliveryGap,
   placeOrder,
   readCart,
+  removeLocalOrder,
+  setOrderSyncState,
 } from '../lib/shopOrders';
 import { useShopSettings } from '../lib/shopSettings';
 import { normalizeStateName, stateOptionsWith } from '../lib/stateOptions';
 import { formatCoordinates, mapsUrl, toPoint } from '../lib/geo';
-import { clearServerCart, registerServerOrder } from '../lib/shopServerSync';
+import { clearServerCart, queuePendingOrder, registerServerOrder } from '../lib/shopServerSync';
 import {
   Button,
   EmptyState,
@@ -46,6 +49,7 @@ import { useConfirm } from './ConfirmDialog';
 import { ShopQuantityControl, shopOwnerId, shopSalonName, useSyncedCart } from './ShopScreen';
 
 const PRODUCT_PLACEHOLDER = '/assets/brand/product-placeholder.svg';
+const SUPPORT_PHONE = '8380017393';
 
 /* ------------------------------------------------------------------ *\
  * Bill card — shared by the cart, the checkout summary and the success
@@ -257,6 +261,10 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
   const [busy, setBusy] = useState(false);
   const [payState, setPayState] = useState('idle'); // idle | opening | in-checkout | app-switched | confirming
   const [placed, setPlaced] = useState(null);
+  // A rejected registration is a real outcome the salon must see — not a
+  // console line. `orderError` is shown above the pay button, with Retry.
+  const [orderError, setOrderError] = useState('');
+  const [retrying, setRetrying] = useState(false);
   const shopSettings = useShopSettings();
   // Cash on delivery is confirmed through the app's own sheet (never
   // window.confirm, which installed PWAs can suppress).
@@ -306,10 +314,20 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     return '';
   };
 
-  const finalizeOrder = (paymentInfo) => {
-    // The local record is written first (same id the server will keep), so
-    // the success view and "My orders" render instantly; the server copy
-    // then makes the order part of the account's history on every device.
+  /**
+   * Place the order ON THE SERVER, then show it.
+   *
+   * The id is generated locally so the flow has one identity, but the browser
+   * copy is only a cache: the success screen appears once
+   * `POST /api/shop-orders/create` has accepted the order — that is the row the
+   * admin dashboard and the distributor work from.
+   *
+   * Cash on delivery: nothing was charged, so a rejection is a clean failure —
+   * the draft is removed, the cart stays untouched and the salon can retry.
+   * Online: the money has been taken, so the order is kept, queued for retry
+   * and shown with an honest "confirming" state.
+   */
+  const finalizeOrder = async (paymentInfo) => {
     const order = placeOrder(ownerId, {
       items: lines,
       address,
@@ -317,16 +335,46 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
       amounts: totals,
       salonName: shopSalonName(session),
     });
-    setLines(clearCart(ownerId));
-    setPlaced(order);
+    setOrderError('');
+    setPayState('saving');
+    const result = await registerServerOrder(order);
     setPayState('idle');
-    notify?.('success', `Order ${order.id} placed.`);
-    registerServerOrder(order).then(registered => {
+
+    if (result.ok) {
+      const confirmed = setOrderSyncState(ownerId, order.id, 'synced', result.order ? {
+        // The server is the authority on the money and the status.
+        amounts: { ...order.amounts, ...(result.order.amounts || {}) },
+        payment: { ...order.payment, ...(result.order.payment || {}) },
+        placedAt: result.order.placedAt || order.placedAt,
+        serverStatus: result.order.serverStatus || null,
+      } : {}) || order;
+      setLines(clearCart(ownerId));
+      setPlaced(confirmed);
+      notify?.('success', `Order ${order.id} placed.`);
       // The placed cart is done for — clear it on the server too so another
-      // device cannot buy it again. (Local copy was already cleared.)
-      if (registered) clearServerCart();
-    });
-    return order;
+      // device cannot buy it again.
+      clearServerCart();
+      return { ok: true, order: confirmed };
+    }
+
+    if (paymentInfo.method === 'ONLINE') {
+      // Paid but not registered: never lose it. Keep the order, mark it
+      // pending and let the retry queue take over.
+      queuePendingOrder(order);
+      const pending = setOrderSyncState(ownerId, order.id, 'pending') || order;
+      setLines(clearCart(ownerId));
+      setPlaced(pending);
+      clearServerCart();
+      notify?.('error', `Payment received, but My Naai could not confirm the order yet — ${result.message} We will keep retrying.`);
+      return { ok: false, order: pending, message: result.message };
+    }
+
+    // COD: roll the draft back. An order the salon can see while the company
+    // cannot is exactly the bug this replaces.
+    removeLocalOrder(ownerId, order.id);
+    setOrderError(result.message || 'My Naai could not accept this order.');
+    notify?.('error', result.message || 'My Naai could not accept this order.');
+    return { ok: false, message: result.message };
   };
 
   const payOnline = async () => {
@@ -353,7 +401,7 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     });
     if (result.status === 'success') {
       setPayState('confirming');
-      finalizeOrder({ method: 'ONLINE', status: 'PAID', paymentId: result.payment?.paymentId || '', amount: totals.total });
+      await finalizeOrder({ method: 'ONLINE', status: 'PAID', paymentId: result.payment?.paymentId || '', amount: totals.total });
       return;
     }
     setPayState('idle');
@@ -364,8 +412,28 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     notify?.('error', describePaymentFailure(result.error));
   };
 
-  const placeCod = () => {
-    finalizeOrder({ method: 'COD', status: 'PENDING', paymentId: '', amount: totals.total });
+  const placeCod = () => finalizeOrder({ method: 'COD', status: 'PENDING', paymentId: '', amount: totals.total });
+
+  // Retry the same placement after a rejected registration — the cart and the
+  // address are still exactly as the salon left them.
+  const retryPlaceOrder = async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      const problem = validate();
+      if (problem) {
+        setOrderError(problem);
+        return;
+      }
+      await finalizeOrder({
+        method: payment === 'online' ? 'ONLINE' : 'COD',
+        status: 'PENDING',
+        paymentId: '',
+        amount: totals.total,
+      });
+    } finally {
+      setRetrying(false);
+    }
   };
 
   // Cash on delivery is a commitment to receive (and pay for) the parcel, so
@@ -387,7 +455,7 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
 
   const submit = async event => {
     event?.preventDefault();
-    if (busy) return;
+    if (busy || retrying) return;
     const problem = validate();
     if (problem) return notify?.('error', problem);
     if (lines.length === 0) return notify?.('error', 'Your cart is empty.');
@@ -399,7 +467,7 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     setBusy(true);
     try {
       if (payment === 'online') await payOnline();
-      else placeCod();
+      else await placeCod();
     } finally {
       setBusy(false);
     }
@@ -453,7 +521,8 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     );
   }
 
-  const payLabel = payState === 'opening' ? 'Contacting payment gateway…'
+  const payLabel = payState === 'saving' ? 'Placing your order with My Naai…'
+    : payState === 'opening' ? 'Contacting payment gateway…'
     : payState === 'in-checkout' ? 'Complete the payment in the Razorpay window'
     : payState === 'app-switched' ? 'Waiting for your payment app…'
     : payState === 'confirming' ? 'Confirming your payment…'
@@ -553,7 +622,28 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
               <LoaderCircle size={15} className="spin" /> {payLabel}
             </div>
           )}
-          <Button type="submit" size="large" loading={busy || payState !== 'idle'} className="shop-proceed-button">
+          {orderError && (
+            <div className="shop-order-error" role="alert">
+              <XCircle size={16} />
+              <div>
+                <strong>Order not placed</strong>
+                <p>{orderError}</p>
+                <p className="shop-order-error-help">
+                  Nothing has been charged and your cart is still here. Check the details above and try again,
+                  or call {SUPPORT_PHONE} if it keeps failing.
+                </p>
+                <div className="shop-order-error-actions">
+                  <Button type="button" size="small" loading={retrying} onClick={retryPlaceOrder}>
+                    Try again
+                  </Button>
+                  <Button type="button" size="small" variant="secondary" onClick={() => setOrderError('')}>
+                    Dismiss
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+          <Button type="submit" size="large" loading={busy || retrying || payState !== 'idle'} className="shop-proceed-button">
             {payLabel} {payment === 'online' ? <CreditCard size={16} /> : <Banknote size={16} />}
           </Button>
           <p className="shop-checkout-terms"><ShieldCheck size={13} /> Orders can be cancelled free of charge until they go out for delivery. Online refunds return to the source within 5–7 working days.</p>

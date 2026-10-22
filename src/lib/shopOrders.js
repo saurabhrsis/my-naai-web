@@ -269,6 +269,25 @@ export function upsertLocalOrder(salonId, order) {
   return { ...order };
 }
 
+// Remove a draft order (used when the server refuses an order that nothing
+// was charged for — an order the salon can see but My Naai has never heard of
+// is worse than an honest failure).
+export function removeLocalOrder(salonId, orderId) {
+  const orders = readOrders(salonId).filter(order => order.id !== String(orderId));
+  writeJson(orderKey(salonId), orders);
+  return orders;
+}
+
+// `pending` = the server has not confirmed it yet (queued for retry);
+// `synced`  = it is a real record on the backend.
+export function setOrderSyncState(salonId, orderId, syncState, extra = {}) {
+  const orders = readOrders(salonId).map(order =>
+    order.id === String(orderId) ? { ...order, ...extra, syncState } : order
+  );
+  writeJson(orderKey(salonId), orders);
+  return orders.find(order => order.id === String(orderId)) || null;
+}
+
 // The address snapshot is the only delivery record the shop keeps, so it is
 // validated here — the forms validate too, but a hand-edited storage entry
 // must not break the tracker.

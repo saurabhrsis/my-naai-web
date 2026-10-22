@@ -2425,8 +2425,29 @@ img.image-fallback-tile {
 /* ── My orders ── */
 .shop-order-tabs { margin-top: 12px; }
 .shop-order-list { display: flex; flex-direction: column; gap: 9px; }
-.shop-order-card { display: flex; align-items: center; gap: 12px; padding: 13px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); text-align: left; }
+.shop-order-card { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
 .shop-order-card:hover { border-color: rgba(46, 204, 113, .4); }
+.shop-order-card-main { display: flex; align-items: center; gap: 12px; width: 100%; padding: 13px; border: 0; border-radius: 14px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.shop-order-card.is-unconfirmed { border-color: rgba(242, 183, 90, .45); }
+.shop-order-sync-actions { display: flex; flex-direction: column; gap: 8px; padding: 0 13px 13px 67px; }
+.shop-order-sync-actions p { margin: 0; color: var(--muted-light); font-size: 10.5px; line-height: 1.5; }
+.shop-order-sync-actions > div { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* An order the backend never accepted. Deliberately loud: a salon must never
+   read it as a real delivery on its way. */
+.shop-sync-warning { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 11px; padding: 12px 14px; border: 1px solid rgba(242, 183, 90, .45); border-radius: 13px; background: rgba(242, 183, 90, .09); }
+.shop-sync-warning > svg { flex: none; margin-top: 1px; color: var(--gold); }
+.shop-sync-warning strong { display: block; color: var(--white); font-size: 12.5px; }
+.shop-sync-warning p { margin: 4px 0 0; color: var(--muted-light); font-size: 11px; line-height: 1.55; }
+.shop-sync-warning.is-detail { padding: 14px; }
+
+/* Checkout: the order was refused by the backend, so nothing was placed. */
+.shop-order-error { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 11px; padding: 12px 14px; border: 1px solid rgba(242, 123, 116, .5); border-radius: 13px; background: rgba(242, 123, 116, .1); }
+.shop-order-error > svg { flex: none; margin-top: 1px; color: #f27b74; }
+.shop-order-error strong { display: block; color: var(--white); font-size: 12.5px; }
+.shop-order-error p { margin: 4px 0 0; color: var(--muted-light); font-size: 11px; line-height: 1.55; }
+.shop-order-error .shop-order-error-help { color: var(--muted); font-size: 10.5px; }
+.shop-order-error-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 9px; }
 .shop-order-icon { width: 42px; height: 42px; flex: none; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; background: var(--shop-green-wash); color: var(--shop-green-soft); }
 .shop-order-copy { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
 .shop-order-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }

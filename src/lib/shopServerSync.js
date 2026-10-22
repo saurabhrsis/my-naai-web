@@ -113,6 +113,9 @@ export function mapServerOrder(order = {}) {
     cancelledAt: order.cancelledAt ? new Date(order.cancelledAt).toISOString() : null,
     cancelReason: String(order.cancelReason || ''),
     serverStatus: status || null,
+    // Any order that came back from the API is, by definition, accepted by
+    // the backend — even if the status field is still empty.
+    syncState: 'synced',
   };
 }
 
@@ -187,32 +190,252 @@ export async function clearServerCart() {
 
 /* ------------------------------------------------------------------ *
  * Order sync
+ *
+ * SHOP ORDERS ARE SERVER RECORDS. The browser copy is a cache: it keeps the
+ * last known state on screen and covers an offline visit, but an order only
+ * exists when `POST /api/shop-orders/create` accepted it — that is the row the
+ * admin dashboard, the distributor and the salon's other devices read.
+ *
+ * This used to be a fire-and-forget call whose failure was swallowed
+ * (`catch { return false }`), so a rejected registration left an order that
+ * was visible ONLY to the salon that placed it. The rejection was real and
+ * silent: the client sent `address.latitude/longitude`, the API's address
+ * schema does not allow unknown keys, and every COD order 400'd while the
+ * screen said "Order placed".
+ *
+ * So: the payload here is built FROM THE CONTRACT (only the fields the API
+ * validates), the result is returned instead of swallowed, and a failed
+ * attempt can be retried or queued.
  * ------------------------------------------------------------------ */
 
-// Register the order the client just placed (same id) so it becomes part of
-// the account's server-side history. Resolves true on success; a failure
-// leaves the local record (still visible) and does not re-open the cart.
-export async function registerServerOrder(order) {
-  if (!signedIn() || !order?.id) return false;
-  try {
-    await api.shopOrderCreate({
-      orderId: order.id,
-      items: order.items,
-      // Coordinates ride along with the address so an order placed from a
-      // salon whose profile predates the coordinate requirement still lands
-      // on the admin's map. The server prefers the salon's own record.
-      address: order.address,
-      payment: {
-        method: order.payment?.method === 'COD' ? 'COD' : 'ONLINE',
-        status: order.payment?.status === 'PAID' ? 'PAID' : 'PENDING',
-        paymentId: order.payment?.paymentId || '',
-        amount: Number(order.payment?.amount) || Number(order.amounts?.total) || 0,
-      },
-    });
-    return true;
-  } catch {
-    return false;
+// The address fields `POST /api/shop-orders/create` validates. Nothing else
+// may go in this object — Joi rejects unknown keys, and one extra key fails the
+// whole order.
+const ORDER_ADDRESS_KEYS = ['name', 'phone', 'line1', 'city', 'state', 'pincode'];
+
+const digitsOnly = (value, max) => String(value ?? '').replace(/\D/g, '').slice(0, max);
+
+// A cart line -> the API's line shape (uuid productId, numeric price/qty,
+// handful of optional snapshot fields).
+export function orderLinePayload(line = {}) {
+  const payload = {
+    productId: String(line.productId || line.id || '').trim(),
+    name: String(line.name || 'Product').slice(0, 200),
+    price: Math.max(0, Number(line.price) || 0),
+    qty: Math.max(1, Math.min(99, Math.round(Number(line.qty) || 1))),
+  };
+  if (Number(line.mrp) > 0) payload.mrp = Number(line.mrp);
+  if (line.image) payload.image = String(line.image);
+  if (line.category) payload.category = String(line.category).slice(0, 60);
+  if (line.gender) payload.gender = String(line.gender).slice(0, 20);
+  if (line.salonName) payload.salonName = String(line.salonName).slice(0, 200);
+  return payload;
+}
+
+/**
+ * The exact body `POST /api/shop-orders/create` expects.
+ *
+ * `withCoordinates` adds the delivery pin. The deployed API's address schema
+ * rejects unknown keys, so this is attempted FIRST and the request is repeated
+ * without it when the server says "not allowed" — a build that understands the
+ * pin records it, an older one still gets a real order.
+ */
+export function buildOrderPayload(order = {}, { withCoordinates = true } = {}) {
+  const source = order.address || {};
+  // Only the contract's keys — built from the allow-list so a field added to
+  // the local order (or a stray property from an old cache) can never break
+  // the request.
+  const address = {
+    name: String(source.name || '').trim().slice(0, 150),
+    phone: digitsOnly(source.phone, 10),
+    line1: String(source.line1 || '').trim().slice(0, 255),
+    city: String(source.city || '').trim().slice(0, 100),
+    state: String(source.state || '').trim().slice(0, 100),
+    pincode: digitsOnly(source.pincode, 6),
+  };
+  const body = {
+    orderId: String(order.id || ''),
+    items: (order.items || []).map(orderLinePayload),
+    address: Object.fromEntries(ORDER_ADDRESS_KEYS.map(key => [key, address[key]])),
+    payment: {
+      method: order.payment?.method === 'ONLINE' ? 'ONLINE' : 'COD',
+      status: order.payment?.status === 'PAID' ? 'PAID' : 'PENDING',
+      paymentId: order.payment?.paymentId || '',
+      amount: Number(order.payment?.amount) || Number(order.amounts?.total) || 0,
+    },
+  };
+  // The pin comes from the SOURCE order, not the stripped address above.
+  const point = withCoordinates ? toPoint(source) : null;
+  if (point) {
+    body.address.latitude = point.latitude;
+    body.address.longitude = point.longitude;
   }
+  return body;
+}
+
+// A UUID is what the line schema requires. A catalogs line that is not one
+// (a demo/mock id) cannot become a server order, and saying so is much better
+// than a generic failure.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const errorMessageOf = (error) => String(error?.message || error?.data?.message || '').trim();
+
+const looksLikeUnknownField = (error) => /not allowed|unknown|unexpected/i.test(errorMessageOf(error));
+
+// "Retry later" vs "this will never work": a network blip, a timeout or a 5xx
+// is worth queuing; a validation/auth rejection is not.
+const isRetryable = (error) => {
+  const status = Number(error?.status);
+  return !status || status >= 500 || status === 408 || status === 429;
+};
+
+const classify = (error) => {
+  const status = Number(error?.status);
+  if (status === 0) return 'NETWORK';
+  if (status === 401 || status === 403) return 'AUTH';
+  if (status === 400 || status === 422) return 'VALIDATION';
+  if (status >= 500) return 'SERVER';
+  return 'UNKNOWN';
+};
+
+// Once a server has told us it does not understand the delivery pin, stop
+// sending it for the rest of the session (one extra request per order, not two).
+let coordinatesSupported = true;
+
+/**
+ * Register a locally-recorded order with the backend.
+ *
+ * Resolves to `{ ok, order, message, code, retryable }` — callers must look at
+ * `ok`. Never throws. `order` is the server's own copy (mapped back) when the
+ * server answered with one.
+ */
+export async function registerServerOrder(order) {
+  if (!order?.id) {
+    return { ok: false, code: 'INVALID', retryable: false, message: 'This order has no id.' };
+  }
+  if (!signedIn()) {
+    return {
+      ok: false,
+      code: 'NO_SESSION',
+      retryable: false,
+      message: 'Sign in to your salon account so the order reaches My Naai.',
+    };
+  }
+
+  const badLine = (order.items || []).find(line => !UUID_RE.test(String(line?.productId || '')));
+  if (badLine) {
+    return {
+      ok: false,
+      code: 'INVALID_ITEM',
+      retryable: false,
+      message: `"${badLine.name || 'A product'}" has no catalog id, so it cannot be ordered. Remove it from the cart and add it again from the shop.`,
+    };
+  }
+
+  const attempt = async (withCoordinates) => api.shopOrderCreate(buildOrderPayload(order, { withCoordinates }));
+
+  let response;
+  try {
+    response = await attempt(coordinatesSupported);
+  } catch (error) {
+    // The deployed API validates the address object strictly. A pin it does
+    // not know about must never cost the salon its order: send the plain
+    // address and remember that this server has no pin support.
+    if (coordinatesSupported && toPoint(order.address) && looksLikeUnknownField(error)) {
+      coordinatesSupported = false;
+      try {
+        response = await attempt(false);
+      } catch (retryError) {
+        return {
+          ok: false,
+          code: classify(retryError),
+          retryable: isRetryable(retryError),
+          message: errorMessageOf(retryError) || 'My Naai could not accept this order.',
+        };
+      }
+    } else {
+      return {
+        ok: false,
+        code: classify(error),
+        retryable: isRetryable(error),
+        message: errorMessageOf(error) || 'My Naai could not accept this order.',
+      };
+    }
+  }
+
+  const serverOrder = mapServerOrder(response?.data || {});
+  return {
+    ok: true,
+    code: 'OK',
+    retryable: false,
+    message: '',
+    order: serverOrder.id ? serverOrder : null,
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Orders that the server has not confirmed yet
+ *
+ * Only a paid-but-unregistered order is ever queued (a COD order that failed
+ * is simply not placed — nothing was taken, so the cart is left intact and the
+ * salon tries again). The queue is a retry buffer, never the record.
+ * ------------------------------------------------------------------ */
+
+const PENDING_ORDERS_KEY = 'mynaaiShopPendingOrders';
+
+function readPendingQueue() {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(PENDING_ORDERS_KEY) : null;
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter(entry => entry?.order?.id) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePendingQueue(entries) {
+  try {
+    localStorage.setItem(PENDING_ORDERS_KEY, JSON.stringify(entries));
+  } catch { /* storage blocked: the in-memory caller still has the order */ }
+}
+
+export function readPendingOrders() {
+  return readPendingQueue();
+}
+
+export function queuePendingOrder(order) {
+  if (!order?.id) return [];
+  const entries = readPendingQueue().filter(entry => entry.order.id !== order.id);
+  entries.push({ orderId: order.id, order, queuedAt: new Date().toISOString(), attempts: 0 });
+  writePendingQueue(entries);
+  return entries;
+}
+
+export function dequeuePendingOrder(orderId) {
+  const entries = readPendingQueue().filter(entry => entry.order.id !== String(orderId));
+  writePendingQueue(entries);
+  return entries;
+}
+
+/**
+ * Retry every queued order (paid orders whose registration failed, e.g. while
+ * offline). Resolves to `{ synced, pending, results }`; the caller decides
+ * whether to refresh the list.
+ */
+export async function flushPendingOrders() {
+  const entries = readPendingQueue();
+  if (!entries.length || !signedIn()) return { synced: [], pending: entries, results: [] };
+  const synced = [];
+  const stillPending = [];
+  const results = [];
+  for (const entry of entries) {
+    const result = await registerServerOrder(entry.order);
+    results.push({ orderId: entry.order.id, ...result });
+    if (result.ok) synced.push({ orderId: entry.order.id, order: result.order });
+    else stillPending.push({ ...entry, attempts: (Number(entry.attempts) || 0) + 1, lastError: result.message });
+  }
+  writePendingQueue(stillPending);
+  return { synced, pending: stillPending, results };
 }
 
 // Pull the account's order history. Resolves to local-shaped orders (each
