@@ -37,13 +37,19 @@ delivery → Delivered), and **cancel order** before dispatch.
   **Naai Shop** / **My shop orders** rows on the account screen; the parcel goes
   to their delivery address.
 - **Visitors** get the storefront on the public website — `/shop`,
-  `/shopProduct?productId=…`, the navbar's **Shop** link, the footer link and a
-  **Shop now** band on the home page. Browsing is free; the first
-  add-to-cart asks for a sign-in and returns them to the product.
+  `/shopProduct?productId=…`, `/shopCart`, the navbar's **Shop** link, the
+  footer link and a **Shop now** band on the home page. Browsing **and filling a
+  cart** are free: the account is asked for at checkout, where a gate explains
+  what it buys (a phone the delivery partner can call, a trackable order, My
+  orders later) and one OTP sign-in carries the cart onto the account. Order
+  history is never public — My orders only exists for a signed-in account.
 
 Those public reads are the open `/api/shop-public/products/list` and
 `/api/shop-public/settings/get` (no token, cached, rate-limited), with a
 fallback to the partner catalog endpoint so either deployment order works.
+Search, the category / gender / price facets and pagination are sent to the API
+on every browse (`patches/backend-shop-catalog-filters.patch`); until that patch
+is deployed the shop reads the catalog and filters locally instead.
 
 Delivery rules (fee, free-delivery threshold, discounts, COD limit and charges)
 come from the admin's shop settings and are applied on the checkout page only.

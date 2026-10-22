@@ -155,7 +155,9 @@ describe('ShopScreen', () => {
     // labelled filter row — no delivery banner, no sort control.
     expect(buttonsContaining('My cart', container).length).toBe(1);
     expect(buttonsContaining('My orders', container).length).toBe(1);
-    expect(container.textContent).toContain('Category');
+    // The category rail labels the categories (the facet itself is a chip, not
+    // a select), then the two labelled selects.
+    expect(container.querySelector('.shop-category-rail').textContent).toContain('Hair care');
     expect(container.textContent).toContain('For');
     expect(container.textContent).toContain('Price');
     expect(container.querySelector('.shop-hero-strip')).toBeNull();
@@ -188,18 +190,20 @@ describe('ShopScreen', () => {
     expect(navigate).toHaveBeenCalledWith('shopCart');
   });
 
-  it('filters with the category, gender and price selects', async () => {
+  it('filters with the category rail and the gender/price selects', async () => {
     const { container } = await render(<ShopScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
     const setFilter = async (label, value) => {
       const select = Array.from(container.querySelectorAll('select')).find(item => item.getAttribute('aria-label') === label);
       select.value = value;
       await act(async () => { select.dispatchEvent(new Event('change', { bubbles: true })); });
     };
+    const chip = text => Array.from(container.querySelectorAll('.shop-chip'))
+      .find(node => node.textContent.trim().endsWith(text));
 
-    await setFilter('Category', 'beard-grooming');
+    await act(async () => { chip('Beard & grooming').click(); });
     expect(Array.from(container.querySelectorAll('.shop-card h3')).map(node => node.textContent)).toEqual(['Beard Oil 30ml']);
 
-    await setFilter('Category', 'all');
+    await act(async () => { chip('All').click(); });
     expect(container.querySelectorAll('.shop-card')).toHaveLength(6);
 
     await setFilter('Gender', 'men');
@@ -221,7 +225,8 @@ describe('ShopScreen', () => {
     // Popular is the catalog order; there is no Sort select to change it.
     expect(titles()[0]).toBe('Keratin Shampoo 200ml');
     expect(selectByLabel('Sort products')).toBeUndefined();
-    expect(container.querySelectorAll('.shop-filters-selects select')).toHaveLength(3);
+    // For + Price (category is the chip rail, so no third select).
+    expect(container.querySelectorAll('.shop-filters-selects select')).toHaveLength(2);
 
     // A search narrows the grid AND travels to the API (once typing settles —
     // the field is debounced so a keystroke is not a request).
@@ -243,11 +248,10 @@ describe('ShopScreen', () => {
     expect(shopProductList).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, searchString: '' }));
   });
 
-  it('keeps the filter facets, sends them to the API, and starts again from page 1', async () => {
+  it('sends every facet to the API and starts again from page 1', async () => {
     const { container } = await render(<ShopScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
-    const select = Array.from(container.querySelectorAll('select')).find(item => item.getAttribute('aria-label') === 'Category');
-    select.value = 'beard-grooming';
-    await act(async () => { select.dispatchEvent(new Event('change', { bubbles: true })); });
+    const chip = Array.from(container.querySelectorAll('.shop-chip')).find(node => node.textContent.includes('Beard & grooming'));
+    await act(async () => { chip.click(); });
     expect(shopProductList).toHaveBeenLastCalledWith(expect.objectContaining({
       page: 1,
       category: 'beard-grooming',
@@ -255,9 +259,23 @@ describe('ShopScreen', () => {
       priceRange: '',
       inStock: true,
     }));
-    // The category chip rail mirrors the select — one state, two controls.
-    const activeChip = container.querySelector('.shop-chip.active');
-    expect(activeChip.textContent).toContain('Beard');
+    expect(container.querySelector('.shop-chip.active').textContent).toContain('Beard');
+
+    // A second facet stacks on the first, in one request.
+    const select = Array.from(container.querySelectorAll('select')).find(item => item.getAttribute('aria-label') === 'Price');
+    select.value = 'under500';
+    await act(async () => { select.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(shopProductList).toHaveBeenLastCalledWith(expect.objectContaining({
+      page: 1,
+      category: 'beard-grooming',
+      priceRange: 'under500',
+    }));
+
+    // Clear filters resets every facet AND the page.
+    await act(async () => { container.querySelector('.shop-clear-filters').click(); });
+    expect(shopProductList).toHaveBeenLastCalledWith(expect.objectContaining({
+      page: 1, category: '', gender: '', priceRange: '', searchString: '',
+    }));
   });
 
   it('opens the product details page when a card is tapped', async () => {

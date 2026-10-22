@@ -2123,8 +2123,10 @@ img.image-fallback-tile {
 .shop-search .shop-search-clear { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: rgba(255, 255, 255, .08); color: var(--muted-light); cursor: pointer; transition: background .15s, color .15s; }
 .shop-search .shop-search-clear:hover { color: var(--white); background: rgba(255, 255, 255, .16); }
 
+/* Two facets (For, Price) — the category lives in the chip rail above, so the
+   toolbar never carries two controls for one filter. */
 .shop-filters-selects { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-@media (min-width: 560px) and (max-width: 899px) { .shop-filters-selects { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; } }
+@media (min-width: 560px) and (max-width: 899px) { .shop-filters-selects { gap: 10px; } }
 .shop-filter-select { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .shop-filter-label { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
 .shop-select-shell { position: relative; display: block; }
@@ -2142,7 +2144,8 @@ img.image-fallback-tile {
   .shop-toolbar { grid-template-columns: minmax(230px, 320px) minmax(0, 1fr); align-items: end; gap: 16px; margin-bottom: 14px; }
   .shop-search { min-height: 40px; max-width: 320px; }
   .shop-search input { height: 38px; }
-  .shop-filters-selects { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  /* Two ~200px facets beside the search, not two half-page hairline boxes. */
+  .shop-filters-selects { grid-template-columns: repeat(2, minmax(0, 200px)); justify-content: start; gap: 12px; }
 }
 
 /* Category rail — the one-tap way around the catalog, above the grid. It

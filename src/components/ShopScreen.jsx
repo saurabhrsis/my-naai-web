@@ -515,12 +515,10 @@ export function ShopScreen({ session, navigate, notify }) {
         </div>
 
         <section className="shop-filters-selects" aria-label="Filter products">
-          <ShopFilterSelect label="Category" ariaLabel="Category" icon={Tag} value={category} onChange={event => setCategory(event.target.value)}>
-            <option value="all">All categories</option>
-            {categories.map(item => (
-              <option key={item.id} value={item.id}>{item.label}</option>
-            ))}
-          </ShopFilterSelect>
+          {/* Category is the chip rail below — one control per facet, not two.
+              The rail lists every category the live catalog uses, including
+              ones the backend invents, so nothing is lost by dropping the
+              duplicate select. */}
           <ShopFilterSelect label="For" ariaLabel="Gender" icon={User} value={gender} onChange={event => setGender(event.target.value)}>
             <option value="all">All</option>
             {SHOP_GENDERS.map(item => (
