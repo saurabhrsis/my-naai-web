@@ -19,25 +19,36 @@ npm test
 
 A Vitest (+ jsdom) suite covers the notification routing/buzzer/token logic and the in-app confirmation dialog (including a guard that fails if a native `window.confirm`/`alert`/`prompt` call comes back). The full mobile→web parity map and what was and wasn't testable here are in [`docs/TESTING-AND-PARITY.md`](docs/TESTING-AND-PARITY.md).
 
-## Naai Shop (salon supply store)
+## Naai Shop (storefront for partners and customers)
 
-Salon partners get a **Shop** tab — a Blinkit/Zepto-style store for grooming
-stock supplied by the MyNaai Platform: search and a compact **Category · For ·
-Price** filter strip, ADD → quantity stepper, a full **product details page**
-(photo gallery for multi-image products, price + MRP savings, seller, delivery
-facts, same-category suggestions — add to cart straight from the page), a
-"My cart (N)" shortcut beside "My orders", a floating "N items · ₹X → View
-cart" bar, cart with bill details, checkout with **Online (Razorpay) or
-Cash on Delivery**, a **My orders** list with a live 4-step status tracker
-(Placed → Packed → Out for delivery → Delivered), and **cancel order** before
-dispatch. Delivery is ₹49, free above ₹499. Catalog classification honours an
-explicit `category`/`gender` on the product (the salon product editor can set
-both, and upload **multiple product photos** — first one is the cover) and
-falls back to keyword inference, so every filter works against the current
-API. Orders live client-side per salon account until a backend
-`/api/orders` controller lands — the storage boundary that would be swapped is
-isolated in `src/lib/shopOrders.js`. Full design, data model and the backend
-integration path are in [`docs/SHOP-FLOW.md`](docs/SHOP-FLOW.md).
+The **admin-curated catalog** (`shop_products`) is on sale to two audiences
+from one set of screens — a Blinkit/Zepto-style store with search and a compact
+**Category · For · Price** filter strip, ADD → quantity stepper, a full
+**product details page** (photo gallery for multi-image products, price + MRP
+savings, seller, delivery facts, same-category suggestions), a "My cart (N)"
+shortcut beside "My orders", a floating "N items · ₹X → View cart" bar, cart
+with bill details, checkout with **Online (Razorpay) or Cash on Delivery**, a
+**My orders** list with a live 4-step status tracker (Placed → Packed → Out for
+delivery → Delivered), and **cancel order** before dispatch.
+
+- **Salon partners** buy stock for their chairs: **Shop** tab in the partner
+  portal; the parcel goes to the salon.
+- **Customers** buy for themselves: **Shop** tab in the customer app plus
+  **Naai Shop** / **My shop orders** rows on the account screen; the parcel goes
+  to their delivery address.
+- **Visitors** get the storefront on the public website — `/shop`,
+  `/shopProduct?productId=…`, the navbar's **Shop** link, the footer link and a
+  **Shop now** band on the home page. Browsing is free; the first
+  add-to-cart asks for a sign-in and returns them to the product.
+
+Delivery rules (fee, free-delivery threshold, discounts, COD limit and charges)
+come from the admin's shop settings and are applied on the checkout page only.
+Orders are **real backend records** (`shop_orders`) created through
+`POST /api/shop-orders/create`; the salon/customer cart is mirrored to
+`shop_carts` so it follows the account. Full design and the two status tracks:
+[`docs/SHOP-FLOW.md`](docs/SHOP-FLOW.md). Selling to customers needs a small
+backend change (buyer resolved from the token instead of assuming a salon) —
+contract, migration and rollout order: [`docs/SHOP-CUSTOMERS.md`](docs/SHOP-CUSTOMERS.md).
 
 To preview the whole flow without the production API (demo salon login with
 any number + any OTP, fixture catalog):

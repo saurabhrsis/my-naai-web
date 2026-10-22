@@ -93,6 +93,9 @@ import { Button, Field, Modal, SelectField, Spinner, SurfaceProvider, getErrorMe
 // produced a lowercase "bookings" tab).
 const USER_NAV = [
   { name: 'home', label: 'Discover', short: 'Discover', icon: Scissors },
+  // The Naai Shop is a first-class tab for customers too: the admin's catalog
+  // (shop_products) is sold to people, not only to salons buying stock.
+  { name: 'shop', label: 'Naai Shop', short: 'Shop', icon: ShoppingBag },
   { name: 'bookings', label: 'My bookings', short: 'Bookings', icon: CalendarCheck2 },
   { name: 'products', label: 'Products', short: 'Products', icon: Package },
   { name: 'account', label: 'Account', short: 'Account', icon: CircleUserRound },
@@ -145,14 +148,20 @@ function saveSession(session) {
 // place (readLocationRoute), which is why an unknown or role-mismatched screen
 // falls back to the role's home instead of rendering a screen the shell has
 // no branch for.
-const USER_ROUTE_NAMES = ['home', 'bookings', 'products', 'account', 'detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'privacy', 'contact'];
-const SALON_ROUTE_NAMES = ['queue', 'history', 'shop', 'shopProduct', 'shopCart', 'shopCheckout', 'shopOrders', 'shopOrder', 'salonProducts', 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
+// The shop routes are shared by both roles: `shopStorageOwnerId` keeps their
+// carts apart, and the screens read the role only for wording.
+const SHOP_ROUTE_NAMES = ['shop', 'shopProduct', 'shopCart', 'shopCheckout', 'shopOrders', 'shopOrder'];
+const USER_ROUTE_NAMES = ['home', 'bookings', 'products', 'account', 'detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'privacy', 'contact', ...SHOP_ROUTE_NAMES];
+const SALON_ROUTE_NAMES = ['queue', 'history', ...SHOP_ROUTE_NAMES, 'salonProducts', 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
 // Every route a visitor may open WITHOUT an account — salons are browsable
 // first, login only appears when they try to book (the client's headline
 // ask). The info pages are public too: the site footer links About/FAQ/Terms/
 // Privacy and a website's legal pages must never sit behind a login. `login`
 // is handled by AppRoot itself, not by the guest shell.
-const GUEST_ROUTE_NAMES = ['home', 'salon', 'about', 'faq', 'terms', 'privacy', 'contact', 'partner'];
+// A visitor may browse the shop and open a product page — the catalog is a
+// public storefront. Everything that writes to an account (cart, checkout,
+// orders) stays behind the login.
+const GUEST_ROUTE_NAMES = ['home', 'salon', 'shop', 'shopProduct', 'about', 'faq', 'terms', 'privacy', 'contact', 'partner'];
 const PUBLIC_ROUTE_NAMES = [...GUEST_ROUTE_NAMES, 'login'];
 
 function defaultRouteForRole(role) {
@@ -582,6 +591,8 @@ export function GuestShell({ route, navigate, notifyInstall, showBuzzerCheck = f
   const currentPage = route.name === 'salon' ? '' : route.name;
   const siteLinks = [
     { name: 'home', label: 'Home' },
+    // The shop is on the website itself, not only behind a partner login.
+    { name: 'shop', label: 'Shop' },
     { name: 'about', label: 'About' },
     // Owners find their route straight from the navbar — no hunting.
     { name: 'partner', label: 'Salon partner' },
@@ -628,9 +639,15 @@ export function GuestShell({ route, navigate, notifyInstall, showBuzzerCheck = f
         ? <PartnerScreen navigate={guestNavigate} showBuzzerCheck={showBuzzerCheck} />
         : route.name === 'salon'
           ? <SalonDetailScreen session={null} params={route.params} navigate={guestNavigate} notify={notify} />
-          : ['about', 'faq', 'terms', 'privacy', 'contact'].includes(route.name)
-            ? <InfoScreen type={route.name} navigate={guestNavigate} />
-            : <HomeScreen session={null} navigate={guestNavigate} notify={notify} />}
+          : route.name === 'shop'
+            // The public storefront: the whole admin catalog is browsable
+            // without an account; the first ADD asks for a sign-in.
+            ? <ShopScreen session={null} navigate={guestNavigate} notify={notify} />
+            : route.name === 'shopProduct'
+              ? <ShopProductDetailScreen session={null} params={route.params} navigate={guestNavigate} notify={notify} />
+              : ['about', 'faq', 'terms', 'privacy', 'contact'].includes(route.name)
+                ? <InfoScreen type={route.name} navigate={guestNavigate} />
+                : <HomeScreen session={null} navigate={guestNavigate} notify={notify} />}
       {/* The signed-out buzzer check lives on the page a tester can actually
           reach before an account exists — no login wall on iOS. */}
       {showBuzzerCheck && route.name !== 'partner' && <div className="guest-buzzer-test"><BuzzerTestCard notify={notify} /></div>}
@@ -1412,6 +1429,14 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     if (isSalon && session.isNewSalon && route.name !== 'editProfile') return <EditSalonProfileScreen {...props} params={{ ...(route.params || {}), isOnboarding: 'true' }} onLogout={onLogout} />;
     if (!isSalon) {
       if (route.name === 'home') return <HomeScreen {...props} />;
+      // Customers shop the same admin catalog the partners buy from; the
+      // screens differ only in wording and in whose cart/orders they read.
+      if (route.name === 'shop') return <ShopScreen {...props} />;
+      if (route.name === 'shopProduct') return <ShopProductDetailScreen {...props} params={route.params} />;
+      if (route.name === 'shopCart') return <ShopCartScreen {...props} />;
+      if (route.name === 'shopCheckout') return <ShopCheckoutScreen {...props} />;
+      if (route.name === 'shopOrders') return <ShopOrdersScreen {...props} />;
+      if (route.name === 'shopOrder') return <ShopOrderScreen {...props} params={route.params} />;
       if (route.name === 'bookings') return <BookingsScreen {...props} />;
       if (route.name === 'products') return <ProductsScreen {...props} />;
       if (route.name === 'account') return <AccountScreen {...props} onLogout={onLogout} />;
@@ -1427,12 +1452,6 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     }
     if (route.name === 'queue') return <SalonQueueScreen {...props} />;
     if (route.name === 'history') return <SalonHistoryScreen {...props} />;
-    if (route.name === 'shop') return <ShopScreen {...props} />;
-    if (route.name === 'shopProduct') return <ShopProductDetailScreen {...props} params={route.params} />;
-    if (route.name === 'shopCart') return <ShopCartScreen {...props} />;
-    if (route.name === 'shopCheckout') return <ShopCheckoutScreen {...props} />;
-    if (route.name === 'shopOrders') return <ShopOrdersScreen {...props} />;
-    if (route.name === 'shopOrder') return <ShopOrderScreen {...props} params={route.params} />;
     if (route.name === 'salonProducts') return <SalonProductsScreen {...props} />;
     if (route.name === 'account') return <SalonAccountScreen {...props} onLogout={onLogout} />;
     if (route.name === 'notifications') return <NotificationsScreen {...props} />;

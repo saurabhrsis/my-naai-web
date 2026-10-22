@@ -64,6 +64,13 @@ const SESSION = {
   },
 };
 
+// The same shop, opened by a signed-in customer instead of a salon partner.
+const CUSTOMER_SESSION = {
+  role: 'USER',
+  userId: 'user-9',
+  user: { fullName: 'Sneha Waghmare', phoneNumber: '9876543210', city: 'Nagpur', state: 'Maharashtra', pincode: '440010' },
+};
+
 const flush = async () => { await act(async () => { await Promise.resolve(); }); };
 
 async function render(element) {
@@ -714,5 +721,65 @@ describe('orders + tracker', () => {
     const { container } = await render(<ShopOrderScreen session={SESSION} params={{ orderId: 'MN-MISSING' }} navigate={vi.fn()} notify={vi.fn()} />);
     expect(container.textContent).toContain('Order not found');
     clearShopStorage('salon-1');
+  });
+});
+
+describe('the shop for customers and website visitors', () => {
+  it('speaks to a customer, not to a salon', async () => {
+    const { container } = await render(<ShopScreen session={CUSTOMER_SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    expect(container.textContent).toContain('delivered to your door');
+    expect(container.textContent).not.toContain('for your salon');
+    // The catalog is the same admin catalog the partners buy from.
+    expect(container.textContent).toContain('Beard Oil 30ml');
+  });
+
+  it('keeps a customer cart in its own store, away from a salon cart', async () => {
+    const { container } = await render(<ShopScreen session={CUSTOMER_SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    await act(async () => { buttonByText('Add', container).click(); });
+    await flush();
+
+    expect(readCart('user:user-9')).toHaveLength(1);
+    expect(readCart('user-9')).toHaveLength(0); // not the salon namespace
+    expect(readCart('guest')).toHaveLength(0);
+  });
+
+  it('lets a website visitor browse, and asks for a sign-in on the first ADD', async () => {
+    const navigate = vi.fn();
+    const notify = vi.fn();
+    const { container } = await render(<ShopScreen session={null} navigate={navigate} notify={notify} />);
+
+    // The whole catalog is public.
+    expect(container.textContent).toContain('Beard Oil 30ml');
+    expect(container.textContent).toContain('delivered to your door');
+
+    await act(async () => { buttonByText('Add', container).click(); });
+    await flush();
+    expect(notify).toHaveBeenCalledWith('info', expect.stringMatching(/sign in/i));
+    expect(navigate).toHaveBeenCalledWith('login', { returnTo: '/shop' });
+    // Nothing was written: a guest cart would follow the browser, not a person.
+    expect(readCart('guest')).toHaveLength(0);
+  });
+
+  it('sends a visitor to sign in from the cart and orders shortcuts', async () => {
+    const navigate = vi.fn();
+    const { container } = await render(<ShopScreen session={null} navigate={navigate} notify={vi.fn()} />);
+    await act(async () => { container.querySelector('.shop-header-action').click(); });
+    expect(navigate).toHaveBeenCalledWith('login', { returnTo: '/shop' });
+    const orders = Array.from(container.querySelectorAll('.shop-header-action'))[1];
+    await act(async () => { orders.click(); });
+    expect(navigate).toHaveBeenCalledTimes(2);
+  });
+
+  it('prefills a customer checkout from the customer profile, and keeps the salon one for partners', async () => {
+    addToCart('user:user-9', { id: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men' });
+    const { container } = await render(<ShopCheckoutScreen session={CUSTOMER_SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+
+    const name = container.querySelector('input[autocomplete="name"]');
+    const phone = container.querySelector('input[autocomplete="tel"]');
+    expect(name.value).toBe('Sneha Waghmare');
+    expect(phone.value).toBe('9876543210');
+    expect(container.textContent).toContain('Delivery to your address');
+    expect(container.textContent).toContain('Delivery address');
+    expect(container.textContent).not.toContain('Shop / salon address');
   });
 });

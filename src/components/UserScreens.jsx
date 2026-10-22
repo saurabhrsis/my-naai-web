@@ -35,6 +35,7 @@ import {
   Send,
   Share2,
   ShieldCheck,
+  Package,
   ShoppingBag,
   Sparkles,
   Star,
@@ -792,6 +793,16 @@ export function HomeScreen({ session, navigate, notify }) {
           {hasMore && <div className="salon-load-sentinel" ref={loadMoreSentinelRef} aria-hidden="true" />}
         </> : <EmptyState icon={Scissors} title="No salons found" message="Try another search or switch the salon type." />}
       </section>
+      {/* The shop is part of the product, not a partner-only extra: a customer
+          (or a visitor) meets it on the page they already land on. */}
+      <section className="home-band home-shop-band" aria-label="Naai Shop">
+        <div className="home-shop-copy">
+          <span className="eyebrow">NAAI SHOP</span>
+          <h2>Grooming products, delivered</h2>
+          <p>Shampoo, beard oil, clippers — the same stock our partner salons use, sent to your door.</p>
+        </div>
+        <Button onClick={() => navigate('shop')}>Shop now <ChevronRight size={16} /></Button>
+      </section>
       <div className="home-trust-row"><ShieldCheck size={16} /><span>Verified listings</span><i /><Clock3 size={16} /><span>Book in minutes</span><i /><Heart size={16} /><span>Made for your time</span></div>
       <TestimonialSection />
       <SiteFooter />
@@ -941,6 +952,10 @@ export function AccountScreen({ session, navigate, onLogout, notify, onSessionUp
   };
 
   const menus = [
+    // The shop is one tap from the account too: a customer who has bought
+    // before should not have to hunt for their order.
+    { label: 'Naai Shop', caption: 'Grooming products delivered to your door', icon: ShoppingBag, route: 'shop' },
+    { label: 'My shop orders', caption: 'Track a delivery or cancel before dispatch', icon: Package, route: 'shopOrders' },
     { label: 'About', caption: 'Why we built a better way to book', icon: Info, route: 'about' },
     { label: 'FAQ', caption: 'Quick answers about bookings', icon: HelpCircle, route: 'faq' },
     { label: 'Terms & Conditions', caption: 'The important fine print', icon: ShieldCheck, route: 'terms' },
@@ -1897,6 +1912,7 @@ export function SiteFooter() {
         <nav className="site-footer-col" aria-label="Explore">
           <h3>Explore</h3>
           <a href="/" onClick={footerNav}>Salons near you</a>
+          <a href="/shop" onClick={footerNav}>Shop grooming products</a>
           <a href="/about" onClick={footerNav}>About</a>
           <a href="/faq" onClick={footerNav}>FAQ</a>
           <a href="/contact" onClick={footerNav}>Contact</a>

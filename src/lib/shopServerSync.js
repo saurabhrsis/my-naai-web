@@ -76,7 +76,12 @@ export function mapServerOrder(order = {}) {
   return {
     id: String(order.orderId || order.id || ''),
     salonId: String(order.salonId || ''),
-    salonName: String(order.salon?.salonName || ''),
+    // A buyer can be a salon (stock for the chairs) or a customer (a personal
+    // order). The backend names whichever it is; the screens show this string
+    // wherever "who is this for?" matters.
+    salonName: String(order.salon?.salonName || order.customer?.fullName || order.buyerName || ''),
+    buyerType: String(order.buyerType || (order.customer || order.customerId ? 'CUSTOMER' : 'SALON')).toUpperCase(),
+    customerId: String(order.customerId || order.customer?.userId || ''),
     items,
     address: {
       name: String(order.address?.name || ''),

@@ -6,7 +6,8 @@ This document describes the responsive MyNaai customer and salon-partner web por
 
 The portal is a Vite/React single-page PWA for the two roles already present in the mobile app:
 
-- **Customer**: discover salons, view services and specialists, choose a slot, create booking requests, view bookings, respond to a salon delay request, browse products, update the profile and read notifications.
+- **Customer**: discover salons, view services and specialists, choose a slot, create booking requests, view bookings, respond to a salon delay request, browse products, **shop the admin's Naai Shop catalog and track those orders**, update the profile and read notifications. The shop is also browsable **without an account** at `/shop` on the public website — signing in is asked for on the first add-to-cart.
+- **Visitor (no account)**: the whole storefront (`/shop`, `/shopProduct?productId=…`), the home page's *Shop now* band, the navbar's **Shop** link and the footer's **Shop grooming products** link.
 - **Salon partner**: view the live customer queue, open a booking request, accept or reject it, ask the customer to accept a small time delay, mark a service complete, review history, manage products, edit salon details, manage open/closed status, manage a subscription and sign out from the account screen.
 
 The UI uses the same REST endpoint names and payload conventions as `rightserveinfotechsystems/my_naai_app`. The production API default is `https://backend.mynaai.in`. In Vite development, `/api`, `/getFiles` and `/socket.io` use the configured proxy. The image path deliberately keeps the mobile app’s case-sensitive spelling: `/getFiles/<path>`.
@@ -462,6 +463,7 @@ request runs a 60-second countdown that a second dialog would eat into.
 | `src/lib/razorpay.js` | Checkout loader, amount rules, payment outcomes, UPI hand-off tracking and pending-payment recovery |
 | `src/lib/bookingTime.js` | Signed-offset time maths for the queue time update: local wall-clock parsing, hour/date rollover, past-time and day-cross detection, exact-time→offset derivation, human offset labels, and the `Due now`/`Overdue by` countdown chips on a queue card |
 | `backend/salonUpdateBookingTime.js` | Drop-in Express + Sequelize controller for the queue time update (`POST /api/booking/salon/queue/update-time/:bookingId`). Copied into the API repo, not built with the web app |
+| `src/lib/shopBuyer.js` | Who is shopping (salon / customer / visitor), the cart's storage namespace and the role-aware shop wording |
 | `src/components/SubscriptionScreen.jsx` | Plan picker, Razorpay flow, cancellation/failure copy and payment recovery |
 | `src/components/ConfirmDialog.jsx` | Promise-based in-app confirmation sheet that replaces every native browser dialog |
 | `src/lib/push.js` | Firebase initialization, permission/token flow and notification route mapping |

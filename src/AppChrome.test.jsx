@@ -323,9 +323,25 @@ describe('Bottom navigation labels', () => {
     await mount();
 
     const labels = tabLabels();
-    expect(labels).toEqual(['Discover', 'Bookings', 'Products', 'Account']);
+    expect(labels).toEqual(['Discover', 'Shop', 'Bookings', 'Products', 'Account']);
     // Nothing may start lowercase — that is the exact defect.
     labels.forEach(label => expect(label[0]).toBe(label[0].toUpperCase()));
+  });
+
+  it('opens the Naai Shop from the customer tab bar', async () => {
+    signIn('USER', '/home');
+    await mount();
+
+    const shopTab = Array.from(container.querySelectorAll('.mobile-nav button')).find(node => node.textContent.includes('Shop'));
+    expect(shopTab).toBeTruthy();
+    await act(async () => { shopTab.click(); });
+    await flush();
+
+    expect(window.location.pathname).toBe('/shop');
+    expect(container.querySelector('.shop-screen')).not.toBeNull();
+    // A customer is spoken to as a person, not as a salon buying stock.
+    expect(container.textContent).toContain('delivered to your door');
+    expect(container.querySelector('.mobile-nav button[aria-current="page"]')?.textContent).toContain('Shop');
   });
 
   it('capitalises every salon tab', async () => {

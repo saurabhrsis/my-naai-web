@@ -109,6 +109,30 @@ describe('pure mappers', () => {
     expect(order.cancelledAt).toBeNull();
   });
 
+  it('maps a CUSTOMER order: buyer type, name from the customer record, no salon', () => {
+    const order = mapServerOrder({
+      orderId: 'MN789',
+      buyerType: 'CUSTOMER',
+      salonId: null,
+      salon: null,
+      customerId: 'user-9',
+      customer: { userId: 'user-9', fullName: 'Sneha Waghmare', phoneNumber: '9876543210' },
+      items: [{ productId: 'p1', name: 'Beard Oil', price: 199, qty: 1 }],
+      address: { name: 'Sneha Waghmare', phone: '9876543210', line1: '12 Main', city: 'Nagpur', state: 'Maharashtra', pincode: '440010' },
+      payment: { method: 'COD', status: 'PENDING', paymentId: '', amount: 248 },
+      amounts: { itemTotal: 199, savings: 0, deliveryFee: 49, total: 248 },
+      status: 'PENDING',
+      createdAt: '2026-10-22T10:00:00.000Z',
+    });
+    expect(order.buyerType).toBe('CUSTOMER');
+    expect(order.customerId).toBe('user-9');
+    // The screens show this wherever "who is this for?" matters.
+    expect(order.salonName).toBe('Sneha Waghmare');
+    // A customer order still belongs to the account (syncState 'synced', so it
+    // is never shown as an unconfirmed draft).
+    expect(order.syncState).toBe('synced');
+  });
+
   it('maps a cancelled server order with its refund flag', () => {
     const order = mapServerOrder({
       orderId: 'MN456',

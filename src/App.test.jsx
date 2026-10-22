@@ -433,7 +433,7 @@ describe('Guest browsing flow', () => {
     const nav = container.querySelector('.site-nav-links');
     expect(nav).not.toBeNull();
     const labels = Array.from(nav.querySelectorAll('button')).map(node => node.textContent.trim());
-    expect(labels).toEqual(['Home', 'About', 'Salon partner', 'Contact']);
+    expect(labels).toEqual(['Home', 'Shop', 'About', 'Salon partner', 'Contact']);
 
     // The partner tab is for owners — it opens the public partner page.
     await act(async () => { Array.from(nav.querySelectorAll('button')).find(node => node.textContent === 'Salon partner').click(); });
@@ -564,6 +564,41 @@ describe('Guest browsing flow', () => {
     expect(container.querySelector('.auth-page')).not.toBeNull();
     const roleButtons = Array.from(container.querySelectorAll('.role-switch button'));
     expect(roleButtons.some(b => b.classList.contains('active') && b.textContent.includes('Salon partner'))).toBe(true);
+  });
+
+  it('opens the Naai Shop on the public website, and keeps the cart behind a login', async () => {
+    // The storefront is introduced on the home page a visitor already lands on.
+    setPath('/');
+    await mount();
+    const band = container.querySelector('.home-shop-band');
+    expect(band).not.toBeNull();
+    await act(async () => { buttonByText('Shop now', band).click(); });
+    await flush();
+    expect(currentPath()).toBe('/shop');
+    expect(container.querySelector('.shop-screen')).not.toBeNull();
+
+    // A guest deep link straight to the storefront.
+    setPath('/shop');
+    await mount();
+    expect(container.querySelector('.shop-screen')).not.toBeNull();
+    expect(container.querySelector('.auth-page')).toBeNull();
+    expect(container.textContent).toContain('Naai Shop');
+
+    // The navbar carries it, so it is reachable by clicking too.
+    const shopLink = Array.from(container.querySelectorAll('.site-nav-links button')).find(node => node.textContent === 'Shop');
+    expect(shopLink).toBeTruthy();
+
+    // A product page is public as well.
+    await act(async () => { goto('/shopProduct?productId=sp1'); });
+    await flush();
+    expect(container.querySelector('.shop-detail-page')).not.toBeNull();
+
+    // The cart and the order history write to an account, so they go through
+    // login and remember where the visitor was heading.
+    await act(async () => { goto('/shopCart'); });
+    await flush();
+    expect(container.querySelector('.auth-page')).not.toBeNull();
+    expect(sessionStorage.getItem('mynaaiPendingRoute')).toBe('/shopCart');
   });
 
   it('opens the website info pages to guests without a login gate', async () => {

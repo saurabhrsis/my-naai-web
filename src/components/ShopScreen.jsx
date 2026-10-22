@@ -24,6 +24,7 @@ import {
   normalizeShopProduct,
 } from '../lib/shopCatalog';
 import { addToCart, cartTotals, readCart, removeCartLine, saveCart, setCartQty } from '../lib/shopOrders';
+import { buyerName, isShopGuest, shopCopy, shopStorageOwnerId } from '../lib/shopBuyer';
 import { useShopSettings } from '../lib/shopSettings';
 import { fetchServerCart, pushCartAdd, pushCartRemove, pushCartSetQty } from '../lib/shopServerSync';
 import {
@@ -39,15 +40,19 @@ import {
 
 const PRODUCT_PLACEHOLDER = '/assets/brand/product-placeholder.svg';
 
-// One small helper all shop screens share: the current salon account the cart
-// and orders belong to.
+// One small helper all shop screens share: the account the cart and orders
+// belong to. Salons keep their bare account id (their stored carts and history
+// predate customers using the shop); customers get their own namespace, so a
+// shared device never mixes a salon's stock order with a personal one.
 export function shopOwnerId(session) {
-  return session?.userId || 'guest';
+  return shopStorageOwnerId(session);
 }
 
+// The buyer's display name (salon name, or the customer's own name) — written
+// into the order snapshot so the admin and the delivery partner know who the
+// parcel is for.
 export function shopSalonName(session) {
-  const user = session?.user || {};
-  return user?.salon?.salonName || user?.salonName || user?.fullName || 'My Naai salon';
+  return buyerName(session) || 'My Naai customer';
 }
 
 // ── Quantity control (Blinkit's signature ADD ↔ stepper) ────────────────────
@@ -224,6 +229,8 @@ export function useSyncedCart(ownerId) {
 // ── The Shop tab ─────────────────────────────────────────────────────────────
 export function ShopScreen({ session, navigate, notify }) {
   const ownerId = shopOwnerId(session);
+  const copy = shopCopy(session);
+  const guest = isShopGuest(session);
   const { products, loading, error, load } = useShopCatalog(notify);
   const { cart, add, setQty } = useSyncedCart(ownerId);
   const [search, setSearch] = useState('');
@@ -240,7 +247,19 @@ export function ShopScreen({ session, navigate, notify }) {
   const totals = useMemo(() => cartTotals(cart, shopSettings), [cart, shopSettings]);
   const qtyFor = id => cart.find(line => line.productId === String(id))?.qty || 0;
 
-  const handleAdd = product => add(product, 1);
+  // A visitor may browse the whole catalog; the cart belongs to an account
+  // (that is what makes it follow the person to the app), so the first ADD on
+  // the public website asks them to sign in and returns them here.
+  const needAccount = () => {
+    if (!guest) return false;
+    notify?.('info', copy.signInToBuy);
+    navigate('login', { returnTo: '/shop' });
+    return true;
+  };
+  const openCart = () => (guest ? needAccount() : navigate('shopCart'));
+  const openOrders = () => (guest ? needAccount() : navigate('shopOrders'));
+
+  const handleAdd = product => { if (needAccount()) return; add(product, 1); };
   const handleSetQty = (product, next) => setQty(product.id, next);
   // Tapping a product opens its full details page (deep-linkable, back button,
   // similar products) instead of an inline sheet.
@@ -260,17 +279,17 @@ export function ShopScreen({ session, navigate, notify }) {
           count rides as a badge) so "Naai Shop" is never squeezed or pushed
           onto a second row — that is the whole mobile budget of this header. */}
       <PageHeader
-        title="Naai Shop"
-        subtitle="Grooming stock for your salon, supplied by My Naai."
+        title={copy.title}
+        subtitle={copy.subtitle}
         subtitleBelow
         action={
           <div className="shop-header-actions">
-            <button type="button" className="refresh-text-button shop-header-action" onClick={() => navigate('shopCart')} aria-label={`My cart${totals.itemCount > 0 ? `, ${totals.itemCount} item${totals.itemCount === 1 ? '' : 's'}` : ''}`}>
+            <button type="button" className="refresh-text-button shop-header-action" onClick={openCart} aria-label={`My cart${totals.itemCount > 0 ? `, ${totals.itemCount} item${totals.itemCount === 1 ? '' : 's'}` : ''}`}>
               <ShoppingBag size={15} />
               <span className="shop-header-action-label">My cart</span>
               {totals.itemCount > 0 && <em className="shop-header-count">{totals.itemCount}</em>}
             </button>
-            <button type="button" className="refresh-text-button shop-header-action" onClick={() => navigate('shopOrders')} aria-label="My orders">
+            <button type="button" className="refresh-text-button shop-header-action" onClick={openOrders} aria-label="My orders">
               <Package size={15} />
               <span className="shop-header-action-label">My orders</span>
             </button>
@@ -328,7 +347,7 @@ export function ShopScreen({ session, navigate, notify }) {
         <EmptyState icon={Search} title="No products match" message="Try a different search, category or price range." action={<Button variant="secondary" onClick={resetFilters}>Clear filters</Button>} />
       )}
 
-      <ShopCartBar totals={totals} onOpen={() => navigate('shopCart')} />
+      <ShopCartBar totals={totals} onOpen={openCart} />
     </div>
   );
 }
@@ -340,6 +359,8 @@ export function ShopScreen({ session, navigate, notify }) {
  * ------------------------------------------------------------------ */
 export function ShopProductDetailScreen({ session, params, navigate, notify }) {
   const ownerId = shopOwnerId(session);
+  const copy = shopCopy(session);
+  const guest = isShopGuest(session);
   const productId = String(params?.productId || '');
   const { products, loading, error, load } = useShopCatalog(notify);
   const { cart, add, setQty } = useSyncedCart(ownerId);
@@ -362,7 +383,15 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
   ), [products, product]);
   const qtyFor = id => cart.find(line => line.productId === String(id))?.qty || 0;
 
-  const handleAdd = value => add(value, 1);
+  const needAccount = () => {
+    if (!guest) return false;
+    notify?.('info', copy.signInToBuy);
+    navigate('login', { returnTo: `/shopProduct?productId=${encodeURIComponent(productId)}` });
+    return true;
+  };
+  const openCart = () => (guest ? needAccount() : navigate('shopCart'));
+
+  const handleAdd = value => { if (needAccount()) return; add(value, 1); };
   const handleSetQty = (value, next) => setQty(value.id, next);
   const openProduct = value => navigate('shopProduct', { productId: value.id });
 
@@ -420,7 +449,7 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
         {product.available ? <span className="shop-detail-tag in-stock">In stock</span> : <span className="shop-detail-tag out-stock">Out of stock</span>}
       </div>
       <h2 className="shop-detail-name">{product.name}</h2>
-      <p className="shop-detail-seller">{product.salonName ? `Sold by ${product.salonName}` : 'Supplied by My Naai'}</p>
+      <p className="shop-detail-seller">{product.salonName ? `Sold by ${product.salonName}` : copy.sellerFallback}</p>
 
       <div className="shop-detail-price-row">
         <div>
@@ -435,7 +464,7 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
 
       <section className="shop-detail-card">
         <h3>About this product</h3>
-        <p>{product.description || `${categoryLabel(product.category)} pick${product.salonName ? ` from ${product.salonName}` : ' from the Naai Shop catalog'} — delivered to your salon in 1–2 days.`}</p>
+        <p>{product.description || `${categoryLabel(product.category)} pick${product.salonName ? ` from ${product.salonName}` : ' from the Naai Shop catalog'} — ${copy.deliveryLine}.`}</p>
       </section>
 
       {/* Delivery facts sit AFTER the description so the terms are read with
@@ -444,7 +473,7 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
           not promise what the bill will not honour. */}
       <section className="shop-detail-card" aria-label="Delivery information">
         <h3><Truck size={15} /> Delivery</h3>
-        <p><Zap size={13} /> Next-day delivery{city ? ` to ${city}` : ' to your salon'}{product.price >= shopSettings.freeDeliveryAbove ? ' · FREE on this item' : ` · free above ${formatCurrency(shopSettings.freeDeliveryAbove)}`}</p>
+        <p><Zap size={13} /> Next-day delivery{city ? ` to ${city}` : ` to ${copy.deliveryTarget}`}{product.price >= shopSettings.freeDeliveryAbove ? ' · FREE on this item' : ` · free above ${formatCurrency(shopSettings.freeDeliveryAbove)}`}</p>
         <p><Banknote size={13} /> {shopSettings.codThreshold > 0 && product.price > shopSettings.codThreshold
           ? 'Online payment via UPI, cards & netbanking'
           : 'Cash on delivery available · online payment via UPI, cards & netbanking'}</p>
@@ -462,7 +491,7 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
         </section>
       )}
 
-      <ShopCartBar totals={totals} onOpen={() => navigate('shopCart')} />
+      <ShopCartBar totals={totals} onOpen={openCart} />
     </div>
   );
 }
