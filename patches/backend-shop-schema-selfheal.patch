@@ -1,0 +1,259 @@
+From 45dd436e5277c7d0a211a6a0e0b14ae5657325c2 Mon Sep 17 00:00:00 2001
+From: MyNaai <dev@mynaai.in>
+Date: Thu, 22 Oct 2026 14:50:25 +0000
+Subject: [PATCH] Shop: repair the two-buyer schema at boot, and replay a
+ blocked write once
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A customer checkout still died on production with
+
+  null value in column "salon_id" of relation "shop_orders"
+  violates not-null constraint
+
+because the code shipped without migrations/2026-10-22-shop-customers.sql
+being run (and `allowNull: true` in a model never alters an existing column).
+
+- src/database/config/ensureShopBuyerSchema.js: idempotent DDL that adds
+  buyer_type / customer_id to shop_orders + shop_carts and drops NOT NULL from
+  salon_id on both. `IF NOT EXISTS` / `IF EXISTS` all the way, so it is a no-op
+  on a migrated database and cannot affect a salon order.
+- index.js: runs once after the DB connects (best-effort; a missing ALTER
+  privilege logs and moves on).
+- shopOrder.service.createOrder + shopCart.service.addLine: `withBuyerSchema`
+  replays the write after a repair when — and only when — the failure is the
+  salon_id not-null violation (23502 on that column). Other errors are
+  untouched, so nothing is masked.
+- Foreign keys and the cart unique index stay in the migration: they can fail
+  on orphan rows and boot should not be noisy.
+
+Proven with PGlite (two scenarios: production's half-migrated tables and a
+table that never got the columns): the customer insert is rejected before,
+both inserts succeed after, a second run is a no-op, salon orders work in
+both states, and existing rows stay buyer_type = 'SALON'.
+---
+ index.js                                     |  10 +-
+ src/database/config/ensureShopBuyerSchema.js | 126 +++++++++++++++++++
+ src/services/shopCart.service.js             |   3 +-
+ src/services/shopOrder.service.js            |   8 +-
+ 4 files changed, 143 insertions(+), 4 deletions(-)
+ create mode 100644 src/database/config/ensureShopBuyerSchema.js
+
+diff --git a/index.js b/index.js
+index 6855540..0d91ef0 100644
+--- a/index.js
++++ b/index.js
+@@ -5,6 +5,7 @@ const path = require('path');
+ const dotenv = require("dotenv");
+ const helmet = require('helmet');
+ const { closeConnection, connectDb } = require("./src/database/config/db");
++const { ensureShopBuyerSchema } = require("./src/database/config/ensureShopBuyerSchema");
+ const db = require("./src/database/models");
+ const routes = require("./src/routes/routes");
+ const errorHandler = require("./src/utils/middleware/error.middleware");
+@@ -197,7 +198,14 @@ require('./cron/plan-check.cron');
+ require('./cron/bookingCompletionCron');
+ 
+ //connect db
+-connectDb();
++// The shop takes orders from salons AND customers. `buyer_type` /
++// `customer_id` and the nullable `salon_id` come from a migration; when a
++// deployment ships the code without running it, every customer checkout
++// fails on `salon_id` not-null. Repair it once here (idempotent, no-op on a
++// migrated database) instead of waiting for someone to run SQL.
++connectDb().then((connected) => {
++    if (connected) ensureShopBuyerSchema();
++});
+ // sendPushNotification("fc2A21LpQ4W3IBj7ry6RyW:APA91bHexWAirHUAVKOZKqsl_BSxon1wTcvqhk40qWCWE1YGzQjdd76Q520S-zuX0rUtcNfyux60kk7GdtuNtm6H6f_G60SL4ODvKPTUbx55qBmKWtQVrjI","Test Title","This is test notification body")
+ // listen on PORT
+ // app.listen(PORT,'0.0.0.0', () => {
+diff --git a/src/database/config/ensureShopBuyerSchema.js b/src/database/config/ensureShopBuyerSchema.js
+new file mode 100644
+index 0000000..ab03366
+--- /dev/null
++++ b/src/database/config/ensureShopBuyerSchema.js
+@@ -0,0 +1,126 @@
++const db = require('../models');
++
++/**
++ * Make the shop's two-buyer schema real on a database that never ran the
++ * migration.
++ *
++ * A customer order needs `buyer_type` + `customer_id` on `shop_orders`, and
++ * `salon_id` must stop being NOT NULL (a customer has no salon). The models
++ * declare exactly that — but `allowNull: true` is a *model* declaration, it
++ * never alters an existing column. Only a migration or `sync({ alter: true })`
++ * touches the database, and this deployment shipped the code without either,
++ * so every customer checkout died with:
++ *
++ *   null value in column "salon_id" of relation "shop_orders"
++ *   violates not-null constraint
++ *
++ * The fix of record is migrations/2026-10-22-shop-customers.sql. This guard is
++ * the belt to that braces: it runs the same, idempotent DDL once per process —
++ * at boot, and again (best-effort) the first time a write trips PostgreSQL's
++ * not-null check, then the write is retried. Every statement is
++ * `IF NOT EXISTS` / `IF EXISTS`, so:
++ *
++ *   - on a migrated database it is a no-op;
++ *   - on a salon order it does nothing at all — dropping NOT NULL never
++ *     rejects a value, and the extra columns are nullable;
++ *   - if the database user lacks ALTER rights it logs and gives up, and the
++ *     API keeps returning the honest "not set up yet" error to the shopper.
++ *
++ * Deliberately NOT done here: the foreign keys and the unique cart index. A
++ * FK fails on orphan rows (and would make boot noisy), so those stay in the
++ * migration, which is the thing to run.
++ */
++
++const STATEMENTS = [
++    // Sequelize names the enum type after the table + column, so there are two.
++    `DO $$
++     BEGIN
++       IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'enum_shop_orders_buyer_type') THEN
++         CREATE TYPE "enum_shop_orders_buyer_type" AS ENUM ('SALON', 'CUSTOMER');
++       END IF;
++       IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'enum_shop_carts_buyer_type') THEN
++         CREATE TYPE "enum_shop_carts_buyer_type" AS ENUM ('SALON', 'CUSTOMER');
++       END IF;
++     END $$;`,
++    // Orders: existing rows are salon orders, so the default backfills them.
++    `ALTER TABLE IF EXISTS shop_orders ADD COLUMN IF NOT EXISTS buyer_type "enum_shop_orders_buyer_type" NOT NULL DEFAULT 'SALON';`,
++    `ALTER TABLE IF EXISTS shop_orders ADD COLUMN IF NOT EXISTS customer_id UUID;`,
++    `ALTER TABLE IF EXISTS shop_orders ALTER COLUMN salon_id DROP NOT NULL;`,
++    // Carts fail the same way, and a silent cart failure is worse than a loud
++    // order failure — the browser shows a cart the server does not have.
++    `ALTER TABLE IF EXISTS shop_carts ADD COLUMN IF NOT EXISTS buyer_type "enum_shop_carts_buyer_type" NOT NULL DEFAULT 'SALON';`,
++    `ALTER TABLE IF EXISTS shop_carts ADD COLUMN IF NOT EXISTS customer_id UUID;`,
++    `ALTER TABLE IF EXISTS shop_carts ALTER COLUMN salon_id DROP NOT NULL;`
++];
++
++let ensured = false;
++let inFlight = null;
++
++/**
++ * True for the exact failure this guard exists to repair — and only that one.
++ * A not-null violation on any other column (or any other error) is left alone
++ * so a real bug is never masked by a retry.
++ */
++const isSalonIdNotNullError = (error) => {
++    const text = [
++        error?.message,
++        error?.original?.detail,
++        error?.parent?.detail,
++        error?.original?.column,
++        error?.parent?.column
++    ].filter(Boolean).join(' ');
++    const code = error?.original?.code || error?.parent?.code || error?.code;
++    if (/null value in column "salon_id"/i.test(text)) return true;
++    return code === '23502' && /salon_id/i.test(text);
++};
++
++/**
++ * Run the DDL. Resolves true when the schema is known-good, false when the
++ * database refused (no ALTER rights, connection down, …) — callers must not
++ * assume success.
++ */
++const ensureShopBuyerSchema = async ({ force = false } = {}) => {
++    if (ensured && !force) return true;
++    if (inFlight) return inFlight;
++
++    inFlight = (async () => {
++        try {
++            for (const statement of STATEMENTS) {
++                await db.sequelize.query(statement);
++            }
++            ensured = true;
++            console.log('[shop-schema] buyer_type / customer_id present, salon_id nullable on shop_orders + shop_carts');
++            return true;
++        } catch (error) {
++            console.error('[shop-schema] could not repair the shop schema — run migrations/2026-10-22-shop-customers.sql:', error.message);
++            return false;
++        } finally {
++            inFlight = null;
++        }
++    })();
++
++    return inFlight;
++};
++
++/**
++ * Wrap a write that may hit the missing-schema error. The happy path is one
++ * try/catch; the recovery path repairs the schema once and replays the write,
++ * so a shopper on a stale deployment does not have to be told to call support.
++ */
++const withBuyerSchema = async (operation) => {
++    try {
++        return await operation();
++    } catch (error) {
++        if (!isSalonIdNotNullError(error)) throw error;
++        const repaired = await ensureShopBuyerSchema({ force: true });
++        if (!repaired) throw error;
++        return operation();
++    }
++};
++
++module.exports = {
++    ensureShopBuyerSchema,
++    withBuyerSchema,
++    isSalonIdNotNullError,
++    SHOP_BUYER_SCHEMA_STATEMENTS: STATEMENTS
++};
+diff --git a/src/services/shopCart.service.js b/src/services/shopCart.service.js
+index 6e4576c..472967d 100644
+--- a/src/services/shopCart.service.js
++++ b/src/services/shopCart.service.js
+@@ -2,6 +2,7 @@ const { Op } = require('sequelize');
+ const db = require('../database/models');
+ const shopOrderService = require('./shopOrder.service');
+ const { buyerWhere, buyerColumns } = require('../utils/shopBuyer');
++const { withBuyerSchema } = require('../database/config/ensureShopBuyerSchema');
+ 
+ /**
+  * Server-side shop cart (table `shop_carts`), keyed by the BUYER — a salon
+@@ -73,7 +74,7 @@ const addLine = async (buyer, productId, qty = 1) => {
+   }
+   // `buyerColumns` sets exactly one of salonId / customerId, matching the
+   // buyerType the token carried.
+-  const row = await db.ShopCart.create({ ...buyerColumns(buyer), productId, qty: nextQty });
++  const row = await withBuyerSchema(() => db.ShopCart.create({ ...buyerColumns(buyer), productId, qty: nextQty }));
+   return row.qty;
+ };
+ 
+diff --git a/src/services/shopOrder.service.js b/src/services/shopOrder.service.js
+index d3d557a..80a0b60 100644
+--- a/src/services/shopOrder.service.js
++++ b/src/services/shopOrder.service.js
+@@ -3,6 +3,7 @@ const db = require('../database/models');
+ const shopSettingsService = require('./shopSettings.service');
+ const { toCoordinate, toPoint, distanceKm, formatKm } = require('../utils/geo');
+ const { buyerWhere, buyerColumns, buyerOwnsOrder, buyerActor } = require('../utils/shopBuyer');
++const { withBuyerSchema } = require('../database/config/ensureShopBuyerSchema');
+ const DEFAULT_LIMIT = parseInt(process.env.PAGE_LIMIT) || 20;
+ 
+ /* ------------------------------------------------------------------ *\
+@@ -172,7 +173,10 @@ const createOrder = async ({ buyerType, buyerId, isSalon, orderId, items, addres
+     customer = await db.User.findByPk(buyerId, { attributes: ['userId', 'fullName', 'phoneNumber'] });
+   }
+ 
+-  const order = await db.ShopOrder.create({
++  // `withBuyerSchema` replays this once if the database still has the old
++  // NOT NULL on `salon_id` (see ensureShopBuyerSchema) — a salon order never
++  // trips it, because a salon order always carries a salon id.
++  const order = await withBuyerSchema(() => db.ShopOrder.create({
+     orderId: orderId || generateOrderId(),
+     // Writes buyerType + exactly one of salonId / customerId.
+     ...buyerColumns({ buyerType, buyerId }),
+@@ -194,7 +198,7 @@ const createOrder = async ({ buyerType, buyerId, isSalon, orderId, items, addres
+     status: 'PENDING_ASSIGNMENT',
+     customerStatus: paid ? 'CONFIRMED' : 'PENDING',
+     notes: notes || null
+-  });
++  }));
+ 
+   // First entries of the audit record: the order arrived on the central
+   // dashboard, and (if paid) the payment is confirmed. The actor is whoever
+-- 
+2.39.5
+

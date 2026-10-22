@@ -33,6 +33,11 @@ export const PRICE_RANGES = [
   { id: 'over1000', label: '₹1,000+' },
 ];
 
+// Kept as the API's contract for ordering, not as a control in the UI: the
+// storefront no longer offers a Sort select (the user asked for it to go), so
+// every browse asks the server for `popular` — the order the catalog is
+// curated in. `/api/shop-products/list` still accepts all three values, so the
+// mobile app and any future chip row keep working.
 export const SORT_OPTIONS = [
   { id: 'popular', label: 'Popular' },
   { id: 'price-asc', label: 'Price: Low to High' },
@@ -215,6 +220,48 @@ export const DEFAULT_SHOP_FILTERS = Object.freeze({
   priceRange: 'all',
   sort: 'popular',
 });
+
+// How many products one catalog request asks for. The server clamps it (1..60),
+// so an old deployment that ignores the field still answers with its own page
+// size — the client reads `pagination` back instead of assuming this number.
+export const SHOP_PAGE_SIZE = 24;
+
+/**
+ * The exact body sent to `/api/shop-products/list` and
+ * `/api/shop-public/products/list`.
+ *
+ * ONE builder for both doors, on purpose: the signed-in screen and the public
+ * one must ask the server the identical question, or a visitor's filtered view
+ * would differ from the same view after signing in. Empty / `all` facets are
+ * sent as '' (not omitted) so the server never has to guess at a stale value
+ * from an earlier request — every request is a complete description of the
+ * list the user is looking at.
+ */
+export function shopCatalogQuery(filters = DEFAULT_SHOP_FILTERS, page = 1) {
+  const pick = value => (value && value !== 'all' ? String(value) : '');
+  return {
+    page: Math.max(1, Math.round(Number(page) || 1)),
+    pageSize: SHOP_PAGE_SIZE,
+    searchString: String(filters?.search || '').trim(),
+    category: pick(filters?.category),
+    gender: pick(filters?.gender),
+    priceRange: pick(filters?.priceRange),
+    sort: String(filters?.sort || 'popular'),
+    // Out-of-stock products are never shoppable, so they are not part of the
+    // result set the pagination counts.
+    inStock: true,
+  };
+}
+
+// True when the shop is showing a narrowed list — the "Clear filters" action
+// is only offered when there is something to clear. Sort is not a facet: the
+// UI has no sort control, so a non-default sort can only arrive from code.
+export function shopFiltersActive(filters = DEFAULT_SHOP_FILTERS) {
+  return Boolean(String(filters?.search || '').trim())
+    || Boolean(filters?.category && filters.category !== 'all')
+    || Boolean(filters?.gender && filters.gender !== 'all')
+    || Boolean(filters?.priceRange && filters.priceRange !== 'all');
+}
 
 // Pure + synchronous so the grid can re-filter on every keystroke without a
 // network round-trip (the catalog endpoint does not accept these facets).

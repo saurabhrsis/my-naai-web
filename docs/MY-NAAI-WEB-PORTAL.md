@@ -6,7 +6,8 @@ This document describes the responsive MyNaai customer and salon-partner web por
 
 The portal is a Vite/React single-page PWA for the two roles already present in the mobile app:
 
-- **Customer**: discover salons, view services and specialists, choose a slot, create booking requests, view bookings, respond to a salon delay request, browse products, update the profile and read notifications.
+- **Customer**: discover salons, view services and specialists, choose a slot, create booking requests, view bookings, respond to a salon delay request, browse products, **shop the admin's Naai Shop catalog and track those orders**, update the profile and read notifications. The shop is also browsable **and fillable without an account** at `/shop` on the public website: a visitor can add to the cart and keep it on the device, and the account is asked for at the moment of purchase (`/shopCheckout`), where one OTP sign-in also carries that cart onto the account.
+- **Visitor (no account)**: the whole storefront (`/shop`, `/shopProduct?productId=…`), the home page's *Shop now* band, the navbar's **Shop** link and the footer's **Shop grooming products** link.
 - **Salon partner**: view the live customer queue, open a booking request, accept or reject it, ask the customer to accept a small time delay, mark a service complete, review history, manage products, edit salon details, manage open/closed status, manage a subscription and sign out from the account screen.
 
 The UI uses the same REST endpoint names and payload conventions as `rightserveinfotechsystems/my_naai_app`. The production API default is `https://backend.mynaai.in`. In Vite development, `/api`, `/getFiles` and `/socket.io` use the configured proxy. The image path deliberately keeps the mobile app’s case-sensitive spelling: `/getFiles/<path>`.
@@ -44,7 +45,7 @@ Login is only ever required at **booking intent**: tapping **Book now** on a sal
 
 The whole portal speaks **real path URLs** — `/` is home, `/salon/<id>` a salon's public page, `/<screen>?<query>` every other screen (`/bookings`, `/privacy-policy`, `/subscription?mode=RENEW…`). All URL creation/parsing lives in `src/lib/routes.js` (`routeToPath` / `parseRoutePath` + the `privacy` ↔ `privacy-policy` segment alias) and is consumed by `getRouteFromPath`/`navigate` in `src/App.jsx`. Old `#/…` links shared before the switch (including every notification tap written by the hash era) still open: `readLocationRoute()` upgrades them to the clean path with a `replaceState`. Navigation helpers used outside React (push notification taps, the service worker pipe) call `softNavigate(path)` — `pushState` + a synthetic `popstate` the router listens for.
 
-**Protected/unprotected routing:** guests may open `home`, `salon`, `about`, `faq`, `terms`, `privacy`, `contact` (plus `/login`); anything else is stashed and bounced through login. Signed-in sessions resolve only their role's route list, can never see the public navbar (`/login` → dashboard home) and only logout returns to the public site.
+**Protected/unprotected routing:** guests may open `home`, `salon`, `shop`, `shopProduct`, `shopCart`, `shopCheckout`, `about`, `faq`, `terms`, `privacy`, `contact` (plus `/login`); anything else — including `/shopOrders`, because order history belongs to an account — is stashed and bounced through login. `/shopCheckout` is public only because it renders the **purchase gate** for a visitor: the address and payment form is never shown without a session. Signed-in sessions resolve only their role's route list, can never see the public navbar (`/login` → dashboard home) and only logout returns to the public site.
 
 **Deployment:** the dev server serves `index.html` for every path automatically; production must do the same (the repo ships `vercel.json` with a catch-all rewrite and `public/_redirects` for Netlify; for nginx: `try_files $uri /index.html;`). The service worker's navigation handler also falls back to `/index.html` offline.
 
@@ -462,6 +463,8 @@ request runs a 60-second countdown that a second dialog would eat into.
 | `src/lib/razorpay.js` | Checkout loader, amount rules, payment outcomes, UPI hand-off tracking and pending-payment recovery |
 | `src/lib/bookingTime.js` | Signed-offset time maths for the queue time update: local wall-clock parsing, hour/date rollover, past-time and day-cross detection, exact-time→offset derivation, human offset labels, and the `Due now`/`Overdue by` countdown chips on a queue card |
 | `backend/salonUpdateBookingTime.js` | Drop-in Express + Sequelize controller for the queue time update (`POST /api/booking/salon/queue/update-time/:bookingId`). Copied into the API repo, not built with the web app |
+| `src/lib/shopBuyer.js` | Who is shopping (salon / customer / visitor), the cart's storage namespace and the role-aware shop wording |
+| `src/lib/api.js` (`shopProductList[Public]`, `shopSettingsGet[Public]`) | The catalog and bill rules, read through the open `/api/shop-public/*` door for a visitor and the partner endpoint for an account, each falling back to the other |
 | `src/components/SubscriptionScreen.jsx` | Plan picker, Razorpay flow, cancellation/failure copy and payment recovery |
 | `src/components/ConfirmDialog.jsx` | Promise-based in-app confirmation sheet that replaces every native browser dialog |
 | `src/lib/push.js` | Firebase initialization, permission/token flow and notification route mapping |

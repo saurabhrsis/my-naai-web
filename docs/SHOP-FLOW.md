@@ -1,16 +1,29 @@
-# Naai Shop — salon supply store
+# Naai Shop — the storefront for partners and customers
 
-A Blinkit/Zepto-style shop for **salon partners**: they buy grooming stock
-(products supplied by the MyNaai Platform) for their chairs, with add-to-cart,
-a Blinkit-style ADD → quantity stepper, a floating "N items · ₹X → View cart"
-bar, checkout with **Online (Razorpay) or Cash on Delivery**, a **My orders**
-list with a live status tracker, and **cancel order** before dispatch.
+A Blinkit/Zepto-style shop over the **admin-curated catalog** (`shop_products`),
+sold to two audiences from one set of screens:
+
+- **Salon partners** buy grooming stock for their chairs (the original B2B shop).
+- **Customers** buy the same products for themselves, from the customer app or
+  from the public website — no partner account needed to browse.
+
+Both get add-to-cart, a Blinkit-style ADD → quantity stepper, a floating
+"N items · ₹X → View cart" bar, checkout with **Online (Razorpay) or Cash on
+Delivery**, a **My orders** list with a live status tracker, and **cancel
+order** before dispatch.
+
+Where the buyer is a salon, the parcel goes to the salon and the order is a
+stock purchase; where the buyer is a customer, it goes to their delivery
+address. The screens say whichever is true (`src/lib/shopBuyer.js`), and the
+two carts never mix: salon carts keep the bare account id, customers are
+namespaced under `user:<userId>`.
 
 ## Where it lives
 
 | Piece | File |
 | --- | --- |
-| Shop tab (salon nav, 3rd position) | `src/App.jsx` (`SALON_NAV`, routes `shop`, `shopProduct`, `shopCart`, `shopCheckout`, `shopOrders`, `shopOrder`) |
+| Shop tab — salon nav (3rd) and customer nav (2nd), plus the public website nav/footer | `src/App.jsx` (`SALON_NAV`, `USER_NAV`, `siteLinks`, routes `shop`, `shopProduct`, `shopCart`, `shopCheckout`, `shopOrders`, `shopOrder`) |
+| Who is buying + role-aware wording (`shopAudience`, `buyerName`, `shopCopy`, `shopStorageOwnerId`) | `src/lib/shopBuyer.js` |
 | Catalog + filters UI | `src/components/ShopScreen.jsx` |
 | Product details page (tap a card) | `src/components/ShopScreen.jsx` (`ShopProductDetailScreen`, route `shopProduct?productId=`) |
 | Cart + checkout + success | `src/components/ShopCartCheckout.jsx` |
@@ -20,7 +33,7 @@ list with a live status tracker, and **cancel order** before dispatch.
 | Server sync (cart + orders per account) | `src/lib/shopServerSync.js` |
 | Order-less Razorpay checkout | `src/lib/razorpay.js` (`openRazorpayOrderlessCheckout`, `getRazorpayKeyId`) |
 | Design tokens + all `.shop-*` styles | `src/styles.css` (bottom section) |
-| Product editor (category/gender + **multiple image uploads**) | `src/components/SalonScreens.jsx` (`SalonProductsScreen`) |
+| Product editor (category/gender + **multiple image uploads**) | `src/components/SalonScreens.jsx` (`SalonProductsScreen`) — **unlinked**: the old Partner Products tab was retired in favour of the shop tab, the screen is kept in the codebase but no longer routed |
 | Multi-image parsing (`productImage` comma list → ordered array) | `src/lib/shopCatalog.js` (`parseProductImages`) |
 
 ## Flow
@@ -45,7 +58,9 @@ Cart ── Blinkit-style rows: quantity stepper (minus at 1 removes the
 Checkout ── delivery address (prefilled from the salon profile, editable;
            state is picked from the Indian state list, and a legacy value
            such as “MH” is mapped onto “Maharashtra”),
-           plus the delivery-location map/pin
+           plus the delivery-location map — a tap drops the pin anywhere
+           (`LocationPicker`; it starts at the buyer's own location), so the
+           point fulfilment navigates to is chosen, not only auto-detected
            └── the FULL bill: delivery fee, COD charges, "To pay"
            └── Pay online (Razorpay, UPI/cards/netbanking)
            └── Cash on delivery ── confirmation box: amount, "Go back" /
@@ -196,6 +211,22 @@ under `/api/products/*`) are NOT the shop catalog. The shop browses the
 **company's** `shop_products` table via `POST /api/shop-products/list`
 (`api.shopProductList`) — no `salonId` anywhere in it.
 
+Because two lists in one app was confusing (and edits in the partner list never
+reached the storefront), the old **Products** tab is retired on both the
+customer and the partner dashboard. The Naai Shop tab is the only product
+surface now; the legacy screens are still in the source but unlinked, and the
+old `/products` URL folds onto `/shop` (`SEGMENT_TO_ROUTE` in
+`src/lib/routes.js`).
+
+**The catalog is also open to the public website.** A visitor with no token
+reads `POST|GET /api/shop-public/products/list` (and `/settings/get` for the
+bill rules) — the same handlers as the partner route, mounted without the auth
+chain, cached for a minute and rate-limited per IP. The web app asks that door
+first while nobody is signed in and falls back to `/api/shop-products/list`, so
+a deployment that has not shipped the public mount yet still shows the catalog;
+a signed-in account does the reverse. Contract and rollout:
+[`SHOP-CUSTOMERS.md`](SHOP-CUSTOMERS.md).
+
 **How the client stays in sync** (`src/lib/shopServerSync.js`):
 
 - the localStorage copy (`mynaaiShopCart:<salonId>`,
@@ -235,7 +266,11 @@ under `/api/products/*`) are NOT the shop catalog. The shop browses the
   server confirmation shows a *Not confirmed* chip, a warning that nobody will
   deliver it, and *Send to My Naai* / *Remove* actions;
 - guests (no session token) never touch the network and keep the pure
-  localStorage behaviour; online payments stay order-less (Razorpay Checkout
+  localStorage behaviour. A visitor on the public website may browse the whole
+  catalog and open any product page, but the first **ADD** asks for a sign-in
+  (and returns them to the product): a cart belongs to an account, which is
+  what makes it follow the person into the app — online payments stay
+  order-less (Razorpay Checkout
   key + amount), and the `razorpay_payment_id` the client stores on the order
   is what the backend's signed webhook flips to PAID.
 

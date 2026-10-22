@@ -2,6 +2,7 @@ import React from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { addToCart } from './lib/shopOrders';
 
 const { salonProfile, userSalonList, userSalonListPublic, userLogin, verifyLogin, userAds, getBookingRequestById, bookingRequestOwnerAction } = vi.hoisted(() => ({ salonProfile: vi.fn(), userSalonList: vi.fn(), userSalonListPublic: vi.fn(), userLogin: vi.fn(), verifyLogin: vi.fn(), userAds: vi.fn(() => Promise.resolve({ status: 'SUCCESS', data: {} })), getBookingRequestById: vi.fn(() => Promise.resolve({ status: 'SUCCESS', data: {} })), bookingRequestOwnerAction: vi.fn(() => Promise.resolve({ status: 'SUCCESS' })) }));
 
@@ -188,8 +189,16 @@ describe('getRouteFromPath', () => {
     setPath('/queue');
     expect(getRouteFromPath('USER')).toEqual({ name: 'home', params: {} });
 
-    setPath('/products');
+    setPath('/bookings');
     expect(getRouteFromPath('SALON')).toEqual({ name: 'queue', params: {} });
+  });
+
+  it('folds the retired /products link onto the shop', () => {
+    // The old "Products" tab is gone, but the URL outlives it in bookmarks and
+    // WhatsApp messages. Better to land on the storefront than on the home page.
+    setPath('/products');
+    expect(getRouteFromPath('USER')).toEqual({ name: 'shop', params: {} });
+    expect(getRouteFromPath('SALON')).toEqual({ name: 'shop', params: {} });
   });
 
   it('maps the salon-partner URL segment onto the partner route', () => {
@@ -433,7 +442,7 @@ describe('Guest browsing flow', () => {
     const nav = container.querySelector('.site-nav-links');
     expect(nav).not.toBeNull();
     const labels = Array.from(nav.querySelectorAll('button')).map(node => node.textContent.trim());
-    expect(labels).toEqual(['Home', 'About', 'Salon partner', 'Contact']);
+    expect(labels).toEqual(['Home', 'Shop', 'About', 'Salon partner', 'Contact']);
 
     // The partner tab is for owners — it opens the public partner page.
     await act(async () => { Array.from(nav.querySelectorAll('button')).find(node => node.textContent === 'Salon partner').click(); });
@@ -564,6 +573,55 @@ describe('Guest browsing flow', () => {
     expect(container.querySelector('.auth-page')).not.toBeNull();
     const roleButtons = Array.from(container.querySelectorAll('.role-switch button'));
     expect(roleButtons.some(b => b.classList.contains('active') && b.textContent.includes('Salon partner'))).toBe(true);
+  });
+
+  it('opens the Naai Shop and the cart on the public website, and gates the purchase', async () => {
+    // The storefront is introduced on the home page a visitor already lands on.
+    setPath('/');
+    await mount();
+    const band = container.querySelector('.home-shop-band');
+    expect(band).not.toBeNull();
+    await act(async () => { buttonByText('Shop now', band).click(); });
+    await flush();
+    expect(currentPath()).toBe('/shop');
+    expect(container.querySelector('.shop-screen')).not.toBeNull();
+
+    // A guest deep link straight to the storefront.
+    setPath('/shop');
+    await mount();
+    expect(container.querySelector('.shop-screen')).not.toBeNull();
+    expect(container.querySelector('.auth-page')).toBeNull();
+    expect(container.textContent).toContain('Naai Shop');
+
+    // The navbar carries it, so it is reachable by clicking too.
+    const shopLink = Array.from(container.querySelectorAll('.site-nav-links button')).find(node => node.textContent === 'Shop');
+    expect(shopLink).toBeTruthy();
+
+    // A product page is public as well.
+    await act(async () => { goto('/shopProduct?productId=sp1'); });
+    await flush();
+    expect(container.querySelector('.shop-detail-page')).not.toBeNull();
+
+    // The cart is public: a visitor may fill one before having an account.
+    await act(async () => { goto('/shopCart'); });
+    await flush();
+    expect(container.querySelector('.auth-page')).toBeNull();
+    expect(container.querySelector('.shop-cart-screen')).not.toBeNull();
+
+    // Checkout is where the account is asked for — a small dialog over the
+    // bill, never a bounce straight to the OTP form.
+    addToCart('guest', { id: 'sp1', name: 'Beard Oil 30ml', price: 199, image: '', category: 'beard-grooming', gender: 'men' });
+    await act(async () => { goto('/shopCheckout'); });
+    await flush();
+    expect(container.querySelector('.auth-page')).toBeNull();
+    expect(container.querySelector('.modal-card')).not.toBeNull();
+    expect(container.querySelector('.modal-card').textContent).toContain('Sign in to place this order');
+
+    // Order history is NOT public: it belongs to the signed-in dashboard.
+    await act(async () => { goto('/shopOrders'); });
+    await flush();
+    expect(container.querySelector('.auth-page')).not.toBeNull();
+    expect(sessionStorage.getItem('mynaaiPendingRoute')).toBe('/shopOrders');
   });
 
   it('opens the website info pages to guests without a login gate', async () => {

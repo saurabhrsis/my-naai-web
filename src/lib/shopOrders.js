@@ -154,6 +154,37 @@ export function clearCart(salonId) {
   return [];
 }
 
+/**
+ * Move a visitor's cart onto the account that just signed in.
+ *
+ * The storefront lets anyone fill a cart (`mynaaiShopCart:guest`) and asks for
+ * an account at the moment of purchase. Signing in must therefore CARRY that
+ * basket over, or the visitor reaches checkout with an empty cart — the exact
+ * bug the gate would otherwise hide. Lines the account already had win on a
+ * duplicate (they were picked in a signed-in session); the visitor's quantity
+ * is kept when it is larger, and the guest copy is cleared so a shared device
+ * never shows the same items twice.
+ *
+ * Returns the merged cart ([] when there was nothing to adopt).
+ */
+export function adoptGuestCart(ownerId) {
+  const target = String(ownerId || 'guest');
+  if (!target || target === 'guest') return [];
+  const guestLines = readCart('guest');
+  if (!guestLines.length) return [];
+
+  const merged = readCart(target).map(line => ({ ...line }));
+  guestLines.forEach(line => {
+    const index = merged.findIndex(item => item.productId === line.productId);
+    if (index >= 0) merged[index].qty = Math.min(99, Math.max(merged[index].qty, line.qty));
+    else merged.push({ ...line });
+  });
+
+  saveCart(target, merged);
+  saveCart('guest', []);
+  return merged;
+}
+
 export function cartCount(lines) {
   return (lines || []).reduce((sum, line) => sum + (line ? lineQty(line) : 0), 0);
 }

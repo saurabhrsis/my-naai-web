@@ -330,6 +330,11 @@ export const api = {
   // response's `status` on shop orders is the SALON-facing track (the
   // internal fulfilment track + distributor never cross to the client).
   shopProductList: payload => post('/api/shop-products/list', payload),
+  // The public storefront's own read-only door: no token, no role, cached at
+  // the edge. The website uses it while nobody is signed in (and falls back to
+  // it if the signed-in catalog ever rejects an anonymous browse), so the shop
+  // never depends on the partner endpoints staying open.
+  shopProductListPublic: payload => post('/api/shop-public/products/list', payload),
   shopCartGet: () => post('/api/shop-cart/get', {}),
   shopCartAdd: payload => post('/api/shop-cart/add', payload),
   shopCartSetQty: payload => post('/api/shop-cart/set-qty', payload),
@@ -343,6 +348,7 @@ export const api = {
   // threshold, discount %, COD limit + charges) — the shop screens use it to
   // bill and phrase delivery exactly as the server will.
   shopSettingsGet: () => post('/api/shop-settings/get', {}),
+  shopSettingsGetPublic: () => post('/api/shop-public/settings/get', {}),
   // Legacy mobile helpers choose the endpoint from the authenticated role.
   // Keep the explicit customer alias below for screens that must not depend on
   // ambient storage (this is also present in communication.js).

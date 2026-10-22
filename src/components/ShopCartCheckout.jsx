@@ -5,6 +5,7 @@ import {
   ChevronRight,
   CreditCard,
   LoaderCircle,
+  Lock,
   MapPin,
   ShieldCheck,
   ShoppingBag,
@@ -31,6 +32,8 @@ import {
 } from '../lib/shopOrders';
 import { useShopSettings } from '../lib/shopSettings';
 import { normalizeStateName, stateOptionsWith } from '../lib/stateOptions';
+import { isShopGuest, shopCopy } from '../lib/shopBuyer';
+import { stashPendingRoute } from '../lib/pendingRoute';
 import { formatCoordinates, mapsUrl, toPoint } from '../lib/geo';
 import { clearServerCart, queuePendingOrder, registerServerOrder } from '../lib/shopServerSync';
 import {
@@ -38,13 +41,14 @@ import {
   EmptyState,
   Field,
   ImageWithFallback,
+  Modal,
   PageHeader,
   SelectField,
   cx,
   formatCurrency,
   getBrowserLocation,
 } from './Shared';
-import { LocationMap } from './LocationMap.jsx';
+import { LocationPicker } from './LocationPicker.jsx';
 import { useConfirm } from './ConfirmDialog';
 import { ShopQuantityControl, shopOwnerId, shopSalonName, useSyncedCart } from './ShopScreen';
 
@@ -119,8 +123,11 @@ export function ShopBillCard({ lines, settings, method, title = 'Bill details', 
  * ------------------------------------------------------------------ */
 export function ShopCartScreen({ session, navigate, notify }) {
   const ownerId = shopOwnerId(session);
+  const copy = shopCopy(session);
+  const guest = isShopGuest(session);
   const { cart: lines, setQty, removeLine } = useSyncedCart(ownerId);
   const shopSettings = useShopSettings();
+  const [gateOpen, setGateOpen] = useState(false);
 
   const totals = cartTotals(lines, shopSettings);
   const gap = freeDeliveryGap(lines, shopSettings);
@@ -152,7 +159,7 @@ export function ShopCartScreen({ session, navigate, notify }) {
         <EmptyState
           icon={ShoppingBag}
           title="Your cart is empty"
-          message="Fill it with shampoo, clippers and beard oil — delivered to your salon."
+          message={copy.cartEmptyHint}
           action={<Button onClick={() => navigate('shop')}>Browse the shop <ChevronRight size={16} /></Button>}
         />
       </div>
@@ -209,6 +216,7 @@ export function ShopCartScreen({ session, navigate, notify }) {
           <ShopBillCard lines={lines} settings={shopSettings} stage="cart" />
         </aside>
       </div>
+      <ShopGuestGateDialog open={gateOpen} onClose={() => setGateOpen(false)} navigate={navigate} copy={copy} />
       <div className="shop-cart-footer">
         <div className="shop-cart-footer-amount">
           {/* The cart figure is the product value. It is NOT the amount that
@@ -220,7 +228,10 @@ export function ShopCartScreen({ session, navigate, notify }) {
           <strong>{formatCurrency(totals.subtotal)}</strong>
           <span>{cartCount(lines)} item{cartCount(lines) === 1 ? '' : 's'} · delivery at checkout</span>
         </div>
-        <Button size="large" onClick={() => navigate('shopCheckout')}>
+        {/* A visitor's tap on "Proceed" opens the sign-in dialog right here —
+            no separate gate page, nothing said about accounts while they
+            shop. A signed-in account goes straight to checkout. */}
+        <Button size="large" onClick={() => (guest ? setGateOpen(true) : navigate('shopCheckout'))}>
           Proceed to checkout <ChevronRight size={17} />
         </Button>
       </div>
@@ -232,29 +243,83 @@ export function ShopCartScreen({ session, navigate, notify }) {
  * Checkout — address + payment (online / COD) + success
  * ------------------------------------------------------------------ */
 
-// The delivery address defaults to the salon's own record (this is a B2B
-// shop — stock lands at the salon) but every field stays editable.
-function initialAddressFromSession(session) {
+// The delivery address defaults to the buyer's own record — the salon's for a
+// partner (stock lands at the shop), the customer's profile for a person — but
+// every field stays editable. The two roles keep their details in different
+// shapes, so each is read from where that account actually stores it.
+export function initialAddressFromSession(session) {
   const user = session?.user || {};
-  const profile = { ...user, ...(user.salon || {}) };
+  const salon = user.salon || {};
+  const isSalon = String(session?.role || '').toUpperCase() === 'SALON';
+  const profile = isSalon ? { ...user, ...salon } : { ...user };
+  // The pin: the buyer's saved GPS point, editable here so a delivery to a
+  // different gate still has somewhere to send the partner.
+  const point = toPoint(profile) || toPoint(salon) || toPoint(user);
   return {
     name: profile.ownerName || profile.fullName || profile.name || '',
-    phone: profile.phoneNumber || profile.phone || '',
-    line1: profile.addressLine1 || profile.address || `${profile.salonName || 'Salon'}, ` + [profile.addressLine1, profile.city].filter(Boolean).join(', '),
+    phone: profile.phoneNumber || profile.phone || profile.mobile || '',
+    line1: profile.addressLine1 || profile.address || '',
     city: profile.city || '',
     // A dropdown only displays a value it knows: `MH`, `Orissa` or
     // `Pondicherry` saved by an older form is mapped onto the canonical name
-    // here, so the salon's address never looks unset at checkout.
+    // here, so the saved address never looks unset at checkout.
     state: normalizeStateName(profile.state),
     pincode: profile.pincode || '',
-    // The delivery point: the salon's saved GPS location, editable here so a
-    // delivery to a different gate still has somewhere to send the partner.
-    ...(toPoint(profile) || { latitude: null, longitude: null }),
+    ...(point || { latitude: null, longitude: null }),
   };
+}
+
+/* ------------------------------------------------------------------ *\
+ * The purchase gate — the one place the website asks for an account
+ *
+ * A visitor browses and fills a cart freely; the account is asked for at the
+ * only moment it is genuinely needed: an order must belong to somebody the
+ * delivery partner can call, the platform can track and the buyer can re-order
+ * from My orders. So the shop says NOTHING about accounts while they shop —
+ * this small dialog opens on "Proceed to checkout", states the three things
+ * the account buys them, and then the OTP page takes over.
+ *
+ * Signing in is not a dead end: the cart stays exactly as it is and
+ * `completeAuth` merges it into the account (`adoptGuestCart`) before resuming
+ * `/shopCheckout`, so the visitor lands on a prefilled checkout with the same
+ * basket.
+ * ------------------------------------------------------------------ */
+export function ShopGuestGateDialog({ open, onClose, navigate, copy }) {
+  const returnTo = '/shopCheckout';
+  const signIn = () => {
+    // The resume target for the auth flow; `guestNavigate` stashes it too, and
+    // `completeAuth` resolves it for the USER role, so this works from the
+    // public shell as well as from any future signed-out branch.
+    stashPendingRoute(returnTo);
+    navigate('login', { returnTo, role: 'USER' });
+  };
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={copy.guestCheckoutTitle}
+      size="sm"
+      footer={(
+        <div className="shop-gate-actions">
+          <Button onClick={signIn}>{copy.guestCheckoutCta}</Button>
+          <Button variant="secondary" onClick={onClose}>{copy.guestCheckoutBack}</Button>
+        </div>
+      )}
+    >
+      <span className="shop-gate-icon" aria-hidden="true"><Lock size={17} /></span>
+      <p className="shop-gate-lead">{copy.guestCheckoutLead}</p>
+      <ul className="shop-gate-points">
+        {copy.guestCheckoutPoints.map(point => (
+          <li key={point}><CheckCircle2 size={13} aria-hidden="true" /><span>{point}</span></li>
+        ))}
+      </ul>
+    </Modal>
+  );
 }
 
 export function ShopCheckoutScreen({ session, navigate, notify }) {
   const ownerId = shopOwnerId(session);
+  const copy = shopCopy(session);
   const [lines, setLines] = useState(() => readCart(ownerId));
   const [address, setAddress] = useState(() => initialAddressFromSession(session));
   const [payment, setPayment] = useState('online');
@@ -264,6 +329,10 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
   // A rejected registration is a real outcome the salon must see — not a
   // console line. `orderError` is shown above the pay button, with Retry.
   const [orderError, setOrderError] = useState('');
+  // What KIND of rejection it was (the sync layer classifies it). A server
+  // that cannot take customer orders at all is not something a "Try again"
+  // button can fix, so the box changes shape for that case.
+  const [orderErrorCode, setOrderErrorCode] = useState('');
   const [retrying, setRetrying] = useState(false);
   const shopSettings = useShopSettings();
   // Cash on delivery is confirmed through the app's own sheet (never
@@ -328,6 +397,7 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
    * and shown with an honest "confirming" state.
    */
   const finalizeOrder = async (paymentInfo) => {
+    setOrderErrorCode('');
     const order = placeOrder(ownerId, {
       items: lines,
       address,
@@ -373,6 +443,7 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     // cannot is exactly the bug this replaces.
     removeLocalOrder(ownerId, order.id);
     setOrderError(result.message || 'My Naai could not accept this order.');
+    setOrderErrorCode(result.code || '');
     notify?.('error', result.message || 'My Naai could not accept this order.');
     return { ok: false, message: result.message };
   };
@@ -393,7 +464,17 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
       name: 'My Naai',
       description: `Naai Shop order · ${cartCount(lines)} item${cartCount(lines) === 1 ? '' : 's'}`,
       prefill: { name: address.name, contact: address.phone },
-      notes: { flow: 'shop-order', salonId: ownerId, items: String(cartCount(lines)) },
+      // The Razorpay notes identify the BUYER so the signed webhook can find
+      // the order. A salon keeps the `salonId` key it has always sent (the
+      // existing webhook matches on it); every buyer also gets `buyerId` +
+      // `buyerType`, which is what a customer order is matched on.
+      notes: {
+        flow: 'shop-order',
+        ...(copy.isSalon ? { salonId: String(session?.userId || '') } : {}),
+        buyerId: String(session?.userId || ''),
+        buyerType: copy.audience,
+        items: String(cartCount(lines)),
+      },
       onEvent: event => {
         if (event.type === 'app-switch') setPayState('app-switched');
         else if (event.type === 'returned') setPayState('confirming');
@@ -423,6 +504,7 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
       const problem = validate();
       if (problem) {
         setOrderError(problem);
+        setOrderErrorCode('VALIDATION');
         return;
       }
       await finalizeOrder({
@@ -489,7 +571,7 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
           <p className="shop-success-eta">
             <Truck size={16} />{' '}
             <span>
-              Delivering to <strong>{placed.address.line1 || 'your salon'}</strong>
+              Delivering to <strong>{placed.address.line1 || copy.deliveryTarget}</strong>
               {placed.address.city ? `, ${placed.address.city}` : ''}
             </span>
           </p>
@@ -521,6 +603,21 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     );
   }
 
+  // Visitors do not check out here. This route is public so a deep link (or a
+  // resume that raced the merge) lands somewhere sensible: the bill is behind
+  // the dialog, and closing it returns to the cart.
+  if (isShopGuest(session)) {
+    return (
+      <div className="screen shop-checkout-screen">
+        <PageHeader title="Checkout" onBack={() => navigate('shopCart')} />
+        <ShopGuestGateDialog open onClose={() => navigate('shopCart')} navigate={navigate} copy={copy} />
+        <ShopBillCard lines={lines} settings={shopSettings} stage="cart" title="Your cart" />
+      </div>
+    );
+  }
+
+  const serverSchemaGap = orderErrorCode === 'BUYER_SCHEMA';
+
   const payLabel = payState === 'saving' ? 'Placing your order with My Naai…'
     : payState === 'opening' ? 'Contacting payment gateway…'
     : payState === 'in-checkout' ? 'Complete the payment in the Razorpay window'
@@ -530,7 +627,7 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
 
   return (
     <div className="screen shop-checkout-screen">
-      <PageHeader title="Checkout" subtitle="Delivery to your salon" onBack={() => navigate('shopCart')} />
+      <PageHeader title="Checkout" subtitle={copy.checkoutSubtitle} onBack={() => navigate('shopCart')} />
       <section className="shop-address-card">
         <h3><MapPin size={15} /> Delivery address</h3>
         <form onSubmit={submit}>
@@ -544,7 +641,7 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
               <Field label="Recipient name" required><input autoComplete="name" value={address.name} onChange={event => setAddressField('name', event.target.value)} placeholder="e.g. Ramesh Kumar" autoFocus /></Field>
               <Field label="Contact number" required><input autoComplete="tel" inputMode="numeric" maxLength={10} value={address.phone} onChange={event => setAddressField('phone', event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="10-digit mobile" /></Field>
             </div>
-            <Field label="Shop / salon address" required><input autoComplete="street-address" value={address.line1} onChange={event => setAddressField('line1', event.target.value)} placeholder="Building, street, landmark" /></Field>
+            <Field label={copy.addressFieldLabel} required><input autoComplete="street-address" value={address.line1} onChange={event => setAddressField('line1', event.target.value)} placeholder="Building, street, landmark" /></Field>
             {/* City · State · Pincode share one even row on a wide screen and
                 stack on a phone — no nested grid, so the columns line up. */}
             <div className="form-three-even">
@@ -573,20 +670,27 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
             <p className="location-preview-coords">
               {deliveryPoint ? formatCoordinates(deliveryPoint) : 'No delivery pin yet'}
             </p>
-            <p className="location-preview-caption">
-              Our delivery partner navigates to this point. It is the salon GPS location unless you set it here.
-            </p>
-            <LocationMap value={deliveryPoint} height={160} ariaLabel="Delivery location map" />
-            <div className="checkout-location-actions">
-              <Button type="button" variant="secondary" size="small" onClick={useMyLocationForDelivery} loading={locating}>
-                <MapPin size={14} /> {locating ? 'Locating…' : 'Use my current location'}
-              </Button>
-              {deliveryPoint && (
+            <p className="location-preview-caption">{copy.locationCaption}</p>
+            <LocationPicker
+              value={deliveryPoint}
+              onChange={next => setAddress(current => ({
+                ...current,
+                latitude: next ? next.latitude : null,
+                longitude: next ? next.longitude : null,
+              }))}
+              height={180}
+              label="Tap the map to drop the delivery pin"
+              locateLabel={locating ? 'Locating…' : 'Use my current location'}
+              onLocate={useMyLocationForDelivery}
+              locating={locating}
+            />
+            {deliveryPoint && (
+              <div className="checkout-location-actions">
                 <a className="location-preview-link" href={mapsUrl(deliveryPoint)} target="_blank" rel="noopener noreferrer">
                   Open in Maps
                 </a>
-              )}
-            </div>
+              </div>
+            )}
           </div>
           <div className="shop-checkout-summary">
             <ShopBillCard lines={lines} settings={shopSettings} method={payment === 'cod' ? 'COD' : 'ONLINE'} />
@@ -610,8 +714,8 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
                   {codLocked
                     ? `Only for orders up to ${formatCurrency(shopSettings.codThreshold)} — this one is ${formatCurrency(totals.itemTotal)}, so please pay online`
                     : shopSettings.codCharges > 0
-                      ? `Pay in cash when the order reaches your salon · ${formatCurrency(shopSettings.codCharges)} COD charges`
-                      : 'Pay in cash when the order reaches your salon'}
+                      ? `Pay in cash ${copy.codLine} · ${formatCurrency(shopSettings.codCharges)} COD charges`
+                      : `Pay in cash ${copy.codLine}`}
                 </small>
               </span>
               <span className={cx('shop-pay-tick', payment === 'cod' && 'on')}><CheckCircle2 size={18} /></span>
@@ -629,14 +733,20 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
                 <strong>Order not placed</strong>
                 <p>{orderError}</p>
                 <p className="shop-order-error-help">
-                  Nothing has been charged and your cart is still here. Check the details above and try again,
-                  or call {SUPPORT_PHONE} if it keeps failing.
+                  {serverSchemaGap
+                    // The server cannot store a customer order at all yet —
+                    // retrying changes nothing, so say where the fix is and
+                    // how to get the parcel moving today.
+                    ? <>Nothing has been charged and your cart is still here. This needs a fix on our side — call {SUPPORT_PHONE} and we will place the order for you.</>
+                    : <>Nothing has been charged and your cart is still here. Check the details above and try again, or call {SUPPORT_PHONE} if it keeps failing.</>}
                 </p>
                 <div className="shop-order-error-actions">
-                  <Button type="button" size="small" loading={retrying} onClick={retryPlaceOrder}>
-                    Try again
-                  </Button>
-                  <Button type="button" size="small" variant="secondary" onClick={() => setOrderError('')}>
+                  {!serverSchemaGap && (
+                    <Button type="button" size="small" loading={retrying} onClick={retryPlaceOrder}>
+                      Try again
+                    </Button>
+                  )}
+                  <Button type="button" size="small" variant="secondary" onClick={() => { setOrderError(''); setOrderErrorCode(''); }}>
                     Dismiss
                   </Button>
                 </div>

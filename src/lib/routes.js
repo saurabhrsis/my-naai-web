@@ -14,7 +14,15 @@
 // public URL reads properly: `privacy` lives at /privacy-policy, the salon
 // partner landing page at /salon-partner.
 const ROUTE_TO_SEGMENT = { privacy: 'privacy-policy', partner: 'salon-partner', home: '' };
-const SEGMENT_TO_ROUTE = { 'privacy-policy': 'privacy', 'salon-partner': 'partner' };
+const SEGMENT_TO_ROUTE = {
+  'privacy-policy': 'privacy',
+  'salon-partner': 'partner',
+  // The old customer "Products" tab lived at /products. That screen is retired
+  // (the Naai Shop replaced it), but the link survives in bookmarks and old
+  // messages, so it is folded onto the shop instead of dead-ending on the home
+  // screen. Nothing writes this segment any more — see USER_NAV in App.jsx.
+  products: 'shop',
+};
 
 // Parse `window.location`-style input (a path, optionally with a query) into
 // the router's { name, params }. The salon screen consumes its id from the

@@ -57,7 +57,7 @@ boundary so the lib can be imported under jsdom.
 | UserLogin / UserSignup / OtpScreen | `AuthFlow` phone/OTP/new-user | ✅ same OTP + `deviceToken` flow |
 | NaaiDashboard (discover) | `#/home` | ✅ distance-sorted salon list, location retry |
 | ServicesScreen (booked salons) | `#/bookings` | ✅ bookings + live socket updates |
-| UserProduct | `#/products` | ✅ |
+| UserProduct | `#/products` | ➖ retired — the Naai Shop (`/shop`) replaced it; the URL now folds onto the shop |
 | SalonDetailScreen | `#/detail` | ✅ |
 | SalonServicesScreen | `#/services` | ✅ |
 | BookingSchedule | `#/schedule` | ✅ available-slot picker (past, booked, overlapping, and too-late slots hidden) |
@@ -72,7 +72,7 @@ boundary so the lib can be imported under jsdom.
 | --- | --- | --- |
 | SalonDashboard (queue) | `#/queue` | ✅ live socket, mark done, call customer |
 | SalonBookingHistory | `#/history` | ✅ |
-| SalonProduct | `#/salonProducts` | ✅ |
+| SalonProduct | `#/salonProducts` | ➖ retired — the Naai Shop (`/shop`) replaced it; the screen is kept but unlinked |
 | SalonAccountScreen | `#/account` | ✅ profile, plan, toggle open/closed |
 | AddOfflineCustomer (walk-in) | — | ⬜ commented out in mobile, not a live flow |
 | BookingRequestScreen | `#/bookingRequest` | ✅ Accept/Reject/Delay + 60s timer |

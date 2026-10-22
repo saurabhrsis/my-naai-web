@@ -5,6 +5,7 @@ import {
   FREE_DELIVERY_ABOVE,
   ACTIVE_ORDER_STATUSES,
   addToCart,
+  adoptGuestCart,
   canCancelOrder,
   cancelOrder,
   cartCount,
@@ -53,6 +54,29 @@ describe('cart', () => {
     expect(readCart('salon-1')).toHaveLength(1);
     expect(readCart('salon-2')).toHaveLength(1);
     expect(readCart('salon-1')[0].productId).toBe('p1');
+  });
+
+  it('moves a visitor cart onto the account that just signed in', () => {
+    addToCart('guest', product('p1', 100));
+    addToCart('guest', product('p1', 100)); // qty 2 in the guest cart
+    addToCart('guest', product('p2', 200));
+    // The account already had one of the same product.
+    addToCart('user:u1', product('p1', 100));
+
+    const merged = adoptGuestCart('user:u1');
+    expect(merged.map(line => [line.productId, line.qty])).toEqual([['p1', 2], ['p2', 1]]);
+    // The account keeps the larger quantity, and the guest slot is emptied so a
+    // shared device never shows the same basket twice.
+    expect(readCart('user:u1')).toHaveLength(2);
+    expect(readCart('guest')).toEqual([]);
+    // Nothing left to adopt the second time (the app calls this on every sign-in).
+    expect(adoptGuestCart('user:u1')).toEqual([]);
+  });
+
+  it('does not touch the guest slot for a guest "account"', () => {
+    addToCart('guest', product('p1', 100));
+    expect(adoptGuestCart('guest')).toEqual([]);
+    expect(readCart('guest')).toHaveLength(1);
   });
 
   it('caps quantities at a sane maximum', () => {

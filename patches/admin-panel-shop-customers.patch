@@ -1,0 +1,230 @@
+From ed1b64d9140f6e2c992b78bdc21a35299240e926 Mon Sep 17 00:00:00 2001
+From: MyNaai <dev@mynaai.in>
+Date: Thu, 22 Oct 2026 13:25:55 +0000
+Subject: [PATCH] Shop Orders: show the customer buyer
+
+Shop orders are no longer salon-only: a customer (the app / website USER
+role) buys from the same catalog through the same endpoints. A customer
+order arrives with buyerType 'CUSTOMER', salon null and a customer object
+{ userId, fullName, phoneNumber }.
+
+- pages/ShopOrders.jsx: a buyerOf(order) helper (exported, so the drawer
+  uses the same rule), a Buyer column that renders the salon name as
+  before or the customer's name with a Customer badge and phone, a
+  Buyer type filter (All / Salons / Customers) sent as buyerType, and a
+  search hint that mentions salon and customer.
+- components/ShopOrderDetailModal.jsx: the "Ordered by" block switches to
+  the customer's name/phone with the Customer badge, the savings line
+  reads Customer saved for a customer order, and the timeline understands
+  the CUSTOMER actor type.
+- services/communication.jsx: adminList forwards buyerType.
+
+A row with no buyerType is treated as a salon order, so the panel can ship
+before (or with) the backend migration.
+---
+ src/components/ShopOrderDetailModal.jsx | 22 ++++++---
+ src/pages/ShopOrders.jsx                | 59 ++++++++++++++++++++++---
+ src/services/communication.jsx          |  6 ++-
+ 3 files changed, 75 insertions(+), 12 deletions(-)
+
+diff --git a/src/components/ShopOrderDetailModal.jsx b/src/components/ShopOrderDetailModal.jsx
+index 43d1eef..82dd878 100644
+--- a/src/components/ShopOrderDetailModal.jsx
++++ b/src/components/ShopOrderDetailModal.jsx
+@@ -3,7 +3,7 @@ import { Modal, Button, Spinner } from "react-bootstrap";
+ import { shopOrderAPI, distributorAPI, API_BASE_URL } from "../services/communication";
+ import { toast } from "react-toastify";
+ import { Plus, CreditCard, UserPlus, CheckCircle2, XCircle, Truck, Ban, Store, MessageSquare, Eye, Edit3, MapPin, Route, Crosshair } from "lucide-react";
+-import { INTERNAL_STATUS_META } from "../pages/ShopOrders.jsx";
++import { INTERNAL_STATUS_META, buyerOf } from "../pages/ShopOrders.jsx";
+ import LocationField from "./LocationField.jsx";
+ import LocationMap from "./LocationMap.jsx";
+ import {
+@@ -42,6 +42,7 @@ const ACTOR_LABELS = {
+   ADMIN: "MyNaai Admin",
+   DISTRIBUTOR: "Distributor",
+   SALON: "Salon",
++  CUSTOMER: "Customer",
+   SYSTEM: "System"
+ };
+ 
+@@ -86,6 +87,8 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
+   if (!order) return null;
+ 
+   const meta = INTERNAL_STATUS_META[order.status] || { label: order.status, badge: "bg-secondary-subtle text-secondary" };
++  // Who bought it — a salon or a customer; every label below reads from here.
++  const buyer = buyerOf(order);
+   const items = order.items || [];
+   const events = [...(order.events || [])].reverse();
+ 
+@@ -255,9 +258,18 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
+               <div style={{ background: "#ffffff", borderRadius: "12px", border: "1px solid #e2e8f0", padding: "20px", boxSizing: "border-box" }}>
+                 <div className="row g-3 mb-3">
+                   <div className="col-sm-6">
+-                    <div className="small text-muted mb-1 fw-semibold">ORDERED BY (SALON)</div>
+-                    <div className="fw-bold text-dark">{order.salon?.salonName || "—"}</div>
+-                    <div className="text-muted small">{order.salon?.phoneNumber || ""}</div>
++                    {/* A salon order shows its salon; a customer order has no
++                        salon at all, so the same block shows the person. */}
++                    <div className="small text-muted mb-1 fw-semibold">
++                      {buyer.isCustomer ? "ORDERED BY (CUSTOMER)" : "ORDERED BY (SALON)"}
++                    </div>
++                    <div className="d-flex align-items-center gap-2">
++                      <span className="fw-bold text-dark">{buyer.name}</span>
++                      {buyer.isCustomer && (
++                        <span className="badge bg-info-subtle text-info-emphasis" style={{ fontSize: "0.7rem" }}>Customer</span>
++                      )}
++                    </div>
++                    <div className="text-muted small">{buyer.phone}</div>
+                   </div>
+                   <div className="col-sm-6">
+                     <div className="small text-muted mb-1 fw-semibold">DELIVERY CONTACT</div>
+@@ -418,7 +430,7 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
+                   <div><span className="text-muted">Delivery:</span> <strong className="text-dark">{Number(order.amounts?.deliveryFee) === 0 ? "Free" : money(order.amounts?.deliveryFee)}</strong></div>
+                   <div><span className="text-muted">Total:</span> <strong className="text-dark">{money(order.amounts?.total)}</strong></div>
+                   {Number(order.amounts?.savings) > 0 && (
+-                    <div><span className="text-muted">Salon saved:</span> <strong className="text-success">{money(order.amounts?.savings)}</strong></div>
++                    <div><span className="text-muted">{buyer.isCustomer ? "Customer saved:" : "Salon saved:"}</span> <strong className="text-success">{money(order.amounts?.savings)}</strong></div>
+                   )}
+                   <div>
+                     <span className="text-muted">Payment: </span>
+diff --git a/src/pages/ShopOrders.jsx b/src/pages/ShopOrders.jsx
+index f60790b..54f75af 100644
+--- a/src/pages/ShopOrders.jsx
++++ b/src/pages/ShopOrders.jsx
+@@ -21,6 +21,27 @@ const dateTime = (value) => {
+   return d.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+ };
+ 
++// Shop orders come from two kinds of buyer: a SALON buying stock and a
++// CUSTOMER buying for themselves (the app / website USER role). A customer
++// order has `salon: null` and a `customer` object, so every place that used
++// to read `order.salon.salonName` goes through here instead. Rows created
++// before the column existed have no `buyerType` — no salon object means
++// customer, anything else is a salon order, which is what they all were.
++export const buyerOf = (order) => {
++  if (!order) return { isCustomer: false, name: "—", phone: "", subtitle: "Salon order" };
++  const hasSalon = Boolean(order.salon && (order.salon.salonName || order.salon.salonId));
++  const isCustomer = order.buyerType
++    ? String(order.buyerType).toUpperCase() === "CUSTOMER"
++    : !hasSalon && Boolean(order.customer);
++  const source = isCustomer ? (order.customer || {}) : (order.salon || {});
++  return {
++    isCustomer,
++    name: (isCustomer ? source.fullName : source.salonName) || (isCustomer ? "Customer" : "—"),
++    phone: source.phoneNumber || "",
++    subtitle: isCustomer ? "Customer order · no salon account" : "Salon order"
++  };
++};
++
+ export const INTERNAL_STATUS_META = {
+   PENDING_ASSIGNMENT: { label: "Pending Assignment", badge: "bg-warning-subtle text-warning-emphasis" },
+   AWAITING_ACCEPTANCE: { label: "Awaiting Distributor", badge: "bg-info-subtle text-info-emphasis" },
+@@ -46,6 +67,8 @@ const ShopOrders = () => {
+   const [search, setSearch] = useState("");
+   const [debouncedSearch, setDebouncedSearch] = useState("");
+   const [statusFilter, setStatusFilter] = useState("ALL");
++  // Buyer type filter: "" (all), "SALON" or "CUSTOMER".
++  const [buyerFilter, setBuyerFilter] = useState("");
+   const [currentPage, setCurrentPage] = useState(1);
+   const [totalPages, setTotalPages] = useState(1);
+   const [orders, setOrders] = useState([]);
+@@ -58,6 +81,7 @@ const ShopOrders = () => {
+       setIsLoading(true);
+       const params = { page: currentPage, searchString: debouncedSearch };
+       if (statusFilter !== "ALL") params.status = statusFilter;
++      if (buyerFilter) params.buyerType = buyerFilter;
+       const result = await shopOrderAPI.adminList(params);
+       if (result.success) {
+         setOrders(result.data?.orders || []);
+@@ -70,7 +94,7 @@ const ShopOrders = () => {
+     } finally {
+       setIsLoading(false);
+     }
+-  }, [currentPage, debouncedSearch, statusFilter]);
++  }, [currentPage, debouncedSearch, statusFilter, buyerFilter]);
+ 
+   useEffect(() => {
+     const timer = setTimeout(() => {
+@@ -160,7 +184,7 @@ const ShopOrders = () => {
+                 the Bootstrap grid utilities, so widths are inline. */}
+             <div className="d-flex flex-column gap-2">
+               <div style={{ flex: "0 0 auto", width: "100%", maxWidth: 420 }}>
+-                <SearchInput value={search} onChange={setSearch} placeholder="Search by order ID..." />
++                <SearchInput value={search} onChange={setSearch} placeholder="Search order ID, salon or customer..." />
+               </div>
+               <div className="d-flex flex-wrap gap-2 align-items-center">
+                 {STATUS_FILTERS.map((f) => (
+@@ -172,6 +196,19 @@ const ShopOrders = () => {
+                     {f.label}
+                   </button>
+                 ))}
++                {/* Who bought it: a salon (partner stock order) or a customer
++                    (app / website personal order). */}
++                <select
++                  className="form-select form-select-sm"
++                  style={{ width: 160 }}
++                  value={buyerFilter}
++                  onChange={(e) => { setBuyerFilter(e.target.value); setCurrentPage(1); }}
++                  aria-label="Buyer type"
++                >
++                  <option value="">All buyers</option>
++                  <option value="SALON">Salons</option>
++                  <option value="CUSTOMER">Customers</option>
++                </select>
+                 <div style={{ marginLeft: "auto" }}><Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} size="sm" /></div>
+               </div>
+             </div>
+@@ -192,7 +229,7 @@ const ShopOrders = () => {
+                 <thead>
+                   <tr className="text-muted small" style={{ textTransform: "uppercase", letterSpacing: "0.4px" }}>
+                     <th>Order</th>
+-                    <th>Salon (Customer)</th>
++                    <th>Buyer</th>
+                     <th className="text-end">Items</th>
+                     <th className="text-end">Total</th>
+                     <th>Payment</th>
+@@ -216,8 +253,20 @@ const ShopOrders = () => {
+                       >
+                         <td className="fw-semibold">#{o.orderId}</td>
+                         <td>
+-                          <div>{o.salon?.salonName || "—"}</div>
+-                          <div className="text-muted small">{o.salon?.phoneNumber || ""}</div>
++                          {(() => {
++                            const buyer = buyerOf(o);
++                            return (
++                              <>
++                                <div className="d-flex align-items-center gap-2">
++                                  <span>{buyer.name}</span>
++                                  {buyer.isCustomer && (
++                                    <span className="badge bg-info-subtle text-info-emphasis" style={{ fontSize: "0.68rem" }}>Customer</span>
++                                  )}
++                                </div>
++                                <div className="text-muted small">{buyer.phone}</div>
++                              </>
++                            );
++                          })()}
+                         </td>
+                         <td className="text-end">{o.amounts?.itemCount ?? (o.items || []).length}</td>
+                         <td className="text-end fw-semibold">{money(o.amounts?.total)}</td>
+diff --git a/src/services/communication.jsx b/src/services/communication.jsx
+index 560d1a4..fcd9d13 100644
+--- a/src/services/communication.jsx
++++ b/src/services/communication.jsx
+@@ -1469,9 +1469,11 @@ export const distributorAPI = {
+ 
+ // Orders — admin dashboard + distributor portal
+ export const shopOrderAPI = {
+-  adminList: async ({ page = 1, status = "", customerStatus = "", searchString = "" } = {}) => {
++  // `buyerType` ('SALON' | 'CUSTOMER') is the Buyer type filter; an empty
++  // string asks the backend for both kinds of buyer.
++  adminList: async ({ page = 1, status = "", customerStatus = "", buyerType = "", searchString = "" } = {}) => {
+     try {
+-      const response = await api.post('/api/shop-orders/admin-list', { page, status, customerStatus, searchString });
++      const response = await api.post('/api/shop-orders/admin-list', { page, status, customerStatus, buyerType, searchString });
+       return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
+     } catch (error) {
+       return { success: false, message: error.response?.data?.message || "Failed to fetch orders", error: error.response?.data };
+-- 
+2.39.5
+

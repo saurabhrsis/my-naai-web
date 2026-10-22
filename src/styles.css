@@ -466,6 +466,14 @@ img { display: block; max-width: 100%; }
 .detail-header-actions { display: flex; align-items: center; gap: 4px; }
 /* The trust strip doubles as the separator between the salon-listings band
    and the testimonials below it. */
+/* Home → Naai Shop band: the storefront meets people on the page they
+   already land on, whether they signed in or not. */
+.home-shop-band { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; background: radial-gradient(120% 140% at 0% 0%, rgba(232,185,126,.10), transparent 58%), linear-gradient(180deg, #141a19, #0f1413); }
+.home-shop-copy { min-width: 0; flex: 1 1 260px; }
+.home-shop-copy h2 { margin: 4px 0 5px; color: var(--white); font-size: 19px; letter-spacing: -.03em; }
+.home-shop-copy p { margin: 0; max-width: 46ch; color: var(--muted-light); font-size: 12px; line-height: 1.55; }
+.home-shop-band .btn { flex: none; }
+
 .home-trust-row { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 7px; margin: 4px 0 7px; padding-top: 20px; border-top: 1px solid var(--line); color: #71807c; font-size: 9px; }
 .home-trust-row svg { color: var(--gold); }
 .home-trust-row i { width: 3px; height: 3px; border-radius: 50%; background: #58605f; }
@@ -1453,6 +1461,8 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
 .modal-backdrop { position: fixed; z-index: 100; inset: 0; display: flex; align-items: flex-end; justify-content: center; padding: max(12px, var(--safe-top)) max(12px, var(--safe-right)) max(12px, var(--safe-bottom)) max(12px, var(--safe-left)); background: rgba(0,0,0,.76); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); overscroll-behavior: contain; }
 .modal-card { width: 100%; max-width: 560px; max-height: min(88vh, 760px); max-height: min(88svh, 760px); overflow: auto; border: 1px solid var(--line-strong); border-radius: 22px 22px 16px 16px; background: #151a19; box-shadow: 0 -10px 60px rgba(0,0,0,.35); }
 .modal-image { max-width: 850px; max-height: 90vh; max-height: 90svh; }
+/* A short question, not a document — the shop's sign-in gate. */
+.modal-sm { max-width: 420px; }
 .modal-header { display: flex; align-items: center; justify-content: space-between; min-width: 0; gap: 10px; padding: 17px 16px 12px; }
 .modal-header h2 { min-width: 0; margin: 0; font-size: 18px; letter-spacing: -.03em; }
 .modal-body { padding: 0 16px 18px; }
@@ -2099,18 +2109,49 @@ img.image-fallback-tile {
 
 .shop-screen { padding-bottom: 148px; }
 
-/* Delivery promise strip under the header (Blinkit's "10 min" bar). */
-.shop-search { margin-bottom: 12px; }
+/* Search + the three facets.
+   PHONE: the field owns its row, the selects sit two per row below it.
+   LAPTOP (>=900px): ONE toolbar line — a compact field with the facets beside
+   it. The field used to be a flex child with `flex: 1`, so on a laptop it
+   stretched the whole content width and read as a banner rather than a search
+   box; here it is bounded (max 320px) and shares the row. */
+.shop-toolbar { display: grid; gap: 10px; margin-bottom: 12px; }
+.shop-search { margin-bottom: 0; min-height: 44px; padding: 0 12px; border-radius: 12px; }
+.shop-search input { height: 42px; font-size: 12.5px; }
+/* The browser's own ✕ would sit next to ours — one clear action is enough. */
+.shop-search input::-webkit-search-cancel-button,
+.shop-search input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
 .shop-search:focus-within { border-color: rgba(46, 204, 113, .6); box-shadow: 0 0 0 3px rgba(46, 204, 113, .08); }
+.shop-search .shop-search-clear { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: rgba(255, 255, 255, .08); color: var(--muted-light); cursor: pointer; transition: background .15s, color .15s; }
+.shop-search .shop-search-clear:hover { color: var(--white); background: rgba(255, 255, 255, .16); }
 
-/* Compact filter row — three labelled selects on one line (no chip rows,
-   no sort control), so the whole filter area is a single 38px strip. */
-.shop-filters-selects { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+/* Three facets: Category, For, Price. Two per row on a phone (a 3-up strip at
+   320px clipped every label), three across from 560px. */
+.shop-filters-selects { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+@media (min-width: 560px) and (max-width: 899px) { .shop-filters-selects { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; } }
 .shop-filter-select { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.shop-filter-select > span { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
-.shop-filter-select select { width: 100%; height: 38px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--white); font-size: 11.5px; font-weight: 700; padding: 0 8px; cursor: pointer; transition: border-color .15s; }
-.shop-filter-select select:hover, .shop-filter-select select:focus { border-color: rgba(46, 204, 113, .55); outline: none; }
-.shop-filter-select select option { color: #f4f7f6; background: #101414; }
+.shop-filter-label { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+.shop-select-shell { position: relative; display: block; }
+.shop-select-icon, .shop-select-caret { position: absolute; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--muted); transition: color .15s; }
+.shop-select-icon { left: 10px; }
+.shop-select-caret { right: 9px; }
+.shop-select-shell:focus-within .shop-select-icon,
+.shop-select-shell:focus-within .shop-select-caret { color: var(--shop-green-soft); }
+.shop-select-shell select { appearance: none; -webkit-appearance: none; width: 100%; height: 40px; padding: 0 27px 0 30px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--white); font-size: 11.5px; font-weight: 700; text-overflow: ellipsis; cursor: pointer; transition: border-color .15s, background .15s; }
+.shop-select-shell select:hover, .shop-select-shell select:focus { border-color: rgba(46, 204, 113, .55); background: #151b1a; outline: none; }
+.shop-select-shell select option { color: #f4f7f6; background: #101414; }
+@media (min-width: 900px) {
+  /* Bottoms aligned: the search box and the select boxes are the same 40px, so
+     the labels above the selects do not push the field out of line. */
+  .shop-toolbar { grid-template-columns: minmax(230px, 320px) minmax(0, 1fr); align-items: end; gap: 16px; margin-bottom: 14px; }
+  .shop-search { min-height: 40px; max-width: 320px; }
+  .shop-search input { height: 38px; }
+  /* Three ~170px facets beside the search, not three half-page hairline boxes. */
+  .shop-filters-selects { grid-template-columns: repeat(3, minmax(0, 170px)); justify-content: start; gap: 12px; }
+}
+
+/* "Show more" for a server-paginated catalog. */
+.shop-load-more { display: flex; justify-content: center; margin: 18px 0 4px; }
 .shop-header-actions { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; justify-content: flex-end; }
 /* The cart / orders shortcuts share the heading's line and are centred with
    it at every width — the generic phone header rule aligns to flex-start (for
@@ -2120,53 +2161,65 @@ img.image-fallback-tile {
 .shop-header-action { white-space: nowrap; }
 .shop-header-count { display: inline-flex; align-items: center; justify-content: center; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: var(--shop-green); color: #08130c; font-size: 9.5px; font-style: normal; font-weight: 800; letter-spacing: 0; }
 
-.shop-count-line { display: flex; align-items: center; gap: 8px; margin: 8px 2px 12px; color: var(--muted); font-size: 11px; }
-.shop-count-line strong { color: var(--white); font-size: 12px; }
-.shop-clear-filters { margin-left: auto; padding: 0; color: var(--shop-green-soft); background: transparent; font-size: 11px; font-weight: 700; }
+.shop-count-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 4px 2px 12px; color: var(--muted); font-size: 11px; }
+.shop-count-text strong { color: var(--white); font-size: 12.5px; }
+.shop-clear-filters { margin-left: auto; padding: 4px 10px; border: 1px solid rgba(46, 204, 113, .35); border-radius: 999px; color: var(--shop-green-soft); background: rgba(46, 204, 113, .08); font-size: 10.5px; font-weight: 700; cursor: pointer; transition: background .15s, border-color .15s; }
+.shop-clear-filters:hover { background: rgba(46, 204, 113, .16); border-color: rgba(46, 204, 113, .55); }
 
-/* The grid — 2-up on phones (Blinkit density), 4–6 up on desktop. */
-.shop-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-@media (min-width: 640px) { .shop-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; } }
-@media (min-width: 1024px) { .shop-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
-.skeleton-card.shop-skeleton { min-height: 262px; }
+/* The grid — 2-up on phones (Blinkit density), up to 5 up on a wide desktop.
+   Cards are equal-height by construction: the price row is pushed to the
+   bottom of the body, so every ADD sits on the same line across a row. */
+.shop-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+@media (min-width: 640px) { .shop-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; } }
+@media (min-width: 1024px) { .shop-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (min-width: 1400px) { .shop-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.skeleton-card.shop-skeleton { min-height: 252px; }
 
-.shop-card { position: relative; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 16px; background: var(--card); overflow: hidden; transition: border-color .18s, transform .18s; }
-.shop-card:hover { border-color: rgba(46, 204, 113, .45); transform: translateY(-2px); box-shadow: 0 12px 32px rgba(0, 0, 0, .35); }
-.shop-card.out-of-stock { opacity: .62; }
-.shop-off-badge { position: absolute; top: 8px; left: 8px; z-index: 2; padding: 3px 7px; border-radius: 8px; background: var(--shop-green); color: #08130c; font-size: 9.5px; font-weight: 800; letter-spacing: .02em; }
+.shop-card { position: relative; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 16px; background: var(--card); overflow: hidden; transition: transform .2s ease, border-color .2s, box-shadow .2s; }
+.shop-card:hover { transform: translateY(-3px); border-color: rgba(46, 204, 113, .42); box-shadow: 0 18px 36px rgba(0, 0, 0, .42); }
+.shop-card.out-of-stock { opacity: .6; }
+/* The photo box is a touch shorter than square (0.88 × its width). At the
+   4–5 column widths a full square made the card ~40px taller than the name,
+   price and ADD underneath actually need, so a row of four filled the
+   whole laptop fold. Cropping 12% off the bottom keeps the product centred
+   and every card in a row the same height. */
+.shop-card-media { position: relative; display: block; width: 100%; aspect-ratio: 25 / 22; padding: 0; border: 0; background: #101414; cursor: pointer; overflow: hidden; }
+.shop-card-image { width: 100%; height: 100%; object-fit: cover; object-position: center; transition: transform .35s ease; }
+.shop-card:hover .shop-card-image { transform: scale(1.06); }
+/* Soft shade behind the badges so "% off" and the rating stay legible over a
+   white product shot as well as a dark one. */
+.shop-card-shade { position: absolute; inset: auto 0 0; height: 46%; background: linear-gradient(180deg, transparent, rgba(6, 9, 8, .6)); pointer-events: none; }
+.shop-off-badge { position: absolute; top: 9px; left: 9px; z-index: 2; padding: 3px 8px; border-radius: 8px; background: var(--shop-green); color: #04160b; font-size: 9.5px; font-weight: 800; letter-spacing: .03em; box-shadow: 0 4px 12px rgba(0, 0, 0, .32); }
 .shop-off-badge.inline { position: static; display: inline-block; margin-left: 0; vertical-align: middle; }
-.shop-card-media { position: relative; display: block; width: 100%; aspect-ratio: 1 / 1; padding: 0; border: 0; background: #101414; cursor: pointer; overflow: hidden; }
-.shop-card-image { width: 100%; height: 100%; object-fit: cover; object-position: center; transition: transform .25s ease; }
-.shop-card:hover .shop-card-image { transform: scale(1.045); }
-.shop-stock-veil { position: absolute; inset: auto 8px 8px; padding: 4px 9px; border-radius: 9px; background: rgba(8, 10, 10, .82); color: var(--muted-light); font-size: 10px; font-weight: 700; backdrop-filter: blur(6px); }
-.shop-card-body { display: flex; flex-direction: column; gap: 5px; flex: 1; padding: 11px 12px 12px; }
-.shop-card-body h3 { margin: 0; font-size: 13px; line-height: 1.35; color: var(--white); cursor: pointer; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.7em; }
+.shop-card-rating { position: absolute; z-index: 2; right: 9px; bottom: 9px; display: inline-flex; align-items: center; gap: 3px; padding: 3px 7px; border-radius: 8px; background: rgba(8, 12, 11, .66); color: #eafff2; font-size: 10px; font-weight: 800; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.shop-card-rating svg { color: var(--shop-yellow); fill: var(--shop-yellow); }
+.shop-stock-veil { position: absolute; inset: auto 8px 8px; padding: 4px 9px; border-radius: 9px; background: rgba(8, 10, 10, .84); color: var(--muted-light); font-size: 10px; font-weight: 700; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.shop-card-body { display: flex; flex-direction: column; gap: 3px; flex: 1; padding: 10px 11px 11px; }
+.shop-card-body h3 { margin: 0; font-size: 13px; font-weight: 650; line-height: 1.35; color: var(--white); cursor: pointer; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.7em; }
 .shop-card-body h3:hover { color: var(--shop-green-soft); }
-.shop-card-salon { margin: 0; color: var(--muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* Wraps as a group on narrow 2-up cards so long INR prices + MRP + the
-   % off badge never push the rating pill out of the card. */
-.shop-card-price-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 4px 6px; margin-top: 2px; flex-wrap: wrap; }
-.shop-card-price-row > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 6px; min-width: 0; }
-.shop-card-price-row strong { color: var(--white); font-size: 14.5px; white-space: nowrap; }
+.shop-card-salon { margin: 0; color: var(--muted); font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.shop-card-price-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 6px; margin-top: auto; padding-top: 7px; min-width: 0; }
+.shop-card-price-row strong { color: var(--white); font-size: 15px; font-weight: 800; white-space: nowrap; }
 .shop-card-price-row s { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .shop-rating { display: inline-flex; align-items: center; gap: 3px; padding: 2.5px 6px; border-radius: 7px; background: rgba(46, 204, 113, .14); color: var(--shop-green-soft); font-size: 10px; font-weight: 800; }
 .shop-rating svg { fill: currentColor; }
-.shop-card-action { margin-top: auto; padding-top: 8px; display: flex; }
+.shop-card-action { margin-top: 7px; display: flex; }
 .shop-card-action > .shop-add-button, .shop-card-action > .shop-stepper, .shop-card-action > .shop-stock-chip { flex: 1; }
 
 /* The Blinkit ADD button and its − 1 + stepper. */
-.shop-add-button { min-height: 34px; min-width: 78px; padding: 0 18px; border: 1.5px solid var(--shop-green); border-radius: 10px; color: #eafff2; background: rgba(35, 180, 92, .16); font-size: 12px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; transition: background .15s, color .15s; }
-.shop-add-button:hover { background: var(--shop-green); color: #08130c; }
+.shop-add-button { min-height: 34px; min-width: 78px; padding: 0 18px; border: 1.5px solid var(--shop-green); border-radius: 10px; color: #eafff2; background: rgba(35, 180, 92, .16); font-size: 12px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; cursor: pointer; transition: background .15s, color .15s, box-shadow .15s; }
+.shop-add-button:hover { background: var(--shop-green); color: #08130c; box-shadow: 0 6px 18px rgba(35, 180, 92, .28); }
 /* − and + pin to the card's edges, the count floats in the middle; the
    34px height matches the ADD button so the card row never jumps. */
 .shop-stepper { display: flex; align-items: stretch; min-height: 34px; border: 1.5px solid var(--shop-green); border-radius: 10px; overflow: hidden; background: rgba(35, 180, 92, .16); }
-.shop-stepper button { flex: 0 0 34px; display: inline-flex; align-items: center; justify-content: center; color: var(--shop-green-soft); background: transparent; }
+.shop-stepper button { flex: 0 0 34px; display: inline-flex; align-items: center; justify-content: center; color: var(--shop-green-soft); background: transparent; cursor: pointer; }
 .shop-stepper button:hover { background: var(--shop-green); color: #08130c; }
 .shop-stepper span { flex: 1 1 auto; display: inline-flex; align-items: center; justify-content: center; color: var(--white); font-size: 13px; font-weight: 800; }
 .shop-stepper.small { min-height: 29px; }
 .shop-stepper.small button { flex: 0 0 29px; }
 .shop-add-button.small { min-height: 29px; min-width: 64px; font-size: 11px; }
-.shop-stock-chip { padding: 5px 10px; border-radius: 9px; border: 1px dashed var(--line); color: var(--muted); font-size: 10.5px; font-weight: 700; }
+.shop-stock-chip { padding: 5px 10px; border-radius: 9px; border: 1px dashed var(--line); color: var(--muted); font-size: 10.5px; font-weight: 700; text-align: center; }
 
 /* Floating "3 items · ₹1,240 → VIEW CART" bar, parked above the bottom nav. */
 .shop-cart-bar { position: fixed; z-index: 39; left: max(10px, var(--safe-left, 0px)); right: max(10px, var(--safe-right, 0px)); bottom: calc(max(9px, var(--safe-bottom, 0px)) + 66px); display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; border-radius: 16px; background: var(--shop-green); color: #08130c; box-shadow: 0 14px 40px rgba(35, 180, 92, .35); font-size: 13px; }
@@ -2208,12 +2261,12 @@ img.image-fallback-tile {
   .shop-orders-screen .page-header-action { align-self: center; }
 
   .shop-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
-  .skeleton-card.shop-skeleton { min-height: 236px; }
+  .skeleton-card.shop-skeleton { min-height: 222px; }
 
   .shop-card { flex-direction: column; border-radius: 14px; }
   .shop-card:hover { transform: none; box-shadow: none; }
 
-  .shop-card-media { width: 100%; flex: none; aspect-ratio: 1 / 1; }
+  .shop-card-media { width: 100%; flex: none; aspect-ratio: 25 / 22; }
   .shop-card-image { transition: none; }
   .shop-card:hover .shop-card-image { transform: none; }
 
@@ -2221,16 +2274,15 @@ img.image-fallback-tile {
      each get one step down in type to stay on their own rows. */
   .shop-card-body { gap: 3px; padding: 8px 9px 9px; }
   .shop-card-body h3 { font-size: 12.5px; line-height: 1.3; min-height: 2.6em; }
-  .shop-card-salon { font-size: 9px; }
-  .shop-card-price-row { margin-top: 1px; gap: 3px 5px; }
+  .shop-card-salon { font-size: 8.5px; letter-spacing: .05em; }
+  .shop-card-price-row { padding-top: 5px; gap: 3px 5px; }
   .shop-card-price-row strong { font-size: 13.5px; }
   .shop-card-price-row s { font-size: 10px; }
   .shop-rating { padding: 2px 5px; font-size: 9px; }
   .shop-rating svg { width: 9px; height: 9px; }
   .shop-off-badge { top: 6px; left: 6px; padding: 2.5px 6px; font-size: 9px; }
-  /* The photo already carries "% off"; repeating it beside the MRP pushed the
-     rating chip onto a second line in a two-up card. */
-  .shop-card-price-row .shop-off-badge.inline { display: none; }
+  .shop-card-rating { right: 6px; bottom: 6px; padding: 2px 5px; font-size: 9px; }
+  .shop-card-rating svg { width: 9px; height: 9px; }
 
   /* Full-width ADD / stepper: at 320px a fixed 104px stepper plus its own
      padding overflowed the card body and pushed the plus button out. */
@@ -2252,19 +2304,12 @@ img.image-fallback-tile {
   .shop-card-body { padding: 7px 8px 8px; }
   .shop-card-body h3 { font-size: 12px; }
   .shop-card-price-row strong { font-size: 13px; }
-  /* Three 93px selects: the browser's own dropdown arrow sat on top of
-     "All categories" and clipped it. Drawing the chevron as a background
-     frees the text column and keeps the arrow at a fixed 12px. */
-  .shop-filter-select select {
-    appearance: none;
-    -webkit-appearance: none;
-    padding: 0 16px 0 6px;
-    font-size: 10.5px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5l5-5' fill='none' stroke='%23b7bebe' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 5px center;
-    background-size: 9px 6px;
-  }
+  /* Two 46%-wide selects per row: the icon and the caret keep their 10px
+     gutters, and the label gets the rest of the width instead of clipping. */
+  .shop-select-shell select { height: 38px; padding: 0 24px 0 27px; font-size: 10.5px; }
+  .shop-select-icon { left: 8px; }
+  .shop-select-caret { right: 7px; }
+  .shop-filter-label { font-size: 8.5px; }
 }
 
 /* ── Product details page (the full page a product card opens) ── */
@@ -2310,6 +2355,15 @@ img.image-fallback-tile {
 .shop-cart-footer-amount strong { color: var(--white); font-size: 17px; }
 .shop-cart-footer-amount span { color: var(--muted-light); font-size: 10.5px; font-weight: 700; }
 .shop-cart-footer .btn { flex: none; border-radius: 12px; }
+/* The sign-in dialog a visitor gets on "Proceed to checkout" (Modal). Small on
+   purpose: it states why an account is needed and hands over to the OTP page. */
+.shop-gate-icon { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 11px; background: var(--shop-green-wash); color: var(--shop-green-soft); }
+.shop-gate-lead { margin: 10px 0 12px; color: var(--muted-light); font-size: 12.5px; line-height: 1.55; }
+.shop-gate-points { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.shop-gate-points li { display: flex; align-items: flex-start; gap: 8px; color: var(--muted-light); font-size: 11.5px; line-height: 1.5; }
+.shop-gate-points svg { flex: none; margin-top: 1px; color: var(--shop-green-soft); }
+.shop-gate-actions { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
+.shop-gate-actions .btn { flex: 1 1 140px; }
 .shop-delivery-note { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 14px; padding: 12px 14px; border: 1px solid rgba(46, 204, 113, .3); border-radius: 14px; background: var(--shop-green-wash); }
 .shop-delivery-note svg { color: var(--shop-green-soft); flex: none; margin-top: 1px; }
 .shop-delivery-note-body { flex: 1; min-width: 0; }
@@ -2503,6 +2557,38 @@ img.image-fallback-tile {
 .location-map-empty svg { color: var(--gold); }
 .location-map-empty span { color: var(--white); font-size: 12.5px; font-weight: 700; }
 .location-map-empty small { font-size: 10.5px; line-height: 1.5; }
+
+/* An unpinned map is still a map: it shows the area the pin should be dropped
+   in (and says so) instead of the old grey "no location saved" box. */
+.location-map-unpinned iframe { filter: grayscale(.35) brightness(.86); }
+.location-map-badge { position: absolute; z-index: 3; left: 8px; top: 8px; display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-radius: 8px; background: rgba(8, 12, 11, .86); color: var(--muted-light); font-size: 10px; font-weight: 700; letter-spacing: .02em; }
+
+/* ── Pin picker ─────────────────────────────────────────────────────────────
+   Plain OpenStreetMap raster tiles (see src/lib/tileMap.js): pan with a drag,
+   tap to drop the pin, keys for the keyboard. No map SDK, no API key. */
+.location-picker { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 2px; }
+.location-picker.is-disabled { opacity: .6; pointer-events: none; }
+.location-picker-map { position: relative; overflow: hidden; width: 100%; border: 1px solid var(--line); border-radius: 12px; background: #10171a; cursor: crosshair; touch-action: none; -webkit-user-select: none; user-select: none; }
+.location-picker-map:focus-visible { outline: 2px solid var(--shop-green); outline-offset: 2px; }
+.location-picker-map.is-dragging { cursor: grabbing; }
+.location-picker-tile { position: absolute; z-index: 1; width: 256px; height: 256px; max-width: none; pointer-events: none; }
+.location-picker-pin { position: absolute; z-index: 5; display: grid; place-items: center; color: var(--gold); transform: translate(-50%, -100%); filter: drop-shadow(0 5px 10px rgba(0, 0, 0, .65)); pointer-events: none; }
+.location-picker-hint { position: absolute; z-index: 4; left: 50%; bottom: 10px; max-width: calc(100% - 22px); padding: 5px 10px; border-radius: 9px; background: rgba(8, 12, 11, .84); color: #eafff2; font-size: 11px; font-weight: 700; text-align: center; transform: translateX(-50%); }
+.location-picker-tools { position: absolute; z-index: 6; top: 8px; right: 8px; display: grid; gap: 4px; }
+.location-picker-tools button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid rgba(255, 255, 255, .16); border-radius: 8px; background: rgba(12, 16, 15, .9); color: var(--white); cursor: pointer; }
+.location-picker-tools button:hover:not(:disabled) { border-color: rgba(46, 204, 113, .5); color: var(--shop-green-soft); }
+.location-picker-tools button:disabled { opacity: .4; cursor: default; }
+/* OSM's tile policy needs the credit to stay on the map. */
+.location-picker-attr { position: absolute; z-index: 4; right: 6px; bottom: 4px; padding: 1px 5px; border-radius: 4px; background: rgba(255, 255, 255, .78); color: #3a3a3a; font-size: 8.5px; font-weight: 600; }
+.location-picker-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.location-picker-locate, .location-picker-clear { display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; border: 1px solid var(--line); border-radius: 9px; background: transparent; color: var(--white); font-size: 11.5px; font-weight: 700; cursor: pointer; }
+.location-picker-locate { border-color: rgba(46, 204, 113, .42); color: var(--shop-green-soft); }
+.location-picker-locate:disabled { opacity: .6; cursor: default; }
+.location-picker-clear { color: var(--muted-light); }
+.location-picker-clear:hover { border-color: rgba(255, 120, 100, .45); color: #ffb4a8; }
+.location-picker-read { margin-left: auto; color: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.location-picker-error { margin: 0; color: #ffb4a8; font-size: 11px; line-height: 1.45; }
+.checkout-location .location-picker { margin-top: 8px; }
 .location-order-note { display: flex; align-items: flex-start; gap: 7px; margin-top: 9px; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
 .location-order-note svg { color: var(--shop-green-soft); flex: none; margin-top: 1px; }
 .checkout-location { margin: 0 0 12px; }

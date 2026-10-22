@@ -128,6 +128,10 @@ const DEV_MOCK_ENDPOINTS = {
   '/api/booking/get-list': { status: 'SUCCESS', data: { bookings: [] } },
   '/api/booking/get-completed-bookings': { status: 'SUCCESS', data: { bookings: [] } },
   '/api/products/list': { status: 'SUCCESS', data: { products: SHOP_PRODUCT_FIXTURES.slice(0, 4) } },
+  // The bill rules the shop quotes from, on both doors (the website reads the
+  // public one). Without this a preview shows the built-in defaults instead.
+  '/api/shop-settings/get': { status: 'SUCCESS', data: { freeDeliveryAbove: 499, deliveryFee: 49, discountPercent: 0, codThreshold: 0, codCharges: 0 } },
+  '/api/shop-public/settings/get': { status: 'SUCCESS', data: { freeDeliveryAbove: 499, deliveryFee: 49, discountPercent: 0, codThreshold: 0, codCharges: 0 } },
   '/api/notifications/register-device': { status: 'SUCCESS' },
   '/api/notifications/test-push': { status: 'SUCCESS' },
   '/api/notifications/get-salon-notification-list': { status: 'SUCCESS', data: { notifications: [] } },
@@ -266,6 +270,7 @@ function devSalonFixturePlugin() {
         // cart/order endpoints are intentionally NOT mocked: the sync layer
         // degrades to the local copy (exactly as it would offline).
         const isShopProducts = path === '/api/shop-products/list'
+          || path === '/api/shop-public/products/list'
           || path === '/api/products/get-all-salons-products-list';
         if (isShopProducts) return sendJson(res, { status: 'SUCCESS', data: { products: SHOP_PRODUCT_FIXTURES } });
         const mock = DEV_MOCK_ENDPOINTS[path];

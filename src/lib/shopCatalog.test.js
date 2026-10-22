@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  SHOP_PAGE_SIZE,
+  shopCatalogQuery,
+  shopFiltersActive,
   DEFAULT_SHOP_FILTERS,
   PRICE_RANGES,
   applyShopFilters,
@@ -175,5 +178,48 @@ describe('categoryChipsFor', () => {
     expect(chips.map(chip => chip.id)).toContain('hair-care');
     expect(chips.filter(chip => chip.id === 'wax-hair')).toHaveLength(1);
     expect(chips.find(chip => chip.id === 'wax-hair').label).toBe('Wax hair');
+  });
+});
+
+describe('shopCatalogQuery', () => {
+  it('describes the whole list the user is looking at, on every request', () => {
+    // Defaults are sent as '' / 'popular' rather than omitted: every request is
+    // a complete description, so an old value can never leak into a new view.
+    expect(shopCatalogQuery()).toEqual({
+      page: 1,
+      pageSize: SHOP_PAGE_SIZE,
+      searchString: '',
+      category: '',
+      gender: '',
+      priceRange: '',
+      sort: 'popular',
+      inStock: true,
+    });
+
+    expect(shopCatalogQuery({ search: '  beard oil  ', category: 'beard-grooming', gender: 'men', priceRange: 'under500', sort: 'price-asc' }, 3)).toEqual({
+      page: 3,
+      pageSize: SHOP_PAGE_SIZE,
+      searchString: 'beard oil',
+      category: 'beard-grooming',
+      gender: 'men',
+      priceRange: 'under500',
+      sort: 'price-asc',
+      inStock: true,
+    });
+
+    // `all` facets are not sent to the server as a value it has to understand.
+    expect(shopCatalogQuery({ category: 'all', gender: 'all', priceRange: 'all' })).toMatchObject({
+      category: '', gender: '', priceRange: '', page: 1,
+    });
+  });
+
+  it('knows when a filter is active (and sort is not a facet)', () => {
+    expect(shopFiltersActive()).toBe(false);
+    expect(shopFiltersActive({ search: '   ' })).toBe(false);
+    expect(shopFiltersActive({ sort: 'price-asc' })).toBe(false);
+    expect(shopFiltersActive({ search: 'oil' })).toBe(true);
+    expect(shopFiltersActive({ category: 'hair-care' })).toBe(true);
+    expect(shopFiltersActive({ gender: 'men' })).toBe(true);
+    expect(shopFiltersActive({ priceRange: 'over1000' })).toBe(true);
   });
 });

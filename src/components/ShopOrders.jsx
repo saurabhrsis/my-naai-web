@@ -35,6 +35,7 @@ import {
 } from '../lib/shopServerSync';
 import { Button, EmptyState, ImageWithFallback, PageHeader, StatusPill, cx, formatCurrency, formatDate, getErrorMessage } from './Shared';
 import { shopOwnerId } from './ShopScreen';
+import { shopCopy } from '../lib/shopBuyer';
 import { useConfirm } from './ConfirmDialog';
 import { LocationPreview } from './LocationMap.jsx';
 import { deliveryPointOf } from '../lib/geo';
@@ -244,6 +245,7 @@ export function ShopOrdersScreen({ session, navigate, notify }) {
  * ------------------------------------------------------------------ */
 export function ShopOrderScreen({ session, params, navigate, notify }) {
   const ownerId = shopOwnerId(session);
+  const copy = shopCopy(session);
   const orderId = params?.orderId || '';
   const confirm = useConfirm();
   const now = useNow(30000);
@@ -389,7 +391,12 @@ export function ShopOrderScreen({ session, params, navigate, notify }) {
           </div>
           {statusPill(status)}
         </div>
-        {status.key === 'delivered' && <p className="shop-tracker-eta"><CheckCircle2 size={15} /> Delivered — enjoy the stock at {order.salonName || 'your salon'}</p>}
+        {status.key === 'delivered' && (
+          <p className="shop-tracker-eta">
+            <CheckCircle2 size={15} /> {copy.deliveredLine}
+            {copy.isSalon ? ` ${order.salonName || 'your salon'}` : ''}
+          </p>
+        )}
         {status.key === 'cancelled' && (
           <p className="shop-tracker-eta cancelled">
             {payment.method === 'ONLINE'

@@ -247,8 +247,10 @@ describe('In-app top bar', () => {
     expect(menuButton().getAttribute('aria-expanded')).toBe('true');
     expect(container.querySelector('.mobile-shell-bar.menu-open')).not.toBeNull();
     const labels = Array.from(container.querySelectorAll('.mobile-shell-menu button')).map(node => node.textContent.trim());
-    // All four customer destinations plus notifications and sign out.
-    expect(labels).toEqual(expect.arrayContaining(['Discover', 'My bookings', 'Products', 'Account', 'Notifications', 'Sign out']));
+    // All four customer destinations plus notifications and sign out. The old
+    // "Products" tab is retired — the Naai Shop is the only product surface.
+    expect(labels).toEqual(expect.arrayContaining(['Discover', 'Naai Shop', 'My bookings', 'Account', 'Notifications', 'Sign out']));
+    expect(labels).not.toContain('Products');
   });
 
   it('lists the salon routes for a partner session', async () => {
@@ -259,7 +261,9 @@ describe('In-app top bar', () => {
     await flush();
 
     const labels = Array.from(container.querySelectorAll('.mobile-shell-menu button')).map(node => node.textContent.trim());
-    expect(labels).toEqual(expect.arrayContaining(['Customer queue', 'History', 'Products', 'Account']));
+    expect(labels).toEqual(expect.arrayContaining(['Customer queue', 'History', 'Naai Shop', 'Account']));
+    // The retired partner product list has no tab on this side either.
+    expect(labels).not.toContain('Products');
     expect(container.querySelector('.mobile-shell-menu-role').textContent).toContain('Salon partner');
   });
 
@@ -314,7 +318,8 @@ describe('In-app top bar', () => {
 // The bar used to build its text with
 //   label.replace('Customer ', '').replace('My ', '')
 // which chopped the capital off the front of the word: an iPad screenshot
-// showed a lowercase "bookings" tab sitting between "Discover" and "Products".
+// showed a lowercase "bookings" tab sitting between "Discover" and "Products"
+// (that "Products" tab is gone now; the shop replaced it).
 describe('Bottom navigation labels', () => {
   const tabLabels = () => Array.from(container.querySelectorAll('.mobile-nav button span')).map(node => node.textContent);
 
@@ -323,9 +328,25 @@ describe('Bottom navigation labels', () => {
     await mount();
 
     const labels = tabLabels();
-    expect(labels).toEqual(['Discover', 'Bookings', 'Products', 'Account']);
+    expect(labels).toEqual(['Discover', 'Shop', 'Bookings', 'Account']);
     // Nothing may start lowercase — that is the exact defect.
     labels.forEach(label => expect(label[0]).toBe(label[0].toUpperCase()));
+  });
+
+  it('opens the Naai Shop from the customer tab bar', async () => {
+    signIn('USER', '/home');
+    await mount();
+
+    const shopTab = Array.from(container.querySelectorAll('.mobile-nav button')).find(node => node.textContent.includes('Shop'));
+    expect(shopTab).toBeTruthy();
+    await act(async () => { shopTab.click(); });
+    await flush();
+
+    expect(window.location.pathname).toBe('/shop');
+    expect(container.querySelector('.shop-screen')).not.toBeNull();
+    // A customer is spoken to as a person, not as a salon buying stock.
+    expect(container.textContent).toContain('delivered to your door');
+    expect(container.querySelector('.mobile-nav button[aria-current="page"]')?.textContent).toContain('Shop');
   });
 
   it('capitalises every salon tab', async () => {
@@ -333,7 +354,7 @@ describe('Bottom navigation labels', () => {
     await mount();
 
     const labels = tabLabels();
-    expect(labels).toEqual(['Queue', 'History', 'Shop', 'Products', 'Account']);
+    expect(labels).toEqual(['Queue', 'History', 'Shop', 'Account']);
     labels.forEach(label => expect(label[0]).toBe(label[0].toUpperCase()));
   });
 

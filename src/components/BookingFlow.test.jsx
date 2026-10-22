@@ -81,6 +81,12 @@ describe('a booking request the salon has not answered yet', () => {
       />,
     );
 
+    // Pick tomorrow first: the screen pre-selects the first free slot of TODAY,
+    // and late in the evening there is none left (the salon closes at 21:00), so
+    // this test used to pass in the morning and fail after dark.
+    await act(async () => { byText('Tomorrow', container).click(); });
+    await flush();
+
     await act(async () => { byText('Confirm booking', container).click(); });
     await flush();
 

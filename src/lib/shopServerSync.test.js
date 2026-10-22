@@ -109,6 +109,30 @@ describe('pure mappers', () => {
     expect(order.cancelledAt).toBeNull();
   });
 
+  it('maps a CUSTOMER order: buyer type, name from the customer record, no salon', () => {
+    const order = mapServerOrder({
+      orderId: 'MN789',
+      buyerType: 'CUSTOMER',
+      salonId: null,
+      salon: null,
+      customerId: 'user-9',
+      customer: { userId: 'user-9', fullName: 'Sneha Waghmare', phoneNumber: '9876543210' },
+      items: [{ productId: 'p1', name: 'Beard Oil', price: 199, qty: 1 }],
+      address: { name: 'Sneha Waghmare', phone: '9876543210', line1: '12 Main', city: 'Nagpur', state: 'Maharashtra', pincode: '440010' },
+      payment: { method: 'COD', status: 'PENDING', paymentId: '', amount: 248 },
+      amounts: { itemTotal: 199, savings: 0, deliveryFee: 49, total: 248 },
+      status: 'PENDING',
+      createdAt: '2026-10-22T10:00:00.000Z',
+    });
+    expect(order.buyerType).toBe('CUSTOMER');
+    expect(order.customerId).toBe('user-9');
+    // The screens show this wherever "who is this for?" matters.
+    expect(order.salonName).toBe('Sneha Waghmare');
+    // A customer order still belongs to the account (syncState 'synced', so it
+    // is never shown as an unconfirmed draft).
+    expect(order.syncState).toBe('synced');
+  });
+
   it('maps a cancelled server order with its refund flag', () => {
     const order = mapServerOrder({
       orderId: 'MN456',
@@ -281,6 +305,29 @@ describe('order sync (signed in)', () => {
     const result = await registerServerOrder(order);
     expect(result).toMatchObject({ ok: false, code: 'VALIDATION', retryable: false });
     expect(result.message).toContain('valid GUID');
+  });
+
+  it('explains a server whose database has not been migrated for customer orders', async () => {
+    signedIn();
+    // Exactly what Postgres says when the code patch is deployed but
+    // `ALTER TABLE shop_orders ALTER COLUMN salon_id DROP NOT NULL` was not
+    // run: the shopper must never read this.
+    shopOrderCreate.mockRejectedValue(Object.assign(new Error(
+      'null value in column "salon_id" of relation "shop_orders" violates not-null constraint',
+    ), { status: 400 }));
+    const result = await registerServerOrder({
+      id: 'MN4',
+      items: [{ productId: PRODUCT_ID, name: 'A', price: 100, qty: 1 }],
+      address: { name: 'R', phone: '9876543210', line1: 'x', city: 'N', state: 'MH', pincode: '440010' },
+      payment: { method: 'COD', status: 'PENDING', amount: 100 },
+      amounts: { total: 100 },
+    });
+    expect(result).toMatchObject({ ok: false, code: 'BUYER_SCHEMA', retryable: false });
+    // A plain sentence for the buyer …
+    expect(result.message).toMatch(/not set up for customer orders/i);
+    expect(result.message).not.toMatch(/salon_id|not-null/i);
+    // … and the server's own words kept for support.
+    expect(result.detail).toContain('salon_id');
   });
 
   it('refuses a line that is not a catalog product, before calling the API', async () => {

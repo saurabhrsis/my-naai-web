@@ -40,6 +40,19 @@ stockStatus ('available'|'out_of_stock'), createdAt, updatedAt }`.
 UI: table (image, name, price, mrp, category, stock) + search + create/edit
 modal + delete with confirm.
 
+> **Customers can buy too (new).** Shop orders are no longer salon-only: a
+> customer (USER role) browses the same `shop_products` catalog and places
+> orders through the same endpoints. Every order now carries
+> `buyerType: 'SALON' | 'CUSTOMER'`, `customerId` and a `customer` object;
+> `salon` is `null` for a customer order. The Shop Orders table should render
+> the customer's name with a **Customer** badge, the drawer should show a
+> *Customer* block where it shows the salon, and the salon filter should gain a
+> **Buyer type** select. Full contract, migration and rollout order:
+> [`docs/SHOP-CUSTOMERS.md`](SHOP-CUSTOMERS.md); the panel change itself is
+> [`patches/admin-panel-shop-customers.patch`](../patches/admin-panel-shop-customers.patch)
+> (a `buyerOf(order)` helper, the Buyer column, the drawer's customer block and
+> the Buyer type filter).
+
 ## 2. Distributors tab
 
 | Action | Endpoint | Body | Notes |

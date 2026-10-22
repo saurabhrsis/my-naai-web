@@ -19,25 +19,49 @@ npm test
 
 A Vitest (+ jsdom) suite covers the notification routing/buzzer/token logic and the in-app confirmation dialog (including a guard that fails if a native `window.confirm`/`alert`/`prompt` call comes back). The full mobile→web parity map and what was and wasn't testable here are in [`docs/TESTING-AND-PARITY.md`](docs/TESTING-AND-PARITY.md).
 
-## Naai Shop (salon supply store)
+## Naai Shop (storefront for partners and customers)
 
-Salon partners get a **Shop** tab — a Blinkit/Zepto-style store for grooming
-stock supplied by the MyNaai Platform: search and a compact **Category · For ·
-Price** filter strip, ADD → quantity stepper, a full **product details page**
-(photo gallery for multi-image products, price + MRP savings, seller, delivery
-facts, same-category suggestions — add to cart straight from the page), a
-"My cart (N)" shortcut beside "My orders", a floating "N items · ₹X → View
-cart" bar, cart with bill details, checkout with **Online (Razorpay) or
-Cash on Delivery**, a **My orders** list with a live 4-step status tracker
-(Placed → Packed → Out for delivery → Delivered), and **cancel order** before
-dispatch. Delivery is ₹49, free above ₹499. Catalog classification honours an
-explicit `category`/`gender` on the product (the salon product editor can set
-both, and upload **multiple product photos** — first one is the cover) and
-falls back to keyword inference, so every filter works against the current
-API. Orders live client-side per salon account until a backend
-`/api/orders` controller lands — the storage boundary that would be swapped is
-isolated in `src/lib/shopOrders.js`. Full design, data model and the backend
-integration path are in [`docs/SHOP-FLOW.md`](docs/SHOP-FLOW.md).
+The **admin-curated catalog** (`shop_products`) is on sale to two audiences
+from one set of screens — a Blinkit/Zepto-style store with search and a compact
+**Category · For · Price** filter strip, ADD → quantity stepper, a full
+**product details page** (photo gallery for multi-image products, price + MRP
+savings, seller, delivery facts, same-category suggestions), a "My cart (N)"
+shortcut beside "My orders", a floating "N items · ₹X → View cart" bar, cart
+with bill details, checkout with **Online (Razorpay) or Cash on Delivery**, a
+**My orders** list with a live 4-step status tracker (Placed → Packed → Out for
+delivery → Delivered), and **cancel order** before dispatch.
+
+- **Salon partners** buy stock for their chairs: **Shop** tab in the partner
+  portal; the parcel goes to the salon.
+- **Customers** buy for themselves: **Shop** tab in the customer app plus
+  **Naai Shop** / **My shop orders** rows on the account screen; the parcel goes
+  to their delivery address.
+- **Visitors** get the storefront on the public website — `/shop`,
+  `/shopProduct?productId=…`, `/shopCart`, the navbar's **Shop** link, the
+  footer link and a **Shop now** band on the home page. Browsing **and filling a
+  cart** are free: the account is asked for when they press **Proceed to
+  checkout**, where a small dialog explains what it buys (a phone the delivery
+  partner can call, a trackable order, My orders later) and one OTP sign-in
+  carries the cart onto the account. Order history is never public — My orders
+  only exists for a signed-in account.
+
+Those public reads are the open `/api/shop-public/products/list` and
+`/api/shop-public/settings/get` (no token, cached, rate-limited), with a
+fallback to the partner catalog endpoint so either deployment order works.
+Search, the category / gender / price facets and pagination are sent to the API
+on every browse (`patches/backend-shop-catalog-filters.patch`); until that patch
+is deployed the shop reads the catalog and filters locally instead.
+
+Delivery rules (fee, free-delivery threshold, discounts, COD limit and charges)
+come from the admin's shop settings and are applied on the checkout page only.
+Orders are **real backend records** (`shop_orders`) created through
+`POST /api/shop-orders/create`; the salon/customer cart is mirrored to
+`shop_carts` so it follows the account. Full design and the two status tracks:
+[`docs/SHOP-FLOW.md`](docs/SHOP-FLOW.md). Selling to customers needs a small
+backend change (buyer resolved from the token instead of assuming a salon) —
+contract, migration and rollout order in
+[`docs/SHOP-CUSTOMERS.md`](docs/SHOP-CUSTOMERS.md); the ready code, as a patch
+for each repo, in [`patches/`](patches/README.md).
 
 To preview the whole flow without the production API (demo salon login with
 any number + any OTP, fixture catalog):
@@ -63,8 +87,10 @@ possible now live in three places, described end to end in
 
 Distances are great-circle kilometres from one shared implementation
 (`src/lib/geo.js` here), rendered on a **free** map stack: Leaflet +
-OpenStreetMap in the admin/distributor surfaces, an OSM embed in this portal —
-no API key, no billing account. The admin panel and backend changes are shipped
+OpenStreetMap in the admin/distributor surfaces, an OSM embed in this portal
+plus a small hand-rolled tile map (`src/lib/tileMap.js`, `LocationPicker`) where
+a partner or a customer has to **drop a pin** — no API key, no billing account,
+no map SDK in the PWA bundle. The admin panel and backend changes are shipped
 as ready-to-apply patches in [`patches/`](patches):
 
 ```bash
