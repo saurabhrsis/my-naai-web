@@ -27,6 +27,7 @@ import {
   readCart,
 } from '../lib/shopOrders';
 import { useShopSettings } from '../lib/shopSettings';
+import { normalizeStateName, stateOptionsWith } from '../lib/stateOptions';
 import { formatCoordinates, mapsUrl, toPoint } from '../lib/geo';
 import { clearServerCart, registerServerOrder } from '../lib/shopServerSync';
 import {
@@ -35,6 +36,7 @@ import {
   Field,
   ImageWithFallback,
   PageHeader,
+  SelectField,
   cx,
   formatCurrency,
   getBrowserLocation,
@@ -236,7 +238,10 @@ function initialAddressFromSession(session) {
     phone: profile.phoneNumber || profile.phone || '',
     line1: profile.addressLine1 || profile.address || `${profile.salonName || 'Salon'}, ` + [profile.addressLine1, profile.city].filter(Boolean).join(', '),
     city: profile.city || '',
-    state: profile.state || '',
+    // A dropdown only displays a value it knows: `MH`, `Orissa` or
+    // `Pondicherry` saved by an older form is mapped onto the canonical name
+    // here, so the salon's address never looks unset at checkout.
+    state: normalizeStateName(profile.state),
     pincode: profile.pincode || '',
     // The delivery point: the salon's saved GPS location, editable here so a
     // delivery to a different gate still has somewhere to send the partner.
@@ -475,7 +480,19 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
                 stack on a phone — no nested grid, so the columns line up. */}
             <div className="form-three-even">
               <Field label="City" required><input autoComplete="address-level2" value={address.city} onChange={event => setAddressField('city', event.target.value)} placeholder="City" /></Field>
-              <Field label="State"><input autoComplete="address-level1" value={address.state} onChange={event => setAddressField('state', event.target.value)} placeholder="State" /></Field>
+              {/* State is a fixed list — a dropdown avoids the typos a free
+                  text field produced ("MH", "maharastra", "Orissa") and the
+                  value we send is always one the platform understands. An
+                  unrecognised saved value stays visible as its own option
+                  rather than silently disappearing. */}
+              <SelectField
+                label="State"
+                value={address.state}
+                onChange={event => setAddressField('state', event.target.value)}
+                options={stateOptionsWith(address.state)}
+                placeholder="Select state"
+                autoComplete="address-level1"
+              />
               <Field label="Pincode" required><input autoComplete="postal-code" inputMode="numeric" maxLength={6} value={address.pincode} onChange={event => setAddressField('pincode', event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="6-digit pincode" /></Field>
             </div>
           </div>

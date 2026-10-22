@@ -42,7 +42,9 @@ Cart ── Blinkit-style rows: quantity stepper (minus at 1 removes the
            total, MRP savings + "you saved" line, delivery marked
            "At checkout"), items-total footer bar
    ▼
-Checkout ── delivery address (prefilled from the salon profile, editable),
+Checkout ── delivery address (prefilled from the salon profile, editable;
+           state is picked from the Indian state list, and a legacy value
+           such as “MH” is mapped onto “Maharashtra”),
            plus the delivery-location map/pin
            └── the FULL bill: delivery fee, COD charges, "To pay"
            └── Pay online (Razorpay, UPI/cards/netbanking)

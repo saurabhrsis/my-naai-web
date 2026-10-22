@@ -504,6 +504,46 @@ describe('ShopCheckoutScreen', () => {
     expect(navigate).toHaveBeenCalledWith('shopOrder', { orderId });
   });
 
+  it('offers the state as a dropdown and prefills the salon\u2019s state', async () => {
+    seedCart();
+    const { container } = await render(<ShopCheckoutScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+
+    // City · State · Pincode share one row; the state is a <select>, not a
+    // free-text input, and it shows the salon's saved state.
+    const stateField = container.querySelector('.form-three-even select');
+    expect(stateField).toBeTruthy();
+    expect(stateField.value).toBe('Maharashtra');
+    expect(stateField.textContent).toContain('Select state');
+    expect(stateField.textContent).toContain('Maharashtra');
+    expect(stateField.textContent).toContain('Karnataka');
+    // No free-text state input is left behind.
+    const stateInputs = Array.from(container.querySelectorAll('.form-three-even input'))
+      .filter(input => input.getAttribute('autocomplete') === 'address-level1');
+    expect(stateInputs).toHaveLength(0);
+
+    // Choosing another state flows straight into the placed order.
+    await act(async () => {
+      stateField.value = 'Karnataka';
+      stateField.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => { container.querySelector('input[value="cod"]').click(); });
+    await act(async () => { buttonsContaining('Place order', container)[0].click(); });
+    await flush();
+    const sheet = document.querySelector('.confirm-sheet');
+    await act(async () => { buttonByText('Place order', sheet).click(); });
+    await flush();
+    expect(readOrders('salon-1')[0].address.state).toBe('Karnataka');
+  });
+
+  it('keeps a legacy state value selectable instead of showing it as unset', async () => {
+    seedCart();
+    // A profile saved before the dropdown existed carries the two-letter code.
+    const legacy = { ...SESSION, user: { salon: { ...SESSION.user.salon, state: 'MH' } } };
+    const { container } = await render(<ShopCheckoutScreen session={legacy} navigate={vi.fn()} notify={vi.fn()} />);
+    const stateField = container.querySelector('.form-three-even select');
+    expect(stateField.value).toBe('Maharashtra');
+  });
+
   it('refuses to place an order with an incomplete address', async () => {
     seedCart();
     const notify = vi.fn();
