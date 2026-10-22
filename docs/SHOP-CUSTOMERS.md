@@ -61,53 +61,50 @@ The create body is the same contract for both buyers (no `salonId`, no
 
 ## 2. Database
 
-Two nullable columns and a relaxed foreign key. No existing row is touched —
-every current row stays a salon order. The runnable SQL lives in
-[`backend/shop-customer/migration.sql`](../backend/shop-customer/migration.sql);
-the shape is:
+PostgreSQL. Two nullable columns and a relaxed foreign key — no existing row is
+touched, and every current row stays a salon order (`buyer_type` defaults to
+`SALON`).
+
+The runnable SQL ships **inside the backend patch** at
+`migrations/2026-10-22-shop-customers.sql` (idempotent). It is only needed where
+`GET /test-db` is not hit: that route runs `model.sync({ alter: true })`, which
+creates the same columns on boot. The shape:
 
 ```sql
--- Who bought it. salonId keeps meaning "a salon bought this"; customerId means
--- "a customer bought this". Exactly one of the two is set.
 ALTER TABLE shop_orders
-  ADD COLUMN buyerType ENUM('SALON','CUSTOMER') NOT NULL DEFAULT 'SALON' AFTER orderId,
-  ADD COLUMN customerId CHAR(36) NULL AFTER salonId,
-  MODIFY COLUMN salonId CHAR(36) NULL,
+  ADD COLUMN buyer_type enum_shop_orders_buyer_type NOT NULL DEFAULT 'SALON',
+  ADD COLUMN customer_id UUID,
+  ALTER COLUMN salon_id DROP NOT NULL;
+
+ALTER TABLE shop_orders
   ADD CONSTRAINT fk_shop_orders_customer
-    FOREIGN KEY (customerId) REFERENCES users(userId) ON DELETE SET NULL;
+  FOREIGN KEY (customer_id) REFERENCES users (user_id) ON DELETE SET NULL;
 
-CREATE INDEX idx_shop_orders_customer ON shop_orders (customerId, createdAt);
-
--- The cart was one row per (salonId, productId); it becomes one row per
--- (buyerType, buyerId, productId).
 ALTER TABLE shop_carts
-  ADD COLUMN buyerType ENUM('SALON','CUSTOMER') NOT NULL DEFAULT 'SALON' AFTER cartId,
-  ADD COLUMN customerId CHAR(36) NULL AFTER salonId,
-  MODIFY COLUMN salonId CHAR(36) NULL,
-  ADD CONSTRAINT fk_shop_carts_customer
-    FOREIGN KEY (customerId) REFERENCES users(userId) ON DELETE CASCADE;
+  ADD COLUMN buyer_type enum_shop_carts_buyer_type NOT NULL DEFAULT 'SALON',
+  ADD COLUMN customer_id UUID,
+  ALTER COLUMN salon_id DROP NOT NULL;
 
-CREATE INDEX idx_shop_carts_customer ON shop_carts (customerId);
-
--- Replace the old unique key with one that covers both kinds of buyer.
--- (Name the constraint after what your schema actually created — check with
---  SHOW INDEX FROM shop_carts;.)
-ALTER TABLE shop_carts DROP INDEX uq_shop_carts_salon_product;
-ALTER TABLE shop_carts ADD UNIQUE KEY uq_shop_carts_buyer_product (buyerType, salonId, customerId, productId);
+-- One row per buyer + product, replacing the old (salon_id, product_id) key.
+CREATE UNIQUE INDEX shop_carts_buyer_product_key
+  ON shop_carts (buyer_type, salon_id, customer_id, product_id);
 ```
 
-Sequelize models:
+Postgres treats NULLs as distinct, so a salon row (`customer_id` NULL) and a
+customer row (`salon_id` NULL) can both hold the same product — which is exactly
+what the two carts need.
+
+Sequelize models (`shopOrder.model.js` / `shopCart.model.js`):
 
 ```js
-// src/database/models/shopOrder.model.js  (+ the same shape in shopCart.model.js)
-buyerType: { type: DataTypes.ENUM('SALON', 'CUSTOMER'), allowNull: false, defaultValue: 'SALON' },
-customerId: { type: DataTypes.STRING(36), allowNull: true, field: 'customerId' },
-// salonId: allowNull true, and the association becomes:
-//   ShopOrder.belongsTo(User, { as: 'customer', foreignKey: 'customerId' })
-```
+buyerType: { type: DataTypes.ENUM('SALON', 'CUSTOMER'), allowNull: false, defaultValue: 'SALON', field: 'buyer_type' },
+customerId: { type: DataTypes.UUID, allowNull: true, field: 'customer_id' },
+salonId: { type: DataTypes.UUID, allowNull: true, field: 'salon_id' },
 
-> The `users` table's primary key is `userId` in this schema; adjust the type
-> (CHAR(36) vs INT) and the FK target to whatever it actually is.
+// associations
+ShopOrder.belongsTo(models.User, { foreignKey: 'customerId', as: 'customer' });
+ShopCart.belongsTo(models.User, { foreignKey: 'customerId', as: 'customer' });
+```
 
 ---
 
@@ -115,7 +112,8 @@ customerId: { type: DataTypes.STRING(36), allowNull: true, field: 'customerId' }
 
 `src/utils/shopBuyer.js` — one place that answers "who is calling?". Every cart
 and order controller uses it, so no endpoint has to guess. The ready file is
-[`backend/shop-customer/src/utils/shopBuyer.js`](../backend/shop-customer/src/utils/shopBuyer.js)
+`src/utils/shopBuyer.js`, added by
+[`patches/backend-shop-customers.patch`](../patches/backend-shop-customers.patch)
 (it also exports `buyerWhere`, `buyerColumns`, `buyerOwnsOrder` and
 `buyerActor`, so services never branch on the role themselves).
 
@@ -128,52 +126,45 @@ and order controller uses it, so no endpoint has to guess. The ready file is
  * bearer token, so the buyer is read from the TOKEN — never from the request
  * body, which the client could lie about.
  *
+ * In this codebase `authenticateSalon` / `authUserOrSalon` attach the Salon row
+ * to `request.salon`, and a user token only gets `request.user = { id,
+ * phoneNumber }` (no role), so their presence is the signal.
+ *
  * Returns { buyerType, buyerId, isSalon } or null when the token carries no
  * usable identity.
  */
-const resolveShopBuyer = (req) => {
-  const user = req.user || req.salon || {};
-  const role = String(user.role || user.userType || '').toUpperCase();
+const resolveShopBuyer = (request) => {
+  const salonId = request.salon && (request.salon.salonId || request.salon.id);
+  if (salonId) return { buyerType: 'SALON', buyerId: String(salonId), isSalon: true };
 
-  if (role === 'SALON') {
-    const salonId = user.salonId || user.id || null;
-    return salonId ? { buyerType: 'SALON', buyerId: salonId, isSalon: true } : null;
-  }
-
-  // Customers carry userId (the mobile app's role name is USER/CUSTOMER).
-  if (role === 'USER' || role === 'CUSTOMER') {
-    const customerId = user.userId || user.id || null;
-    return customerId ? { buyerType: 'CUSTOMER', buyerId: customerId, isSalon: false } : null;
-  }
+  const userId = request.user && (request.user.id || request.user.userId);
+  if (userId) return { buyerType: 'CUSTOMER', buyerId: String(userId), isSalon: false };
 
   return null;
 };
-
-module.exports = { resolveShopBuyer };
 ```
 
-The nine controllers are also written out in full under
-[`backend/shop-customer/src/controller/`](../backend/shop-customer/src/controller)
-— drop them over the existing files. They look like this (one example; the
-rest follow the same shape):
+The nine controllers are rewritten by
+[`patches/backend-shop-customers.patch`](../patches/backend-shop-customers.patch).
+They look like this (one example; the rest follow the same shape):
 
 ```js
 // src/controller/shopOrder/createShopOrder.js
 const { resolveShopBuyer } = require('../../utils/shopBuyer');
 
-const createShopOrder = async (req, res) => {
-  const buyer = resolveShopBuyer(req);
-  if (!buyer) return res.status(401).json({ status: 'FAILED', message: 'Sign in to place this order.' });
+const createShopOrder = async (request, response) => {
+  const buyer = resolveShopBuyer(request);
+  if (!buyer) return response.status(401).json({ status: 'JWT_FAILED', message: 'Sign in to place this order' });
 
   const order = await shopOrderService.createOrder({
     ...buyer,                       // buyerType, buyerId, isSalon
-    orderId: req.body.orderId,
-    items: req.body.items,
-    address: req.body.address,
-    payment: req.body.payment,
-    notes: req.body.notes
+    orderId: request.body.orderId,
+    items: request.body.items,
+    address: request.body.address,
+    payment: request.body.payment,
+    notes: request.body.notes
   });
-  return res.json({ status: 'SUCCESS', data: order });
+  return response.status(200).json({ status: 'SUCCESS', message: 'Order placed successfully', data: order });
 };
 ```
 
@@ -181,8 +172,8 @@ const createShopOrder = async (req, res) => {
 `resolveShopBuyer(req).buyerId`:**
 
 `shopOrder/createShopOrder.js`, `listShopOrders.js`, `getShopOrderById.js`,
-`cancelShopOrder.js`, `shopCart/getCart.js`, `addToCart.js`, `setCartQty.js`,
-`removeFromCart.js`, `clearCart.js`.
+`cancelShopOrder.js`, `shopCart/getShopCart.js`, `addToShopCart.js`,
+`setShopCartLineQty.js`, `removeFromShopCart.js`, `clearShopCart.js`.
 
 ### Services
 
@@ -270,8 +261,8 @@ The storefront is browsable **before login**, so there are two layers:
    // POST|GET /settings/get    → the same settings handler
    ```
 
-   [`backend/shop-customer/src/routes/shopPublic.routes.js`](../backend/shop-customer/src/routes/shopPublic.routes.js)
-   re-uses the two existing handlers (so the response shape cannot drift), adds
+   `src/routes/shopPublic.routes.js` (in the backend patch) re-uses the two
+   existing handlers (so the response shape cannot drift), adds
    a 60 s cache header on the catalog (5 min on the rules), a per-IP rate limit
    (`publicReadLimiter.middleware.js`) and a GET mirror of each POST.
 
@@ -298,10 +289,11 @@ const where = buyerType === 'CUSTOMER' ? { customerId: buyerId } : { salonId: sa
 
 ## 5. Admin panel (my-naai-frontend)
 
-Three small additions; no new tab. The copy-in components live in
-[`admin-panel-shop-customers/`](../admin-panel-shop-customers/README.md)
-(`BuyerCell`, `BuyerSummary`, `BuyerTypeFilter`, plus `buyerOf(order)` for the
-CSV/export path).
+Three small additions; no new tab. They are implemented by
+[`patches/admin-panel-shop-customers.patch`](../patches/admin-panel-shop-customers.patch)
+— `buyerOf(order)` plus the Buyer column, the drawer's customer block and the
+Buyer type filter, in `ShopOrders.jsx`, `ShopOrderDetailModal.jsx` and
+`communication.jsx`.
 
 1. **Shop Orders → table row**: show the buyer. `buyerType === 'CUSTOMER'`
    renders the customer's name with a neutral **Customer** badge; a salon order
@@ -322,8 +314,13 @@ address, both of which a customer order has.
 
 ## 6. Rollout order
 
+The two repos' changes are ready as patches in
+[`patches/`](../patches/README.md) — `git am patches/backend-shop-customers.patch`
+in `my_naai_backend`, `git am patches/admin-panel-shop-customers.patch` in
+`my-naai-frontend`.
+
 1. Apply the migration + models (columns are nullable/defaulted — deploy is safe
-   with the old code still running).
+   with the old code still running). `GET /test-db` also creates them.
 2. Deploy the backend changes above.
 3. Open `/api/shop-products/list` publicly and mount `/api/shop-public/*`.
 4. Deploy the web portal (this repo). Until step 2 lands, a customer can browse

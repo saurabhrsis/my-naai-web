@@ -52,7 +52,9 @@ Orders are **real backend records** (`shop_orders`) created through
 `shop_carts` so it follows the account. Full design and the two status tracks:
 [`docs/SHOP-FLOW.md`](docs/SHOP-FLOW.md). Selling to customers needs a small
 backend change (buyer resolved from the token instead of assuming a salon) —
-contract, migration and rollout order: [`docs/SHOP-CUSTOMERS.md`](docs/SHOP-CUSTOMERS.md).
+contract, migration and rollout order in
+[`docs/SHOP-CUSTOMERS.md`](docs/SHOP-CUSTOMERS.md); the ready code, as a patch
+for each repo, in [`patches/`](patches/README.md).
 
 To preview the whole flow without the production API (demo salon login with
 any number + any OTP, fixture catalog):

@@ -1,0 +1,1292 @@
+From b3b50a408e48cff107371d1e96c68e605c353c93 Mon Sep 17 00:00:00 2001
+From: MyNaai <dev@mynaai.in>
+Date: Thu, 22 Oct 2026 13:24:44 +0000
+Subject: [PATCH] shop: customers + public storefront API
+
+---
+ migrations/2026-10-22-shop-customers.sql      |  84 ++++++++++++
+ src/controller/shopCart/addToShopCart.js      |  14 +-
+ src/controller/shopCart/clearShopCart.js      |  11 +-
+ src/controller/shopCart/getShopCart.js        |  14 +-
+ src/controller/shopCart/removeFromShopCart.js |  13 +-
+ src/controller/shopCart/setShopCartLineQty.js |  11 +-
+ .../shopOrder/adminListShopOrders.js          |  11 +-
+ src/controller/shopOrder/cancelShopOrder.js   |  16 +--
+ src/controller/shopOrder/createShopOrder.js   |  24 ++--
+ src/controller/shopOrder/getShopOrderById.js  |  15 +-
+ src/controller/shopOrder/listShopOrders.js    |  16 ++-
+ .../shopProduct/listShopProducts.js           |  14 +-
+ src/database/models/shopCart.model.js         |  33 ++++-
+ src/database/models/shopOrder.model.js        |  28 +++-
+ src/routes/routes.js                          |   5 +
+ src/routes/shopCart.routes.js                 |  10 +-
+ src/routes/shopOrder.routes.js                |  15 +-
+ src/routes/shopProduct.routes.js              |  11 +-
+ src/routes/shopPublic.routes.js               |  50 +++++++
+ src/services/shopCart.service.js              |  28 ++--
+ src/services/shopOrder.service.js             | 129 +++++++++++++++---
+ .../publicReadLimiter.middleware.js           |  55 ++++++++
+ src/utils/shopBuyer.js                        |  95 +++++++++++++
+ 23 files changed, 573 insertions(+), 129 deletions(-)
+ create mode 100644 migrations/2026-10-22-shop-customers.sql
+ create mode 100644 src/routes/shopPublic.routes.js
+ create mode 100644 src/utils/middleware/publicReadLimiter.middleware.js
+ create mode 100644 src/utils/shopBuyer.js
+
+diff --git a/migrations/2026-10-22-shop-customers.sql b/migrations/2026-10-22-shop-customers.sql
+new file mode 100644
+index 0000000..82511bf
+--- /dev/null
++++ b/migrations/2026-10-22-shop-customers.sql
+@@ -0,0 +1,84 @@
++-- Naai Shop for customers — schema migration (PostgreSQL).
++--
++-- Additive and backward compatible: every existing row keeps meaning "a salon
++-- ordered / added this" (`buyer_type` defaults to 'SALON'), and the old code
++-- keeps working until the new build is live.
++--
++-- The API also creates these columns on boot via `GET /test-db`
++-- (`model.sync({ alter: true })`). Run this file instead where that route is
++-- not visited — it is idempotent, so running it after a sync is harmless.
++
++BEGIN;
++
++-- ── Enum types (Sequelize's own names, so a later sync does not fight them) ──
++DO $$ BEGIN
++    CREATE TYPE enum_shop_orders_buyer_type AS ENUM ('SALON', 'CUSTOMER');
++EXCEPTION WHEN duplicate_object THEN NULL; END $$;
++
++DO $$ BEGIN
++    CREATE TYPE enum_shop_carts_buyer_type AS ENUM ('SALON', 'CUSTOMER');
++EXCEPTION WHEN duplicate_object THEN NULL; END $$;
++
++-- ── Orders ──────────────────────────────────────────────────────────────────
++ALTER TABLE shop_orders
++    ADD COLUMN IF NOT EXISTS buyer_type enum_shop_orders_buyer_type NOT NULL DEFAULT 'SALON',
++    ADD COLUMN IF NOT EXISTS customer_id UUID;
++
++-- A customer order has no salon, so the column must accept NULL.
++ALTER TABLE shop_orders ALTER COLUMN salon_id DROP NOT NULL;
++
++DO $$ BEGIN
++    ALTER TABLE shop_orders
++        ADD CONSTRAINT fk_shop_orders_customer
++        FOREIGN KEY (customer_id) REFERENCES users (user_id) ON DELETE SET NULL;
++EXCEPTION WHEN duplicate_object THEN NULL; END $$;
++
++CREATE INDEX IF NOT EXISTS shop_orders_customer_id ON shop_orders (customer_id, created_at);
++
++-- ── Cart ────────────────────────────────────────────────────────────────────
++ALTER TABLE shop_carts
++    ADD COLUMN IF NOT EXISTS buyer_type enum_shop_carts_buyer_type NOT NULL DEFAULT 'SALON',
++    ADD COLUMN IF NOT EXISTS customer_id UUID;
++
++ALTER TABLE shop_carts ALTER COLUMN salon_id DROP NOT NULL;
++
++DO $$ BEGIN
++    ALTER TABLE shop_carts
++        ADD CONSTRAINT fk_shop_carts_customer
++        FOREIGN KEY (customer_id) REFERENCES users (user_id) ON DELETE CASCADE;
++EXCEPTION WHEN duplicate_object THEN NULL; END $$;
++
++CREATE INDEX IF NOT EXISTS shop_carts_customer_id ON shop_carts (customer_id);
++
++-- The cart's uniqueness moves from "one row per salon + product" to "one row
++-- per buyer + product". Postgres treats NULLs as distinct, so a salon row
++-- (customer_id NULL) and a customer row (salon_id NULL) can both hold the same
++-- product — which is exactly what the two carts need.
++--
++-- Drop the old unique index by whatever name Sequelize actually created it:
++DO $$
++DECLARE idx RECORD;
++BEGIN
++    FOR idx IN
++        SELECT indexname FROM pg_indexes
++        WHERE tablename = 'shop_carts'
++          AND indexdef ILIKE '%UNIQUE%'
++          AND indexdef ILIKE '%salon_id%'
++          AND indexdef ILIKE '%product_id%'
++          AND indexdef NOT ILIKE '%buyer_type%'
++    LOOP
++        EXECUTE format('DROP INDEX IF EXISTS %I', idx.indexname);
++    END LOOP;
++END $$;
++
++CREATE UNIQUE INDEX IF NOT EXISTS shop_carts_buyer_product_key
++    ON shop_carts (buyer_type, salon_id, customer_id, product_id);
++
++COMMIT;
++
++-- ── Notes ───────────────────────────────────────────────────────────────────
++-- * No backfill is needed: buyer_type defaults to 'SALON' and every existing
++--   row already has salon_id set with customer_id NULL.
++-- * Rollback: drop both new columns and indexes, then
++--   `ALTER TABLE shop_orders ALTER COLUMN salon_id SET NOT NULL;` after
++--   deleting any customer rows.
+diff --git a/src/controller/shopCart/addToShopCart.js b/src/controller/shopCart/addToShopCart.js
+index f65328a..99af2e7 100644
+--- a/src/controller/shopCart/addToShopCart.js
++++ b/src/controller/shopCart/addToShopCart.js
+@@ -1,12 +1,14 @@
+ const { addShopCartSchema } = require('../../validations/shopCart.validation');
+ const shopCartService = require('../../services/shopCart.service');
++const { resolveShopBuyer } = require('../../utils/shopBuyer');
+ 
+-// Add a shop product to the salon's cart (top-up when already present).
++// Add a shop product to the buyer's cart (top-up when already present).
++// A salon and a customer each get their own cart from the same endpoint.
+ const addToShopCart = async (request, response) => {
+     try {
+-        const salonId = request.salon?.salonId;
+-        if (!salonId) {
+-            return response.status(400).json({ status: 'FAILED', message: 'Salon Id not found in token' });
++        const buyer = resolveShopBuyer(request);
++        if (!buyer) {
++            return response.status(401).json({ status: 'JWT_FAILED', message: 'Sign in to add products to your cart' });
+         }
+         const { productId, qty } = request.body || {};
+         const validationResult = addShopCartSchema.validate({ productId, qty }, { abortEarly: true });
+@@ -14,12 +16,12 @@ const addToShopCart = async (request, response) => {
+             return response.status(400).json({ status: 'FAILED', message: validationResult.error.details[0].message });
+         }
+ 
+-        const newQty = await shopCartService.addLine(salonId, validationResult.value.productId, validationResult.value.qty);
++        const newQty = await shopCartService.addLine(buyer, validationResult.value.productId, validationResult.value.qty);
+         if (newQty === null) {
+             return response.status(404).json({ status: 'FAILED', message: 'Product not found or not available' });
+         }
+ 
+-        const data = await shopCartService.getCart(salonId);
++        const data = await shopCartService.getCart(buyer);
+         return response.status(200).json({ status: 'SUCCESS', message: 'Item added to cart', data });
+     } catch (error) {
+         console.log('error', error);
+diff --git a/src/controller/shopCart/clearShopCart.js b/src/controller/shopCart/clearShopCart.js
+index 8c8e9a7..e69a26e 100644
+--- a/src/controller/shopCart/clearShopCart.js
++++ b/src/controller/shopCart/clearShopCart.js
+@@ -1,13 +1,14 @@
+ const shopCartService = require('../../services/shopCart.service');
++const { resolveShopBuyer } = require('../../utils/shopBuyer');
+ 
+-// Empty the salon's cart (called after a successful order placement).
++// Empty the buyer's cart (called after a successful order placement).
+ const clearShopCart = async (request, response) => {
+     try {
+-        const salonId = request.salon?.salonId;
+-        if (!salonId) {
+-            return response.status(400).json({ status: 'FAILED', message: 'Salon Id not found in token' });
++        const buyer = resolveShopBuyer(request);
++        if (!buyer) {
++            return response.status(401).json({ status: 'JWT_FAILED', message: 'Sign in to change your cart' });
+         }
+-        await shopCartService.clearCart(salonId);
++        await shopCartService.clearCart(buyer);
+         return response.status(200).json({ status: 'SUCCESS', message: 'Cart cleared' });
+     } catch (error) {
+         console.log('error', error);
+diff --git a/src/controller/shopCart/getShopCart.js b/src/controller/shopCart/getShopCart.js
+index 75467b3..ce95b77 100644
+--- a/src/controller/shopCart/getShopCart.js
++++ b/src/controller/shopCart/getShopCart.js
+@@ -1,14 +1,16 @@
+ const shopCartService = require('../../services/shopCart.service');
++const { resolveShopBuyer } = require('../../utils/shopBuyer');
+ 
+-// The salon's cart, with live product fields and a server-computed bill.
+-// Web and app both render from this — same salon, same cart, every device.
++// The buyer's cart, with live product fields and a server-computed bill.
++// Web and app both render from this — same account, same cart, every device.
++// The buyer (salon or customer) comes from the token, never the body.
+ const getShopCart = async (request, response) => {
+     try {
+-        const salonId = request.salon?.salonId;
+-        if (!salonId) {
+-            return response.status(400).json({ status: 'FAILED', message: 'Salon Id not found in token' });
++        const buyer = resolveShopBuyer(request);
++        if (!buyer) {
++            return response.status(401).json({ status: 'JWT_FAILED', message: 'Sign in to view your cart' });
+         }
+-        const data = await shopCartService.getCart(salonId);
++        const data = await shopCartService.getCart(buyer);
+         return response.status(200).json({ status: 'SUCCESS', message: 'Cart fetched successfully', data });
+     } catch (error) {
+         console.log('error', error);
+diff --git a/src/controller/shopCart/removeFromShopCart.js b/src/controller/shopCart/removeFromShopCart.js
+index 298514f..374b46f 100644
+--- a/src/controller/shopCart/removeFromShopCart.js
++++ b/src/controller/shopCart/removeFromShopCart.js
+@@ -1,12 +1,13 @@
+ const { removeShopCartSchema } = require('../../validations/shopCart.validation');
+ const shopCartService = require('../../services/shopCart.service');
++const { resolveShopBuyer } = require('../../utils/shopBuyer');
+ 
+-// Remove one line from the salon's cart.
++// Remove one line from the buyer's cart.
+ const removeFromShopCart = async (request, response) => {
+     try {
+-        const salonId = request.salon?.salonId;
+-        if (!salonId) {
+-            return response.status(400).json({ status: 'FAILED', message: 'Salon Id not found in token' });
++        const buyer = resolveShopBuyer(request);
++        if (!buyer) {
++            return response.status(401).json({ status: 'JWT_FAILED', message: 'Sign in to change your cart' });
+         }
+         const { productId } = request.body || {};
+         const validationResult = removeShopCartSchema.validate({ productId }, { abortEarly: true });
+@@ -14,12 +15,12 @@ const removeFromShopCart = async (request, response) => {
+             return response.status(400).json({ status: 'FAILED', message: validationResult.error.details[0].message });
+         }
+ 
+-        const removed = await shopCartService.removeLine(salonId, validationResult.value.productId);
++        const removed = await shopCartService.removeLine(buyer, validationResult.value.productId);
+         if (!removed) {
+             return response.status(404).json({ status: 'FAILED', message: 'Item not in cart' });
+         }
+ 
+-        const data = await shopCartService.getCart(salonId);
++        const data = await shopCartService.getCart(buyer);
+         return response.status(200).json({ status: 'SUCCESS', message: 'Item removed from cart', data });
+     } catch (error) {
+         console.log('error', error);
+diff --git a/src/controller/shopCart/setShopCartLineQty.js b/src/controller/shopCart/setShopCartLineQty.js
+index d54d3bd..8d808af 100644
+--- a/src/controller/shopCart/setShopCartLineQty.js
++++ b/src/controller/shopCart/setShopCartLineQty.js
+@@ -1,12 +1,13 @@
+ const { setShopCartQtySchema } = require('../../validations/shopCart.validation');
+ const shopCartService = require('../../services/shopCart.service');
++const { resolveShopBuyer } = require('../../utils/shopBuyer');
+ 
+ // Absolute quantity for a cart line (the stepper). qty 0 removes it.
+ const setShopCartLineQty = async (request, response) => {
+     try {
+-        const salonId = request.salon?.salonId;
+-        if (!salonId) {
+-            return response.status(400).json({ status: 'FAILED', message: 'Salon Id not found in token' });
++        const buyer = resolveShopBuyer(request);
++        if (!buyer) {
++            return response.status(401).json({ status: 'JWT_FAILED', message: 'Sign in to change your cart' });
+         }
+         const { productId, qty } = request.body || {};
+         const validationResult = setShopCartQtySchema.validate({ productId, qty }, { abortEarly: true });
+@@ -14,12 +15,12 @@ const setShopCartLineQty = async (request, response) => {
+             return response.status(400).json({ status: 'FAILED', message: validationResult.error.details[0].message });
+         }
+ 
+-        const newQty = await shopCartService.setLineQty(salonId, validationResult.value.productId, validationResult.value.qty);
++        const newQty = await shopCartService.setLineQty(buyer, validationResult.value.productId, validationResult.value.qty);
+         if (newQty === null) {
+             return response.status(404).json({ status: 'FAILED', message: 'Item not in cart' });
+         }
+ 
+-        const data = await shopCartService.getCart(salonId);
++        const data = await shopCartService.getCart(buyer);
+         return response.status(200).json({ status: 'SUCCESS', message: 'Cart updated', data });
+     } catch (error) {
+         console.log('error', error);
+diff --git a/src/controller/shopOrder/adminListShopOrders.js b/src/controller/shopOrder/adminListShopOrders.js
+index 62aeb3b..07fd424 100644
+--- a/src/controller/shopOrder/adminListShopOrders.js
++++ b/src/controller/shopOrder/adminListShopOrders.js
+@@ -1,13 +1,14 @@
+ const shopOrderService = require('../../services/shopOrder.service');
+ 
+ // Company admin (and, via the distributorId filter, the admin/distributor
+-// view): every salon's orders with BOTH status tracks and the assigned
+-// distributor. Filters: status (internal track), customerStatus (salon
+-// track), salonId, distributorId, searchString (order id), page.
++// view): every buyer's orders with BOTH status tracks and the assigned
++// distributor. Filters: status (internal track), customerStatus (customer
++// track), buyerType ('SALON' | 'CUSTOMER'), salonId, distributorId,
++// searchString (order id, salon name, customer name or phone), page.
+ const adminListShopOrders = async (request, response) => {
+     try {
+-        const { page, status, customerStatus, salonId, distributorId, searchString } = request.body || {};
+-        const data = await shopOrderService.listForAdmin({ page, status, customerStatus, salonId, distributorId, searchString });
++        const { page, status, customerStatus, buyerType, salonId, distributorId, searchString } = request.body || {};
++        const data = await shopOrderService.listForAdmin({ page, status, customerStatus, buyerType, salonId, distributorId, searchString });
+ 
+         return response.status(200).json({
+             status: 'SUCCESS',
+diff --git a/src/controller/shopOrder/cancelShopOrder.js b/src/controller/shopOrder/cancelShopOrder.js
+index 2369db4..5cf2cb4 100644
+--- a/src/controller/shopOrder/cancelShopOrder.js
++++ b/src/controller/shopOrder/cancelShopOrder.js
+@@ -1,14 +1,16 @@
+ const { cancelShopOrderSchema } = require('../../validations/shopOrder.validation');
+ const shopOrderService = require('../../services/shopOrder.service');
++const { resolveShopBuyer } = require('../../utils/shopBuyer');
+ const { cleanForSalon } = require('./listShopOrders');
+ 
+ // Buyer self-service cancellation — free until the parcel leaves the depot.
+-// A paid online order is flagged for a refund.
++// A paid online order is flagged for a refund. The buyer is whoever the token
++// says, and the service only cancels an order that buyer owns.
+ const cancelShopOrder = async (request, response) => {
+     try {
+-        const salonId = request.salon?.salonId;
+-        if (!salonId) {
+-            return response.status(400).json({ status: 'FAILED', message: 'Salon Id not found in token' });
++        const buyer = resolveShopBuyer(request);
++        if (!buyer) {
++            return response.status(401).json({ status: 'JWT_FAILED', message: 'Sign in to cancel this order' });
+         }
+ 
+         const { orderId, reason } = request.body || {};
+@@ -17,12 +19,10 @@ const cancelShopOrder = async (request, response) => {
+             return response.status(400).json({ status: 'FAILED', message: validationResult.error.details[0].message });
+         }
+ 
+-        const order = await shopOrderService.getById(orderId);
+-        if (!order || String(order.salonId) !== String(salonId)) {
++        const updated = await shopOrderService.cancelByBuyer(orderId, { buyer, reason });
++        if (!updated) {
+             return response.status(404).json({ status: 'FAILED', message: 'Order not found' });
+         }
+-
+-        const updated = await shopOrderService.cancelBySalon(orderId, reason);
+         return response.status(200).json({ status: 'SUCCESS', message: 'Order cancelled successfully', data: cleanForSalon(updated) });
+     } catch (error) {
+         console.log('error', error);
+diff --git a/src/controller/shopOrder/createShopOrder.js b/src/controller/shopOrder/createShopOrder.js
+index 5a12272..f7e0c02 100644
+--- a/src/controller/shopOrder/createShopOrder.js
++++ b/src/controller/shopOrder/createShopOrder.js
+@@ -1,17 +1,21 @@
+ const { createShopOrderSchema } = require('../../validations/shopOrder.validation');
+ const shopOrderService = require('../../services/shopOrder.service');
++const { resolveShopBuyer } = require('../../utils/shopBuyer');
+ 
+-// A salon places an order for stock (B2B shop). The client sends the exact
+-// snapshot shape it keeps locally; the bill is recomputed here so the
+-// amounts can never be tampered with. The client's order id is honoured so
+-// the web's local record and this record share an id (same for the app).
++// One endpoint, two buyers: a SALON restocking its chairs and a CUSTOMER
++// buying for home. The buyer comes from the TOKEN (resolveShopBuyer) — the
++// body never names a salon or a customer, so a client cannot place an order
++// into somebody else's history. The client sends the exact snapshot shape it
++// keeps locally; the bill is recomputed here so the amounts can never be
++// tampered with. The client's order id is honoured so the web's local record
++// and this record share an id (same for the app).
+ const createShopOrder = async (request, response) => {
+     try {
+-        const salonId = request.salon?.salonId;
+-        if (!salonId) {
+-            return response.status(400).json({
+-                status: 'FAILED',
+-                message: 'Salon Id not found in token'
++        const buyer = resolveShopBuyer(request);
++        if (!buyer) {
++            return response.status(401).json({
++                status: 'JWT_FAILED',
++                message: 'Sign in to place this order'
+             });
+         }
+ 
+@@ -32,7 +36,7 @@ const createShopOrder = async (request, response) => {
+ 
+         const value = validationResult.value;
+         const order = await shopOrderService.createOrder({
+-            salonId,
++            ...buyer,                       // buyerType, buyerId, isSalon
+             orderId: value.orderId || null,
+             items: value.items,
+             address: value.address,
+diff --git a/src/controller/shopOrder/getShopOrderById.js b/src/controller/shopOrder/getShopOrderById.js
+index 1b1bec4..d018df5 100644
+--- a/src/controller/shopOrder/getShopOrderById.js
++++ b/src/controller/shopOrder/getShopOrderById.js
+@@ -1,13 +1,16 @@
+ const { getShopOrderSchema } = require('../../validations/shopOrder.validation');
+ const shopOrderService = require('../../services/shopOrder.service');
++const { resolveShopBuyer } = require('../../utils/shopBuyer');
+ const { cleanForSalon } = require('./listShopOrders');
+ 
+-// The salon's own order detail — same salon-track view as the list.
++// The buyer's own order detail — same salon-track view as the list. The
++// ownership check runs inside the service, so an order that belongs to
++// somebody else answers exactly like a missing id.
+ const getShopOrderById = async (request, response) => {
+     try {
+-        const salonId = request.salon?.salonId;
+-        if (!salonId) {
+-            return response.status(400).json({ status: 'FAILED', message: 'Salon Id not found in token' });
++        const buyer = resolveShopBuyer(request);
++        if (!buyer) {
++            return response.status(401).json({ status: 'JWT_FAILED', message: 'Sign in to view this order' });
+         }
+ 
+         const { orderId } = request.body || {};
+@@ -16,8 +19,8 @@ const getShopOrderById = async (request, response) => {
+             return response.status(400).json({ status: 'FAILED', message: validationResult.error.details[0].message });
+         }
+ 
+-        const order = await shopOrderService.getById(orderId);
+-        if (!order || String(order.salonId) !== String(salonId)) {
++        const order = await shopOrderService.getById(orderId, { buyer });
++        if (!order) {
+             return response.status(404).json({ status: 'FAILED', message: 'Order not found' });
+         }
+ 
+diff --git a/src/controller/shopOrder/listShopOrders.js b/src/controller/shopOrder/listShopOrders.js
+index f7a5632..3c7a0a1 100644
+--- a/src/controller/shopOrder/listShopOrders.js
++++ b/src/controller/shopOrder/listShopOrders.js
+@@ -1,8 +1,10 @@
+ const shopOrderService = require('../../services/shopOrder.service');
++const { resolveShopBuyer } = require('../../utils/shopBuyer');
+ 
+-// The salon's own order history. The SALON track is what it may see: the
+-// response's `status` is the customer status, and the internal fulfilment
+-// state plus the assigned distributor are stripped.
++// The buyer's own order history — a salon's or a customer's, decided by the
++// token. The SALON track is what either may see: the response's `status` is
++// the customer status, and the internal fulfilment state plus the assigned
++// distributor are stripped.
+ //
+ // `deliveryLocation` stays: it is the salon's OWN address (the point the
+ // admin and the distributor see on their map), so the salon can confirm the
+@@ -23,13 +25,13 @@ const cleanForSalon = (order) => {
+ 
+ const listShopOrders = async (request, response) => {
+     try {
+-        const salonId = request.salon?.salonId;
+-        if (!salonId) {
+-            return response.status(400).json({ status: 'FAILED', message: 'Salon Id not found in token' });
++        const buyer = resolveShopBuyer(request);
++        if (!buyer) {
++            return response.status(401).json({ status: 'JWT_FAILED', message: 'Sign in to see your orders' });
+         }
+ 
+         const { page } = request.body || {};
+-        const { orders, pagination } = await shopOrderService.listForSalon(salonId, page);
++        const { orders, pagination } = await shopOrderService.listForBuyer({ buyer, page });
+ 
+         return response.status(200).json({
+             status: 'SUCCESS',
+diff --git a/src/controller/shopProduct/listShopProducts.js b/src/controller/shopProduct/listShopProducts.js
+index 54f3b43..4811782 100644
+--- a/src/controller/shopProduct/listShopProducts.js
++++ b/src/controller/shopProduct/listShopProducts.js
+@@ -1,19 +1,11 @@
+ const shopProductService = require('../../services/shopProduct.service');
+ 
+ // The buying side's catalog: the mobile app browses as a USER, the web shop
+-// as a SALON — authUserOrSalon accepts either token and identifies the
+-// caller. The catalog itself is company-wide, so the identity only proves
+-// the caller is an account, not which account.
++// as a SALON, and a visitor on the public website browses with no token at
++// all. The catalog is company-wide and the payload carries only published
++// fields, so no identity is required — the shop must open before sign-in.
+ const listShopProducts = async (request, respsone) => {
+     try {
+-        const callerId = request.user?.id || request.salon?.salonId;
+-        if (!callerId) {
+-            return respsone.status(400).json({
+-                status: 'FAILED',
+-                message: 'Caller identity not found in token'
+-            });
+-        }
+-
+         const { page, searchString } = request.body || {};
+         const data = await shopProductService.listCatalog({ page, searchString });
+ 
+diff --git a/src/database/models/shopCart.model.js b/src/database/models/shopCart.model.js
+index 7bebd2e..248c80c 100644
+--- a/src/database/models/shopCart.model.js
++++ b/src/database/models/shopCart.model.js
+@@ -20,13 +20,30 @@ module.exports = (sequelize) => {
+             primaryKey: true
+         },
+ 
+-        // The buying salon (salon token in the JWT).
++        // Who owns the line. A salon cart carries `salonId`; a customer cart
++        // (app / website USER role) carries `customerId`. `buyerType` says
++        // which one to read; existing rows are salon carts.
++        buyerType: {
++            type: DataTypes.ENUM('SALON', 'CUSTOMER'),
++            allowNull: false,
++            defaultValue: 'SALON',
++            field: 'buyer_type'
++        },
++
++        // The buying salon (salon token in the JWT). NULL for a customer.
+         salonId: {
+             type: DataTypes.UUID,
+-            allowNull: false,
++            allowNull: true,
+             field: 'salon_id'
+         },
+ 
++        // The buying customer (users.user_id). NULL for a salon.
++        customerId: {
++            type: DataTypes.UUID,
++            allowNull: true,
++            field: 'customer_id'
++        },
++
+         // Shop product in the line (shop_products.product_id).
+         productId: {
+             type: DataTypes.UUID,
+@@ -44,8 +61,12 @@ module.exports = (sequelize) => {
+         tableName: 'shop_carts',
+         timestamps: true,
+         indexes: [
+-            { unique: true, fields: ['salon_id', 'product_id'] },
+-            { fields: ['salon_id'] }
++            // One row per buyer + product. Postgres treats NULLs as distinct,
++            // so a salon row (customer_id NULL) and a customer row
++            // (salon_id NULL) can both hold the same product.
++            { unique: true, name: 'shop_carts_buyer_product_key', fields: ['buyer_type', 'salon_id', 'customer_id', 'product_id'] },
++            { fields: ['salon_id'] },
++            { fields: ['customer_id'] }
+         ]
+     });
+ 
+@@ -54,6 +75,10 @@ module.exports = (sequelize) => {
+             foreignKey: 'productId',
+             as: 'product'
+         });
++        ShopCart.belongsTo(models.User, {
++            foreignKey: 'customerId',
++            as: 'customer'
++        });
+     };
+ 
+     return ShopCart;
+diff --git a/src/database/models/shopOrder.model.js b/src/database/models/shopOrder.model.js
+index 56a5388..c43b98c 100644
+--- a/src/database/models/shopOrder.model.js
++++ b/src/database/models/shopOrder.model.js
+@@ -48,14 +48,33 @@ module.exports = (sequelize) => {
+             field: 'order_id'
+         },
+ 
++        // Who bought it. A salon order carries `salonId`; a customer order
++        // (the app / website USER role) carries `customerId` instead, so the
++        // salon column is nullable and `buyerType` says which id to read.
++        // Existing rows are salon orders and default to 'SALON'.
++        buyerType: {
++            type: DataTypes.ENUM('SALON', 'CUSTOMER'),
++            allowNull: false,
++            defaultValue: 'SALON',
++            field: 'buyer_type'
++        },
++
+         // The buying salon (salon token in the JWT). Sellers are the
+         // company's own stock (shop_products) — no selling salon per line.
++        // NULL for a customer order.
+         salonId: {
+             type: DataTypes.UUID,
+-            allowNull: false,
++            allowNull: true,
+             field: 'salon_id'
+         },
+ 
++        // The buying customer (users.user_id) — NULL for a salon order.
++        customerId: {
++            type: DataTypes.UUID,
++            allowNull: true,
++            field: 'customer_id'
++        },
++
+         // Snapshot of the cart lines at placement time:
+         // [{ productId, name, price, mrp, image, category, gender, salonName, qty }]
+         items: {
+@@ -152,6 +171,13 @@ module.exports = (sequelize) => {
+             foreignKey: 'salonId',
+             as: 'salon'
+         });
++        // The customer who placed it (null on a salon order). Every admin and
++        // fulfilment payload includes it, so a customer order still has a
++        // name and a phone number to show and to call.
++        ShopOrder.belongsTo(models.User, {
++            foreignKey: 'customerId',
++            as: 'customer'
++        });
+         ShopOrder.belongsTo(models.Distributor, {
+             foreignKey: 'distributorId',
+             as: 'distributor'
+diff --git a/src/routes/routes.js b/src/routes/routes.js
+index b6760d2..a441fd8 100644
+--- a/src/routes/routes.js
++++ b/src/routes/routes.js
+@@ -13,6 +13,7 @@ const shopCartRouter = require('./shopCart.routes');
+ const distributorRouter = require('./distributor.routes');
+ const shopOrderRouter = require('./shopOrder.routes');
+ const shopSettingsRouter = require('./shopSettings.routes');
++const shopPublicRouter = require('./shopPublic.routes');
+ const razorpayWebhook = require('../controller/razorpay/razorpayWebhook');
+ const notificationRouter = require('./notification.routes');
+ const bookingRequestRouter = require('./bookingRequest.routes');
+@@ -41,6 +42,10 @@ routes.use('/shop-cart', shopCartRouter);
+ routes.use('/distributors', distributorRouter);
+ routes.use('/shop-orders', shopOrderRouter);
+ routes.use('/shop-settings', shopSettingsRouter);
++// The website storefront: catalog + bill rules with NO token (a visitor
++// browses before signing in). Same handlers, no auth chain, edge-cacheable
++// and rate-limited per IP.
++routes.use('/shop-public', shopPublicRouter);
+ 
+ // Razorpay webhook — public, but signature-verified (raw body HMAC-SHA256).
+ routes.post('/razorpay/webhook', razorpayWebhook);
+diff --git a/src/routes/shopCart.routes.js b/src/routes/shopCart.routes.js
+index 7147841..a8d8afe 100644
+--- a/src/routes/shopCart.routes.js
++++ b/src/routes/shopCart.routes.js
+@@ -1,15 +1,17 @@
+ const express = require('express');
+-const { authenticateSalon } = require('../utils/middleware/authSalon.middleware');
++const authenticateUserOrSalon = require('../utils/middleware/authUserOrSalon.middleware');
+ const getShopCart = require('../controller/shopCart/getShopCart');
+ const addToShopCart = require('../controller/shopCart/addToShopCart');
+ const setShopCartLineQty = require('../controller/shopCart/setShopCartLineQty');
+ const removeFromShopCart = require('../controller/shopCart/removeFromShopCart');
+ const clearShopCart = require('../controller/shopCart/clearShopCart');
+ 
+-// The cart belongs to the BUYING SALON's account — the same identity that
+-// owns the shop orders — so web and mobile app share it.
++// The cart belongs to the BUYER's account — the same identity that owns the
++// shop orders — so web and mobile app share it. Either a salon token (partner
++// portal) or a user token (customer app / website) is accepted; which one it
++// was decides whose cart this is.
+ const shopCartRouter = express.Router();
+-shopCartRouter.use(authenticateSalon);
++shopCartRouter.use(authenticateUserOrSalon);
+ 
+ shopCartRouter.post('/get', getShopCart);
+ shopCartRouter.post('/add', addToShopCart);
+diff --git a/src/routes/shopOrder.routes.js b/src/routes/shopOrder.routes.js
+index 526dc12..06f2d72 100644
+--- a/src/routes/shopOrder.routes.js
++++ b/src/routes/shopOrder.routes.js
+@@ -1,5 +1,5 @@
+ const express = require('express');
+-const { authenticateSalon } = require('../utils/middleware/authSalon.middleware');
++const authenticateUserOrSalon = require('../utils/middleware/authUserOrSalon.middleware');
+ const { authenticateAdmin } = require('../utils/middleware/auth.middleware');
+ const { authenticateDistributorOrAdmin } = require('../utils/middleware/authDistributorOrAdmin.middleware');
+ const createShopOrder = require('../controller/shopOrder/createShopOrder');
+@@ -18,11 +18,14 @@ const distributorUpdateOrderStatus = require('../controller/shopOrder/distributo
+ 
+ const shopOrderRouter = express.Router();
+ 
+-// Buying salon — its own orders (the SALON status track is what it sees).
+-shopOrderRouter.post('/create', authenticateSalon, createShopOrder);
+-shopOrderRouter.post('/list', authenticateSalon, listShopOrders);
+-shopOrderRouter.post('/get-by-id', authenticateSalon, getShopOrderById);
+-shopOrderRouter.post('/cancel', authenticateSalon, cancelShopOrder);
++// The BUYER's own orders — a salon (partner portal) or a customer (app /
++// website). Either token is accepted; the buyer is resolved from it, so one
++// account can never read or cancel another's parcel. They see the customer
++// status track only.
++shopOrderRouter.post('/create', authenticateUserOrSalon, createShopOrder);
++shopOrderRouter.post('/list', authenticateUserOrSalon, listShopOrders);
++shopOrderRouter.post('/get-by-id', authenticateUserOrSalon, getShopOrderById);
++shopOrderRouter.post('/cancel', authenticateUserOrSalon, cancelShopOrder);
+ 
+ // Company admin — every salon's orders, both status tracks, distributor
+ // assignment. The admin/distributor view filters by distributorId.
+diff --git a/src/routes/shopProduct.routes.js b/src/routes/shopProduct.routes.js
+index 2f9e896..b64319d 100644
+--- a/src/routes/shopProduct.routes.js
++++ b/src/routes/shopProduct.routes.js
+@@ -1,6 +1,5 @@
+ const express = require('express');
+ const { authenticateAdmin } = require('../utils/middleware/auth.middleware');
+-const authenticateUserOrSalon = require('../utils/middleware/authUserOrSalon.middleware');
+ const listShopProducts = require('../controller/shopProduct/listShopProducts');
+ const adminListShopProducts = require('../controller/shopProduct/adminListShopProducts');
+ const adminCreateShopProduct = require('../controller/shopProduct/adminCreateShopProduct');
+@@ -9,10 +8,12 @@ const adminDeleteShopProduct = require('../controller/shopProduct/adminDeleteSho
+ 
+ const shopProductRouter = express.Router();
+ 
+-// Buying-side catalog: mobile app (user token) and web shop (salon token).
+-// These are the COMPANY's shop products — a separate table from the
+-// salons' customer-facing products (/api/products/*).
+-shopProductRouter.post('/list', authenticateUserOrSalon, listShopProducts);
++// Buying-side catalog: mobile app (user token), web shop (salon token) and
++// the PUBLIC website, which browses before anyone signs in. These are the
++// COMPANY's shop products — a separate table from the salons'
++// customer-facing products (/api/products/*) — and the response already
++// carries only published fields (no cost price, no admin columns).
++shopProductRouter.post('/list', listShopProducts);
+ 
+ // Company admin manages the catalog.
+ shopProductRouter.post('/admin-list', authenticateAdmin, adminListShopProducts);
+diff --git a/src/routes/shopPublic.routes.js b/src/routes/shopPublic.routes.js
+new file mode 100644
+index 0000000..9a0dba5
+--- /dev/null
++++ b/src/routes/shopPublic.routes.js
+@@ -0,0 +1,50 @@
++const express = require('express');
++const publicReadLimiter = require('../utils/middleware/publicReadLimiter.middleware');
++const listShopProducts = require('../controller/shopProduct/listShopProducts');
++const getShopSettings = require('../controller/shopSettings/getShopSettings');
++
++/**
++ * The open storefront: the catalog and the shop's commerce rules, with NO
++ * token at all.
++ *
++ * Why a separate mount instead of relying on `/api/shop-products/list` being
++ * open: the partner catalog route is shared by the app and the salon portal,
++ * and its middleware chain may grow (plan checks, salon lookups) for reasons
++ * that have nothing to do with a visitor reading prices. These two reads are
++ * a stable, deliberately public contract for the website.
++ *
++ * The handlers are the SAME ones the guarded routes use — only the chain in
++ * front of them differs — so the response shape cannot drift.
++ *
++ * Mounted in src/routes/routes.js as `/api/shop-public`.
++ */
++const shopPublicRouter = express.Router();
++
++// Every shop controller reads `req.body` (the whole API is POST). The website
++// also wants a plain GET it can cache at the edge, so the query string is
++// copied into the body and the same handler answers both — one
++// implementation, two verbs.
++const bodyFromQuery = (request, _response, next) => {
++    if (request.method === 'GET') request.body = { ...request.query };
++    next();
++};
++
++// Public reads may be cached briefly at the edge/CDN. The catalog changes when
++// the admin edits a product, not per visitor, so a minute of staleness buys a
++// storefront that opens instantly; `stale-while-revalidate` keeps it
++// responsive while the fresh copy is fetched.
++const cacheFor = (seconds) => (_request, response, next) => {
++    response.set('Cache-Control', `public, max-age=${seconds}, stale-while-revalidate=60`);
++    next();
++};
++
++shopPublicRouter.post('/products/list', publicReadLimiter, cacheFor(60), listShopProducts);
++shopPublicRouter.get('/products/list', publicReadLimiter, cacheFor(60), bodyFromQuery, listShopProducts);
++
++// Delivery charges, the free-delivery threshold, the COD limit and the
++// discount are terms of sale, not secrets: the shop cannot quote an honest
++// bill without them.
++shopPublicRouter.post('/settings/get', publicReadLimiter, cacheFor(300), getShopSettings);
++shopPublicRouter.get('/settings/get', publicReadLimiter, cacheFor(300), bodyFromQuery, getShopSettings);
++
++module.exports = shopPublicRouter;
+diff --git a/src/services/shopCart.service.js b/src/services/shopCart.service.js
+index c52050e..6e4576c 100644
+--- a/src/services/shopCart.service.js
++++ b/src/services/shopCart.service.js
+@@ -1,9 +1,11 @@
+ const { Op } = require('sequelize');
+ const db = require('../database/models');
+ const shopOrderService = require('./shopOrder.service');
++const { buyerWhere, buyerColumns } = require('../utils/shopBuyer');
+ 
+ /**
+- * Server-side shop cart (table `shop_carts`), keyed by the buying salon.
++ * Server-side shop cart (table `shop_carts`), keyed by the BUYER — a salon
++ * buying stock, or a customer buying for themselves (`buyerType`).
+  *
+  * The web portal and the mobile app both read and write the cart through
+  * this service, so the same salon sees the same cart on every device —
+@@ -21,9 +23,9 @@ const clampQty = (value) => Math.max(1, Math.min(99, Math.round(Number(value) ||
+ // is unavailable are kept (flagged) so the UI can show "no longer
+ // available" and let the buyer remove them. Totals count available lines
+ // only — you cannot buy what is off the shelf.
+-const getCart = async (salonId) => {
++const getCart = async (buyer) => {
+   const rows = await db.ShopCart.findAll({
+-    where: { salonId },
++    where: buyerWhere(buyer),
+     include: [{
+       model: db.ShopProduct,
+       as: 'product',
+@@ -59,24 +61,26 @@ const requireBuyableProduct = async (productId) => {
+ };
+ 
+ // Add (or top up) a line. Returns the fresh line qty.
+-const addLine = async (salonId, productId, qty = 1) => {
++const addLine = async (buyer, productId, qty = 1) => {
+   const product = await requireBuyableProduct(productId);
+   if (!product) return null;
+ 
+   const nextQty = clampQty(qty);
+-  const existing = await db.ShopCart.findOne({ where: { salonId, productId } });
++  const existing = await db.ShopCart.findOne({ where: { ...buyerWhere(buyer), productId } });
+   if (existing) {
+     await existing.update({ qty: Math.min(99, existing.qty + nextQty) });
+     return existing.qty;
+   }
+-  const row = await db.ShopCart.create({ salonId, productId, qty: nextQty });
++  // `buyerColumns` sets exactly one of salonId / customerId, matching the
++  // buyerType the token carried.
++  const row = await db.ShopCart.create({ ...buyerColumns(buyer), productId, qty: nextQty });
+   return row.qty;
+ };
+ 
+ // Absolute set (the stepper). qty <= 0 removes the line.
+-const setLineQty = async (salonId, productId, qty) => {
++const setLineQty = async (buyer, productId, qty) => {
+   const next = Math.round(Number(qty) || 0);
+-  const existing = await db.ShopCart.findOne({ where: { salonId, productId } });
++  const existing = await db.ShopCart.findOne({ where: { ...buyerWhere(buyer), productId } });
+   if (next <= 0) {
+     if (existing) await existing.destroy();
+     return 0;
+@@ -87,8 +91,8 @@ const setLineQty = async (salonId, productId, qty) => {
+   return clamped;
+ };
+ 
+-const removeLine = async (salonId, productId) => {
+-  const existing = await db.ShopCart.findOne({ where: { salonId, productId } });
++const removeLine = async (buyer, productId) => {
++  const existing = await db.ShopCart.findOne({ where: { ...buyerWhere(buyer), productId } });
+   if (!existing) return false;
+   await existing.destroy();
+   return true;
+@@ -96,8 +100,8 @@ const removeLine = async (salonId, productId) => {
+ 
+ // Called after a successful order placement so the placed cart is not
+ // bought twice from another device.
+-const clearCart = async (salonId) => {
+-  await db.ShopCart.destroy({ where: { salonId } });
++const clearCart = async (buyer) => {
++  await db.ShopCart.destroy({ where: buyerWhere(buyer) });
+   return true;
+ };
+ 
+diff --git a/src/services/shopOrder.service.js b/src/services/shopOrder.service.js
+index c10d962..d3d557a 100644
+--- a/src/services/shopOrder.service.js
++++ b/src/services/shopOrder.service.js
+@@ -2,6 +2,7 @@ const { Op } = require('sequelize');
+ const db = require('../database/models');
+ const shopSettingsService = require('./shopSettings.service');
+ const { toCoordinate, toPoint, distanceKm, formatKm } = require('../utils/geo');
++const { buyerWhere, buyerColumns, buyerOwnsOrder, buyerActor } = require('../utils/shopBuyer');
+ const DEFAULT_LIMIT = parseInt(process.env.PAGE_LIMIT) || 20;
+ 
+ /* ------------------------------------------------------------------ *\
+@@ -132,7 +133,7 @@ const inr = (n) => `₹${Number(n).toLocaleString('en-IN')}`;
+  * The COD limit (shop_settings.codThreshold) is enforced here as well as in
+  * the checkout UI — a tampered client cannot order COD above it.
+  */
+-const createOrder = async ({ salonId, orderId, items, address, payment, notes }) => {
++const createOrder = async ({ buyerType, buyerId, isSalon, orderId, items, address, payment, notes }) => {
+   const method = payment?.method === 'ONLINE' ? 'ONLINE' : 'COD';
+   const settings = await shopSettingsService.getSettings();
+ 
+@@ -147,19 +148,34 @@ const createOrder = async ({ salonId, orderId, items, address, payment, notes })
+   const paid = method === 'ONLINE' && payment?.status === 'PAID';
+ 
+   // The delivery point, decided once and stored on the order:
+-  //   1. the salon's own coordinates (the server's truth — a client cannot
+-  //      claim a different delivery city to shave its bill or its KM);
+-  //   2. the address pin the client sent (a salon whose profile has no
+-  //      coordinates yet still gets a map for the dispatcher).
++  //   1. a SALON order: the salon's own coordinates (the server's truth — a
++  //      client cannot claim a different delivery city to shave its KM),
++  //      else the address pin the client sent;
++  //   2. a CUSTOMER order: the pin the client sent. A customer has no
++  //      standing address on file, so there is nothing to look up — and
++  //      inventing one would send the parcel to the wrong door.
+   // Everything downstream (KM on assignment, the admin map, the distributor
+-  // portal) reads these two columns.
+-  const salon = await db.Salon.findByPk(salonId, { attributes: ['salonName', 'latitude', 'longitude', 'addressLine1', 'city'] });
+-  const deliveryPoint = toPoint({ latitude: salon?.latitude, longitude: salon?.longitude })
+-    || toPoint({ latitude: address?.latitude, longitude: address?.longitude });
++  // portal) reads these two columns, so fulfilment is identical for both.
++  let salon = null;
++  let customer = null;
++  let deliveryPoint = null;
++
++  if (isSalon) {
++    salon = await db.Salon.findByPk(buyerId, { attributes: ['salonName', 'latitude', 'longitude', 'addressLine1', 'city'] });
++    deliveryPoint = toPoint({ latitude: salon?.latitude, longitude: salon?.longitude })
++      || toPoint({ latitude: address?.latitude, longitude: address?.longitude });
++  } else {
++    deliveryPoint = toPoint({ latitude: address?.latitude, longitude: address?.longitude });
++    // Snapshot who bought it; the users row keeps the account's current name
++    // and phone so the admin and the delivery partner know who the parcel is
++    // for without a second lookup.
++    customer = await db.User.findByPk(buyerId, { attributes: ['userId', 'fullName', 'phoneNumber'] });
++  }
+ 
+   const order = await db.ShopOrder.create({
+     orderId: orderId || generateOrderId(),
+-    salonId,
++    // Writes buyerType + exactly one of salonId / customerId.
++    ...buyerColumns({ buyerType, buyerId }),
+     items,
+     // Coordinates never live inside the address snapshot (the salon's address
+     // text must not silently change); they get their own columns below.
+@@ -181,8 +197,12 @@ const createOrder = async ({ salonId, orderId, items, address, payment, notes })
+   });
+ 
+   // First entries of the audit record: the order arrived on the central
+-  // dashboard, and (if paid) the payment is confirmed.
+-  const actor = { actorType: 'SALON', actorId: salonId, actorLabel: salon?.salonName || 'Salon' };
++  // dashboard, and (if paid) the payment is confirmed. The actor is whoever
++  // bought it — the admin timeline renders the same row for both buyers.
++  const actor = buyerActor(
++    { buyerType, buyerId },
++    isSalon ? (salon?.salonName || 'Salon') : (customer?.fullName || 'Customer')
++  );
+   await logEvent(order, { ...actor, action: 'ORDER_PLACED', toStatus: order.status, note: method === 'ONLINE' ? 'Order placed (online payment)' : 'Order placed (cash on delivery)' });
+   if (paid) {
+     await logEvent(order, { ...actor, action: 'PAYMENT_CONFIRMED', toStatus: order.customerStatus });
+@@ -241,14 +261,22 @@ const decorateForFulfilment = (order) => {
+   return plain;
+ };
+ 
+-const listForSalon = async (salonId, page = 1) => {
++/**
++ * A buyer's own order history — a salon's or a customer's, decided by the
++ * token. Everything except the `where` is the shared list: same pagination,
++ * same newest-first order, same payload.
++ */
++const listForBuyer = async ({ buyer, page = 1 } = {}) => {
+   const limit = DEFAULT_LIMIT;
+   const safePage = parseInt(page, 10) > 0 ? parseInt(page, 10) : 1;
+   const offset = (safePage - 1) * limit;
+ 
+   const { count: totalOrders, rows: orders } = await db.ShopOrder.findAndCountAll({
+-    where: { salonId },
+-    include: [{ model: db.Salon, as: 'salon', attributes: ['salonId', 'salonName', 'latitude', 'longitude'] }],
++    where: buyerWhere(buyer),
++    include: [
++      { model: db.Salon, as: 'salon', attributes: ['salonId', 'salonName', 'latitude', 'longitude'] },
++      { model: db.User, as: 'customer', attributes: ['userId', 'fullName', 'phoneNumber'] }
++    ],
+     order: [['createdAt', 'DESC']],
+     limit,
+     offset
+@@ -260,9 +288,15 @@ const listForSalon = async (salonId, page = 1) => {
+   };
+ };
+ 
++// Kept for any caller that still has a bare salon id.
++const listForSalon = (salonId, page = 1) => listForBuyer({
++  buyer: { buyerType: 'SALON', buyerId: salonId, isSalon: true },
++  page
++});
++
+ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+ 
+-const getById = async (orderIdOrId, { withEvents = false } = {}) => {
++const getById = async (orderIdOrId, { withEvents = false, buyer = null } = {}) => {
+   const where = { orderId: orderIdOrId };
+   if (UUID_RE.test(String(orderIdOrId))) {
+     where[Op.or] = [{ orderId: orderIdOrId }, { id: orderIdOrId }];
+@@ -271,6 +305,8 @@ const getById = async (orderIdOrId, { withEvents = false } = {}) => {
+     // Coordinates travel with both ends of the delivery: the salon's (the
+     // delivery location) and the distributor's (the dispatch location).
+     { model: db.Salon, as: 'salon', attributes: ['salonId', 'salonName', 'phoneNumber', 'latitude', 'longitude', 'addressLine1', 'city'] },
++    // A customer order has no salon, so the buyer's name/phone come from here.
++    { model: db.User, as: 'customer', attributes: ['userId', 'fullName', 'phoneNumber'] },
+     {
+       model: db.Distributor,
+       as: 'distributor',
+@@ -285,7 +321,13 @@ const getById = async (orderIdOrId, { withEvents = false } = {}) => {
+       order: [['createdAt', 'ASC'], ['id', 'ASC']]
+     });
+   }
+-  return await db.ShopOrder.findOne({ where, include });
++  const order = await db.ShopOrder.findOne({ where, include });
++  if (!order) return null;
++  // Internal callers (admin, distributor, webhook) pass no buyer and keep
++  // reading every order. A buyer's own request must match the token — an
++  // order that is not theirs answers exactly like a missing id.
++  if (buyer && !buyerOwnsOrder(buyer, order)) return null;
++  return order;
+ };
+ 
+ // The Razorpay webhook correlates a captured payment with an order by the
+@@ -458,8 +500,9 @@ const updateStatus = async (orderIdOrId, nextStatus, note, actor = {}) => {
+ // the depot (internal: PENDING_ASSIGNMENT / AWAITING_ACCEPTANCE / ASSIGNED /
+ // PICKED). Both tracks go terminal; a paid online order is flagged for a
+ // refund.
+-const cancelBySalon = async (orderIdOrId, reason) => {
+-  const order = await getById(orderIdOrId);
++const cancelByBuyer = async (orderIdOrId, { buyer, reason } = {}) => {
++  // Ownership first: an order that belongs to somebody else is "not found".
++  const order = await getById(orderIdOrId, { buyer });
+   if (!order) return null;
+   if (order.status === 'CANCELLED') {
+     throw new Error('Order is already cancelled');
+@@ -477,14 +520,29 @@ const cancelBySalon = async (orderIdOrId, reason) => {
+   }
+   await order.save();
+ 
+-  await logEvent(order, { actorType: 'SALON', actorId: order.salonId, actorLabel: order.salon?.salonName || 'Salon', action: 'CANCELLED', fromStatus, toStatus: 'CANCELLED', note: order.cancelReason || 'Cancelled by salon' });
++  const cancelledBy = buyer && buyer.buyerType === 'CUSTOMER'
++    ? buyerActor(buyer, order.customer?.fullName || 'Customer')
++    : { actorType: 'SALON', actorId: order.salonId, actorLabel: order.salon?.salonName || 'Salon' };
++  await logEvent(order, {
++    ...cancelledBy,
++    action: 'CANCELLED',
++    fromStatus,
++    toStatus: 'CANCELLED',
++    note: order.cancelReason || (cancelledBy.actorType === 'CUSTOMER' ? 'Cancelled by customer' : 'Cancelled by salon')
++  });
+   return order;
+ };
+ 
++// Kept for any caller that still has a bare salon id.
++const cancelBySalon = (orderIdOrId, reason) => cancelByBuyer(orderIdOrId, {
++  buyer: null,
++  reason
++});
++
+ // Company admin: every salon's orders. Filters: status (INTERNAL track),
+ // customerStatus, salonId, distributorId (the admin/distributor view),
+ // searchString (order id).
+-const listForAdmin = async ({ page = 1, status, customerStatus, salonId, distributorId, searchString = '' } = {}) => {
++const listForAdmin = async ({ page = 1, status, customerStatus, salonId, distributorId, buyerType, searchString = '' } = {}) => {
+   const limit = DEFAULT_LIMIT;
+   const safePage = parseInt(page, 10) > 0 ? parseInt(page, 10) : 1;
+   const offset = (safePage - 1) * limit;
+@@ -494,15 +552,29 @@ const listForAdmin = async ({ page = 1, status, customerStatus, salonId, distrib
+   if (customerStatus) where.customerStatus = customerStatus;
+   if (salonId) where.salonId = salonId;
+   if (distributorId) where.distributorId = distributorId;
++  // 'SALON' | 'CUSTOMER' — the dashboard's Buyer type filter.
++  const trimmedBuyerType = String(buyerType || '').trim().toUpperCase();
++  if (['SALON', 'CUSTOMER'].includes(trimmedBuyerType)) where.buyerType = trimmedBuyerType;
++
+   const trimmedSearch = String(searchString || '').trim();
+   if (trimmedSearch) {
+-    where[Op.or] = [{ orderId: { [Op.iLike]: `%${trimmedSearch}%` } }];
++    // An order id, a salon name, or a customer's name / phone — the admin
++    // should not have to know the id to find a customer's parcel.
++    where[Op.or] = [
++      { orderId: { [Op.iLike]: `%${trimmedSearch}%` } },
++      { '$salon.salonName$': { [Op.iLike]: `%${trimmedSearch}%` } },
++      { '$customer.fullName$': { [Op.iLike]: `%${trimmedSearch}%` } },
++      { '$customer.phoneNumber$': { [Op.iLike]: `%${trimmedSearch}%` } }
++    ];
+   }
+ 
+   const { count: totalOrders, rows: orders } = await db.ShopOrder.findAndCountAll({
+     where,
+     include: [
+       { model: db.Salon, as: 'salon', attributes: ['salonId', 'salonName', 'phoneNumber', 'latitude', 'longitude', 'addressLine1', 'city'] },
++      // Every customer order must arrive with its buyer: `salon` is null on
++      // those rows, so this is the only name/phone the dashboard can show.
++      { model: db.User, as: 'customer', attributes: ['userId', 'fullName', 'phoneNumber'] },
+       {
+         model: db.Distributor,
+         as: 'distributor',
+@@ -516,6 +588,11 @@ const listForAdmin = async ({ page = 1, status, customerStatus, salonId, distrib
+       }
+     ],
+     order: [['createdAt', 'DESC']],
++    // The search above matches joined columns ($salon.… / $customer.…), which
++    // Sequelize only exposes to the count query when the join is not wrapped
++    // in a sub-query.
++    subQuery: false,
++    distinct: true,
+     limit,
+     offset
+   });
+@@ -540,6 +617,8 @@ const listForDistributor = async (distributorId, { page = 1, status } = {}) => {
+     where,
+     include: [
+       { model: db.Salon, as: 'salon', attributes: ['salonId', 'salonName', 'phoneNumber', 'latitude', 'longitude', 'addressLine1', 'city'] },
++      // A customer parcel has no salon; the partner needs the buyer's name.
++      { model: db.User, as: 'customer', attributes: ['userId', 'fullName', 'phoneNumber'] },
+       {
+         model: db.Distributor,
+         as: 'distributor',
+@@ -553,6 +632,10 @@ const listForDistributor = async (distributorId, { page = 1, status } = {}) => {
+       }
+     ],
+     order: [['createdAt', 'DESC']],
++    // The events include is `separate` (its own query), so counting rows here
++    // does not need a sub-query — and skipping it keeps the joins count-safe.
++    subQuery: false,
++    distinct: true,
+     limit,
+     offset
+   });
+@@ -603,6 +686,7 @@ module.exports = {
+   INTERNAL_STATUSES,
+   INTERNAL_TO_CUSTOMER_STATUS,
+   createOrder,
++  listForBuyer,
+   listForSalon,
+   getById,
+   findByPaymentId,
+@@ -611,6 +695,7 @@ module.exports = {
+   rejectOrder,
+   distributorUpdateStatus,
+   updateStatus,
++  cancelByBuyer,
+   cancelBySalon,
+   listForAdmin,
+   listForDistributor
+diff --git a/src/utils/middleware/publicReadLimiter.middleware.js b/src/utils/middleware/publicReadLimiter.middleware.js
+new file mode 100644
+index 0000000..050fbe2
+--- /dev/null
++++ b/src/utils/middleware/publicReadLimiter.middleware.js
+@@ -0,0 +1,55 @@
++// utils/middleware/publicReadLimiter.middleware.js
++//
++// A small fixed-window rate limiter for the shop's open (no-token) reads.
++//
++// `/api/shop-public/*` is reachable by anyone on the internet, so it must not
++// become a free way to hammer the database. It does NOT replace a deployment
++// level limiter (nginx / the host's gateway) — it is the guard that is always
++// there, even on a box where nobody configured one.
++//
++// Deliberately dependency-free and in-memory: a single process counts its own
++// hits, which matches a single-instance Node deployment. Behind several
++// replicas the effective limit multiplies, which is still far better than no
++// limit at all; swap the store for Redis if the fleet grows.
++const WINDOW_MS = 60 * 1000;
++const MAX_REQUESTS = 120;            // per IP per window — a shopper never gets close
++const MAX_TRACKED_CLIENTS = 5000;    // keeps a flood from growing the map forever
++
++const hits = new Map(); // ip -> { count, resetAt }
++
++const clientOf = (request) => (
++    (request.headers['x-forwarded-for'] || '').split(',')[0].trim()
++    || request.socket?.remoteAddress
++    || 'unknown'
++);
++
++const publicReadLimiter = (request, response, next) => {
++    // Tests and health checks must never be throttled by their own budget.
++    if (process.env.NODE_ENV === 'test' || process.env.DISABLE_PUBLIC_SHOP_LIMIT === 'true') return next();
++
++    const now = Date.now();
++    const key = clientOf(request);
++    const current = hits.get(key);
++
++    if (!current || current.resetAt <= now) {
++        // Opportunistic cleanup: one expired entry per request, so the map
++        // shrinks as traffic moves on without a timer keeping the process alive.
++        if (hits.size > MAX_TRACKED_CLIENTS) hits.delete(hits.keys().next().value);
++        hits.set(key, { count: 1, resetAt: now + WINDOW_MS });
++        return next();
++    }
++
++    current.count += 1;
++    if (current.count > MAX_REQUESTS) {
++        const retryAfter = Math.max(1, Math.ceil((current.resetAt - now) / 1000));
++        response.set('Retry-After', String(retryAfter));
++        return response.status(429).json({
++            status: 'FAILED',
++            message: 'Too many requests just now. Please try again in a minute.'
++        });
++    }
++
++    return next();
++};
++
++module.exports = publicReadLimiter;
+diff --git a/src/utils/shopBuyer.js b/src/utils/shopBuyer.js
+new file mode 100644
+index 0000000..aa32981
+--- /dev/null
++++ b/src/utils/shopBuyer.js
+@@ -0,0 +1,95 @@
++// utils/shopBuyer.js
++//
++// Who is using the shop right now — the one place that answers it.
++//
++// The shop serves two kinds of buyer through the same endpoints:
++//
++//   SALON     a partner buying stock for its chairs (the original B2B shop)
++//   CUSTOMER  a user of the mobile app / website buying grooming products
++//
++// Both authenticate with a bearer token. `authenticateSalon` attaches the
++// Salon row (`request.salon`), `authUserOrSalon` attaches either that or
++// `request.user`, which is `{ id, phoneNumber }` for a customer. The buyer is
++// read from THOSE — never from the request body, which a client could set to
++// somebody else's id and then read or cancel their orders.
++const SALON_ROLES = ['SALON', 'PARTNER'];
++const CUSTOMER_ROLES = ['USER', 'CUSTOMER', 'CLIENT'];
++
++/**
++ * @returns {{ buyerType: 'SALON'|'CUSTOMER', buyerId: string, isSalon: boolean } | null}
++ *          null when the token carries no usable identity → the controller
++ *          answers 401.
++ */
++const resolveShopBuyer = (request) => {
++    if (!request) return null;
++
++    const salon = request.salon;
++    const salonId = salon && (salon.salonId || salon.salon_id || salon.id);
++    if (salonId) {
++        return { buyerType: 'SALON', buyerId: String(salonId), isSalon: true };
++    }
++
++    const user = request.user;
++    const userId = user && (user.id || user.userId || user.user_id);
++    const role = String((user && (user.role || user.userType)) || '').toUpperCase();
++    // `request.user` from authUserOrSalon carries no role: its mere presence
++    // (there is no request.salon) means the token was a customer token.
++    if (userId && (!role || CUSTOMER_ROLES.includes(role))) {
++        return { buyerType: 'CUSTOMER', buyerId: String(userId), isSalon: false };
++    }
++
++    // Any other middleware that attaches a bare `{ role, id }`.
++    const bareId = request.auth && (request.auth.id || request.auth.userId);
++    if (bareId) {
++        const bareRole = String(request.auth.role || request.auth.userType || '').toUpperCase();
++        if (SALON_ROLES.includes(bareRole)) return { buyerType: 'SALON', buyerId: String(bareId), isSalon: true };
++        if (CUSTOMER_ROLES.includes(bareRole)) return { buyerType: 'CUSTOMER', buyerId: String(bareId), isSalon: false };
++    }
++
++    return null;
++};
++
++/**
++ * The Sequelize `where` fragment for a buyer: the single place that knows
++ * which column identifies them, so a service never branches on the role.
++ */
++const buyerWhere = (buyer) => (
++    buyer && buyer.buyerType === 'CUSTOMER'
++        ? { customerId: buyer.buyerId }
++        : { salonId: buyer ? buyer.buyerId : null }
++);
++
++/**
++ * The columns written when a buyer places something. Exactly one of the two
++ * ids is set — a row belongs to a salon or to a customer, never both.
++ */
++const buyerColumns = (buyer) => (
++    buyer && buyer.buyerType === 'CUSTOMER'
++        ? { buyerType: 'CUSTOMER', customerId: buyer.buyerId, salonId: null }
++        : { buyerType: 'SALON', salonId: buyer ? buyer.buyerId : null, customerId: null }
++);
++
++/**
++ * True when this buyer owns this order. Used by get-by-id and cancel so one
++ * buyer can never read or cancel another's parcel.
++ */
++const buyerOwnsOrder = (buyer, order) => {
++    if (!buyer || !order) return false;
++    const row = order.toJSON ? order.toJSON() : order;
++    return buyer.buyerType === 'CUSTOMER'
++        ? String(row.customerId || '') === buyer.buyerId
++        : String(row.salonId || '') === buyer.buyerId;
++};
++
++/**
++ * The actor written into `shop_order_events` when a buyer moves their own
++ * order (placement, cancellation). The admin timeline renders the same row
++ * shape for both buyers.
++ */
++const buyerActor = (buyer, label) => ({
++    actorType: buyer && buyer.buyerType === 'CUSTOMER' ? 'CUSTOMER' : 'SALON',
++    actorId: buyer ? buyer.buyerId : null,
++    actorLabel: label || (buyer && buyer.buyerType === 'CUSTOMER' ? 'Customer' : 'Salon')
++});
++
++module.exports = { resolveShopBuyer, buyerWhere, buyerColumns, buyerOwnsOrder, buyerActor };
+-- 
+2.39.5
+

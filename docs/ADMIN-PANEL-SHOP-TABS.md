@@ -48,9 +48,10 @@ modal + delete with confirm.
 > the customer's name with a **Customer** badge, the drawer should show a
 > *Customer* block where it shows the salon, and the salon filter should gain a
 > **Buyer type** select. Full contract, migration and rollout order:
-> [`docs/SHOP-CUSTOMERS.md`](SHOP-CUSTOMERS.md); the drop-in components
-> (`BuyerCell`, `BuyerSummary`, `BuyerTypeFilter`, `buyerOf`) are in
-> [`admin-panel-shop-customers/`](../admin-panel-shop-customers/README.md).
+> [`docs/SHOP-CUSTOMERS.md`](SHOP-CUSTOMERS.md); the panel change itself is
+> [`patches/admin-panel-shop-customers.patch`](../patches/admin-panel-shop-customers.patch)
+> (a `buyerOf(order)` helper, the Buyer column, the drawer's customer block and
+> the Buyer type filter).
 
 ## 2. Distributors tab
 
