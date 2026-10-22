@@ -65,7 +65,7 @@ describe('getFileUrl', () => {
 
   it('keeps foreign absolute URLs and local asset paths unchanged', () => {
     expect(getFileUrl('https://cdn.example/ad.jpg')).toBe('https://cdn.example/ad.jpg');
-    expect(getFileUrl('/assets/brand/naai-logo-dark.svg')).toBe('/assets/brand/naai-logo-dark.svg');
+    expect(getFileUrl('/assets/brand/mynaai-mark.png')).toBe('/assets/brand/mynaai-mark.png');
   });
 
   it('returns an empty string for empty or prefix-only values', () => {

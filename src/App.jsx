@@ -988,20 +988,13 @@ function SalonRegistration({ initialData, onBack, onComplete, notifyInstall }) {
 function Brand({ light = false }) {
   return (
     <div className={cx('brand', light && 'brand-light')}>
-      {/* The new M/N ribbon mark. It is the vector file so the tile stays crisp
-          from the 34px phone navbar up to the 58px sidebar — the PNG twin
-          (`/assets/my_naai.png`) is only for places that cannot take an SVG
-          (the Razorpay checkout sheet). */}
-      <img className="brand-mark" src="/assets/brand/naai-logo.svg" alt="" decoding="async" />
-      {/* Both capitals share .brand-cap, so the "M" and the "N" are always the
-          same size. The wordmark used to be "M" at 30px plus "y Naai" at 24px,
-          which left the N visibly smaller than the M in every header. */}
-      <span className="brand-wordmark" aria-hidden="true">
-        <span className="brand-cap">M</span>
-        <span className="brand-lower">y&nbsp;</span>
-        <span className="brand-cap">N</span>
-        <span className="brand-lower">aai</span>
-      </span>
+      {/* One official lockup: the M monogram with "My Naai" hand-lettered under
+          it (the wordmark is part of the artwork, so no text is repeated beside
+          it). The mark on its own is used where the lockup would be too narrow
+          — phone bars, checked by the same 1023px breakpoint that decides
+          whether the sidebar or the top bar is on screen. */}
+      <img className="brand-lockup" src="/assets/brand/mynaai-logo.png" alt="" decoding="async" />
+      <img className="brand-mark" src="/assets/brand/mynaai-mark.png" alt="" decoding="async" />
       <span className="sr-only">My Naai</span>
     </div>
   );

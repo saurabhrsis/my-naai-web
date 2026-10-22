@@ -175,19 +175,19 @@ export function Spinner({ label = '', size = 22 }) {
   return <span className="spinner-wrap"><LoaderCircle className="spin" size={size} aria-hidden="true" />{label && <span>{label}</span>}</span>;
 }
 
-// The brand logo used as a "no photo yet" placeholder is a square tile with its
-// own near-black background. Filling a wide card frame with `object-fit: cover`
-// cropped the mark, so a logo fallback is letterboxed on a branded gradient
-// instead (`.image-fallback-tile`). Photo fallbacks still fill the frame.
+// The brand artwork used as a "no photo yet" placeholder is a transparent
+// monogram. Filling a wide card frame with `object-fit: cover` cropped it, so a
+// logo fallback is letterboxed on a branded gradient instead
+// (`.image-fallback-tile`). Photo fallbacks still fill the frame.
 function isLogoFallback(src, resolved, fallback) {
   if (src && resolved !== fallback) return false;
-  return /\.svg(?:[?#]|$)/i.test(String(resolved || ''));
+  return /(?:^|\/)(?:mynaai-[\w-]+\.png|naai-[\w-]+\.svg)$/i.test(String(resolved || '').split(/[?#]/)[0]);
 }
 
 // forwardRef so a caller can reach the underlying <img> — the ad carousel needs
 // it to read `naturalWidth/Height` off an image that was already cached (whose
 // onLoad therefore never fires).
-export const ImageWithFallback = React.forwardRef(function ImageWithFallback({ src, fallback = '/assets/brand/naai-logo-dark.svg', alt = '', className = '', loading = 'lazy', decoding = 'async', ...props }, ref) {
+export const ImageWithFallback = React.forwardRef(function ImageWithFallback({ src, fallback = '/assets/brand/mynaai-mark.png', alt = '', className = '', loading = 'lazy', decoding = 'async', ...props }, ref) {
   const [current, setCurrent] = useState(src ? getFileUrl(src) : fallback);
   useEffect(() => setCurrent(src ? getFileUrl(src) : fallback), [src, fallback]);
   const resolved = current || fallback;

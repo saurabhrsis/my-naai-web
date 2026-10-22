@@ -158,20 +158,15 @@ img { display: block; max-width: 100%; }
 .login-back { display: inline-flex; align-items: center; gap: 5px; margin: 0 0 18px; padding: 0; background: none; border: 0; color: var(--muted); font-size: 12px; font-weight: 600; }
 .login-back:hover { color: var(--gold); }
 
-/* Official My Naai mark (`my_naai.png` — the cream plate carrying the ink
-   M/N ribbon monogram) plus the wordmark. The artwork brings its own plate,
-   so the tile needs no dark background or gold ring any more — just a soft
-   shadow to lift it off the dark chrome. */
-.brand { display: inline-flex; align-items: center; gap: 10px; color: var(--white); white-space: nowrap; }
-.brand-mark { width: 46px; height: 46px; flex: none; object-fit: contain; border-radius: 13px; background: transparent; box-shadow: 0 6px 18px rgba(0, 0, 0, .32); }
-.brand-wordmark { display: inline-flex; align-items: baseline; line-height: 1; letter-spacing: -.045em; }
-/* Both capitals of "My Naai" share .brand-cap so the M and the N are always the
-   same size; the lowercase runs stay a step smaller, which is the wordmark's
-   shape. It used to be "M" at 30px + "y Naai" at 24px, so M and N disagreed. */
-.brand-cap { color: #ffffff; font-size: 30px; font-weight: 800; letter-spacing: -.06em; }
-.brand-lower { color: #f3efe8; font-size: 24px; font-weight: 700; }
+/* Official My Naai lockup — the white M monogram with "My Naai" hand-lettered
+   underneath, straight from the supplied artwork. It is white on transparent,
+   drawn for the dark chrome every header here already uses; no plate, no ring,
+   no CSS wordmark beside it (the name is part of the image). */
+.brand { display: inline-flex; align-items: center; color: var(--white); white-space: nowrap; }
+.brand-lockup { height: 52px; width: auto; flex: none; object-fit: contain; filter: drop-shadow(0 4px 14px rgba(0, 0, 0, .45)); }
+.brand-mark { display: none; width: 46px; height: 46px; flex: none; object-fit: contain; }
 .brand-light { color: white; }
-.brand-light .brand-mark { box-shadow: 0 8px 24px rgba(0, 0, 0, .4); }
+.brand-light .brand-lockup { filter: drop-shadow(0 6px 20px rgba(0, 0, 0, .55)); }
 .login-page { display: grid; grid-template-columns: 1fr; }
 .auth-visual { display: none; position: relative; overflow: hidden; }
 .auth-visual-image { position: absolute; inset: 0; background: url('/assets/new_background.jpeg') center / cover; filter: saturate(.8); }
@@ -255,9 +250,7 @@ img { display: block; max-width: 100%; }
 /* `position: relative` anchors the dropdown panel below. */
 .mobile-shell-bar { position: sticky; top: 0; z-index: 30; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: calc(6px + var(--safe-top)) max(15px, var(--safe-right)) 12px max(15px, var(--safe-left)); background: var(--black); }
 .mobile-shell-bar .brand { min-width: 0; }
-.mobile-shell-bar .brand-mark { width: 44px; height: 44px; border-radius: 13px; }
-.mobile-shell-bar .brand-cap { font-size: 29px; }
-.mobile-shell-bar .brand-lower { font-size: 23px; }
+.mobile-shell-bar .brand-mark { width: 34px; height: 34px; }
 .mobile-shell-actions { display: flex; flex: none; align-items: center; gap: 9px; }
 /* The in-app hamburger. This rule used to be `display: none` for a button that
    was never rendered at all, which is why tablets had no menu: below 1024px
@@ -986,10 +979,9 @@ a.contact-detail-card:hover { border-color: rgba(232, 185, 126, .35); }
    further down this file. */
 .site-navbar { position: sticky; top: 0; z-index: 40; flex: none; display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; min-width: 0; padding: calc(9px + var(--safe-top)) max(14px, var(--safe-right)) 9px max(14px, var(--safe-left)); background: rgba(15, 17, 17, .9); border-bottom: 1px solid var(--line); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
 .site-navbar-brand { flex: none; display: flex; align-items: center; min-width: 0; padding: 0; border: 0; background: none; }
-.site-navbar .brand { min-width: 0; gap: 9px; }
-.site-navbar .brand-mark { width: 38px; height: 38px; border-radius: 11px; }
-.site-navbar .brand-cap { font-size: 24px; }
-.site-navbar .brand-lower { font-size: 19px; }
+.site-navbar .brand { min-width: 0; }
+.site-navbar .brand-lockup { height: 42px; }
+.site-navbar .brand-mark { width: 38px; height: 38px; }
 .site-nav-links { flex: 1 1 auto; min-width: 0; display: flex; justify-content: center; gap: 2px; }
 .site-nav-links button { position: relative; padding: 9px 10px; border: 0; border-radius: 9px; background: none; color: var(--muted-light); font-size: 13px; font-weight: 600; white-space: nowrap; }
 .site-nav-links button:hover { color: var(--white); background: rgba(255,255,255,.04); }
@@ -1005,7 +997,11 @@ a.contact-detail-card:hover { border-color: rgba(232, 185, 126, .35); }
    the bar, which is also where the signed-in shell grows its sidebar. */
 @media (max-width: 1023px) {
   .site-navbar { gap: 8px; }
-  .site-navbar .brand-wordmark { display: none; } /* phones: the mark alone, the pills get the room */
+  /* Phones and tablets: the monogram alone — the lockup's wordmark would be
+     illegible beside the pills and the menu toggle, and the pills need the
+     room. Same breakpoint as the sidebar/top-bar swap. */
+  .brand-lockup { display: none; }
+  .brand-mark { display: block; }
   .site-nav-toggle { display: inline-flex; }
   .site-navbar .install-auth-button { width: 36px; height: 36px; gap: 0; padding: 0; font-size: 0; justify-content: center; }
   .site-navbar .install-auth-button svg { flex: none; }
@@ -1655,12 +1651,8 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .sidebar { position: sticky; top: 0; width: 240px; height: var(--viewport-height); flex: none; display: flex; flex-direction: column; padding: calc(29px + var(--safe-top)) max(18px, var(--safe-right)) calc(21px + var(--safe-bottom)) max(18px, var(--safe-left)); border-right: 1px solid var(--line); background: #0d1010; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
   .sidebar > .brand, .sidebar-role, .sidebar-nav, .sidebar-bottom { flex: none; }
   .sidebar > .brand { padding: 0 8px; margin-bottom: 28px; gap: 12px; }
-  .sidebar > .brand .brand-mark { width: 58px; height: 58px; border-radius: 16px; }
-  .sidebar > .brand .brand-cap { font-size: 34px; }
-  .sidebar > .brand .brand-lower { font-size: 27px; }
-  .auth-visual .brand-mark { width: 54px; height: 54px; border-radius: 15px; }
-  .auth-visual .brand-cap { font-size: 32px; }
-  .auth-visual .brand-lower { font-size: 26px; }
+  .sidebar > .brand .brand-lockup { height: 58px; }
+  .auth-visual .brand-lockup { height: 62px; }
   .sidebar-role { display: flex; align-items: center; gap: 10px; padding: 11px; margin-bottom: 18px; border-radius: 13px; background: rgba(255,255,255,.035); }
   .role-mark { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 9px; color: #111; background: var(--gold); }
   .sidebar-role > span:last-child { display: flex; flex-direction: column; gap: 4px; }
@@ -1760,7 +1752,7 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
      the Login button must stay whole at 320px, next to the install icon and
      the menu toggle. */
   .site-navbar { gap: 6px; padding-right: max(11px, var(--safe-right)); padding-left: max(11px, var(--safe-left)); }
-  .site-navbar .brand-mark { width: 34px; height: 34px; border-radius: 10px; }
+  .site-navbar .brand-mark { width: 34px; height: 34px; }
   .guest-login-button { gap: 5px; padding: 7px 11px; font-size: 11px; }
   .site-nav-toggle { width: 34px; height: 34px; }
   .site-footer-grid { gap: 18px 11px; }
