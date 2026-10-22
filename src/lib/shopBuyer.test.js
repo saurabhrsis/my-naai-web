@@ -60,8 +60,8 @@ describe('shopCopy', () => {
     expect(customer.addressFieldLabel).toBe('Delivery address');
     expect(customer.cartEmptyHint).toContain('your door');
     expect(customer.deliveryLine).toContain('your address');
-    // Guests are told to sign in rather than being handed a dead cart.
+    // A guest fills a cart and meets the sign-in gate at checkout.
     expect(guest.isGuest).toBe(true);
-    expect(guest.signInToBuy).toMatch(/sign in/i);
+    expect(guest.guestCheckoutCta).toMatch(/sign in/i);
   });
 });

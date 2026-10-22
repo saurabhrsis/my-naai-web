@@ -600,14 +600,14 @@ describe('Guest browsing flow', () => {
     expect(container.querySelector('.auth-page')).toBeNull();
     expect(container.querySelector('.shop-cart-screen')).not.toBeNull();
 
-    // Checkout is where the account is asked for — and it asks on its own
-    // screen, with the reason, rather than bouncing straight to the OTP form.
+    // Checkout is where the account is asked for — a small dialog over the
+    // bill, never a bounce straight to the OTP form.
     addToCart('guest', { id: 'sp1', name: 'Beard Oil 30ml', price: 199, image: '', category: 'beard-grooming', gender: 'men' });
     await act(async () => { goto('/shopCheckout'); });
     await flush();
     expect(container.querySelector('.auth-page')).toBeNull();
-    expect(container.querySelector('.shop-gate-card')).not.toBeNull();
-    expect(container.textContent).toContain('Sign in to place this order');
+    expect(container.querySelector('.modal-card')).not.toBeNull();
+    expect(container.querySelector('.modal-card').textContent).toContain('Sign in to place this order');
 
     // Order history is NOT public: it belongs to the signed-in dashboard.
     await act(async () => { goto('/shopOrders'); });

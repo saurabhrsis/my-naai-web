@@ -62,13 +62,18 @@ The create body is the same contract for both buyers (no `salonId`, no
 ### The visitor's cart and the purchase gate (web)
 
 A visitor on the public website can browse `/shop`, open `/shopProduct` and
-**fill a cart** — no account, no OTP. The cart lives in the browser under the
-`guest` key (`shopCart:guest`), exactly the shape an account's cart uses.
-`/shopCheckout` is a public route that renders the **gate** for a visitor: why
-an account is needed (a phone the delivery partner can call, an order that can
-be tracked and cancelled, My orders later), the cart lines and the bill — and
-one **Sign in / Create account** action that requests the USER role and stashes
-`/shopCheckout` as the resume route.
+**fill a cart** — no account, no OTP, and the shop says nothing about accounts
+while they shop. The cart lives in the browser under the `guest` key
+(`shopCart:guest`), exactly the shape an account's cart uses.
+
+The account is asked for at **purchase**: "Proceed to checkout" opens a small
+dialog (`ShopGuestGateDialog`, a `Modal`) that states why an account is needed
+— a phone the delivery partner can call, an order that can be tracked and
+cancelled, reordering from My orders — with **Sign in / Create account**
+(USER role, `/shopCheckout` stashed as the resume route) and **Keep shopping**.
+A visitor who lands on `/shopCheckout` directly gets the same dialog over the
+bill; closing it returns them to the cart, and the address/payment form is
+never rendered without a session.
 
 On a successful sign-in `completeAuth` calls `adoptGuestCart(ownerId)`
 (`src/lib/shopOrders.js`): the guest lines are merged into the account's cart

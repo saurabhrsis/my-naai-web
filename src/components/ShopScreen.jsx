@@ -145,38 +145,6 @@ function ShopFilterSelect({ label, ariaLabel, icon: Icon, value, onChange, child
   );
 }
 
-// The category rail: the fastest way to move around a catalog, above the
-// selects on every width. The select stays as the labelled, keyboard- and
-// screen-reader-friendly control (and keeps the long-tail categories the
-// admin invents); the chips are the one-tap path to the same state, and the
-// two always show the same active category because they read one variable.
-function ShopCategoryRail({ categories, value, onChange }) {
-  return (
-    <div className="shop-category-rail" role="group" aria-label="Shop categories">
-      <button
-        type="button"
-        className={cx('shop-chip', value === 'all' && 'active')}
-        aria-pressed={value === 'all'}
-        onClick={() => onChange('all')}
-      >
-        All
-      </button>
-      {categories.map(item => (
-        <button
-          key={item.id}
-          type="button"
-          className={cx('shop-chip', value === item.id && 'active')}
-          aria-pressed={value === item.id}
-          onClick={() => onChange(value === item.id ? 'all' : item.id)}
-        >
-          <Tag size={12} aria-hidden="true" />
-          {item.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 // ── Floating "3 items · ₹1,240 → View cart" bar (shop + product page) ──────
 //
 // The number is the ITEM value (`subtotal`), never the checkout total. The bar
@@ -515,10 +483,12 @@ export function ShopScreen({ session, navigate, notify }) {
         </div>
 
         <section className="shop-filters-selects" aria-label="Filter products">
-          {/* Category is the chip rail below — one control per facet, not two.
-              The rail lists every category the live catalog uses, including
-              ones the backend invents, so nothing is lost by dropping the
-              duplicate select. */}
+          <ShopFilterSelect label="Category" ariaLabel="Category" icon={Tag} value={category} onChange={event => setCategory(event.target.value)}>
+            <option value="all">All categories</option>
+            {categories.map(item => (
+              <option key={item.id} value={item.id}>{item.label}</option>
+            ))}
+          </ShopFilterSelect>
           <ShopFilterSelect label="For" ariaLabel="Gender" icon={User} value={gender} onChange={event => setGender(event.target.value)}>
             <option value="all">All</option>
             {SHOP_GENDERS.map(item => (
@@ -532,17 +502,6 @@ export function ShopScreen({ session, navigate, notify }) {
           </ShopFilterSelect>
         </section>
       </div>
-
-      <ShopCategoryRail categories={categories} value={category} onChange={setCategory} />
-
-      {/* A visitor is told, once and up front, that the cart is theirs to
-          fill — the account is asked for at the moment of purchase. */}
-      {guest && (
-        <p className="shop-guest-note">
-          <ShoppingBag size={13} aria-hidden="true" />
-          Fill your cart freely — you will be asked to sign in only when you place the order.
-        </p>
-      )}
 
       {loading ? (
         <div className="shop-grid">{[1, 2, 3, 4, 5, 6, 7, 8].map(item => <SkeletonCard key={item} className="shop-skeleton" />)}</div>
@@ -694,12 +653,6 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
       <div className="shop-detail-action">
         <ShopQuantityControl qty={qtyFor(product.id)} onAdd={() => handleAdd(product)} onSet={next => handleSetQty(product, next)} disabled={!product.available} large />
       </div>
-      {guest && (
-        <p className="shop-guest-note">
-          <ShoppingBag size={13} aria-hidden="true" />
-          Add it to your cart now — signing in is only needed to place the order.
-        </p>
-      )}
 
       <section className="shop-detail-card">
         <h3>About this product</h3>

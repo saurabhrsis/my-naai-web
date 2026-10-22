@@ -39,10 +39,11 @@ delivery → Delivered), and **cancel order** before dispatch.
 - **Visitors** get the storefront on the public website — `/shop`,
   `/shopProduct?productId=…`, `/shopCart`, the navbar's **Shop** link, the
   footer link and a **Shop now** band on the home page. Browsing **and filling a
-  cart** are free: the account is asked for at checkout, where a gate explains
-  what it buys (a phone the delivery partner can call, a trackable order, My
-  orders later) and one OTP sign-in carries the cart onto the account. Order
-  history is never public — My orders only exists for a signed-in account.
+  cart** are free: the account is asked for when they press **Proceed to
+  checkout**, where a small dialog explains what it buys (a phone the delivery
+  partner can call, a trackable order, My orders later) and one OTP sign-in
+  carries the cart onto the account. Order history is never public — My orders
+  only exists for a signed-in account.
 
 Those public reads are the open `/api/shop-public/products/list` and
 `/api/shop-public/settings/get` (no token, cached, rate-limited), with a

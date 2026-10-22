@@ -155,9 +155,8 @@ describe('ShopScreen', () => {
     // labelled filter row — no delivery banner, no sort control.
     expect(buttonsContaining('My cart', container).length).toBe(1);
     expect(buttonsContaining('My orders', container).length).toBe(1);
-    // The category rail labels the categories (the facet itself is a chip, not
-    // a select), then the two labelled selects.
-    expect(container.querySelector('.shop-category-rail').textContent).toContain('Hair care');
+    // Three labelled selects: Category, For, Price. No Sort control.
+    expect(container.textContent).toContain('Category');
     expect(container.textContent).toContain('For');
     expect(container.textContent).toContain('Price');
     expect(container.querySelector('.shop-hero-strip')).toBeNull();
@@ -190,20 +189,18 @@ describe('ShopScreen', () => {
     expect(navigate).toHaveBeenCalledWith('shopCart');
   });
 
-  it('filters with the category rail and the gender/price selects', async () => {
+  it('filters with the category, gender and price selects', async () => {
     const { container } = await render(<ShopScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
     const setFilter = async (label, value) => {
       const select = Array.from(container.querySelectorAll('select')).find(item => item.getAttribute('aria-label') === label);
       select.value = value;
       await act(async () => { select.dispatchEvent(new Event('change', { bubbles: true })); });
     };
-    const chip = text => Array.from(container.querySelectorAll('.shop-chip'))
-      .find(node => node.textContent.trim().endsWith(text));
 
-    await act(async () => { chip('Beard & grooming').click(); });
+    await setFilter('Category', 'beard-grooming');
     expect(Array.from(container.querySelectorAll('.shop-card h3')).map(node => node.textContent)).toEqual(['Beard Oil 30ml']);
 
-    await act(async () => { chip('All').click(); });
+    await setFilter('Category', 'all');
     expect(container.querySelectorAll('.shop-card')).toHaveLength(6);
 
     await setFilter('Gender', 'men');
@@ -225,8 +222,8 @@ describe('ShopScreen', () => {
     // Popular is the catalog order; there is no Sort select to change it.
     expect(titles()[0]).toBe('Keratin Shampoo 200ml');
     expect(selectByLabel('Sort products')).toBeUndefined();
-    // For + Price (category is the chip rail, so no third select).
-    expect(container.querySelectorAll('.shop-filters-selects select')).toHaveLength(2);
+    // Category + For + Price, and nothing else.
+    expect(container.querySelectorAll('.shop-filters-selects select')).toHaveLength(3);
 
     // A search narrows the grid AND travels to the API (once typing settles —
     // the field is debounced so a keystroke is not a request).
@@ -250,8 +247,13 @@ describe('ShopScreen', () => {
 
   it('sends every facet to the API and starts again from page 1', async () => {
     const { container } = await render(<ShopScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
-    const chip = Array.from(container.querySelectorAll('.shop-chip')).find(node => node.textContent.includes('Beard & grooming'));
-    await act(async () => { chip.click(); });
+    const setFilter = async (label, value) => {
+      const select = Array.from(container.querySelectorAll('select')).find(item => item.getAttribute('aria-label') === label);
+      select.value = value;
+      await act(async () => { select.dispatchEvent(new Event('change', { bubbles: true })); });
+    };
+
+    await setFilter('Category', 'beard-grooming');
     expect(shopProductList).toHaveBeenLastCalledWith(expect.objectContaining({
       page: 1,
       category: 'beard-grooming',
@@ -259,12 +261,9 @@ describe('ShopScreen', () => {
       priceRange: '',
       inStock: true,
     }));
-    expect(container.querySelector('.shop-chip.active').textContent).toContain('Beard');
 
     // A second facet stacks on the first, in one request.
-    const select = Array.from(container.querySelectorAll('select')).find(item => item.getAttribute('aria-label') === 'Price');
-    select.value = 'under500';
-    await act(async () => { select.dispatchEvent(new Event('change', { bubbles: true })); });
+    await setFilter('Price', 'under500');
     expect(shopProductList).toHaveBeenLastCalledWith(expect.objectContaining({
       page: 1,
       category: 'beard-grooming',
@@ -860,8 +859,8 @@ describe('the shop for customers and website visitors', () => {
     // The whole catalog is public.
     expect(container.textContent).toContain('Beard Oil 30ml');
     expect(container.textContent).toContain('delivered to your door');
-    // The visitor is told up front that the cart is theirs to fill.
-    expect(container.querySelector('.shop-guest-note').textContent).toMatch(/sign in only when you place the order/i);
+    // Nothing is said about accounts while they shop.
+    expect(container.querySelector('.shop-guest-note')).toBeNull();
 
     await act(async () => { buttonByText('Add', container).click(); });
     await flush();
@@ -942,37 +941,52 @@ describe('the shop for customers and website visitors', () => {
     expect(buttonsContaining('Show more products', container)).toHaveLength(0);
   });
 
-  it('asks a visitor to sign in at checkout, explains why, and comes back to it', async () => {
+  it('opens a small sign-in dialog when a visitor tries to check out', async () => {
+    addToCart('guest', { id: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men' });
+    const navigate = vi.fn();
+    const { container } = await render(<ShopCartScreen session={null} navigate={navigate} notify={vi.fn()} />);
+
+    // The cart itself carries no account copy — the dialog is the only place.
+    expect(container.querySelector('.shop-guest-note')).toBeNull();
+    expect(container.textContent).not.toMatch(/sign in to place the order/i);
+
+    await act(async () => { buttonsContaining('Proceed to checkout', container)[0].click(); });
+    // The dialog, not a gate page and not the login page yet.
+    expect(navigate).not.toHaveBeenCalled();
+    const dialog = document.querySelector('.modal-card');
+    expect(dialog).toBeTruthy();
+    expect(dialog.textContent).toContain('Sign in to place this order');
+    // Small, and it says what the account is for.
+    expect(dialog.textContent).toMatch(/phone number/i);
+    expect(dialog.textContent).toMatch(/tracked/i);
+    expect(dialog.querySelectorAll('li')).toHaveLength(3);
+
+    // "Keep shopping" closes it and leaves the cart where it was.
+    await act(async () => { buttonsContaining('Keep shopping', dialog)[0].click(); });
+    expect(document.querySelector('.modal-card')).toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
+
+    // The sign-in action requests a CUSTOMER account and resumes checkout.
+    await act(async () => { container.querySelector('.shop-cart-footer .btn').click(); });
+    const again = document.querySelector('.modal-card');
+    await act(async () => { buttonsContaining('Sign in / Create account', again)[0].click(); });
+    expect(navigate).toHaveBeenCalledWith('login', { returnTo: '/shopCheckout', role: 'USER' });
+  });
+
+  it('still explains itself on a direct /shopCheckout link, over the bill', async () => {
     addToCart('guest', { id: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men' });
     const navigate = vi.fn();
     const { container } = await render(<ShopCheckoutScreen session={null} navigate={navigate} notify={vi.fn()} />);
 
-    // The gate, not the address form.
-    expect(container.querySelector('.shop-gate-card')).toBeTruthy();
+    // No address form for a visitor …
     expect(container.querySelector('input[autocomplete="name"]')).toBeNull();
-    expect(container.textContent).toContain('Sign in to place this order');
-    // The reasons are spelled out: a login wall with no explanation is a toll gate.
-    expect(container.textContent).toMatch(/delivery partner/i);
-    expect(container.textContent).toMatch(/tracked/i);
-    // The cart is still shown — the visitor can see nothing was lost.
-    expect(container.textContent).toContain('Beard Oil 30ml');
-    expect(container.textContent).toMatch(/kept on this device/i);
-
-    const cta = buttonsContaining('Sign in', container)[0];
-    await act(async () => { cta.click(); });
-    // The account is requested as a CUSTOMER and the resume target is this
-    // exact screen, so `completeAuth` hands the checkout back after the OTP.
-    expect(navigate).toHaveBeenCalledWith('login', { returnTo: '/shopCheckout', role: 'USER' });
-  });
-
-  it('tells a visitor on the cart footer that the sign-in comes at checkout', async () => {
-    addToCart('guest', { id: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men' });
-    const navigate = vi.fn();
-    const { container } = await render(<ShopCartScreen session={null} navigate={navigate} notify={vi.fn()} />);
-    expect(container.querySelector('.shop-cart-guest-note').textContent).toMatch(/sign in to place the order/i);
-    // The cart itself is not gated: checkout is one tap away, the gate is there.
-    await act(async () => { buttonsContaining('Proceed to checkout', container)[0].click(); });
-    expect(navigate).toHaveBeenCalledWith('shopCheckout');
+    // … the dialog is open over the bill, and closing it goes back to the cart.
+    expect(document.querySelector('.modal-card').textContent).toContain('Sign in to place this order');
+    // The bill underneath still totals the basket they filled.
+    expect(container.textContent).toMatch(/Item total/);
+    expect(container.querySelector('.shop-bill-card')).toBeTruthy();
+    await act(async () => { buttonsContaining('Keep shopping', document.querySelector('.modal-card'))[0].click(); });
+    expect(navigate).toHaveBeenCalledWith('shopCart');
   });
 
   it('prefills a customer checkout from the customer profile, and keeps the salon one for partners', async () => {

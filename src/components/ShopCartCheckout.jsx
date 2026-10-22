@@ -41,6 +41,7 @@ import {
   EmptyState,
   Field,
   ImageWithFallback,
+  Modal,
   PageHeader,
   SelectField,
   cx,
@@ -126,6 +127,7 @@ export function ShopCartScreen({ session, navigate, notify }) {
   const guest = isShopGuest(session);
   const { cart: lines, setQty, removeLine } = useSyncedCart(ownerId);
   const shopSettings = useShopSettings();
+  const [gateOpen, setGateOpen] = useState(false);
 
   const totals = cartTotals(lines, shopSettings);
   const gap = freeDeliveryGap(lines, shopSettings);
@@ -214,6 +216,7 @@ export function ShopCartScreen({ session, navigate, notify }) {
           <ShopBillCard lines={lines} settings={shopSettings} stage="cart" />
         </aside>
       </div>
+      <ShopGuestGateDialog open={gateOpen} onClose={() => setGateOpen(false)} navigate={navigate} copy={copy} />
       <div className="shop-cart-footer">
         <div className="shop-cart-footer-amount">
           {/* The cart figure is the product value. It is NOT the amount that
@@ -225,15 +228,12 @@ export function ShopCartScreen({ session, navigate, notify }) {
           <strong>{formatCurrency(totals.subtotal)}</strong>
           <span>{cartCount(lines)} item{cartCount(lines) === 1 ? '' : 's'} · delivery at checkout</span>
         </div>
-        <div className="shop-cart-footer-action">
-          <Button size="large" onClick={() => navigate('shopCheckout')}>
-            Proceed to checkout <ChevronRight size={17} />
-          </Button>
-          {/* A visitor's cart is not a promise of an order yet: the account is
-              asked for on the next screen, so say it before the tap rather
-              than surprising them with a login form at checkout. */}
-          {guest && <small className="shop-cart-guest-note">You will sign in to place the order.</small>}
-        </div>
+        {/* A visitor's tap on "Proceed" opens the sign-in dialog right here —
+            no separate gate page, nothing said about accounts while they
+            shop. A signed-in account goes straight to checkout. */}
+        <Button size="large" onClick={() => (guest ? setGateOpen(true) : navigate('shopCheckout'))}>
+          Proceed to checkout <ChevronRight size={17} />
+        </Button>
       </div>
     </div>
   );
@@ -272,19 +272,19 @@ export function initialAddressFromSession(session) {
 /* ------------------------------------------------------------------ *\
  * The purchase gate — the one place the website asks for an account
  *
- * The storefront lets a visitor browse AND fill a cart; the account is asked
- * for here, at the only moment it is genuinely needed: an order must belong to
- * somebody the delivery partner can call, the platform can track and the
- * buyer can re-order from My orders. The gift is explained BEFORE the form
- * (address, tracking, notifications), because a login wall with no reason
- * reads as a toll gate.
+ * A visitor browses and fills a cart freely; the account is asked for at the
+ * only moment it is genuinely needed: an order must belong to somebody the
+ * delivery partner can call, the platform can track and the buyer can re-order
+ * from My orders. So the shop says NOTHING about accounts while they shop —
+ * this small dialog opens on "Proceed to checkout", states the three things
+ * the account buys them, and then the OTP page takes over.
  *
  * Signing in is not a dead end: the cart stays exactly as it is and
- * `completeAuth` merges it into the account (`adoptGuestCart`) before
- * resuming this very screen — so the visitor lands back on checkout with the
- * same basket and the address prefilled from their profile.
+ * `completeAuth` merges it into the account (`adoptGuestCart`) before resuming
+ * `/shopCheckout`, so the visitor lands on a prefilled checkout with the same
+ * basket.
  * ------------------------------------------------------------------ */
-export function ShopAccountGate({ navigate, lines, shopSettings, copy }) {
+export function ShopGuestGateDialog({ open, onClose, navigate, copy }) {
   const returnTo = '/shopCheckout';
   const signIn = () => {
     // The resume target for the auth flow; `guestNavigate` stashes it too, and
@@ -294,43 +294,26 @@ export function ShopAccountGate({ navigate, lines, shopSettings, copy }) {
     navigate('login', { returnTo, role: 'USER' });
   };
   return (
-    <div className="screen shop-checkout-screen">
-      <PageHeader title="Checkout" subtitle="One step before delivery" onBack={() => navigate('shopCart')} />
-      <section className="shop-gate-card">
-        <span className="shop-gate-icon" aria-hidden="true"><Lock size={19} /></span>
-        <h2>{copy.guestCheckoutTitle}</h2>
-        <p className="shop-gate-lead">{copy.guestCheckoutLead}</p>
-        <ul className="shop-gate-points">
-          {copy.guestCheckoutPoints.map(point => (
-            <li key={point}><CheckCircle2 size={14} aria-hidden="true" /><span>{point}</span></li>
-          ))}
-        </ul>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={copy.guestCheckoutTitle}
+      size="sm"
+      footer={(
         <div className="shop-gate-actions">
-          <Button size="large" onClick={signIn}>{copy.guestCheckoutCta} <ChevronRight size={17} /></Button>
-          <Button variant="secondary" onClick={() => navigate('shop')}>{copy.guestCheckoutBack}</Button>
+          <Button onClick={signIn}>{copy.guestCheckoutCta}</Button>
+          <Button variant="secondary" onClick={onClose}>{copy.guestCheckoutBack}</Button>
         </div>
-        <p className="shop-gate-footnote">
-          <ShoppingBag size={13} aria-hidden="true" />
-          <span>
-            {lines.length} item{lines.length === 1 ? '' : 's'} in your cart are kept on this device
-            {' '}and move to your account as soon as you sign in.
-          </span>
-        </p>
-      </section>
-      {/* The basket, item by item: what they picked is theirs and must not
-          disappear behind a login card. */}
-      <ul className="shop-gate-items" aria-label="Items in your cart">
-        {lines.map(line => (
-          <li key={line.productId}>
-            <ImageWithFallback src={getFileUrl(line.image)} fallback={PRODUCT_PLACEHOLDER} alt="" className="shop-gate-item-image" />
-            <span className="shop-gate-item-name">{line.name}</span>
-            <span className="shop-gate-item-qty">× {line.qty}</span>
-            <strong>{formatCurrency(line.price * line.qty)}</strong>
-          </li>
+      )}
+    >
+      <span className="shop-gate-icon" aria-hidden="true"><Lock size={17} /></span>
+      <p className="shop-gate-lead">{copy.guestCheckoutLead}</p>
+      <ul className="shop-gate-points">
+        {copy.guestCheckoutPoints.map(point => (
+          <li key={point}><CheckCircle2 size={13} aria-hidden="true" /><span>{point}</span></li>
         ))}
       </ul>
-      <ShopBillCard lines={lines} settings={shopSettings} stage="cart" title="Your cart" />
-    </div>
+    </Modal>
   );
 }
 
@@ -620,10 +603,17 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     );
   }
 
-  // Visitors do not check out here: the gate explains why and hands them a
-  // sign-in that comes back to this exact screen.
+  // Visitors do not check out here. This route is public so a deep link (or a
+  // resume that raced the merge) lands somewhere sensible: the bill is behind
+  // the dialog, and closing it returns to the cart.
   if (isShopGuest(session)) {
-    return <ShopAccountGate navigate={navigate} lines={lines} shopSettings={shopSettings} copy={copy} />;
+    return (
+      <div className="screen shop-checkout-screen">
+        <PageHeader title="Checkout" onBack={() => navigate('shopCart')} />
+        <ShopGuestGateDialog open onClose={() => navigate('shopCart')} navigate={navigate} copy={copy} />
+        <ShopBillCard lines={lines} settings={shopSettings} stage="cart" title="Your cart" />
+      </div>
+    );
   }
 
   const serverSchemaGap = orderErrorCode === 'BUYER_SCHEMA';
