@@ -358,6 +358,85 @@ describe('Bottom navigation labels', () => {
     labels.forEach(label => expect(label[0]).toBe(label[0].toUpperCase()));
   });
 
+  // The reported defect: a partner tapped Shop and got the CUSTOMER QUEUE. The
+  // shop routes only had a branch inside the customer half of `render`, so on
+  // the salon side every shop URL fell through to the final
+  // `return <SalonQueueScreen/>`. Both roles now share one shop branch.
+  it('opens the Naai Shop from the salon tab bar, not the queue', async () => {
+    signIn('SALON', '/queue');
+    await mount();
+    expect(container.querySelector('.salon-queue-screen')).not.toBeNull();
+
+    const shopTab = Array.from(container.querySelectorAll('.mobile-nav button')).find(node => node.textContent.includes('Shop'));
+    expect(shopTab).toBeTruthy();
+    await act(async () => { shopTab.click(); });
+    await flush();
+
+    expect(window.location.pathname).toBe('/shop');
+    expect(container.querySelector('.shop-screen')).not.toBeNull();
+    // The queue must be GONE, not merely underneath the shop.
+    expect(container.querySelector('.salon-queue-screen')).toBeNull();
+    // The screen itself is the shop (the sidebar still LISTS "Customer queue",
+    // so the assertion is about the content area, not the whole page).
+    const content = container.querySelector('.workspace-content') || container;
+    expect(content.textContent).not.toContain('No customers in queue');
+    expect(content.querySelector('.shop-screen')).not.toBeNull();
+    expect(container.querySelector('.mobile-nav button[aria-current="page"]')?.textContent).toContain('Shop');
+  });
+
+  it('opens the shop on a direct /shop link on the salon side too', async () => {
+    signIn('SALON', '/shop');
+    await mount();
+
+    expect(container.querySelector('.shop-screen')).not.toBeNull();
+    expect(container.querySelector('.salon-queue-screen')).toBeNull();
+    // …and it is the partner's shop, in the partner's words.
+    expect(container.textContent).toContain('Grooming stock for your salon');
+  });
+
+  it('keeps a partner inside the shop on every shop route', async () => {
+    // The same fall-through that sent Shop to the queue also swallowed the
+    // product page, the cart and the order list.
+    const routes = [
+      ['/shopCart', '.shop-cart-screen'],
+      ['/shopOrders', '.shop-orders-screen'],
+      ['/shopProduct?productId=missing', '.shop-detail-page'],
+    ];
+    for (const [path, selector] of routes) {
+      signIn('SALON', path);
+      await mount();
+      expect(container.querySelector(selector), path).not.toBeNull();
+      expect(container.querySelector('.salon-queue-screen'), path).toBeNull();
+      act(() => root.unmount());
+      container.remove();
+      container = null;
+      root = null;
+    }
+  });
+
+  it('gives a partner the same shop screens a customer gets', async () => {
+    const shopShape = () => ({
+      toolbar: Boolean(container.querySelector('.shop-toolbar')),
+      facets: container.querySelectorAll('.shop-filters-selects select').length,
+      grid: Boolean(container.querySelector('.shop-grid, .shop-empty, .shop-loading, .empty-state')),
+      cartShortcut: Boolean(container.querySelector('.shop-header-action')),
+    });
+
+    signIn('USER', '/shop');
+    await mount();
+    const customer = shopShape();
+    act(() => root.unmount());
+    container.remove();
+
+    signIn('SALON', '/shop');
+    await mount();
+    const salon = shopShape();
+
+    // Same UI: one toolbar, the three facet selects, the grid, the cart shortcut.
+    expect(customer).toEqual({ toolbar: true, facets: 3, grid: true, cartShortcut: true });
+    expect(salon).toEqual(customer);
+  });
+
   it('marks the open tab for assistive tech', async () => {
     signIn('USER', '/bookings');
     await mount();

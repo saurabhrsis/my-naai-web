@@ -184,6 +184,21 @@ const SALON_ROUTE_NAMES = ['queue', 'history', ...SHOP_ROUTE_NAMES, 'account', '
 const GUEST_ROUTE_NAMES = ['home', 'salon', 'shop', 'shopProduct', 'shopCart', 'shopCheckout', 'about', 'faq', 'terms', 'privacy', 'contact', 'partner'];
 const PUBLIC_ROUTE_NAMES = [...GUEST_ROUTE_NAMES, 'login'];
 
+// Every shop route renders the same component for a customer and for a salon
+// partner. Returns the element, or `null` when the route is not a shop route
+// (the caller then falls through to its role's own screens).
+function renderShopRoute(route, props) {
+  switch (route.name) {
+    case 'shop': return <ShopScreen {...props} />;
+    case 'shopProduct': return <ShopProductDetailScreen {...props} params={route.params} />;
+    case 'shopCart': return <ShopCartScreen {...props} />;
+    case 'shopCheckout': return <ShopCheckoutScreen {...props} />;
+    case 'shopOrders': return <ShopOrdersScreen {...props} />;
+    case 'shopOrder': return <ShopOrderScreen {...props} params={route.params} />;
+    default: return null;
+  }
+}
+
 function defaultRouteForRole(role) {
   return { name: String(role || '').toUpperCase() === 'SALON' ? 'queue' : 'home', params: {} };
 }
@@ -1462,16 +1477,18 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     const navForScreens = isSubscriptionLocked ? safeNavigate : navigate;
     const props = { session, navigate: navForScreens, notify, onSessionUpdate: handleSessionUpdate };
     if (isSalon && session.isNewSalon && route.name !== 'editProfile') return <EditSalonProfileScreen {...props} params={{ ...(route.params || {}), isOnboarding: 'true' }} onLogout={onLogout} />;
+    // ── The Naai Shop, for BOTH roles ───────────────────────────────────────
+    // One set of screens, one UI: the catalog, product page, cart, checkout and
+    // order history are the same components either way, and the only thing that
+    // changes is the wording/persistence chosen from the session inside them
+    // (`shopCopy`, `shopStorageOwnerId`). This block MUST run before the role
+    // split: it used to live inside the customer branch only, so a salon
+    // partner who tapped Shop matched no salon branch and fell through to the
+    // final `return <SalonQueueScreen/>` — the tab opened the customer queue.
+    const shopScreen = renderShopRoute(route, props);
+    if (shopScreen) return shopScreen;
     if (!isSalon) {
       if (route.name === 'home') return <HomeScreen {...props} />;
-      // Customers shop the same admin catalog the partners buy from; the
-      // screens differ only in wording and in whose cart/orders they read.
-      if (route.name === 'shop') return <ShopScreen {...props} />;
-      if (route.name === 'shopProduct') return <ShopProductDetailScreen {...props} params={route.params} />;
-      if (route.name === 'shopCart') return <ShopCartScreen {...props} />;
-      if (route.name === 'shopCheckout') return <ShopCheckoutScreen {...props} />;
-      if (route.name === 'shopOrders') return <ShopOrdersScreen {...props} />;
-      if (route.name === 'shopOrder') return <ShopOrderScreen {...props} params={route.params} />;
       if (route.name === 'bookings') return <BookingsScreen {...props} />;
       // if (route.name === 'products') return <ProductsScreen {...props} />; // retired tab
       if (route.name === 'account') return <AccountScreen {...props} onLogout={onLogout} />;
