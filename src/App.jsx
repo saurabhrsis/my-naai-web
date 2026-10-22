@@ -13,7 +13,7 @@ import {
   LogOut,
   MapPin,
   Menu,
-  Package,
+  // Package, // only the hidden Products tabs used this icon
   Scissors,
   ShoppingBag,
   Sparkles,
@@ -65,7 +65,8 @@ import {
   HomeScreen,
   InfoScreen,
   NotificationsScreen,
-  ProductsScreen,
+  // ProductsScreen, // hidden: the old salon-product list is replaced by the
+  // shop (see USER_NAV below) — the screen itself is kept in UserScreens.jsx.
   SalonDetailScreen,
   ScheduleScreen,
   ServicesScreen,
@@ -76,7 +77,8 @@ import {
   EditSalonProfileScreen,
   SalonAccountScreen,
   SalonHistoryScreen,
-  SalonProductsScreen,
+  // SalonProductsScreen, // hidden: partners manage stock in the shop now — the
+  // screen itself is kept in SalonScreens.jsx.
   SalonQueueScreen,
 } from './components/SalonScreens';
 import { ShopProductDetailScreen, ShopScreen } from './components/ShopScreen';
@@ -100,14 +102,24 @@ const USER_NAV = [
   // (shop_products) is sold to people, not only to salons buying stock.
   { name: 'shop', label: 'Naai Shop', short: 'Shop', icon: ShoppingBag },
   { name: 'bookings', label: 'My bookings', short: 'Bookings', icon: CalendarCheck2 },
-  { name: 'products', label: 'Products', short: 'Products', icon: Package },
+  // Old customer "Products" tab — retired. It listed the legacy products API
+  // (`/api/products/get-all-salons-products-list`), which is not the catalog the
+  // shop sells, so customers saw two different product lists. The Naai Shop tab
+  // above is now the only product surface. Commented out, not deleted: the screen
+  // (ProductsScreen) is still in UserScreens.jsx if it is ever needed again.
+  // { name: 'products', label: 'Products', short: 'Products', icon: Package },
   { name: 'account', label: 'Account', short: 'Account', icon: CircleUserRound },
 ];
 const SALON_NAV = [
   { name: 'queue', label: 'Customer queue', short: 'Queue', icon: UsersRound },
   { name: 'history', label: 'History', short: 'History', icon: History },
   { name: 'shop', label: 'Naai Shop', short: 'Shop', icon: ShoppingBag },
-  { name: 'salonProducts', label: 'Products', short: 'Products', icon: Package },
+  // Old partner "Products" tab — retired for the same reason as the customer one:
+  // it edited the legacy products table instead of the shop catalog the shop
+  // sells, so a partner's edits never reached the storefront. The shop tab is
+  // now the single product surface on this side too. SalonProductsScreen is kept
+  // in SalonScreens.jsx, unused, rather than deleted.
+  // { name: 'salonProducts', label: 'Products', short: 'Products', icon: Package },
   { name: 'account', label: 'Account', short: 'Account', icon: CircleUserRound },
 ];
 
@@ -154,8 +166,11 @@ function saveSession(session) {
 // The shop routes are shared by both roles: `shopStorageOwnerId` keeps their
 // carts apart, and the screens read the role only for wording.
 const SHOP_ROUTE_NAMES = ['shop', 'shopProduct', 'shopCart', 'shopCheckout', 'shopOrders', 'shopOrder'];
-const USER_ROUTE_NAMES = ['home', 'bookings', 'products', 'account', 'detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'privacy', 'contact', ...SHOP_ROUTE_NAMES];
-const SALON_ROUTE_NAMES = ['queue', 'history', ...SHOP_ROUTE_NAMES, 'salonProducts', 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
+// 'products' and 'salonProducts' are no longer routes of their own — the retired
+// Products tabs pointed at them. A stale /products link is aliased onto the shop
+// in src/lib/routes.js, so it still lands somewhere useful.
+const USER_ROUTE_NAMES = ['home', 'bookings', 'account', 'detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'privacy', 'contact', ...SHOP_ROUTE_NAMES];
+const SALON_ROUTE_NAMES = ['queue', 'history', ...SHOP_ROUTE_NAMES, 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
 // Every route a visitor may open WITHOUT an account — salons are browsable
 // first, login only appears when they try to book (the client's headline
 // ask). The info pages are public too: the site footer links About/FAQ/Terms/
@@ -1458,7 +1473,7 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
       if (route.name === 'shopOrders') return <ShopOrdersScreen {...props} />;
       if (route.name === 'shopOrder') return <ShopOrderScreen {...props} params={route.params} />;
       if (route.name === 'bookings') return <BookingsScreen {...props} />;
-      if (route.name === 'products') return <ProductsScreen {...props} />;
+      // if (route.name === 'products') return <ProductsScreen {...props} />; // retired tab
       if (route.name === 'account') return <AccountScreen {...props} onLogout={onLogout} />;
       if (route.name === 'detail' || route.name === 'salon') return <SalonDetailScreen {...props} params={route.params} />;
       if (route.name === 'services') return <ServicesScreen {...props} params={route.params} />;
@@ -1472,7 +1487,7 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     }
     if (route.name === 'queue') return <SalonQueueScreen {...props} />;
     if (route.name === 'history') return <SalonHistoryScreen {...props} />;
-    if (route.name === 'salonProducts') return <SalonProductsScreen {...props} />;
+    // if (route.name === 'salonProducts') return <SalonProductsScreen {...props} />; // retired tab
     if (route.name === 'account') return <SalonAccountScreen {...props} onLogout={onLogout} />;
     if (route.name === 'notifications') return <NotificationsScreen {...props} />;
     if (route.name === 'editProfile') return <EditSalonProfileScreen {...props} params={route.params} onLogout={onLogout} />;
@@ -1639,10 +1654,11 @@ function MobileShellBar({ session, nav, route, navigate, onLogout, notifyInstall
 // surgery on them. The old code did `.replace('Customer ', '').replace('My ', '')`
 // on the nav label, which chopped the capital off the front of the word and
 // shipped a lowercase "bookings" / "queue" sitting next to "Discover",
-// "Products" and "Account" — visible on every phone and tablet. Each nav entry
+// "Shop" and "Account" — visible on every phone and tablet. Each nav entry
 // now carries its own `short` label and the bar just renders it.
-// The column count follows the nav's length: customer roles show four tabs,
-// salon partners five (Queue, History, Shop, Products, Account).
+// The column count follows the nav's length: four tabs on both sides now that the
+// old Products tab is gone (Discover, Shop, Bookings, Account for customers;
+// Queue, History, Shop, Account for partners).
 function MobileNav({ nav, route, navigate }) { return <nav className="mobile-nav" style={{ gridTemplateColumns: `repeat(${nav.length}, minmax(0, 1fr))` }}>{nav.map(item => <button key={item.name} className={route.name === item.name ? 'active' : ''} aria-current={route.name === item.name ? 'page' : undefined} onClick={() => navigate(item.name)}><item.icon size={20} /><span>{item.short || item.label}</span></button>)}</nav>; }
 
 function PartnerInfo({ type, navigate }) { const content = type === 'about' ? SALON_ABOUT_CONTENT : type === 'faq' ? SALON_FAQ_CONTENT : SALON_TERMS_CONTENT; return <div className="screen info-screen"><div className="page-header"><div className="page-header-leading"><button className="icon-btn ghost" onClick={() => navigate(-1)} aria-label="Go back"><ChevronRight size={19} className="rotate-180" /></button><div><span className="eyebrow">{content.eyebrow}</span><h1>{content.title}</h1></div></div></div><div className="info-intro"><Sparkles size={18} /><p>{content.intro || 'Everything you need to know about partnering with My Naai.'}</p></div><div className="info-sections">{content.sections.map(section => <section key={section.title}><h2>{section.title}</h2><p>{section.text}</p></section>)}</div><div className="info-contact"><span className="info-contact-icon"><HelpCircle size={18} /></span><div><strong>Need more help?</strong><p>Call our partner team on 8380017393</p></div><button onClick={() => window.open('tel:8380017393')}><ChevronRight size={17} /></button></div></div>; }

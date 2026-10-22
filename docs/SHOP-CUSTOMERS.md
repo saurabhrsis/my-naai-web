@@ -20,7 +20,7 @@ admin keeps adding products exactly as today.
 | `mynaai.in/shop` (public website) | Whole catalog browsable with no account. Navbar link **Shop**, footer link **Shop grooming products**. |
 | `mynaai.in/shopProduct?productId=…` | Public product page (price, gallery, delivery facts). |
 | ADD as a visitor | Asks for a sign-in and resumes on the product page (`/login?…`, pending route). No guest cart is written — a cart belongs to a person, not to a browser. |
-| Customer app (USER role) | **Shop** tab in the bottom bar (`Discover · Shop · Bookings · Products · Account`), plus **Naai Shop** / **My shop orders** rows on the Account screen. |
+| Customer app (USER role) | **Shop** tab in the bottom bar (`Discover · Shop · Bookings · Account`), plus **Naai Shop** / **My shop orders** rows on the Account screen. The old **Products** tab is retired on both the customer and partner dashboards — it listed the legacy per-salon `products` table, so there were two different product lists in one app. |
 | Salon app (SALON role) | Unchanged: **Shop** tab, same catalog, salon cart/orders. |
 | Wording | Role-aware (`src/lib/shopBuyer.js`): a customer is never told the parcel goes to "your salon". |
 | Cart/order storage | Salons keep the bare account id (`mynaaiShopCart:<accountId>`, unchanged). Customers are namespaced (`mynaaiShopCart:user:<userId>`) so one device can hold both. |

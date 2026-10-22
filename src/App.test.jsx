@@ -189,8 +189,16 @@ describe('getRouteFromPath', () => {
     setPath('/queue');
     expect(getRouteFromPath('USER')).toEqual({ name: 'home', params: {} });
 
-    setPath('/products');
+    setPath('/bookings');
     expect(getRouteFromPath('SALON')).toEqual({ name: 'queue', params: {} });
+  });
+
+  it('folds the retired /products link onto the shop', () => {
+    // The old "Products" tab is gone, but the URL outlives it in bookmarks and
+    // WhatsApp messages. Better to land on the storefront than on the home page.
+    setPath('/products');
+    expect(getRouteFromPath('USER')).toEqual({ name: 'shop', params: {} });
+    expect(getRouteFromPath('SALON')).toEqual({ name: 'shop', params: {} });
   });
 
   it('maps the salon-partner URL segment onto the partner route', () => {

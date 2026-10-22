@@ -33,7 +33,7 @@ namespaced under `user:<userId>`.
 | Server sync (cart + orders per account) | `src/lib/shopServerSync.js` |
 | Order-less Razorpay checkout | `src/lib/razorpay.js` (`openRazorpayOrderlessCheckout`, `getRazorpayKeyId`) |
 | Design tokens + all `.shop-*` styles | `src/styles.css` (bottom section) |
-| Product editor (category/gender + **multiple image uploads**) | `src/components/SalonScreens.jsx` (`SalonProductsScreen`) |
+| Product editor (category/gender + **multiple image uploads**) | `src/components/SalonScreens.jsx` (`SalonProductsScreen`) — **unlinked**: the old Partner Products tab was retired in favour of the shop tab, the screen is kept in the codebase but no longer routed |
 | Multi-image parsing (`productImage` comma list → ordered array) | `src/lib/shopCatalog.js` (`parseProductImages`) |
 
 ## Flow
@@ -208,6 +208,13 @@ products (`products`, edited by each salon, browsed by the app's customers
 under `/api/products/*`) are NOT the shop catalog. The shop browses the
 **company's** `shop_products` table via `POST /api/shop-products/list`
 (`api.shopProductList`) — no `salonId` anywhere in it.
+
+Because two lists in one app was confusing (and edits in the partner list never
+reached the storefront), the old **Products** tab is retired on both the
+customer and the partner dashboard. The Naai Shop tab is the only product
+surface now; the legacy screens are still in the source but unlinked, and the
+old `/products` URL folds onto `/shop` (`SEGMENT_TO_ROUTE` in
+`src/lib/routes.js`).
 
 **The catalog is also open to the public website.** A visitor with no token
 reads `POST|GET /api/shop-public/products/list` (and `/settings/get` for the
