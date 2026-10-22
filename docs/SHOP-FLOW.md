@@ -35,13 +35,18 @@ Shop tab ── search / Category · For · Price selects (one compact strip)
    │                                        │  delivery facts, description,
    │                                        │  "You may also like", cart bar
    ▼
-"3 items · ₹1,240 → View cart" floating bar
+"3 items · ₹897 + delivery at checkout → View cart" floating bar
    ▼
 Cart ── Blinkit-style rows: quantity stepper (minus at 1 removes the
-           line), per-line totals, free-delivery progress bar, bill (item total,
-           MRP savings + "you saved" line, delivery fee), to-pay footer bar
+           line), per-line totals, free-delivery progress note, bill (item
+           total, MRP savings + "you saved" line, delivery marked
+           "At checkout"), items-total footer bar
    ▼
-Checkout ── delivery address (prefilled from the salon profile, editable)
+Checkout ── delivery address (prefilled from the salon profile, editable;
+           state is picked from the Indian state list, and a legacy value
+           such as “MH” is mapped onto “Maharashtra”),
+           plus the delivery-location map/pin
+           └── the FULL bill: delivery fee, COD charges, "To pay"
            └── Pay online (Razorpay, UPI/cards/netbanking)
            └── Cash on delivery ── confirmation box: amount, "Go back" /
                "Place order" (no order is written until it is confirmed)
@@ -112,9 +117,19 @@ a **My cart** shortcut (with the live item count) beside **My orders**.
 
 Delivery facts (the free-delivery threshold, order-by) come from the
 admin-managed `shop_settings` row (default free above ₹499), so the shop no
-longer renders a delivery banner — only the bill card and the details-page
-delivery card still state the fee/free rule, and they read it live from the
-same settings the backend bills against.
+longer renders a delivery banner — only the details-page delivery card still
+states the fee/free rule, and it reads it live from the same settings the
+backend bills against.
+
+**The cart never quotes a delivery charge.** `ShopBillCard` has two stages:
+`cart` bills the products only (item total, order discount, MRP savings) and
+marks the delivery row **At checkout**; `checkout` adds the delivery fee, the
+COD charge and the real **To pay**. The floating cart bar and the cart footer
+quote the same product value (`subtotal`). Adding a delivery fee the moment an
+item was added is what made a ₹99 product read “₹199” in the cart strip — a
+price that moves when the shopper has not agreed to anything yet cannot be
+trusted, and the fee genuinely depends on details checkout collects (address,
+payment method, free-delivery threshold).
 
 All filtering is client-side over the catalog (`applyShopFilters` in
 `shopCatalog.js` — pure, fully unit-tested). The catalog endpoint
@@ -191,15 +206,49 @@ under `/api/products/*`) are NOT the shop catalog. The shop browses the
 - every add / set-qty / remove / clear is pushed **fire-and-forget** at
   `POST /api/shop-cart/*` — a failed push never breaks the session (the local
   copy survives, the next mount re-syncs);
-- at checkout the order is written locally first (`placeOrder` generates the
-  `MN…` id), the success card renders instantly, and then the same id is
-  **registered** on the server (`POST /api/shop-orders/create`) — the local
-  and server records share one identity; a successful registration clears the
-  server cart;
+- at checkout the order is placed **through the backend**. `placeOrder`
+  generates the `MN…` id locally, and that id is immediately
+  **registered** on the server (`POST /api/shop-orders/create`) with the same
+  identity. `/api/shop-orders/create` is what makes the order real (the
+  `shop_orders` row the admin dashboard and the distributor work from), so the
+  success card waits for its answer:
+  - **accepted** → the local copy is marked `syncState: 'synced'`, the server
+    amounts/payment/status are merged in, the cart (local + server) is
+    cleared and the success card shows the order;
+  - **cash on delivery rejected** → nothing is placed. The local draft is
+    deleted, the cart and address stay exactly as they were, and the checkout
+    shows the backend's message with *Try again*;
+  - **online payment taken but registration failed** (network/5xx) → the order
+    is never thrown away: it is kept with `syncState: 'pending'`, queued in
+    `mynaaiShopPendingOrders` and retried by `flushPendingOrders()` on the next
+    visit to *My orders*;
+- the request body is built **from the API contract**, never from the local
+  order: `{ orderId, items[{productId,name,price,qty,…}], address{name,phone,
+  line1,city,state,pincode}, payment{method,status,paymentId,amount} }`. Joi
+  rejects unknown keys, and one stray key fails the whole order — the delivery
+  pin (`address.latitude/longitude`) is added only when it exists and the
+  registration is repeated without it if an older backend answers "not
+  allowed", so a pin can never cost the salon its order. A line whose
+  `productId` is not a catalog UUID is refused before the call with a message
+  naming the product;
+- **My orders never dresses up a draft as a real order**: anything without a
+  server confirmation shows a *Not confirmed* chip, a warning that nobody will
+  deliver it, and *Send to My Naai* / *Remove* actions;
 - guests (no session token) never touch the network and keep the pure
   localStorage behaviour; online payments stay order-less (Razorpay Checkout
   key + amount), and the `razorpay_payment_id` the client stores on the order
   is what the backend's signed webhook flips to PAID.
+
+> **Backend requirement (open).** `createShopOrderSchema` in the backend
+> validates the address object strictly, so a delivery pin
+> (`address.latitude` / `address.longitude`) is rejected as an unknown key and
+> the order is stored without it. The checkout therefore sends the pin only
+> when it exists and falls back to a pin-less body on "not allowed", which is
+> why a COD order now always lands in `shop_orders`. To store the pin on the
+> order, the backend has to add the two optional coordinates to that schema
+> (`latitude: Joi.number().min(-90).max(90)`,
+> `longitude: Joi.number().min(-180).max(180)`) and persist them on the order
+> snapshot; the client needs no change once it does.
 
 **Two status tracks.** The order carries an INTERNAL track (what the company
 admin and the assigned **distributor** see:

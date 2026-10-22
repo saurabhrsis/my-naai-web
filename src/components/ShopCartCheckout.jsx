@@ -10,6 +10,7 @@ import {
   ShoppingBag,
   Trash2,
   Truck,
+  XCircle,
 } from 'lucide-react';
 import { getFileUrl } from '../lib/api';
 import {
@@ -25,22 +26,30 @@ import {
   freeDeliveryGap,
   placeOrder,
   readCart,
+  removeLocalOrder,
+  setOrderSyncState,
 } from '../lib/shopOrders';
 import { useShopSettings } from '../lib/shopSettings';
-import { clearServerCart, registerServerOrder } from '../lib/shopServerSync';
+import { normalizeStateName, stateOptionsWith } from '../lib/stateOptions';
+import { formatCoordinates, mapsUrl, toPoint } from '../lib/geo';
+import { clearServerCart, queuePendingOrder, registerServerOrder } from '../lib/shopServerSync';
 import {
   Button,
   EmptyState,
   Field,
   ImageWithFallback,
   PageHeader,
+  SelectField,
   cx,
   formatCurrency,
+  getBrowserLocation,
 } from './Shared';
+import { LocationMap } from './LocationMap.jsx';
 import { useConfirm } from './ConfirmDialog';
 import { ShopQuantityControl, shopOwnerId, shopSalonName, useSyncedCart } from './ShopScreen';
 
 const PRODUCT_PLACEHOLDER = '/assets/brand/product-placeholder.svg';
+const SUPPORT_PHONE = '8380017393';
 
 /* ------------------------------------------------------------------ *\
  * Bill card — shared by the cart, the checkout summary and the success
@@ -49,8 +58,20 @@ const PRODUCT_PLACEHOLDER = '/assets/brand/product-placeholder.svg';
  * the bill exactly as the order was billed — the settings may have moved
  * since.
  * ------------------------------------------------------------------ */
-export function ShopBillCard({ lines, settings, method, title = 'Bill details', amounts }) {
+export function ShopBillCard({ lines, settings, method, title = 'Bill details', amounts, stage = 'checkout' }) {
   const totals = amounts || cartTotals(lines, settings, { method });
+  // TWO STAGES, ON PURPOSE.
+  //
+  // `cart`   — the salon is still deciding. Only the products are on the bill:
+  //            item total, the admin's item discount, MRP savings. Delivery is
+  //            NOT added here, because it depends on the address, the payment
+  //            method and the admin's free-delivery threshold, and charging it
+  //            in the cart made a ₹99 item look like a ₹199 cart. The row says
+  //            where the fee appears instead of quoting a number the salon has
+  //            not agreed to yet.
+  // `checkout` — the full bill, once the delivery details and payment method
+  //            are known: delivery fee, COD charges and the real "To pay".
+  const atCheckout = stage === 'checkout';
   return (
     <section className="shop-bill-card">
       <h3>{title}</h3>
@@ -62,14 +83,32 @@ export function ShopBillCard({ lines, settings, method, title = 'Bill details', 
         </div>
       )}
       {totals.savings > 0 && <div className="shop-bill-row saving"><span>MRP savings</span><span>− {formatCurrency(totals.savings)}</span></div>}
-      <div className="shop-bill-row">
-        <span>Delivery fee</span>
-        {totals.deliveryFee === 0 && lines.length > 0
-          ? <span className="shop-bill-free">FREE</span>
-          : <span>{totals.deliveryFee === 0 ? '—' : formatCurrency(totals.deliveryFee)}</span>}
-      </div>
-      {totals.codFee > 0 && <div className="shop-bill-row"><span>COD charges</span><span>{formatCurrency(totals.codFee)}</span></div>}
-      <div className="shop-bill-row total"><span>To pay</span><strong>{formatCurrency(totals.total)}</strong></div>
+      {atCheckout ? (
+        <>
+          <div className="shop-bill-row">
+            <span>Delivery fee</span>
+            {totals.deliveryFee === 0 && lines.length > 0
+              ? <span className="shop-bill-free">FREE</span>
+              : <span>{totals.deliveryFee === 0 ? '—' : formatCurrency(totals.deliveryFee)}</span>}
+          </div>
+          {totals.codFee > 0 && <div className="shop-bill-row"><span>COD charges</span><span>{formatCurrency(totals.codFee)}</span></div>}
+          <div className="shop-bill-row total"><span>To pay</span><strong>{formatCurrency(totals.total)}</strong></div>
+        </>
+      ) : (
+        <>
+          <div className="shop-bill-row pending">
+            <span>Delivery fee</span>
+            <span>At checkout</span>
+          </div>
+          <div className="shop-bill-row total"><span>Items total</span><strong>{formatCurrency(totals.subtotal)}</strong></div>
+          <p className="shop-bill-note">
+            Product value only — delivery is calculated on the next step, once your address is confirmed.
+            {totals.freeDeliveryAbove > 0 && totals.deliveryFee > 0
+              ? ` Free delivery above ${formatCurrency(totals.freeDeliveryAbove)}.`
+              : ''}
+          </p>
+        </>
+      )}
       {totals.savings > 0 && <p className="shop-bill-saved">You saved {formatCurrency(totals.savings)} on this order</p>}
     </section>
   );
@@ -166,14 +205,20 @@ export function ShopCartScreen({ session, navigate, notify }) {
           </div>
         </div>
         <aside className="shop-cart-aside">
-          <ShopBillCard lines={lines} settings={shopSettings} />
+          {/* Cart stage: products only. Delivery is billed at checkout. */}
+          <ShopBillCard lines={lines} settings={shopSettings} stage="cart" />
         </aside>
       </div>
       <div className="shop-cart-footer">
         <div className="shop-cart-footer-amount">
-          <small>To pay</small>
-          <strong>{formatCurrency(totals.total)}</strong>
-          <span>{cartCount(lines)} item{cartCount(lines) === 1 ? '' : 's'}</span>
+          {/* The cart figure is the product value. It is NOT the amount that
+              will be charged: delivery (and any COD charge) is added on the
+              checkout page, and quoting a bigger number here — a ₹99 product
+              showing as ₹199 with a delivery fee nobody chose — read as a
+              hidden charge. */}
+          <small>Items total</small>
+          <strong>{formatCurrency(totals.subtotal)}</strong>
+          <span>{cartCount(lines)} item{cartCount(lines) === 1 ? '' : 's'} · delivery at checkout</span>
         </div>
         <Button size="large" onClick={() => navigate('shopCheckout')}>
           Proceed to checkout <ChevronRight size={17} />
@@ -197,8 +242,14 @@ function initialAddressFromSession(session) {
     phone: profile.phoneNumber || profile.phone || '',
     line1: profile.addressLine1 || profile.address || `${profile.salonName || 'Salon'}, ` + [profile.addressLine1, profile.city].filter(Boolean).join(', '),
     city: profile.city || '',
-    state: profile.state || '',
+    // A dropdown only displays a value it knows: `MH`, `Orissa` or
+    // `Pondicherry` saved by an older form is mapped onto the canonical name
+    // here, so the salon's address never looks unset at checkout.
+    state: normalizeStateName(profile.state),
     pincode: profile.pincode || '',
+    // The delivery point: the salon's saved GPS location, editable here so a
+    // delivery to a different gate still has somewhere to send the partner.
+    ...(toPoint(profile) || { latitude: null, longitude: null }),
   };
 }
 
@@ -210,6 +261,10 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
   const [busy, setBusy] = useState(false);
   const [payState, setPayState] = useState('idle'); // idle | opening | in-checkout | app-switched | confirming
   const [placed, setPlaced] = useState(null);
+  // A rejected registration is a real outcome the salon must see — not a
+  // console line. `orderError` is shown above the pay button, with Retry.
+  const [orderError, setOrderError] = useState('');
+  const [retrying, setRetrying] = useState(false);
   const shopSettings = useShopSettings();
   // Cash on delivery is confirmed through the app's own sheet (never
   // window.confirm, which installed PWAs can suppress).
@@ -230,6 +285,26 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
 
   const setAddressField = (key, value) => setAddress(current => ({ ...current, [key]: value }));
 
+  // The delivery pin. Browser GPS is asked from this tap (gesture-safe) and the
+  // result is stored on the address, so the order carries the exact point the
+  // admin panel and the delivery partner will navigate to.
+  const deliveryPoint = toPoint(address);
+  const [locating, setLocating] = useState(false);
+  const useMyLocationForDelivery = async () => {
+    setLocating(true);
+    try {
+      const fix = await getBrowserLocation();
+      if (!fix) {
+        notify?.('error', 'Could not read this device\u2019s location. Allow location access and try again.');
+        return;
+      }
+      setAddress(current => ({ ...current, latitude: fix.latitude, longitude: fix.longitude }));
+      notify?.('success', 'Delivery pin set to your current location.');
+    } finally {
+      setLocating(false);
+    }
+  };
+
   const validate = () => {
     if (!address.name.trim()) return 'Add the recipient\u2019s name.';
     if (!/^\d{10}$/.test(address.phone.trim())) return 'Add a 10-digit contact number.';
@@ -239,10 +314,20 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     return '';
   };
 
-  const finalizeOrder = (paymentInfo) => {
-    // The local record is written first (same id the server will keep), so
-    // the success view and "My orders" render instantly; the server copy
-    // then makes the order part of the account's history on every device.
+  /**
+   * Place the order ON THE SERVER, then show it.
+   *
+   * The id is generated locally so the flow has one identity, but the browser
+   * copy is only a cache: the success screen appears once
+   * `POST /api/shop-orders/create` has accepted the order — that is the row the
+   * admin dashboard and the distributor work from.
+   *
+   * Cash on delivery: nothing was charged, so a rejection is a clean failure —
+   * the draft is removed, the cart stays untouched and the salon can retry.
+   * Online: the money has been taken, so the order is kept, queued for retry
+   * and shown with an honest "confirming" state.
+   */
+  const finalizeOrder = async (paymentInfo) => {
     const order = placeOrder(ownerId, {
       items: lines,
       address,
@@ -250,16 +335,46 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
       amounts: totals,
       salonName: shopSalonName(session),
     });
-    setLines(clearCart(ownerId));
-    setPlaced(order);
+    setOrderError('');
+    setPayState('saving');
+    const result = await registerServerOrder(order);
     setPayState('idle');
-    notify?.('success', `Order ${order.id} placed.`);
-    registerServerOrder(order).then(registered => {
+
+    if (result.ok) {
+      const confirmed = setOrderSyncState(ownerId, order.id, 'synced', result.order ? {
+        // The server is the authority on the money and the status.
+        amounts: { ...order.amounts, ...(result.order.amounts || {}) },
+        payment: { ...order.payment, ...(result.order.payment || {}) },
+        placedAt: result.order.placedAt || order.placedAt,
+        serverStatus: result.order.serverStatus || null,
+      } : {}) || order;
+      setLines(clearCart(ownerId));
+      setPlaced(confirmed);
+      notify?.('success', `Order ${order.id} placed.`);
       // The placed cart is done for — clear it on the server too so another
-      // device cannot buy it again. (Local copy was already cleared.)
-      if (registered) clearServerCart();
-    });
-    return order;
+      // device cannot buy it again.
+      clearServerCart();
+      return { ok: true, order: confirmed };
+    }
+
+    if (paymentInfo.method === 'ONLINE') {
+      // Paid but not registered: never lose it. Keep the order, mark it
+      // pending and let the retry queue take over.
+      queuePendingOrder(order);
+      const pending = setOrderSyncState(ownerId, order.id, 'pending') || order;
+      setLines(clearCart(ownerId));
+      setPlaced(pending);
+      clearServerCart();
+      notify?.('error', `Payment received, but My Naai could not confirm the order yet — ${result.message} We will keep retrying.`);
+      return { ok: false, order: pending, message: result.message };
+    }
+
+    // COD: roll the draft back. An order the salon can see while the company
+    // cannot is exactly the bug this replaces.
+    removeLocalOrder(ownerId, order.id);
+    setOrderError(result.message || 'My Naai could not accept this order.');
+    notify?.('error', result.message || 'My Naai could not accept this order.');
+    return { ok: false, message: result.message };
   };
 
   const payOnline = async () => {
@@ -286,7 +401,7 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     });
     if (result.status === 'success') {
       setPayState('confirming');
-      finalizeOrder({ method: 'ONLINE', status: 'PAID', paymentId: result.payment?.paymentId || '', amount: totals.total });
+      await finalizeOrder({ method: 'ONLINE', status: 'PAID', paymentId: result.payment?.paymentId || '', amount: totals.total });
       return;
     }
     setPayState('idle');
@@ -297,8 +412,28 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     notify?.('error', describePaymentFailure(result.error));
   };
 
-  const placeCod = () => {
-    finalizeOrder({ method: 'COD', status: 'PENDING', paymentId: '', amount: totals.total });
+  const placeCod = () => finalizeOrder({ method: 'COD', status: 'PENDING', paymentId: '', amount: totals.total });
+
+  // Retry the same placement after a rejected registration — the cart and the
+  // address are still exactly as the salon left them.
+  const retryPlaceOrder = async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      const problem = validate();
+      if (problem) {
+        setOrderError(problem);
+        return;
+      }
+      await finalizeOrder({
+        method: payment === 'online' ? 'ONLINE' : 'COD',
+        status: 'PENDING',
+        paymentId: '',
+        amount: totals.total,
+      });
+    } finally {
+      setRetrying(false);
+    }
   };
 
   // Cash on delivery is a commitment to receive (and pay for) the parcel, so
@@ -320,7 +455,7 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
 
   const submit = async event => {
     event?.preventDefault();
-    if (busy) return;
+    if (busy || retrying) return;
     const problem = validate();
     if (problem) return notify?.('error', problem);
     if (lines.length === 0) return notify?.('error', 'Your cart is empty.');
@@ -332,7 +467,7 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     setBusy(true);
     try {
       if (payment === 'online') await payOnline();
-      else placeCod();
+      else await placeCod();
     } finally {
       setBusy(false);
     }
@@ -386,7 +521,8 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
     );
   }
 
-  const payLabel = payState === 'opening' ? 'Contacting payment gateway…'
+  const payLabel = payState === 'saving' ? 'Placing your order with My Naai…'
+    : payState === 'opening' ? 'Contacting payment gateway…'
     : payState === 'in-checkout' ? 'Complete the payment in the Razorpay window'
     : payState === 'app-switched' ? 'Waiting for your payment app…'
     : payState === 'confirming' ? 'Confirming your payment…'
@@ -398,16 +534,58 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
       <section className="shop-address-card">
         <h3><MapPin size={15} /> Delivery address</h3>
         <form onSubmit={submit}>
-          <div className="form-two-col">
-            <Field label="Recipient name" required><input value={address.name} onChange={event => setAddressField('name', event.target.value)} placeholder="e.g. Ramesh Kumar" autoFocus /></Field>
-            <Field label="Contact number" required><input inputMode="numeric" maxLength={10} value={address.phone} onChange={event => setAddressField('phone', event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="10-digit mobile" /></Field>
-          </div>
-          <Field label="Address" required><input value={address.line1} onChange={event => setAddressField('line1', event.target.value)} placeholder="Shop / salon address" /></Field>
-          <div className="form-two-col">
-            <Field label="City" required><input value={address.city} onChange={event => setAddressField('city', event.target.value)} placeholder="City" /></Field>
+          {/* Every field group is a direct child of one column with a real gap.
+              Address fields used to be block elements with no spacing between
+              them (only the two-column grids had a gap), which put each label
+              flush against the input above it — on a phone that read as one
+              long run of text. */}
+          <div className="checkout-fields">
             <div className="form-two-col">
-              <Field label="State"><input value={address.state} onChange={event => setAddressField('state', event.target.value)} placeholder="State" /></Field>
-              <Field label="Pincode" required><input inputMode="numeric" maxLength={6} value={address.pincode} onChange={event => setAddressField('pincode', event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="6-digit pincode" /></Field>
+              <Field label="Recipient name" required><input autoComplete="name" value={address.name} onChange={event => setAddressField('name', event.target.value)} placeholder="e.g. Ramesh Kumar" autoFocus /></Field>
+              <Field label="Contact number" required><input autoComplete="tel" inputMode="numeric" maxLength={10} value={address.phone} onChange={event => setAddressField('phone', event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="10-digit mobile" /></Field>
+            </div>
+            <Field label="Shop / salon address" required><input autoComplete="street-address" value={address.line1} onChange={event => setAddressField('line1', event.target.value)} placeholder="Building, street, landmark" /></Field>
+            {/* City · State · Pincode share one even row on a wide screen and
+                stack on a phone — no nested grid, so the columns line up. */}
+            <div className="form-three-even">
+              <Field label="City" required><input autoComplete="address-level2" value={address.city} onChange={event => setAddressField('city', event.target.value)} placeholder="City" /></Field>
+              {/* State is a fixed list — a dropdown avoids the typos a free
+                  text field produced ("MH", "maharastra", "Orissa") and the
+                  value we send is always one the platform understands. An
+                  unrecognised saved value stays visible as its own option
+                  rather than silently disappearing. */}
+              <SelectField
+                label="State"
+                value={address.state}
+                onChange={event => setAddressField('state', event.target.value)}
+                options={stateOptionsWith(address.state)}
+                placeholder="Select state"
+                autoComplete="address-level1"
+              />
+              <Field label="Pincode" required><input autoComplete="postal-code" inputMode="numeric" maxLength={6} value={address.pincode} onChange={event => setAddressField('pincode', event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="6-digit pincode" /></Field>
+            </div>
+          </div>
+          {/* Delivery location — the point the admin and the delivery partner
+              see on their map. Prefilled from the salon profile; adjustable
+              here because a delivery may go to a different gate. */}
+          <div className="checkout-location">
+            <h3><MapPin size={15} /> Delivery location</h3>
+            <p className="location-preview-coords">
+              {deliveryPoint ? formatCoordinates(deliveryPoint) : 'No delivery pin yet'}
+            </p>
+            <p className="location-preview-caption">
+              Our delivery partner navigates to this point. It is the salon GPS location unless you set it here.
+            </p>
+            <LocationMap value={deliveryPoint} height={160} ariaLabel="Delivery location map" />
+            <div className="checkout-location-actions">
+              <Button type="button" variant="secondary" size="small" onClick={useMyLocationForDelivery} loading={locating}>
+                <MapPin size={14} /> {locating ? 'Locating…' : 'Use my current location'}
+              </Button>
+              {deliveryPoint && (
+                <a className="location-preview-link" href={mapsUrl(deliveryPoint)} target="_blank" rel="noopener noreferrer">
+                  Open in Maps
+                </a>
+              )}
             </div>
           </div>
           <div className="shop-checkout-summary">
@@ -444,7 +622,28 @@ export function ShopCheckoutScreen({ session, navigate, notify }) {
               <LoaderCircle size={15} className="spin" /> {payLabel}
             </div>
           )}
-          <Button type="submit" size="large" loading={busy || payState !== 'idle'} className="shop-proceed-button">
+          {orderError && (
+            <div className="shop-order-error" role="alert">
+              <XCircle size={16} />
+              <div>
+                <strong>Order not placed</strong>
+                <p>{orderError}</p>
+                <p className="shop-order-error-help">
+                  Nothing has been charged and your cart is still here. Check the details above and try again,
+                  or call {SUPPORT_PHONE} if it keeps failing.
+                </p>
+                <div className="shop-order-error-actions">
+                  <Button type="button" size="small" loading={retrying} onClick={retryPlaceOrder}>
+                    Try again
+                  </Button>
+                  <Button type="button" size="small" variant="secondary" onClick={() => setOrderError('')}>
+                    Dismiss
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+          <Button type="submit" size="large" loading={busy || retrying || payState !== 'idle'} className="shop-proceed-button">
             {payLabel} {payment === 'online' ? <CreditCard size={16} /> : <Banknote size={16} />}
           </Button>
           <p className="shop-checkout-terms"><ShieldCheck size={13} /> Orders can be cancelled free of charge until they go out for delivery. Online refunds return to the source within 5–7 working days.</p>

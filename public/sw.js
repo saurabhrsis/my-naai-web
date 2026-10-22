@@ -7,16 +7,18 @@
  * - Works on Android, iOS (PWA), Chrome, Edge, Firefox, Samsung Internet, Safari
  */
 
-const CACHE_NAME = 'mynaai-shell-v10';
+const CACHE_NAME = 'mynaai-shell-v11';
 const APP_SHELL = [
   '/',
   '/index.html',
   '/manifest.webmanifest',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
-  '/assets/brand/naai-mark.svg',
-  '/assets/brand/naai-logo.svg',
-  '/assets/brand/naai-logo-dark.svg',
+  '/icons/icon-maskable-512.png',
+  '/icons/badge-96.png',
+  '/favicon.ico',
+  '/assets/brand/mynaai-mark.png',
+  '/assets/brand/mynaai-logo.png',
   '/assets/my_naai.png',
   '/assets/new_background.jpeg',
   '/assets/audio/buzzer.wav',
@@ -275,7 +277,7 @@ self.addEventListener('fetch', event => {
         })
         .catch(() => {
           if (event.request.destination === 'image') {
-            return caches.match('/assets/brand/naai-logo-dark.svg');
+            return caches.match('/assets/brand/mynaai-mark.png');
           }
           // Never hand an HTML fallback to a script/style import — that exact
           // mismatch is the black-screen failure this handler now prevents.
@@ -371,7 +373,7 @@ if (firebaseMessaging) {
     return self.registration.showNotification(title, {
       body,
       icon: '/icons/icon-192.png',
-      badge: '/icons/icon-192.png',
+      badge: '/icons/badge-96.png',
       tag: data.bookingRequestId || data.bookingId || data.type || 'mynaai-notification',
       data: { ...data, target },
       requireInteraction: isBookingRequest || type === 'DELAY_TIME_PROPOSAL' || isDelayBooking,
@@ -438,7 +440,7 @@ self.addEventListener('push', event => {
           self.registration.showNotification(title, {
             body,
             icon: '/icons/icon-192.png',
-            badge: '/icons/icon-192.png',
+            badge: '/icons/badge-96.png',
             tag: data.bookingRequestId || data.bookingId || data.type || 'mynaai-notification',
             data: { ...data, target },
             requireInteraction: true,

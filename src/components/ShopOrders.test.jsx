@@ -4,18 +4,24 @@ import { createRoot } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ConfirmProvider } from './ConfirmDialog';
 import { ShopOrderScreen, ShopOrdersScreen } from './ShopOrders';
-import { findOrder, placeOrder } from '../lib/shopOrders';
+import { findOrder, placeOrder, setOrderSyncState } from '../lib/shopOrders';
 
-const { fetchAllServerOrders, fetchServerOrderById, cancelServerOrder } = vi.hoisted(() => ({
+const { fetchAllServerOrders, fetchServerOrderById, cancelServerOrder, flushPendingOrders, registerServerOrder, dequeuePendingOrder } = vi.hoisted(() => ({
   fetchAllServerOrders: vi.fn(),
   fetchServerOrderById: vi.fn(),
   cancelServerOrder: vi.fn(),
+  flushPendingOrders: vi.fn(),
+  registerServerOrder: vi.fn(),
+  dequeuePendingOrder: vi.fn(),
 }));
 
 vi.mock('../lib/shopServerSync', () => ({
   fetchAllServerOrders,
   fetchServerOrderById,
   cancelServerOrder,
+  flushPendingOrders,
+  registerServerOrder,
+  dequeuePendingOrder,
 }));
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -26,7 +32,21 @@ const SESSION = {
   user: { salon: { salonName: 'Golden Scissors', ownerName: 'Ramesh Kumar', city: 'Nagpur' } },
 };
 
-const seedOrder = () => placeOrder('salon-1', {
+// A real order: placed locally AND accepted by the backend. Orders without a
+// server confirmation are deliberately treated as suspect by the screen.
+const seedOrder = (overrides = {}) => {
+  const placed = placeOrder('salon-1', {
+    items: [{ productId: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men', qty: 1 }],
+    address: { name: 'Ramesh Kumar', phone: '9876543210', line1: '12 Main Road', city: 'Nagpur', state: 'Maharashtra', pincode: '440010' },
+    payment: { method: 'COD', status: 'PENDING', amount: 248 },
+    amounts: { itemTotal: 199, savings: 0, deliveryFee: 49, total: 248 },
+    salonName: 'Golden Scissors',
+  });
+  return setOrderSyncState('salon-1', placed.id, 'synced', { serverStatus: 'PENDING', ...overrides }) || placed;
+};
+
+// The bug this feature fixes: a local-only order that the backend never took.
+const seedUnconfirmedOrder = () => placeOrder('salon-1', {
   items: [{ productId: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men', qty: 1 }],
   address: { name: 'Ramesh Kumar', phone: '9876543210', line1: '12 Main Road', city: 'Nagpur', state: 'Maharashtra', pincode: '440010' },
   payment: { method: 'COD', status: 'PENDING', amount: 248 },
@@ -59,6 +79,11 @@ beforeEach(() => {
   fetchServerOrderById.mockResolvedValue(null);
   cancelServerOrder.mockReset();
   cancelServerOrder.mockResolvedValue(true);
+  flushPendingOrders.mockReset();
+  flushPendingOrders.mockResolvedValue({ synced: [], pending: [], results: [] });
+  registerServerOrder.mockReset();
+  registerServerOrder.mockResolvedValue({ ok: true, code: 'OK', order: null });
+  dequeuePendingOrder.mockReset();
   document.body.innerHTML = '';
 });
 
@@ -85,6 +110,45 @@ describe('ShopOrdersScreen with the server history', () => {
     expect(container.textContent).toContain('Delivered');
     // Persisted back into the local history for offline visits.
     expect(findOrder('salon-1', local.id).serverStatus).toBe('SHIPPED');
+  });
+
+  it('warns about an order the backend never accepted, and resends it on demand', async () => {
+    const local = seedUnconfirmedOrder();
+    const notify = vi.fn();
+    const { container } = await render(<ShopOrdersScreen session={SESSION} navigate={vi.fn()} notify={notify} />);
+
+    expect(container.textContent).toContain('Not confirmed');
+    expect(container.textContent).toContain('not confirmed by My Naai yet');
+    // It is not dressed up as a real order on its way.
+    expect(container.textContent).not.toContain('Order placed');
+
+    await act(async () => { buttonByText('Send to My Naai', container).click(); });
+    await flush();
+    expect(registerServerOrder).toHaveBeenCalledWith(expect.objectContaining({ id: local.id }));
+    expect(findOrder('salon-1', local.id).syncState).toBe('synced');
+    expect(notify).toHaveBeenCalledWith('success', `Order ${local.id} confirmed by My Naai.`);
+    expect(container.textContent).not.toContain('Not confirmed');
+  });
+
+  it('keeps an order unconfirmed (and says why) when the resend is refused', async () => {
+    const local = seedUnconfirmedOrder();
+    registerServerOrder.mockResolvedValue({ ok: false, code: 'VALIDATION', message: 'address.pincode must be 6 digits' });
+    const notify = vi.fn();
+    const { container } = await render(<ShopOrdersScreen session={SESSION} navigate={vi.fn()} notify={notify} />);
+
+    await act(async () => { buttonByText('Send to My Naai', container).click(); });
+    await flush();
+    expect(notify).toHaveBeenCalledWith('error', expect.stringContaining('address.pincode'));
+    expect(findOrder('salon-1', local.id).syncState).toBeUndefined();
+    expect(container.textContent).toContain('Not confirmed');
+  });
+
+  it('removes an unconfirmed order from the device', async () => {
+    const local = seedUnconfirmedOrder();
+    const { container } = await render(<ShopOrdersScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    await act(async () => { buttonByText('Remove', container).click(); });
+    await flush();
+    expect(findOrder('salon-1', local.id)).toBeFalsy();
   });
 
   it('falls back to the local copy when the server is unreachable', async () => {

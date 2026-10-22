@@ -17,6 +17,8 @@
 // `getOrderStatus(order, now)` stays pure — the screens pass `now`
 // (default Date.now()) so tests are exact.
 
+import { toPoint } from './geo';
+
 const CART_PREFIX = 'mynaaiShopCart:';
 const ORDERS_PREFIX = 'mynaaiShopOrders:';
 
@@ -267,11 +269,35 @@ export function upsertLocalOrder(salonId, order) {
   return { ...order };
 }
 
+// Remove a draft order (used when the server refuses an order that nothing
+// was charged for — an order the salon can see but My Naai has never heard of
+// is worse than an honest failure).
+export function removeLocalOrder(salonId, orderId) {
+  const orders = readOrders(salonId).filter(order => order.id !== String(orderId));
+  writeJson(orderKey(salonId), orders);
+  return orders;
+}
+
+// `pending` = the server has not confirmed it yet (queued for retry);
+// `synced`  = it is a real record on the backend.
+export function setOrderSyncState(salonId, orderId, syncState, extra = {}) {
+  const orders = readOrders(salonId).map(order =>
+    order.id === String(orderId) ? { ...order, ...extra, syncState } : order
+  );
+  writeJson(orderKey(salonId), orders);
+  return orders.find(order => order.id === String(orderId)) || null;
+}
+
 // The address snapshot is the only delivery record the shop keeps, so it is
 // validated here — the forms validate too, but a hand-edited storage entry
 // must not break the tracker.
 function normalizeAddress(address = {}) {
-  return {
+  // The delivery point travels with the address so the admin panel and the
+  // delivery partner can put the order on a map. It is kept OUT of the text
+  // fields (a coordinate is not part of the address the salon typed) and is
+  // `null` rather than 0 when unknown — 0,0 is a real place in the Atlantic.
+  const point = toPoint(address);
+  const clean = {
     name: String(address.name || '').trim(),
     phone: String(address.phone || '').trim(),
     line1: String(address.line1 || '').trim(),
@@ -279,6 +305,14 @@ function normalizeAddress(address = {}) {
     state: String(address.state || '').trim(),
     pincode: String(address.pincode || '').trim(),
   };
+  // Only carry the pair when it exists: an order from a salon without GPS
+  // keeps exactly the shape it always had, and no client reads a missing
+  // coordinate as (0, 0).
+  if (point) {
+    clean.latitude = point.latitude;
+    clean.longitude = point.longitude;
+  }
+  return clean;
 }
 
 // `now` is injectable so the deterministic timeline can be tested exactly;

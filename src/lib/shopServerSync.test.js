@@ -32,6 +32,7 @@ vi.mock('../lib/session', async () => {
 
 import {
   CANCELLABLE_SERVER_STATUSES,
+  buildOrderPayload,
   clearServerCart,
   cancelServerOrder,
   customerStatusToTrackerKey,
@@ -45,8 +46,12 @@ import {
   pushCartAdd,
   pushCartRemove,
   pushCartSetQty,
+  readPendingOrders,
   registerServerOrder,
 } from './shopServerSync';
+
+// The API's line schema wants a real catalog id.
+const PRODUCT_ID = '3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
 
 beforeEach(() => {
   Object.values({ shopCartGet, shopCartAdd, shopCartSetQty, shopCartRemove, shopCartClear, shopOrderCreate, shopOrderList, shopOrderGetById, shopOrderCancel }).forEach(fn => fn.mockReset());
@@ -145,7 +150,9 @@ describe('session guard', () => {
     expect(await fetchServerOrders()).toBeNull();
     expect(await fetchAllServerOrders()).toBeNull();
     expect(await fetchServerOrderById('MN1')).toBeNull();
-    expect(await registerServerOrder({ id: 'MN1' })).toBe(false);
+    // A guest cannot place a real order, and the result says so instead of
+    // pretending (that silence was the original bug).
+    await expect(registerServerOrder({ id: 'MN1' })).resolves.toMatchObject({ ok: false, code: 'NO_SESSION' });
     expect(await pushCartAdd('p1')).toBe(false);
     expect(await pushCartSetQty('p1', 2)).toBe(false);
     expect(await pushCartRemove('p1')).toBe(false);
@@ -204,18 +211,114 @@ describe('order sync (signed in)', () => {
     shopOrderCreate.mockResolvedValue({ status: 'SUCCESS' });
     const order = {
       id: 'MNLOCAL1',
-      items: [{ productId: 'p1', name: 'A', price: 100, qty: 1 }],
-      address: { name: 'R', phone: '9876543210', line1: 'x', city: 'N', state: '', pincode: '440010' },
+      items: [{ productId: PRODUCT_ID, name: 'A', price: 100, qty: 1 }],
+      address: { name: 'R', phone: '9876543210', line1: 'x', city: 'N', state: 'MH', pincode: '440010' },
       payment: { method: 'ONLINE', status: 'PAID', paymentId: 'pay_1', amount: 149 },
       amounts: { itemTotal: 100, savings: 0, deliveryFee: 49, total: 149 },
     };
-    await expect(registerServerOrder(order)).resolves.toBe(true);
+    await expect(registerServerOrder(order)).resolves.toMatchObject({ ok: true, code: 'OK' });
     expect(shopOrderCreate).toHaveBeenCalledWith({
       orderId: 'MNLOCAL1',
-      items: order.items,
-      address: order.address,
+      items: [{ productId: PRODUCT_ID, name: 'A', price: 100, qty: 1 }],
+      address: { name: 'R', phone: '9876543210', line1: 'x', city: 'N', state: 'MH', pincode: '440010' },
       payment: { method: 'ONLINE', status: 'PAID', paymentId: 'pay_1', amount: 149 },
     });
+  });
+
+  it('builds the create body from the contract, never the local order', () => {
+    const order = {
+      id: 'MNLOCAL2',
+      items: [{ productId: PRODUCT_ID, name: 'A', price: 100, qty: 2, image: '/a.png', mrp: 150, bogus: 'x' }],
+      address: {
+        name: ' R ', phone: '98765-43210', line1: 'x', city: 'N', state: 'MH', pincode: '440010',
+        latitude: 21.1458, longitude: 79.0882,
+        // Neither of these may reach the API: the address schema is strict.
+        landmark: 'Near temple', note: '',
+      },
+      payment: { method: 'COD', status: 'PENDING', amount: 249 },
+      amounts: { total: 249 },
+    };
+    const withPin = buildOrderPayload(order);
+    expect(Object.keys(withPin.address).sort()).toEqual(['city', 'latitude', 'line1', 'longitude', 'name', 'phone', 'pincode', 'state']);
+    expect(withPin.address).toMatchObject({ name: 'R', phone: '9876543210', pincode: '440010', latitude: 21.1458, longitude: 79.0882 });
+    expect(withPin.address).not.toHaveProperty('landmark');
+    expect(withPin.items[0]).not.toHaveProperty('bogus');
+    expect(withPin.payment).toEqual({ method: 'COD', status: 'PENDING', paymentId: '', amount: 249 });
+
+    // The fallback the deployed API needs: the same body without the pin.
+    const withoutPin = buildOrderPayload(order, { withCoordinates: false });
+    expect(withoutPin.address).not.toHaveProperty('latitude');
+    expect(withoutPin.address).not.toHaveProperty('longitude');
+  });
+
+  it('retries without the pin when the server rejects the coordinates, and stops sending them', async () => {
+    signedIn();
+    const rejection = Object.assign(new Error('"address.latitude" is not allowed'), { status: 400 });
+    shopOrderCreate.mockRejectedValueOnce(rejection).mockResolvedValue({ status: 'SUCCESS', data: { orderId: 'MN1' } });
+    const order = {
+      id: 'MN1',
+      items: [{ productId: PRODUCT_ID, name: 'A', price: 100, qty: 1 }],
+      address: { name: 'R', phone: '9876543210', line1: 'x', city: 'N', state: 'MH', pincode: '440010', latitude: 21.1, longitude: 79.1 },
+      payment: { method: 'COD', status: 'PENDING', amount: 149 },
+      amounts: { total: 149 },
+    };
+    await expect(registerServerOrder(order)).resolves.toMatchObject({ ok: true });
+    expect(shopOrderCreate).toHaveBeenCalledTimes(2);
+    expect(shopOrderCreate.mock.calls[0][0].address).toHaveProperty('latitude', 21.1);
+    expect(shopOrderCreate.mock.calls[1][0].address).not.toHaveProperty('latitude');
+  });
+
+  it('reports a rejection instead of swallowing it', async () => {
+    signedIn();
+    shopOrderCreate.mockRejectedValue(Object.assign(new Error('items.0.productId must be a valid GUID'), { status: 400 }));
+    const order = {
+      id: 'MN2',
+      items: [{ productId: PRODUCT_ID, name: 'A', price: 100, qty: 1 }],
+      address: { name: 'R', phone: '9876543210', line1: 'x', city: 'N', state: 'MH', pincode: '440010' },
+      payment: { method: 'COD', status: 'PENDING', amount: 149 },
+      amounts: { total: 149 },
+    };
+    const result = await registerServerOrder(order);
+    expect(result).toMatchObject({ ok: false, code: 'VALIDATION', retryable: false });
+    expect(result.message).toContain('valid GUID');
+  });
+
+  it('refuses a line that is not a catalog product, before calling the API', async () => {
+    signedIn();
+    const result = await registerServerOrder({
+      id: 'MN3',
+      items: [{ productId: 'p1', name: 'Demo soap', price: 100, qty: 1 }],
+      address: { name: 'R', phone: '9876543210', line1: 'x', city: 'N', state: 'MH', pincode: '440010' },
+      payment: { method: 'COD', status: 'PENDING', amount: 100 },
+      amounts: { total: 100 },
+    });
+    expect(result).toMatchObject({ ok: false, code: 'INVALID_ITEM' });
+    expect(result.message).toContain('Demo soap');
+    expect(shopOrderCreate).not.toHaveBeenCalled();
+  });
+
+  it('queues a paid order that could not be registered and drains it later', async () => {
+    signedIn();
+    const order = {
+      id: 'MNQ1',
+      items: [{ productId: PRODUCT_ID, name: 'A', price: 100, qty: 1 }],
+      address: { name: 'R', phone: '9876543210', line1: 'x', city: 'N', state: 'MH', pincode: '440010' },
+      payment: { method: 'ONLINE', status: 'PAID', paymentId: 'pay_9', amount: 149 },
+      amounts: { total: 149 },
+    };
+    shopOrderCreate.mockRejectedValueOnce(Object.assign(new Error('socket hang up'), { status: 0 }));
+    await expect(registerServerOrder(order)).resolves.toMatchObject({ ok: false, code: 'NETWORK', retryable: true });
+
+    expect(readPendingOrders()).toHaveLength(0);
+    const { queuePendingOrder } = await import('./shopServerSync');
+    queuePendingOrder(order);
+    expect(readPendingOrders().map(entry => entry.orderId)).toEqual(['MNQ1']);
+
+    shopOrderCreate.mockResolvedValue({ status: 'SUCCESS', data: { orderId: 'MNQ1' } });
+    const { flushPendingOrders } = await import('./shopServerSync');
+    const flushed = await flushPendingOrders();
+    expect(flushed.synced.map(entry => entry.orderId)).toEqual(['MNQ1']);
+    expect(readPendingOrders()).toHaveLength(0);
   });
 
   it('fetches the paged history until a short page ends it', async () => {

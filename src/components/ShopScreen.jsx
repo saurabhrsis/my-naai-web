@@ -110,13 +110,22 @@ export function ShopProductCard({ product, qty, onAdd, onSetQty, onOpen }) {
 }
 
 // ── Floating "3 items · ₹1,240 → View cart" bar (shop + product page) ──────
+//
+// The number is the ITEM value (`subtotal`), never the checkout total. The bar
+// used to quote `total`, so a ₹99 item read "₹199" the moment it was added —
+// the ₹49 delivery fee (or a ₹100 one, depending on the admin's rules) sat in
+// a line nobody had agreed to yet. Delivery is a checkout decision: it is
+// billed on the checkout page, once the address and payment method are known.
 export function ShopCartBar({ totals, onOpen }) {
   if (!totals.itemCount) return null;
   return (
     <button type="button" className="shop-cart-bar" onClick={onOpen}>
       <span className="shop-cart-bar-left">
         <ShoppingBag size={17} />
-        <span><strong>{totals.itemCount} item{totals.itemCount === 1 ? '' : 's'}</strong> · {formatCurrency(totals.total)}</span>
+        <span>
+          <strong>{totals.itemCount} item{totals.itemCount === 1 ? '' : 's'}</strong> · {formatCurrency(totals.subtotal)}
+          <small className="shop-cart-bar-note">+ delivery at checkout</small>
+        </span>
       </span>
       <span className="shop-cart-bar-cta">View cart <ChevronRight size={16} /></span>
     </button>

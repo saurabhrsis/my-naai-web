@@ -6,13 +6,22 @@ import { ConfirmProvider } from './ConfirmDialog';
 import { ShopProductDetailScreen, ShopQuantityControl, ShopScreen } from './ShopScreen';
 import { ShopCartScreen, ShopCheckoutScreen } from './ShopCartCheckout';
 import { ShopOrderScreen, ShopOrdersScreen } from './ShopOrders';
-import { addToCart, clearShopStorage, findOrder, placeOrder, readCart, readOrders } from '../lib/shopOrders';
+import { addToCart, clearShopStorage, findOrder, placeOrder, readCart, readOrders, setOrderSyncState } from '../lib/shopOrders';
 import { resetShopSettingsCache } from '../lib/shopSettings';
 
-const { shopProductList, shopSettingsGet } = vi.hoisted(() => ({
+const { shopProductList, shopSettingsGet, shopOrderCreate } = vi.hoisted(() => ({
   shopProductList: vi.fn(),
   shopSettingsGet: vi.fn(),
+  shopOrderCreate: vi.fn(),
 }));
+
+// The order is only real once `POST /api/shop-orders/create` accepts it, so the
+// checkout tests drive that call. It is mocked at the sync layer (a real
+// registration is covered in shopServerSync.test.js).
+vi.mock('../lib/shopServerSync', async () => {
+  const actual = await vi.importActual('../lib/shopServerSync');
+  return { ...actual, registerServerOrder: shopOrderCreate };
+});
 
 vi.mock('../lib/api', async () => {
   const actual = await vi.importActual('../lib/api');
@@ -88,6 +97,9 @@ beforeEach(() => {
     status: 'SUCCESS',
     data: { freeDeliveryAbove: 499, deliveryFee: 49, discountPercent: 0, codThreshold: 0, codCharges: 0 },
   });
+  // The backend accepts orders by default; a rejection test overrides this.
+  shopOrderCreate.mockReset();
+  shopOrderCreate.mockResolvedValue({ ok: true, code: 'OK', order: null });
   document.body.innerHTML = '';
 });
 
@@ -333,12 +345,14 @@ describe('ShopCartScreen', () => {
     expect(container.querySelectorAll('.shop-cart-item')).toHaveLength(2);
     expect(container.textContent).toContain('MRP savings');
     expect(container.textContent).toContain('FREE'); // 698 is above the threshold
-    // Blinkit-style footer: to-pay amount + item count + proceed CTA.
+    // Blinkit-style footer: ITEM total + count + proceed CTA. Delivery is a
+    // checkout charge and must not be baked into this figure.
     const footer = container.querySelector('.shop-cart-footer');
     expect(footer).toBeTruthy();
-    expect(footer.textContent).toContain('To pay');
+    expect(footer.textContent).toContain('Items total');
     expect(footer.textContent).toContain('₹ 698');
     expect(footer.textContent).toContain('2 items');
+    expect(footer.textContent).toContain('delivery at checkout');
     const proceed = buttonsContaining('Proceed to checkout', container)[0];
     await act(async () => { proceed.click(); });
     expect(navigate).toHaveBeenCalledWith('shopCheckout');
@@ -354,11 +368,12 @@ describe('ShopCartScreen', () => {
     expect(items).toHaveLength(2);
     expect(items[0].querySelector('.shop-cart-line-total').textContent).toBe('₹ 199');
 
-    // + on the first line → line total ₹ 398, footer 398 + 499 (free delivery).
+    // + on the first line → line total ₹ 398; the cart total is the product
+    // value only (398 + 499), with delivery billed at checkout.
     const [, plus] = items[0].querySelectorAll('.shop-stepper button');
     await act(async () => { plus.click(); });
     expect(container.querySelector('.shop-cart-item .shop-cart-line-total').textContent).toBe('₹ 398');
-    expect(container.querySelector('.shop-cart-footer').textContent).toContain('₹ 897'); // 398 + 499, free delivery
+    expect(container.querySelector('.shop-cart-footer').textContent).toContain('₹ 897'); // 398 + 499 products
 
     // The free-delivery note switches to the "unlocked" state (₹1,197 > ₹499).
     expect(container.querySelector('.shop-delivery-note.unlocked')).toBeTruthy();
@@ -368,7 +383,8 @@ describe('ShopCartScreen', () => {
     const [minus] = items[1].querySelectorAll('.shop-stepper button');
     await act(async () => { minus.click(); });
     expect(container.querySelectorAll('.shop-cart-item')).toHaveLength(1);
-    expect(container.querySelector('.shop-cart-footer').textContent).toContain('₹ 447'); // 398 + ₹49 delivery below the threshold
+    // Still the product value — the ₹49 fee belongs to the checkout step.
+    expect(container.querySelector('.shop-cart-footer').textContent).toContain('₹ 398');
     expect(container.querySelector('.shop-delivery-note.unlocked')).toBeNull();
 
     // The explicit Remove button deletes the remaining line → empty state.
@@ -383,6 +399,34 @@ describe('ShopCartScreen', () => {
     expect(container.textContent).toContain('Your cart is empty');
   });
 
+  // The reported bug: one ₹99 product, and the cart strip showed ₹199 because
+  // a delivery charge was added before checkout had even started. The strip now
+  // quotes the product value; the fee appears on the checkout bill.
+  it('never adds delivery to the cart or the cart bar — the fee appears at checkout', async () => {
+    addToCart('salon-1', { id: 'sp9', name: 'Shaving Foam 100g', price: 99, mrp: 0, image: '', category: 'shaving', gender: 'men' });
+    const cart = await render(<ShopCartScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    const footer = cart.container.querySelector('.shop-cart-footer');
+    expect(footer.textContent).toContain('₹ 99');
+    expect(footer.textContent).not.toContain('₹ 148');
+    const bill = cart.container.querySelector('.shop-bill-card');
+    expect(bill.textContent).toContain('₹ 99');
+    expect(bill.textContent).not.toContain('₹ 148');
+    expect(bill.textContent).toContain('At checkout');
+
+    // The shop's floating bar quotes the same product value.
+    const shop = await render(<ShopScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    const bar = shop.container.querySelector('.shop-cart-bar');
+    expect(bar.textContent).toContain('₹ 99');
+    expect(bar.textContent).toContain('delivery at checkout');
+
+    // …and the checkout bill is where the fee finally lands.
+    const checkout = await render(<ShopCheckoutScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    const summary = checkout.container.querySelector('.shop-checkout-summary');
+    expect(summary.textContent).toContain('₹ 49');
+    expect(summary.textContent).toContain('₹ 148');
+    expect(summary.textContent).toContain('To pay');
+  });
+
   it('bills the cart from the admin shop settings (discount, fee, threshold)', async () => {
     shopSettingsGet.mockResolvedValue({
       status: 'SUCCESS',
@@ -391,12 +435,16 @@ describe('ShopCartScreen', () => {
     addToCart('salon-1', { id: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men' });
     const { container } = await render(<ShopCartScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
 
-    // ₹199 − 10% (₹20) = ₹179 < ₹500 → +₹40 fee → ₹219 to pay.
+    // ₹199 − 10% (₹20) = ₹179 of products. The cart does NOT add the ₹40 fee:
+    // it shows the item total and says the fee is calculated at checkout.
     const bill = container.querySelector('.shop-bill-card');
     expect(bill.textContent).toContain('Order discount (10%)');
     expect(bill.textContent).toContain('− ₹ 20');
-    expect(bill.textContent).toContain('₹ 40');
-    expect(container.querySelector('.shop-cart-footer').textContent).toContain('₹ 219');
+    expect(bill.textContent).toContain('Delivery fee');
+    expect(bill.textContent).toContain('At checkout');
+    expect(bill.textContent).not.toContain('₹ 40');
+    expect(bill.textContent).toContain('₹ 179');
+    expect(container.querySelector('.shop-cart-footer').textContent).toContain('₹ 179');
     // The free-delivery progress runs on the after-discount subtotal: 500 − 179.
     expect(container.querySelector('.shop-delivery-note').textContent).toContain('₹ 321');
     // COD is not chosen at cart level yet, so no COD charges line.
@@ -468,6 +516,99 @@ describe('ShopCheckoutScreen', () => {
     expect(navigate).toHaveBeenCalledWith('shopOrder', { orderId });
   });
 
+  it('hands the whole order to the backend call and marks it confirmed on success', async () => {
+    seedCart();
+    const { container } = await render(<ShopCheckoutScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    await act(async () => { container.querySelector('input[value="cod"]').click(); });
+    await act(async () => { buttonsContaining('Place order', container)[0].click(); });
+    await flush();
+    await act(async () => { buttonByText('Place order', document.querySelector('.confirm-sheet')).click(); });
+    await flush();
+
+    expect(shopOrderCreate).toHaveBeenCalledTimes(1);
+    const sent = shopOrderCreate.mock.calls[0][0];
+    const orderId = readOrders('salon-1')[0].id;
+    expect(sent.id).toBe(orderId);
+    expect(sent.items).toHaveLength(2);
+    expect(sent.items[0]).toMatchObject({ productId: 'sp1', price: 199, qty: 1 });
+    expect(sent.address).toMatchObject({ name: 'Ramesh Kumar', phone: '9876543210', city: 'Nagpur', state: 'Maharashtra', pincode: '440010' });
+    expect(sent.payment).toMatchObject({ method: 'COD', status: 'PENDING' });
+    expect(sent.amounts.total).toBe(698);
+
+    // The local copy now knows the backend has it (the wire body itself is
+    // asserted in shopServerSync.test.js).
+    expect(readOrders('salon-1')[0].syncState).toBe('synced');
+    expect(container.textContent).toContain('Order placed');
+  });
+
+  it('shows the backend\u2019s refusal and leaves the cart intact', async () => {
+    seedCart();
+    shopOrderCreate.mockResolvedValue({ ok: false, code: 'VALIDATION', retryable: false, message: 'items.0.productId must be a valid GUID' });
+    const notify = vi.fn();
+    const { container } = await render(<ShopCheckoutScreen session={SESSION} navigate={vi.fn()} notify={notify} />);
+    await act(async () => { container.querySelector('input[value="cod"]').click(); });
+    await act(async () => { buttonsContaining('Place order', container)[0].click(); });
+    await flush();
+    await act(async () => { buttonByText('Place order', document.querySelector('.confirm-sheet')).click(); });
+    await flush();
+
+    // No success card, an explicit error, and NOTHING left behind as an order.
+    expect(container.textContent).not.toContain('Order placed');
+    expect(container.querySelector('.shop-order-error')).toBeTruthy();
+    expect(container.querySelector('.shop-order-error').textContent).toContain('items.0.productId must be a valid GUID');
+    expect(readOrders('salon-1')).toHaveLength(0);
+    expect(readCart('salon-1')).toHaveLength(2);
+    expect(notify).toHaveBeenCalledWith('error', expect.stringContaining('valid GUID'));
+
+    // "Try again" re-sends the same placeable order.
+    shopOrderCreate.mockResolvedValue({ ok: true, code: 'OK', order: null });
+    await act(async () => { buttonByText('Try again', container).click(); });
+    await flush();
+    expect(shopOrderCreate).toHaveBeenCalledTimes(2);
+    expect(readOrders('salon-1')).toHaveLength(1);
+    expect(container.textContent).toContain('Order placed');
+  });
+
+  it('offers the state as a dropdown and prefills the salon\u2019s state', async () => {
+    seedCart();
+    const { container } = await render(<ShopCheckoutScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+
+    // City · State · Pincode share one row; the state is a <select>, not a
+    // free-text input, and it shows the salon's saved state.
+    const stateField = container.querySelector('.form-three-even select');
+    expect(stateField).toBeTruthy();
+    expect(stateField.value).toBe('Maharashtra');
+    expect(stateField.textContent).toContain('Select state');
+    expect(stateField.textContent).toContain('Maharashtra');
+    expect(stateField.textContent).toContain('Karnataka');
+    // No free-text state input is left behind.
+    const stateInputs = Array.from(container.querySelectorAll('.form-three-even input'))
+      .filter(input => input.getAttribute('autocomplete') === 'address-level1');
+    expect(stateInputs).toHaveLength(0);
+
+    // Choosing another state flows straight into the placed order.
+    await act(async () => {
+      stateField.value = 'Karnataka';
+      stateField.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => { container.querySelector('input[value="cod"]').click(); });
+    await act(async () => { buttonsContaining('Place order', container)[0].click(); });
+    await flush();
+    const sheet = document.querySelector('.confirm-sheet');
+    await act(async () => { buttonByText('Place order', sheet).click(); });
+    await flush();
+    expect(readOrders('salon-1')[0].address.state).toBe('Karnataka');
+  });
+
+  it('keeps a legacy state value selectable instead of showing it as unset', async () => {
+    seedCart();
+    // A profile saved before the dropdown existed carries the two-letter code.
+    const legacy = { ...SESSION, user: { salon: { ...SESSION.user.salon, state: 'MH' } } };
+    const { container } = await render(<ShopCheckoutScreen session={legacy} navigate={vi.fn()} notify={vi.fn()} />);
+    const stateField = container.querySelector('.form-three-even select');
+    expect(stateField.value).toBe('Maharashtra');
+  });
+
   it('refuses to place an order with an incomplete address', async () => {
     seedCart();
     const notify = vi.fn();
@@ -520,13 +661,18 @@ describe('ShopCheckoutScreen', () => {
 });
 
 describe('orders + tracker', () => {
-  const seedOrder = () => placeOrder('salon-1', {
-    items: [{ productId: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men', qty: 1 }],
-    address: { name: 'Ramesh Kumar', phone: '9876543210', line1: '12 Main Road', city: 'Nagpur', state: 'Maharashtra', pincode: '440010' },
-    payment: { method: 'COD', status: 'PENDING', amount: 248 },
-    amounts: { itemTotal: 199, savings: 0, deliveryFee: 49, total: 248 },
-    salonName: 'Golden Scissors',
-  });
+  const seedOrder = () => {
+    const placed = placeOrder('salon-1', {
+      items: [{ productId: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men', qty: 1 }],
+      address: { name: 'Ramesh Kumar', phone: '9876543210', line1: '12 Main Road', city: 'Nagpur', state: 'Maharashtra', pincode: '440010' },
+      payment: { method: 'COD', status: 'PENDING', amount: 248 },
+      amounts: { itemTotal: 199, savings: 0, deliveryFee: 49, total: 248 },
+      salonName: 'Golden Scissors',
+    });
+    // The backend accepted it — that is what makes it a real order. The live
+    // status arrives from the server, so the seed only carries the flag.
+    return setOrderSyncState('salon-1', placed.id, 'synced') || placed;
+  };
 
   it('lists orders in My orders with the live status', async () => {
     const order = seedOrder();
@@ -534,7 +680,7 @@ describe('orders + tracker', () => {
     const { container } = await render(<ShopOrdersScreen session={SESSION} navigate={navigate} notify={vi.fn()} />);
     expect(container.textContent).toContain(order.id);
     expect(container.textContent).toContain('Order placed');
-    await act(async () => { container.querySelector('.shop-order-card').click(); });
+    await act(async () => { container.querySelector('.shop-order-card-main').click(); });
     expect(navigate).toHaveBeenCalledWith('shopOrder', { orderId: order.id });
   });
 

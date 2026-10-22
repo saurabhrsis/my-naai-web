@@ -465,10 +465,13 @@ request runs a 60-second countdown that a second dialog would eat into.
 | `src/components/SubscriptionScreen.jsx` | Plan picker, Razorpay flow, cancellation/failure copy and payment recovery |
 | `src/components/ConfirmDialog.jsx` | Promise-based in-app confirmation sheet that replaces every native browser dialog |
 | `src/lib/push.js` | Firebase initialization, permission/token flow and notification route mapping |
-| `public/assets/brand/naai-mark.svg` | Official My Naai monogram — the 2026 M/N ribbon (inherits `currentColor`) |
-| `public/assets/brand/naai-logo.svg` | Official logo: ink mark on the cream plate (favicon and store artwork) |
-| `public/assets/brand/naai-logo-dark.svg` | Official logo on the dark app tile; the default image fallback everywhere |
-| `public/assets/my_naai.png` | Raster version of the brand tile for surfaces that cannot take SVG (Razorpay checkout) |
+| `public/assets/brand/mynaai-mark.png` | Official My Naai monogram (white on transparent) — the app icon art, the default image fallback and the phone-size brand mark |
+| `public/assets/brand/mynaai-logo.png` | Official lockup: the M monogram with **My Naai** lettered underneath — header, sidebar, login and registration |
+| `public/icons/icon-192.png`, `icon-512.png`, `icon-maskable-512.png`, `apple-touch-icon.png` | The app icon at every size the manifest, iOS and Android ask for (maskable padded for Android's mask) |
+| `public/favicon.ico`, `public/icons/favicon-32.png`, `favicon-16.png` | Browser-tab icons |
+| `public/icons/badge-96.png` | Monochrome notification badge (status-bar icon) |
+| `public/assets/my_naai.png` | Raster brand tile for surfaces that need a PNG at a stable path (Razorpay checkout) |
+| `public/assets/brand/og-cover.png` | Link preview (1200×630): the lockup centred on the app background |
 | `public/firebase-messaging-sw.js` | Background push display and notification click routing |
 | `src/components/UserScreens.jsx` | Customer screens, bookings and delay response |
 | `src/components/SalonScreens.jsx` | Salon queue, booking request, delay action and partner screens |

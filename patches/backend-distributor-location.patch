@@ -1,0 +1,1210 @@
+From 1643f1059794284734db9a48b835b83ca7b03602 Mon Sep 17 00:00:00 2001
+From: MyNaai Dev <dev@mynaai.in>
+Date: Wed, 21 Oct 2026 06:13:31 +0000
+Subject: [PATCH] Distributor + order locations: coordinates, KM, nearest-first
+ list
+
+---
+ docs/DISTRIBUTOR-LOCATION.md                  |  87 +++++++++++
+ .../distributor/createDistributor.js          |  15 +-
+ .../distributor/listDistributors.js           |  22 ++-
+ .../distributor/updateDistributor.js          |  13 +-
+ .../distributor/updateDistributorLocation.js  |  38 +++++
+ .../shopOrder/adminAssignDistributor.js       |   2 +-
+ .../shopOrder/adminGetShopOrderById.js        |   4 +-
+ .../shopOrder/adminSetDeliveryLocation.js     |  42 +++++
+ .../shopOrder/adminUpdateShopOrderStatus.js   |   2 +-
+ .../shopOrder/distributorAcceptOrder.js       |   2 +-
+ .../shopOrder/distributorRejectOrder.js       |   2 +-
+ .../shopOrder/distributorUpdateOrderStatus.js |   2 +-
+ src/controller/shopOrder/listShopOrders.js    |   9 ++
+ src/database/models/distributor.model.js      |  27 ++++
+ src/database/models/shopOrder.model.js        |  16 ++
+ src/routes/distributor.routes.js              |   5 +
+ src/routes/shopOrder.routes.js                |   4 +
+ src/services/distributor.service.js           |  90 +++++++++--
+ src/services/shopOrder.service.js             | 144 ++++++++++++++++--
+ src/utils/geo.js                              | 132 ++++++++++++++++
+ src/validations/distributor.validation.js     |  65 +++++++-
+ src/validations/shopOrder.validation.js       |  16 +-
+ 22 files changed, 696 insertions(+), 43 deletions(-)
+ create mode 100644 docs/DISTRIBUTOR-LOCATION.md
+ create mode 100644 src/controller/distributor/updateDistributorLocation.js
+ create mode 100644 src/controller/shopOrder/adminSetDeliveryLocation.js
+ create mode 100644 src/utils/geo.js
+
+diff --git a/docs/DISTRIBUTOR-LOCATION.md b/docs/DISTRIBUTOR-LOCATION.md
+new file mode 100644
+index 0000000..40cf32c
+--- /dev/null
++++ b/docs/DISTRIBUTOR-LOCATION.md
+@@ -0,0 +1,87 @@
++# Distributor & delivery location (KM + nearest first)
++
++Distance is how dispatch decides who carries a parcel: a partner 2 km from the
++salon beats one 40 km away, whatever their names are. This note describes the
++coordinates that make that possible and the API contract the admin panel
++(`my-naai-frontend`) and the salon portal (`my-naai-web`) read.
++
++## Storage
++
++| Table | Column | Meaning |
++| --- | --- | --- |
++| `distributors` | `latitude`, `longitude` (DOUBLE, nullable) | The partner's dispatch point: pinned by the admin while adding them, refreshed by the distributor portal's GPS ("live location"). |
++| `distributors` | `location_updated_at` | When the point was last set — a three-week-old pin is shown as such, so nobody is sorted by a stale position. |
++| `shop_orders` | `delivery_latitude`, `delivery_longitude` (DOUBLE, nullable) | The delivery point, **snapshotted** at placement (the salon's coordinates, or the address pin the client sent). Moving a salon later never rewrites where an old parcel went. |
++
++Both tables are already created with `sync({ alter: true })` at boot, so the new
++columns appear on deploy; no manual migration is required.
++
++Coordinates are always a **pair**. A lone latitude is rejected by validation —
++half a location is worse than none, because it silently drops out of sorting.
++
++## Distance
++
++`src/utils/geo.js` holds the single implementation (haversine, great-circle,
++rounded to 2 decimals ≈ 10 m). It is not a road distance and is not billed as
++one; every response field is called `distanceKm` so a routing provider can
++replace the maths later without changing a single client.
++
++## API
++
++### `POST /api/distributors/list` (admin)
++
++```json
++{ "page": 1, "searchString": "", "latitude": 21.1458, "longitude": 79.0882, "sortBy": "distance" }
++```
++
++* Sending the pair (the order's delivery location) returns **nearest first**
++  with `distanceKm` on every row. Partners with no pin go **last** — unknown is
++  not "near". Sorting happens across the whole filtered set before paging, so
++  the nearest partner cannot be stranded on page 3.
++* Without the pair the list stays alphabetical (`sortBy: "name"`).
++* `data.reference` echoes what the ordering was based on.
++* Each row also carries `latitude`, `longitude`, `locationUpdatedAt`,
++  `hasLocation`.
++
++### `POST /api/distributors/create` / `update` (admin)
++
++Optional `latitude` + `longitude` (both or neither). On update, sending neither
++leaves the pin untouched; sending `null`s clears it.
++
++### `POST /api/distributors/location`
++
++Distributor token (own row) **or** admin token + `distributorId`.
++
++```json
++{ "latitude": 21.1466, "longitude": 79.0888 }
++```
++
++Updates the point and `location_updated_at`; returns the row.
++
++### `POST /api/shop-orders/admin-set-delivery-location` (admin)
++
++```json
++{ "orderId": "MN…", "latitude": 21.1458, "longitude": 79.0882 }
++```
++
++For a salon with no coordinates (or a delivery to a different gate). Locked once
++the order is `DELIVERED`/`CANCELLED`; lands in the order timeline as
++`DELIVERY_LOCATION_SET`.
++
++### Order payloads (admin + distributor portal)
++
++Both list and detail responses add:
++
++```json
++"deliveryLocation": { "latitude": 21.1458, "longitude": 79.0882, "source": "ORDER", "hasLocation": true },
++"distributor": { "…": "…", "latitude": 21.1466, "longitude": 79.0888, "hasLocation": true, "distanceKm": 1.42 }
++```
++
++`source` is `ORDER` (the snapshot), `SALON` (fallback to the salon's current
++coordinates) or `null` when neither exists.
++
++The **salon** payload keeps `deliveryLocation` (it is the salon's own address —
++so they can confirm the pin) and still never sees the distributor, the internal
++status or the distance. Assignments write the distance into the audit note
++("… — 1.4 km from the delivery location"), so "why this partner?" stays
++answerable.
+diff --git a/src/controller/distributor/createDistributor.js b/src/controller/distributor/createDistributor.js
+index 7b3c415..0f3292b 100644
+--- a/src/controller/distributor/createDistributor.js
++++ b/src/controller/distributor/createDistributor.js
+@@ -1,11 +1,13 @@
+ const { createDistributorSchema } = require('../../validations/distributor.validation');
+ const distributorService = require('../../services/distributor.service');
+ 
+-// Company admin: add a delivery partner.
++// Company admin: add a delivery partner. The optional `latitude`/`longitude`
++// pair is the dispatch pin the admin drops on the map (or sends from their own
++// GPS) — it powers the KM column and the nearest-first list.
+ const createDistributor = async (request, response) => {
+     try {
+-        const { name, phone, email, area, deliveryCapability, address, password, isActive } = request.body || {};
+-        const validationResult = createDistributorSchema.validate({ name, phone, email, area, deliveryCapability, address, password, isActive }, { abortEarly: true });
++        const { name, phone, email, area, deliveryCapability, address, password, isActive, latitude, longitude } = request.body || {};
++        const validationResult = createDistributorSchema.validate({ name, phone, email, area, deliveryCapability, address, password, isActive, latitude, longitude }, { abortEarly: true });
+         if (validationResult.error) {
+             return response.status(400).json({ status: 'FAILED', message: validationResult.error.details[0].message });
+         }
+@@ -18,7 +20,12 @@ const createDistributor = async (request, response) => {
+             deliveryCapability: value.deliveryCapability || null,
+             address: value.address || null,
+             password: value.password || null,
+-            isActive: value.isActive
++            isActive: value.isActive,
++            // Only present when the admin placed a pin; absent leaves the
++            // columns NULL, which the clients render as "no location yet".
++            ...(value.latitude !== undefined || value.longitude !== undefined
++                ? { latitude: value.latitude, longitude: value.longitude }
++                : {})
+         });
+         return response.status(200).json({ status: 'SUCCESS', message: 'Distributor added successfully', data: result });
+     } catch (error) {
+diff --git a/src/controller/distributor/listDistributors.js b/src/controller/distributor/listDistributors.js
+index 7565eee..409f216 100644
+--- a/src/controller/distributor/listDistributors.js
++++ b/src/controller/distributor/listDistributors.js
+@@ -1,10 +1,28 @@
++const { listDistributorSchema } = require('../../validations/distributor.validation');
+ const distributorService = require('../../services/distributor.service');
+ 
+ // Company admin: the delivery partners orders can be assigned to.
++//
++// Send `latitude` + `longitude` (the order's delivery location) to get a
++// dispatch-ready list: every row carries `distanceKm`, rows are sorted
++// nearest-first (partners with no pin land last), and `data.reference` says
++// which ordering was applied. Without a reference point the list stays
++// alphabetical so the Distributors tab keeps its familiar order.
+ const listDistributors = async (request, response) => {
+     try {
+-        const { page, searchString } = request.body || {};
+-        const data = await distributorService.list({ page, searchString });
++        const { page, searchString, latitude, longitude, sortBy } = request.body || {};
++        const validationResult = listDistributorSchema.validate({ page, searchString, latitude, longitude, sortBy }, { abortEarly: true });
++        if (validationResult.error) {
++            return response.status(400).json({ status: 'FAILED', message: validationResult.error.details[0].message });
++        }
++        const value = validationResult.value;
++        const data = await distributorService.list({
++            page: value.page,
++            searchString: value.searchString,
++            latitude: value.latitude === '' ? null : value.latitude,
++            longitude: value.longitude === '' ? null : value.longitude,
++            sortBy: value.sortBy
++        });
+         return response.status(200).json({ status: 'SUCCESS', message: 'Distributor list fetched successfully', data });
+     } catch (error) {
+         console.log('error', error);
+diff --git a/src/controller/distributor/updateDistributor.js b/src/controller/distributor/updateDistributor.js
+index c79b5da..a00f06c 100644
+--- a/src/controller/distributor/updateDistributor.js
++++ b/src/controller/distributor/updateDistributor.js
+@@ -1,11 +1,12 @@
+ const { updateDistributorSchema } = require('../../validations/distributor.validation');
+ const distributorService = require('../../services/distributor.service');
+ 
+-// Company admin: partially update a delivery partner.
++// Company admin: partially update a delivery partner. `latitude`/`longitude`
++// move the dispatch pin (both must be sent together; both null clears it).
+ const updateDistributor = async (request, response) => {
+     try {
+-        const { distributorId, name, phone, email, area, deliveryCapability, address, password, isActive } = request.body || {};
+-        const validationResult = updateDistributorSchema.validate({ distributorId, name, phone, email, area, deliveryCapability, address, password, isActive }, { abortEarly: true });
++        const { distributorId, name, phone, email, area, deliveryCapability, address, password, isActive, latitude, longitude } = request.body || {};
++        const validationResult = updateDistributorSchema.validate({ distributorId, name, phone, email, area, deliveryCapability, address, password, isActive, latitude, longitude }, { abortEarly: true });
+         if (validationResult.error) {
+             return response.status(400).json({ status: 'FAILED', message: validationResult.error.details[0].message });
+         }
+@@ -18,6 +19,12 @@ const updateDistributor = async (request, response) => {
+         if (address !== undefined) dataToUpdate.address = address || null;
+         if (password !== undefined) dataToUpdate.password = password || null;
+         if (typeof isActive === 'boolean') dataToUpdate.isActive = isActive;
++        // An unrelated edit must not wipe the pin: only pass the pair through
++        // when the admin actually sent it.
++        if (latitude !== undefined || longitude !== undefined) {
++            dataToUpdate.latitude = latitude === undefined ? undefined : latitude;
++            dataToUpdate.longitude = longitude === undefined ? undefined : longitude;
++        }
+         if (Object.keys(dataToUpdate).length === 0) {
+             return response.status(400).json({ status: 'FAILED', message: 'No fields to update' });
+         }
+diff --git a/src/controller/distributor/updateDistributorLocation.js b/src/controller/distributor/updateDistributorLocation.js
+new file mode 100644
+index 0000000..d5c49d8
+--- /dev/null
++++ b/src/controller/distributor/updateDistributorLocation.js
+@@ -0,0 +1,38 @@
++const { updateDistributorLocationSchema } = require('../../validations/distributor.validation');
++const distributorService = require('../../services/distributor.service');
++
++/**
++ * Live location ping.
++ *
++ * Two callers, one contract:
++ *   · the distributor portal — its own token, its own row ("where I am now",
++ *     read from the browser's GPS when the distributor taps Update location);
++ *   · the admin panel — the admin token plus the `distributorId` being
++ *     corrected (the same field the rest of the Distributors tab uses).
++ *
++ * A stale pin is worse than no pin, so the refresh timestamp goes back with
++ * every response and the clients show it.
++ */
++const updateDistributorLocation = async (request, response) => {
++    try {
++        const own = request.distributor;
++        const { distributorId, latitude, longitude } = request.body || {};
++        const targetId = own?.distributorId || distributorId;
++        if (!targetId) {
++            return response.status(400).json({ status: 'FAILED', message: 'Distributor Id is required' });
++        }
++        const validationResult = updateDistributorLocationSchema.validate({ latitude, longitude }, { abortEarly: true });
++        if (validationResult.error) {
++            return response.status(400).json({ status: 'FAILED', message: validationResult.error.details[0].message });
++        }
++        const result = await distributorService.updateLocation(targetId, validationResult.value);
++        if (!result) {
++            return response.status(404).json({ status: 'FAILED', message: 'Distributor not found' });
++        }
++        return response.status(200).json({ status: 'SUCCESS', message: 'Distributor location updated', data: result });
++    } catch (error) {
++        console.log('error', error);
++        return response.status(500).json({ status: 'FAILED', message: error.message });
++    }
++};
++module.exports = updateDistributorLocation;
+diff --git a/src/controller/shopOrder/adminAssignDistributor.js b/src/controller/shopOrder/adminAssignDistributor.js
+index ab5a8aa..61ec015 100644
+--- a/src/controller/shopOrder/adminAssignDistributor.js
++++ b/src/controller/shopOrder/adminAssignDistributor.js
+@@ -31,7 +31,7 @@ const adminAssignDistributor = async (request, response) => {
+         return response.status(200).json({
+             status: 'SUCCESS',
+             message: 'Distributor assigned — awaiting their acceptance',
+-            data: updated
++            data: shopOrderService.decorateForFulfilment(updated)
+         });
+     } catch (error) {
+         console.log('error', error);
+diff --git a/src/controller/shopOrder/adminGetShopOrderById.js b/src/controller/shopOrder/adminGetShopOrderById.js
+index f35116a..1721144 100644
+--- a/src/controller/shopOrder/adminGetShopOrderById.js
++++ b/src/controller/shopOrder/adminGetShopOrderById.js
+@@ -26,7 +26,9 @@ const adminGetShopOrderById = async (request, response) => {
+         return response.status(200).json({
+             status: 'SUCCESS',
+             message: 'Order fetched successfully',
+-            data: order
++            // Adds `deliveryLocation` (the point on the map) and
++            // `distributor.distanceKm` (how far the partner is from it).
++            data: shopOrderService.decorateForFulfilment(order)
+         });
+     } catch (error) {
+         console.log('error', error);
+diff --git a/src/controller/shopOrder/adminSetDeliveryLocation.js b/src/controller/shopOrder/adminSetDeliveryLocation.js
+new file mode 100644
+index 0000000..68fa92d
+--- /dev/null
++++ b/src/controller/shopOrder/adminSetDeliveryLocation.js
+@@ -0,0 +1,42 @@
++const { adminSetDeliveryLocationSchema } = require('../../validations/shopOrder.validation');
++const shopOrderService = require('../../services/shopOrder.service');
++
++/**
++ * Company admin: place (or correct) the delivery pin for an order.
++ *
++ * Why this exists — a salon created before coordinates were compulsory has
++ * none on file, so its order has no map and no KM. Rather than blocking
++ * dispatch, the admin can drop the pin from the order itself; the change lands
++ * in the order's timeline and immediately drives the "nearest distributor"
++ * ordering in the assign screen.
++ */
++const adminSetDeliveryLocation = async (request, response) => {
++    try {
++        const { orderId, latitude, longitude } = request.body || {};
++        const validationResult = adminSetDeliveryLocationSchema.validate({ orderId, latitude, longitude }, { abortEarly: true });
++        if (validationResult.error) {
++            return response.status(400).json({ status: 'FAILED', message: validationResult.error.details[0].message });
++        }
++
++        const actor = {
++            actorType: 'ADMIN',
++            actorId: request.admin?.adminId || request.admin?.id,
++            actorLabel: request.admin?.name || 'Admin'
++        };
++        const updated = await shopOrderService.setDeliveryLocation(orderId, { latitude, longitude }, actor);
++        if (!updated) {
++            return response.status(404).json({ status: 'FAILED', message: 'Order not found' });
++        }
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: 'Delivery location saved',
++            data: updated
++        });
++    } catch (error) {
++        console.log('error', error);
++        const known = /locked once an order|valid latitude/.test(error.message);
++        return response.status(known ? 400 : 500).json({ status: 'FAILED', message: error.message });
++    }
++};
++
++module.exports = adminSetDeliveryLocation;
+diff --git a/src/controller/shopOrder/adminUpdateShopOrderStatus.js b/src/controller/shopOrder/adminUpdateShopOrderStatus.js
+index 0b9010b..2567aa7 100644
+--- a/src/controller/shopOrder/adminUpdateShopOrderStatus.js
++++ b/src/controller/shopOrder/adminUpdateShopOrderStatus.js
+@@ -23,7 +23,7 @@ const adminUpdateShopOrderStatus = async (request, response) => {
+             actorLabel: request.admin?.name || 'Admin'
+         };
+         const updated = await shopOrderService.updateStatus(orderId, status, notes || null, actor);
+-        return response.status(200).json({ status: 'SUCCESS', message: 'Order status updated successfully', data: updated });
++        return response.status(200).json({ status: 'SUCCESS', message: 'Order status updated successfully', data: shopOrderService.decorateForFulfilment(updated) });
+     } catch (error) {
+         console.log('error', error);
+         const known = /terminal|Unknown order status/.test(error.message);
+diff --git a/src/controller/shopOrder/distributorAcceptOrder.js b/src/controller/shopOrder/distributorAcceptOrder.js
+index 4d965d9..0129ba6 100644
+--- a/src/controller/shopOrder/distributorAcceptOrder.js
++++ b/src/controller/shopOrder/distributorAcceptOrder.js
+@@ -20,7 +20,7 @@ const distributorAcceptOrder = async (request, response) => {
+         if (!updated) {
+             return response.status(404).json({ status: 'FAILED', message: 'Order not found' });
+         }
+-        return response.status(200).json({ status: 'SUCCESS', message: 'Order accepted', data: updated });
++        return response.status(200).json({ status: 'SUCCESS', message: 'Order accepted', data: shopOrderService.decorateForFulfilment(updated) });
+     } catch (error) {
+         console.log('error', error);
+         const known = /Only an order awaiting|not assigned to your distributor/.test(error.message);
+diff --git a/src/controller/shopOrder/distributorRejectOrder.js b/src/controller/shopOrder/distributorRejectOrder.js
+index e9171e2..2d97db6 100644
+--- a/src/controller/shopOrder/distributorRejectOrder.js
++++ b/src/controller/shopOrder/distributorRejectOrder.js
+@@ -20,7 +20,7 @@ const distributorRejectOrder = async (request, response) => {
+         if (!updated) {
+             return response.status(404).json({ status: 'FAILED', message: 'Order not found' });
+         }
+-        return response.status(200).json({ status: 'SUCCESS', message: 'Order rejected — waiting for re-assignment', data: updated });
++        return response.status(200).json({ status: 'SUCCESS', message: 'Order rejected — waiting for re-assignment', data: shopOrderService.decorateForFulfilment(updated) });
+     } catch (error) {
+         console.log('error', error);
+         const known = /Only an order awaiting|not assigned to your distributor/.test(error.message);
+diff --git a/src/controller/shopOrder/distributorUpdateOrderStatus.js b/src/controller/shopOrder/distributorUpdateOrderStatus.js
+index 83492b9..f294522 100644
+--- a/src/controller/shopOrder/distributorUpdateOrderStatus.js
++++ b/src/controller/shopOrder/distributorUpdateOrderStatus.js
+@@ -20,7 +20,7 @@ const distributorUpdateOrderStatus = async (request, response) => {
+         if (!updated) {
+             return response.status(404).json({ status: 'FAILED', message: 'Order not found' });
+         }
+-        return response.status(200).json({ status: 'SUCCESS', message: `Order marked ${String(status).toLowerCase().replace(/_/g, ' ')}`, data: updated });
++        return response.status(200).json({ status: 'SUCCESS', message: `Order marked ${String(status).toLowerCase().replace(/_/g, ' ')}`, data: shopOrderService.decorateForFulfilment(updated) });
+     } catch (error) {
+         console.log('error', error);
+         const known = /can only be moved|not assigned to your distributor|must be (assigned|picked|shipped)/i.test(error.message);
+diff --git a/src/controller/shopOrder/listShopOrders.js b/src/controller/shopOrder/listShopOrders.js
+index 503286a..f7a5632 100644
+--- a/src/controller/shopOrder/listShopOrders.js
++++ b/src/controller/shopOrder/listShopOrders.js
+@@ -3,12 +3,21 @@ const shopOrderService = require('../../services/shopOrder.service');
+ // The salon's own order history. The SALON track is what it may see: the
+ // response's `status` is the customer status, and the internal fulfilment
+ // state plus the assigned distributor are stripped.
++//
++// `deliveryLocation` stays: it is the salon's OWN address (the point the
++// admin and the distributor see on their map), so the salon can confirm the
++// pin is right. The partner's identity and how far away they are remain
++// internal.
+ const cleanForSalon = (order) => {
+     const clean = order.toJSON();
+     clean.status = order.customerStatus;
++    clean.deliveryLocation = shopOrderService.deliveryLocationOf(clean);
+     delete clean.customerStatus;
+     delete clean.distributorId;
+     delete clean.distributor;
++    // The raw snapshot columns are already summarised by deliveryLocation.
++    delete clean.deliveryLatitude;
++    delete clean.deliveryLongitude;
+     return clean;
+ };
+ 
+diff --git a/src/database/models/distributor.model.js b/src/database/models/distributor.model.js
+index 1a5051c..753da1b 100644
+--- a/src/database/models/distributor.model.js
++++ b/src/database/models/distributor.model.js
+@@ -55,6 +55,33 @@ module.exports = (sequelize) => {
+             allowNull: true
+         },
+ 
++        // Dispatch location (the distributor's base / current position).
++        // The admin drops a pin while adding the partner, and the distributor
++        // portal can refresh it with the browser's own GPS ("live location"),
++        // which is what makes "nearest distributor first" and the KM column
++        // on an order meaningful. NULL means unknown — never 0,0 (Null Island
++        // would sort every unlocated partner to the top of a nearest-first
++        // list). DOUBLE, so a coordinate round-trips exactly.
++        latitude: {
++            type: DataTypes.DOUBLE,
++            allowNull: true,
++            field: 'latitude'
++        },
++
++        longitude: {
++            type: DataTypes.DOUBLE,
++            allowNull: true,
++            field: 'longitude'
++        },
++
++        // When the coordinates were last set/refreshed, so the admin can tell a
++        // pinned base ("set on 12 Oct") from a live fix ("2 minutes ago").
++        locationUpdatedAt: {
++            type: DataTypes.DATE,
++            allowNull: true,
++            field: 'location_updated_at'
++        },
++
+         isActive: {
+             type: DataTypes.BOOLEAN,
+             allowNull: false,
+diff --git a/src/database/models/shopOrder.model.js b/src/database/models/shopOrder.model.js
+index 6f74ece..56a5388 100644
+--- a/src/database/models/shopOrder.model.js
++++ b/src/database/models/shopOrder.model.js
+@@ -108,6 +108,22 @@ module.exports = (sequelize) => {
+             field: 'distributor_id'
+         },
+ 
++        // The delivery point, snapshotted at placement: the buying salon's
++        // coordinates (or the address pin the client sent). Snapshotted, not
++        // joined, so moving the salon later never rewrites where an old parcel
++        // went — and dispatch can still compute KM for completed orders.
++        deliveryLatitude: {
++            type: DataTypes.DOUBLE,
++            allowNull: true,
++            field: 'delivery_latitude'
++        },
++
++        deliveryLongitude: {
++            type: DataTypes.DOUBLE,
++            allowNull: true,
++            field: 'delivery_longitude'
++        },
++
+         cancelledAt: {
+             type: DataTypes.DATE,
+             allowNull: true,
+diff --git a/src/routes/distributor.routes.js b/src/routes/distributor.routes.js
+index ee2f932..2f9207f 100644
+--- a/src/routes/distributor.routes.js
++++ b/src/routes/distributor.routes.js
+@@ -4,6 +4,8 @@ const listDistributors = require('../controller/distributor/listDistributors');
+ const createDistributor = require('../controller/distributor/createDistributor');
+ const updateDistributor = require('../controller/distributor/updateDistributor');
+ const loginDistributor = require('../controller/distributor/loginDistributor');
++const updateDistributorLocation = require('../controller/distributor/updateDistributorLocation');
++const { authenticateDistributorOrAdmin } = require('../utils/middleware/authDistributorOrAdmin.middleware');
+ 
+ // Delivery partners (company admin). Orders get a distributorId via
+ // /api/shop-orders/admin-assign-distributor; the distributor then accepts or
+@@ -13,5 +15,8 @@ distributorRouter.post('/login', loginDistributor);
+ distributorRouter.post('/list', authenticateAdmin, listDistributors);
+ distributorRouter.post('/create', authenticateAdmin, createDistributor);
+ distributorRouter.post('/update', authenticateAdmin, updateDistributor);
++// Live/pinned location. A distributor refreshes its own row from the portal;
++// the admin token is accepted too (with `distributorId`) while correcting a pin.
++distributorRouter.post('/location', authenticateDistributorOrAdmin, updateDistributorLocation);
+ 
+ module.exports = distributorRouter;
+diff --git a/src/routes/shopOrder.routes.js b/src/routes/shopOrder.routes.js
+index 4f2cd1d..526dc12 100644
+--- a/src/routes/shopOrder.routes.js
++++ b/src/routes/shopOrder.routes.js
+@@ -10,6 +10,7 @@ const adminListShopOrders = require('../controller/shopOrder/adminListShopOrders
+ const adminGetShopOrderById = require('../controller/shopOrder/adminGetShopOrderById');
+ const adminUpdateShopOrderStatus = require('../controller/shopOrder/adminUpdateShopOrderStatus');
+ const adminAssignDistributor = require('../controller/shopOrder/adminAssignDistributor');
++const adminSetDeliveryLocation = require('../controller/shopOrder/adminSetDeliveryLocation');
+ const distributorAcceptOrder = require('../controller/shopOrder/distributorAcceptOrder');
+ const distributorRejectOrder = require('../controller/shopOrder/distributorRejectOrder');
+ const distributorListOrders = require('../controller/shopOrder/distributorListOrders');
+@@ -29,6 +30,9 @@ shopOrderRouter.post('/admin-list', authenticateAdmin, adminListShopOrders);
+ shopOrderRouter.post('/admin-get-by-id', authenticateAdmin, adminGetShopOrderById);
+ shopOrderRouter.post('/admin-update-status', authenticateAdmin, adminUpdateShopOrderStatus);
+ shopOrderRouter.post('/admin-assign-distributor', authenticateAdmin, adminAssignDistributor);
++// Place or correct the delivery pin on an order (map in the admin detail
++// drawer); drives the KM shown while assigning a distributor.
++shopOrderRouter.post('/admin-set-delivery-location', authenticateAdmin, adminSetDeliveryLocation);
+ 
+ // Distributor portal (distributor token) — the admin token is accepted too,
+ // so the admin can record a distributor's accept/reject on their behalf.
+diff --git a/src/services/distributor.service.js b/src/services/distributor.service.js
+index e696bdc..8aea8ca 100644
+--- a/src/services/distributor.service.js
++++ b/src/services/distributor.service.js
+@@ -1,6 +1,7 @@
+ const { Op } = require('sequelize');
+ const bcrypt = require('bcryptjs');
+ const db = require('../database/models');
++const { toCoordinate, toPoint, distanceKm, sortByDistance } = require('../utils/geo');
+ const DEFAULT_LIMIT = parseInt(process.env.PAGE_LIMIT) || 20;
+ 
+ /**
+@@ -8,20 +9,53 @@ const DEFAULT_LIMIT = parseInt(process.env.PAGE_LIMIT) || 20;
+  * delivery partner the admin requests for shop orders; the distributor logs
+  * in with the password the admin set and accepts or rejects their orders.
+  * The `password` hash is never returned to any client.
++ *
++ * LOCATION — a distributor carries coordinates (set by the admin's pin while
++ * adding them, refreshed by the portal's own GPS). Those coordinates are what
++ * turn a flat list into a dispatch decision: `/list` accepts a reference point
++ * (the order's delivery location) and answers nearest-first with `distanceKm`
++ * per row, and an order payload carries `distributor.distanceKm`.
+  */
+ const publicView = (distributor) => {
+   if (!distributor) return null;
+   const view = distributor.toJSON ? distributor.toJSON() : { ...distributor };
+   delete view.password;
++  // Coordinates are stored as numbers already; normalise anyway so a caller
++  // never has to guess between a string and a number.
++  view.latitude = toCoordinate(view.latitude);
++  view.longitude = toCoordinate(view.longitude);
++  view.hasLocation = Boolean(toPoint(view));
+   return view;
+ };
+ 
+ const hashPassword = (plain) => (plain ? bcrypt.hashSync(plain, 10) : null);
+ 
+-const list = async ({ page = 1, searchString = '' } = {}) => {
++// Only touch the location columns when the caller actually sent them: an
++// unrelated edit (renaming a partner) must not wipe a pin the admin placed.
++const locationPatch = (data = {}) => {
++  const patch = {};
++  const sentLat = Object.prototype.hasOwnProperty.call(data, 'latitude');
++  const sentLng = Object.prototype.hasOwnProperty.call(data, 'longitude');
++  if (!sentLat && !sentLng) return patch;
++  const latitude = toCoordinate(data.latitude);
++  const longitude = toCoordinate(data.longitude);
++  patch.latitude = latitude;
++  patch.longitude = longitude;
++  patch.locationUpdatedAt = latitude !== null && longitude !== null ? new Date() : null;
++  return patch;
++};
++
++/**
++ * Admin list. Without a reference point this is the familiar alphabetical,
++ * paginated list. WITH a reference point (`latitude` + `longitude`, i.e. the
++ * order's delivery location) the whole filtered set is sorted nearest-first
++ * and THEN paginated — sorting only the current page would put a "nearest"
++ * distributor on page 3, which is exactly the bug this endpoint exists to
++ * avoid. The partner table stays small, so this is a cheap sort.
++ */
++const list = async ({ page = 1, searchString = '', latitude, longitude, sortBy } = {}) => {
+   const limit = DEFAULT_LIMIT;
+   const safePage = parseInt(page, 10) > 0 ? parseInt(page, 10) : 1;
+-  const offset = (safePage - 1) * limit;
+ 
+   const where = {};
+   const trimmedSearch = String(searchString || '').trim();
+@@ -33,16 +67,33 @@ const list = async ({ page = 1, searchString = '' } = {}) => {
+     ];
+   }
+ 
+-  const { count: totalDistributors, rows: distributors } = await db.Distributor.findAndCountAll({
++  const rows = await db.Distributor.findAll({
+     where,
+-    order: [['name', 'ASC']],
+-    limit,
+-    offset
++    order: [['name', 'ASC']]
+   });
+ 
++  const reference = toPoint({ latitude, longitude });
++  const wantsDistance = Boolean(reference) && sortBy !== 'name';
++  const decorated = rows.map((row) => {
++    const view = publicView(row);
++    view.distanceKm = reference ? distanceKm(view, reference) : null;
++    return view;
++  });
++
++  const sorted = wantsDistance
++    ? sortByDistance(decorated, reference)
++    : decorated.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
++
++  const totalDistributors = sorted.length;
++  const offset = (safePage - 1) * limit;
++  const pageRows = sorted.slice(offset, offset + limit);
++
+   return {
+-    distributors: distributors.map(publicView),
+-    pagination: { page: safePage, limit, totalDistributors, totalPages: Math.ceil(totalDistributors / limit) || 0 }
++    distributors: pageRows,
++    pagination: { page: safePage, limit, totalDistributors, totalPages: Math.ceil(totalDistributors / limit) || 0 },
++    // Echo what the ordering was based on, so the admin panel can label the
++    // column honestly ("nearest to this order" vs "A–Z").
++    reference: reference ? { ...reference, orderedBy: wantsDistance ? 'distance' : 'name' } : { orderedBy: 'name' }
+   };
+ };
+ 
+@@ -51,7 +102,9 @@ const getById = async (distributorId) => db.Distributor.findByPk(distributorId);
+ const create = async (dataToInsert) => {
+   const data = { ...dataToInsert };
+   if (data.password) data.password = hashPassword(data.password);
+-  return publicView(await db.Distributor.create(data));
++  Object.assign(data, locationPatch(data));
++  const created = await db.Distributor.create(data);
++  return publicView(created);
+ };
+ 
+ const update = async (distributorId, dataToUpdate) => {
+@@ -59,10 +112,27 @@ const update = async (distributorId, dataToUpdate) => {
+   if (!distributor) return null;
+   const data = { ...dataToUpdate };
+   if (data.password !== undefined) data.password = data.password ? hashPassword(data.password) : null;
++  Object.assign(data, locationPatch(data));
+   await distributor.update(data);
+   return publicView(distributor);
+ };
+ 
++/**
++ * Distributor portal: refresh the live location. Called from the portal's
++ * "Update my location" button with the browser's own GPS fix, and by the
++ * admin while correcting a pin — both end up in the same columns so the KM
++ * arithmetic never has two sources of truth.
++ */
++const updateLocation = async (distributorId, { latitude, longitude }) => {
++  const distributor = await db.Distributor.findByPk(distributorId);
++  if (!distributor) return null;
++  const lat = toCoordinate(latitude);
++  const lng = toCoordinate(longitude);
++  if (lat === null || lng === null) return null;
++  await distributor.update({ latitude: lat, longitude: lng, locationUpdatedAt: new Date() });
++  return publicView(distributor);
++};
++
+ // Portal login: phone or email + the password the admin set.
+ const login = async (identifier, password) => {
+   const trimmed = String(identifier || '').trim();
+@@ -80,4 +150,4 @@ const login = async (identifier, password) => {
+   return ok ? publicView(distributor) : null;
+ };
+ 
+-module.exports = { list, getById, create, update, login };
++module.exports = { list, getById, create, update, updateLocation, login, publicView };
+diff --git a/src/services/shopOrder.service.js b/src/services/shopOrder.service.js
+index 2f423ce..c10d962 100644
+--- a/src/services/shopOrder.service.js
++++ b/src/services/shopOrder.service.js
+@@ -1,6 +1,7 @@
+ const { Op } = require('sequelize');
+ const db = require('../database/models');
+ const shopSettingsService = require('./shopSettings.service');
++const { toCoordinate, toPoint, distanceKm, formatKm } = require('../utils/geo');
+ const DEFAULT_LIMIT = parseInt(process.env.PAGE_LIMIT) || 20;
+ 
+ /* ------------------------------------------------------------------ *\
+@@ -145,11 +146,26 @@ const createOrder = async ({ salonId, orderId, items, address, payment, notes })
+   }
+   const paid = method === 'ONLINE' && payment?.status === 'PAID';
+ 
++  // The delivery point, decided once and stored on the order:
++  //   1. the salon's own coordinates (the server's truth — a client cannot
++  //      claim a different delivery city to shave its bill or its KM);
++  //   2. the address pin the client sent (a salon whose profile has no
++  //      coordinates yet still gets a map for the dispatcher).
++  // Everything downstream (KM on assignment, the admin map, the distributor
++  // portal) reads these two columns.
++  const salon = await db.Salon.findByPk(salonId, { attributes: ['salonName', 'latitude', 'longitude', 'addressLine1', 'city'] });
++  const deliveryPoint = toPoint({ latitude: salon?.latitude, longitude: salon?.longitude })
++    || toPoint({ latitude: address?.latitude, longitude: address?.longitude });
++
+   const order = await db.ShopOrder.create({
+     orderId: orderId || generateOrderId(),
+     salonId,
+     items,
+-    address,
++    // Coordinates never live inside the address snapshot (the salon's address
++    // text must not silently change); they get their own columns below.
++    address: address ? { name: address.name, phone: address.phone, line1: address.line1, city: address.city, state: address.state, pincode: address.pincode } : address,
++    deliveryLatitude: deliveryPoint ? deliveryPoint.latitude : null,
++    deliveryLongitude: deliveryPoint ? deliveryPoint.longitude : null,
+     payment: {
+       method,
+       status: paid ? 'PAID' : 'PENDING',
+@@ -166,7 +182,6 @@ const createOrder = async ({ salonId, orderId, items, address, payment, notes })
+ 
+   // First entries of the audit record: the order arrived on the central
+   // dashboard, and (if paid) the payment is confirmed.
+-  const salon = await db.Salon.findByPk(salonId, { attributes: ['salonName'] });
+   const actor = { actorType: 'SALON', actorId: salonId, actorLabel: salon?.salonName || 'Salon' };
+   await logEvent(order, { ...actor, action: 'ORDER_PLACED', toStatus: order.status, note: method === 'ONLINE' ? 'Order placed (online payment)' : 'Order placed (cash on delivery)' });
+   if (paid) {
+@@ -175,6 +190,57 @@ const createOrder = async ({ salonId, orderId, items, address, payment, notes })
+   return order;
+ };
+ 
++/* ------------------------------------------------------------------ *\
++ * Delivery location + distance
++ *
++ * Every fulfilment payload (admin, distributor) names the point the parcel is
++ * going to and how far the assigned partner is from it. The salon sees the
++ * point (it is the salon's own address) but never the partner's distance or
++ * identity — the two tracks stay separate, as they always were.
++ * ------------------------------------------------------------------ */
++
++const DELIVERY_LOCATION_SOURCES = {
++  ORDER: 'ORDER',
++  SALON: 'SALON'
++};
++
++// The point the parcel is going to. The order snapshot wins; a salon moved
++// after placement is only a fallback, so history stays truthful.
++const deliveryLocationOf = (order) => {
++  const raw = order?.toJSON ? order.toJSON() : (order || {});
++  const fromOrder = toPoint({ latitude: raw.deliveryLatitude, longitude: raw.deliveryLongitude });
++  if (fromOrder) return { ...fromOrder, source: DELIVERY_LOCATION_SOURCES.ORDER, hasLocation: true };
++  const fromSalon = toPoint({ latitude: raw.salon?.latitude, longitude: raw.salon?.longitude });
++  if (fromSalon) return { ...fromSalon, source: DELIVERY_LOCATION_SOURCES.SALON, hasLocation: true };
++  return { latitude: null, longitude: null, source: null, hasLocation: false };
++};
++
++/**
++ * The fulfilment view of an order (admin + distributor portal):
++ *   deliveryLocation { latitude, longitude, source, hasLocation }
++ *   distributor.distanceKm (km from the partner's stored location to the
++ *                  delivery point, null when either end is unknown)
++ *   distributor.hasLocation / locationUpdatedAt
++ * The salon payload never passes through here.
++ */
++const decorateForFulfilment = (order) => {
++  if (!order) return null;
++  const plain = order.toJSON ? order.toJSON() : { ...order };
++  const deliveryLocation = deliveryLocationOf(plain);
++  plain.deliveryLocation = deliveryLocation;
++  if (plain.distributor) {
++    const distance = distanceKm(plain.distributor, deliveryLocation);
++    plain.distributor = {
++      ...plain.distributor,
++      latitude: toCoordinate(plain.distributor.latitude),
++      longitude: toCoordinate(plain.distributor.longitude),
++      hasLocation: Boolean(toPoint(plain.distributor)),
++      distanceKm: distance
++    };
++  }
++  return plain;
++};
++
+ const listForSalon = async (salonId, page = 1) => {
+   const limit = DEFAULT_LIMIT;
+   const safePage = parseInt(page, 10) > 0 ? parseInt(page, 10) : 1;
+@@ -182,7 +248,7 @@ const listForSalon = async (salonId, page = 1) => {
+ 
+   const { count: totalOrders, rows: orders } = await db.ShopOrder.findAndCountAll({
+     where: { salonId },
+-    include: [{ model: db.Salon, as: 'salon', attributes: ['salonId', 'salonName'] }],
++    include: [{ model: db.Salon, as: 'salon', attributes: ['salonId', 'salonName', 'latitude', 'longitude'] }],
+     order: [['createdAt', 'DESC']],
+     limit,
+     offset
+@@ -202,8 +268,14 @@ const getById = async (orderIdOrId, { withEvents = false } = {}) => {
+     where[Op.or] = [{ orderId: orderIdOrId }, { id: orderIdOrId }];
+   }
+   const include = [
+-    { model: db.Salon, as: 'salon', attributes: ['salonId', 'salonName'] },
+-    { model: db.Distributor, as: 'distributor', attributes: ['distributorId', 'name', 'phone'] }
++    // Coordinates travel with both ends of the delivery: the salon's (the
++    // delivery location) and the distributor's (the dispatch location).
++    { model: db.Salon, as: 'salon', attributes: ['salonId', 'salonName', 'phoneNumber', 'latitude', 'longitude', 'addressLine1', 'city'] },
++    {
++      model: db.Distributor,
++      as: 'distributor',
++      attributes: ['distributorId', 'name', 'phone', 'area', 'deliveryCapability', 'latitude', 'longitude', 'locationUpdatedAt']
++    }
+   ];
+   if (withEvents) {
+     include.push({
+@@ -233,6 +305,10 @@ const assignDistributor = async (orderIdOrId, distributorId, note, actor = {}, d
+   if (order.status === 'DELIVERED' || order.status === 'CANCELLED') {
+     throw new Error(`Order can no longer be assigned (status: ${order.status})`);
+   }
++  // The distance the admin saw on the assign screen is written into the
++  // permanent record, so "why this partner?" is answerable months later.
++  const deliveryPoint = deliveryLocationOf(order);
++  const distanceLabel = formatKm(distanceKm(distributor, deliveryPoint));
+ 
+   const fromStatus = order.status;
+   order.distributorId = distributorId;
+@@ -248,7 +324,11 @@ const assignDistributor = async (orderIdOrId, distributorId, note, actor = {}, d
+     action: 'ASSIGNED',
+     fromStatus,
+     toStatus: order.status,
+-    note: [note, `Distributor requested: ${distributor?.name || distributorId}`].filter(Boolean).join(' — ')
++    note: [
++      note,
++      `Distributor requested: ${distributor?.name || distributorId}`,
++      distanceLabel ? `${distanceLabel} from the delivery location` : 'delivery distance unknown (no coordinates)'
++    ].filter(Boolean).join(' — ')
+   });
+   return order;
+ };
+@@ -422,8 +502,12 @@ const listForAdmin = async ({ page = 1, status, customerStatus, salonId, distrib
+   const { count: totalOrders, rows: orders } = await db.ShopOrder.findAndCountAll({
+     where,
+     include: [
+-      { model: db.Salon, as: 'salon', attributes: ['salonId', 'salonName', 'phoneNumber'] },
+-      { model: db.Distributor, as: 'distributor', attributes: ['distributorId', 'name', 'phone', 'area'] },
++      { model: db.Salon, as: 'salon', attributes: ['salonId', 'salonName', 'phoneNumber', 'latitude', 'longitude', 'addressLine1', 'city'] },
++      {
++        model: db.Distributor,
++        as: 'distributor',
++        attributes: ['distributorId', 'name', 'phone', 'area', 'deliveryCapability', 'latitude', 'longitude', 'locationUpdatedAt']
++      },
+       {
+         model: db.ShopOrderEvent,
+         as: 'events',
+@@ -437,7 +521,7 @@ const listForAdmin = async ({ page = 1, status, customerStatus, salonId, distrib
+   });
+ 
+   return {
+-    orders,
++    orders: orders.map(decorateForFulfilment),
+     pagination: { page: safePage, limit, totalOrders, totalPages: Math.ceil(totalOrders / limit) || 0 }
+   };
+ };
+@@ -455,7 +539,12 @@ const listForDistributor = async (distributorId, { page = 1, status } = {}) => {
+   const { count: totalOrders, rows: orders } = await db.ShopOrder.findAndCountAll({
+     where,
+     include: [
+-      { model: db.Salon, as: 'salon', attributes: ['salonId', 'salonName', 'phoneNumber'] },
++      { model: db.Salon, as: 'salon', attributes: ['salonId', 'salonName', 'phoneNumber', 'latitude', 'longitude', 'addressLine1', 'city'] },
++      {
++        model: db.Distributor,
++        as: 'distributor',
++        attributes: ['distributorId', 'name', 'phone', 'area', 'latitude', 'longitude', 'locationUpdatedAt']
++      },
+       {
+         model: db.ShopOrderEvent,
+         as: 'events',
+@@ -469,13 +558,46 @@ const listForDistributor = async (distributorId, { page = 1, status } = {}) => {
+   });
+ 
+   return {
+-    orders,
++    orders: orders.map(decorateForFulfilment),
+     pagination: { page: safePage, limit, totalOrders, totalPages: Math.ceil(totalOrders / limit) || 0 }
+   };
+ };
+ 
++/**
++ * Admin: correct or add the delivery pin for an order (a salon with no
++ * coordinates on file, or a delivery that goes somewhere else). Recorded in
++ * the timeline with who moved it, because the pin decides the KM the next
++ * assignment shows.
++ */
++const setDeliveryLocation = async (orderIdOrId, { latitude, longitude }, actor = {}) => {
++  const order = await getById(orderIdOrId);
++  if (!order) return null;
++  if (order.status === 'DELIVERED' || order.status === 'CANCELLED') {
++    throw new Error(`The delivery location is locked once an order is ${order.status}`);
++  }
++  const point = toPoint({ latitude, longitude });
++  if (!point) throw new Error('A valid latitude and longitude pair is required');
++  const previous = deliveryLocationOf(order);
++  await order.update({ deliveryLatitude: point.latitude, deliveryLongitude: point.longitude });
++  await logEvent(order, {
++    actorType: actor.actorType || 'ADMIN',
++    actorId: actor.actorId || null,
++    actorLabel: actor.actorLabel || 'Admin',
++    action: 'DELIVERY_LOCATION_SET',
++    fromStatus: order.status,
++    toStatus: order.status,
++    note: `Delivery location set to ${point.latitude.toFixed(5)}, ${point.longitude.toFixed(5)}`
++      + (previous.hasLocation ? ' (replacing the previous pin)' : '')
++  });
++  const fresh = await getById(orderIdOrId, { withEvents: true });
++  return decorateForFulfilment(fresh);
++};
++
+ module.exports = {
+   DELIVERY_FEE,
++  deliveryLocationOf,
++  decorateForFulfilment,
++  setDeliveryLocation,
+   FREE_DELIVERY_ABOVE,
+   computeTotals,
+   INTERNAL_STATUSES,
+diff --git a/src/utils/geo.js b/src/utils/geo.js
+new file mode 100644
+index 0000000..2e791d7
+--- /dev/null
++++ b/src/utils/geo.js
+@@ -0,0 +1,132 @@
++/**
++ * Geo helpers — delivery distances on the planet we actually deliver on.
++ *
++ * A distributor and a salon (the delivery point) are two points on a sphere;
++ * the "KM" the admin sees is the great-circle (haversine) distance between
++ * them, NOT a straight line on a projected map and NOT a driving route. That
++ * is deliberate: it is instant, needs no routing provider, works offline and
++ * never disagrees with itself between the admin panel, the distributor portal
++ * and a re-sorted list. A road distance can be added later without changing
++ * this contract — `distanceKm` is already the field every client reads.
++ *
++ * Coordinates are stored as DOUBLE columns but arrive from a browser
++ * (`navigator.geolocation`) or from a client payload where they may be
++ * strings, `''`, `null` or `undefined`. Every entry point normalises through
++ * `toCoordinate`, so 0 is a real coordinate (the equator / Greenwich) while
++ * an absent value is `null` — never NaN and never a silent 0.
++ */
++const EARTH_RADIUS_KM = 6371;
++
++const toCoordinate = (value) => {
++  if (value === null || value === undefined) return null;
++  if (typeof value === 'string' && value.trim() === '') return null;
++  const n = Number(value);
++  return Number.isFinite(n) ? n : null;
++};
++
++const isValidLatitude = (value) => {
++  const n = toCoordinate(value);
++  return n !== null && n >= -90 && n <= 90;
++};
++
++const isValidLongitude = (value) => {
++  const n = toCoordinate(value);
++  return n !== null && n >= -180 && n <= 180;
++};
++
++// A usable point needs BOTH halves; half a coordinate is not a location, it is
++// a data-entry bug that must never be rendered as one.
++const toPoint = (source) => {
++  if (!source) return null;
++  const latitude = toCoordinate(source.latitude);
++  const longitude = toCoordinate(source.longitude);
++  if (latitude === null || longitude === null) return null;
++  if (!isValidLatitude(latitude) || !isValidLongitude(longitude)) return null;
++  return { latitude, longitude };
++};
++
++const haversineKm = (fromLat, fromLon, toLat, toLon) => {
++  const lat1 = Number(fromLat);
++  const lon1 = Number(fromLon);
++  const lat2 = Number(toLat);
++  const lon2 = Number(toLon);
++  if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return null;
++  const dLat = ((lat2 - lat1) * Math.PI) / 180;
++  const dLon = ((lon2 - lon1) * Math.PI) / 180;
++  const a = Math.sin(dLat / 2) ** 2
++    + Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
++  return EARTH_RADIUS_KM * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a))));
++};
++
++// Two decimals is ~10 m — precise enough to sort and to warn a dispatcher,
++// and coarse enough that a stored value never reads like a GPS track.
++const roundKm = (km, digits = 2) => {
++  if (!Number.isFinite(km)) return null;
++  const factor = 10 ** digits;
++  return Math.round(km * factor) / factor;
++};
++
++// Distance between two point-like objects ({latitude, longitude}) or between a
++// point and a stored row. Returns null when either end has no usable location.
++const distanceKm = (from, to) => {
++  const a = toPoint(from);
++  const b = toPoint(to);
++  if (!a || !b) return null;
++  return roundKm(haversineKm(a.latitude, a.longitude, b.latitude, b.longitude));
++};
++
++// Decorate a row (a Sequelize instance or a plain object) with the distance to
++// `reference`, keeping everything else untouched.
++const withDistance = (row, reference) => {
++  if (!row) return null;
++  const plain = row.toJSON ? row.toJSON() : { ...row };
++  const distance = distanceKm(plain, reference);
++  return { ...plain, distanceKm: distance };
++};
++
++// Nearest first. Rows with no known location go last (they are not "far", they
++// are simply unknown — putting them at km 0 would push them to the top of a
++// dispatch list, which is the one thing a nearest-first list must not do),
++// then ties break by name so paging is stable.
++const sortByDistance = (rows = [], reference = null) => {
++  const list = [...rows];
++  const hasReference = Boolean(toPoint(reference));
++  if (!hasReference) {
++    return list.sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')));
++  }
++  return list.sort((a, b) => {
++    const aKm = distanceKm(a, reference);
++    const bKm = distanceKm(b, reference);
++    if (aKm === null && bKm === null) return String(a?.name || '').localeCompare(String(b?.name || ''));
++    if (aKm === null) return 1;
++    if (bKm === null) return -1;
++    if (aKm !== bKm) return aKm - bKm;
++    return String(a?.name || '').localeCompare(String(b?.name || ''));
++  });
++};
++
++// Human label used in order events and API messages ("4.2 km").
++const formatKm = (km) => (Number.isFinite(km) ? `${Number(km).toFixed(1)} km` : null);
++
++// A free, key-less deep link that opens the point in whatever map app the
++// phone has. Shared by the admin panel and the distributor portal.
++const mapsUrl = (source) => {
++  const point = toPoint(source);
++  if (!point) return null;
++  return `https://www.google.com/maps/search/?api=1&query=${point.latitude},${point.longitude}`;
++};
++
++module.exports = {
++  EARTH_RADIUS_KM,
++  toCoordinate,
++  isValidLatitude,
++  isValidLongitude,
++  toPoint,
++  haversineKm,
++  roundKm,
++  distanceKm,
++  withDistance,
++  sortByDistance,
++  formatKm,
++  mapsUrl
++};
+diff --git a/src/validations/distributor.validation.js b/src/validations/distributor.validation.js
+index 5184726..46a0289 100644
+--- a/src/validations/distributor.validation.js
++++ b/src/validations/distributor.validation.js
+@@ -1,6 +1,25 @@
+ const Joi = require('joi');
+ 
+-const createDistributorSchema = Joi.object({
++// Coordinates arrive from a browser GPS fix or from a map picker. `null` and
++// `''` both mean "no pin yet" (the admin can save a partner before visiting the
++// site), so they are allowed — but a half coordinate is not a location, so the
++// pair is validated together by `withLocationPair` below.
++const latitude = Joi.number().min(-90).max(90).optional().allow(null, '');
++const longitude = Joi.number().min(-180).max(180).optional().allow(null, '');
++
++// Two rules that a per-field schema cannot express:
++//   1. a latitude without a longitude (or the reverse) is not a location;
++//   2. NaN / an out-of-range value must never reach the DB as a coordinate.
++const withLocationPair = (schema) => schema.custom((value, helpers) => {
++  const hasLat = value.latitude !== undefined && value.latitude !== null && value.latitude !== '';
++  const hasLng = value.longitude !== undefined && value.longitude !== null && value.longitude !== '';
++  if (hasLat !== hasLng) {
++    return helpers.error('any.invalid', { message: 'latitude and longitude must be sent together' });
++  }
++  return value;
++}, 'latitude/longitude pair');
++
++const createDistributorSchema = withLocationPair(Joi.object({
+   name: Joi.string().required(),
+   phone: Joi.string().optional().allow(null, ''),
+   email: Joi.string().email().optional().allow(null, ''),
+@@ -9,10 +28,14 @@ const createDistributorSchema = Joi.object({
+   address: Joi.string().max(2000).optional().allow(null),
+   // Portal login password (plain text in the payload, stored hashed).
+   password: Joi.string().min(6).max(100).optional().allow(null, ''),
+-  isActive: Joi.boolean().optional().default(true)
+-});
++  isActive: Joi.boolean().optional().default(true),
++  // Dispatch location — the admin drops a pin (map click or "use current
++  // location") while adding the partner; used for the KM / nearest-first sort.
++  latitude,
++  longitude
++}));
+ 
+-const updateDistributorSchema = Joi.object({
++const updateDistributorSchema = withLocationPair(Joi.object({
+   distributorId: Joi.string().uuid().required(),
+   name: Joi.string().optional(),
+   phone: Joi.string().optional().allow(null, ''),
+@@ -22,13 +45,43 @@ const updateDistributorSchema = Joi.object({
+   address: Joi.string().max(2000).optional().allow(null),
+   // Empty string clears the password (disables portal login).
+   password: Joi.string().min(6).max(100).optional().allow(null, ''),
+-  isActive: Joi.boolean().optional()
++  isActive: Joi.boolean().optional(),
++  // Send the pair to move the pin, or send both as null to clear it.
++  latitude,
++  longitude
++}));
++
++// Distributor portal: refresh the live location. Only the pair, nothing else.
++const updateDistributorLocationSchema = Joi.object({
++  latitude: Joi.number().min(-90).max(90).required(),
++  longitude: Joi.number().min(-180).max(180).required()
+ });
+ 
++// Admin list options. Sending a reference point turns the response into a
++// nearest-first list (`distanceKm` per row); without one it stays alphabetical.
++const listDistributorSchema = Joi.object({
++  page: Joi.number().integer().min(1).optional(),
++  searchString: Joi.string().allow('', null).optional(),
++  latitude: Joi.number().min(-90).max(90).optional().allow(null, ''),
++  longitude: Joi.number().min(-180).max(180).optional().allow(null, ''),
++  sortBy: Joi.string().valid('name', 'distance').optional()
++}).custom((value, helpers) => {
++  const hasLat = value.latitude !== undefined && value.latitude !== null && value.latitude !== '';
++  const hasLng = value.longitude !== undefined && value.longitude !== null && value.longitude !== '';
++  if (hasLat !== hasLng) return helpers.error('any.invalid', { message: 'latitude and longitude must be sent together' });
++  return value;
++}, 'reference point pair');
++
+ // Distributor portal login — identifier is the phone OR the email on file.
+ const loginDistributorSchema = Joi.object({
+   identifier: Joi.string().required(),
+   password: Joi.string().required()
+ });
+ 
+-module.exports = { createDistributorSchema, updateDistributorSchema, loginDistributorSchema };
++module.exports = {
++  createDistributorSchema,
++  updateDistributorSchema,
++  updateDistributorLocationSchema,
++  listDistributorSchema,
++  loginDistributorSchema
++};
+diff --git a/src/validations/shopOrder.validation.js b/src/validations/shopOrder.validation.js
+index 37f629b..b399d52 100644
+--- a/src/validations/shopOrder.validation.js
++++ b/src/validations/shopOrder.validation.js
+@@ -25,7 +25,12 @@ const createShopOrderSchema = Joi.object({
+         line1: Joi.string().max(255).required(),
+         city: Joi.string().max(100).required(),
+         state: Joi.string().max(100).allow(null, '').optional(),
+-        pincode: Joi.string().pattern(/^\d{6}$/).required()
++        pincode: Joi.string().pattern(/^\d{6}$/).required(),
++        // Optional delivery pin from the client. The server prefers the
++        // salon's own coordinates and only falls back to these, so a tampered
++        // browser cannot move a delivery (and its KM) to another city.
++        latitude: Joi.number().min(-90).max(90).optional().allow(null, ''),
++        longitude: Joi.number().min(-180).max(180).optional().allow(null, '')
+     }).required(),
+     payment: Joi.object({
+         method: Joi.string().valid('ONLINE', 'COD').default('COD'),
+@@ -53,6 +58,14 @@ const adminUpdateShopOrderStatusSchema = Joi.object({
+     notes: Joi.string().max(1000).allow(null, '').optional()
+ });
+ 
++// Admin corrects the delivery pin (a salon with no coordinates yet, or an
++// order that goes to a different gate/warehouse).
++const adminSetDeliveryLocationSchema = Joi.object({
++    orderId: Joi.string().max(64).required(),
++    latitude: Joi.number().min(-90).max(90).required(),
++    longitude: Joi.number().min(-180).max(180).required()
++});
++
+ const adminAssignDistributorSchema = Joi.object({
+     orderId: Joi.string().max(64).required(),
+     distributorId: Joi.string().uuid().required(),
+@@ -88,6 +101,7 @@ module.exports = {
+     cancelShopOrderSchema,
+     adminUpdateShopOrderStatusSchema,
+     adminAssignDistributorSchema,
++    adminSetDeliveryLocationSchema,
+     distributorOrderSchema,
+     distributorRejectOrderSchema,
+     distributorListOrdersSchema,
+-- 
+2.39.5
+

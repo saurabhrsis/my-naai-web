@@ -91,7 +91,7 @@ import { ASK_CHOICES, alertsPromptFallback, canAskForAlerts, promptsAvailable, r
 import { PermissionSheet } from './PermissionUI';
 import { BuzzerTestCard } from './BuzzerTestCard';
 
-const USER_FALLBACK_IMAGE = '/assets/brand/naai-logo-dark.svg';
+const USER_FALLBACK_IMAGE = '/assets/brand/mynaai-mark.png';
 // On-brand placeholders for catalog items and specialists without an uploaded
 // photo. The old defaults were stock pictures (an advert with a film roll, one
 // specific barber's face repeated for every specialist), which looked like

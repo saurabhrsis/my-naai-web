@@ -9,16 +9,18 @@
  * - Works on Android Chrome, Edge, Samsung Internet, Firefox, iOS Safari (PWA), Chrome on iOS (PWA)
  */
 
-const CACHE_NAME = 'mynaai-shell-v8';
+const CACHE_NAME = 'mynaai-shell-v9';
 const APP_SHELL = [
   '/',
   '/index.html',
   '/manifest.webmanifest',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
-  '/assets/brand/naai-mark.svg',
-  '/assets/brand/naai-logo.svg',
-  '/assets/brand/naai-logo-dark.svg',
+  '/icons/icon-maskable-512.png',
+  '/icons/badge-96.png',
+  '/favicon.ico',
+  '/assets/brand/mynaai-mark.png',
+  '/assets/brand/mynaai-logo.png',
   '/assets/my_naai.png',
   '/assets/new_background.jpeg',
   '/assets/audio/buzzer.wav',
@@ -422,7 +424,7 @@ function showFallbackNotification(title, body, data, type) {
   return self.registration.showNotification(title, {
     body,
     icon: '/icons/icon-192.png',
-    badge: '/icons/icon-192.png',
+    badge: '/icons/badge-96.png',
     tag: alertTag(data, type),
     data: { ...data, target },
     requireInteraction: false,
@@ -518,7 +520,7 @@ self.addEventListener('fetch', event => {
         })
         .catch(() => {
           if (event.request.destination === 'image') {
-            return caches.match('/assets/brand/naai-logo-dark.svg');
+            return caches.match('/assets/brand/mynaai-mark.png');
           }
           // Never hand an HTML fallback to a script/style import — that exact
           // mismatch is the black-screen failure this handler exists to avoid.
@@ -635,7 +637,7 @@ if (firebaseSdkAvailable && firebaseConfig.apiKey && firebaseConfig.projectId &&
     return self.registration.showNotification(title, {
       body,
       icon: '/icons/icon-192.png',
-      badge: '/icons/icon-192.png',
+      badge: '/icons/badge-96.png',
       tag: alertTag(data, type),
       data: { ...data, target },
       requireInteraction: false,
@@ -711,7 +713,7 @@ self.addEventListener('push', event => {
       const options = {
         body,
         icon: '/icons/icon-192.png',
-        badge: '/icons/icon-192.png',
+        badge: '/icons/badge-96.png',
         tag,
         data: { ...data, target },
         requireInteraction: true,

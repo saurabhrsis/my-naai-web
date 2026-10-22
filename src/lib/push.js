@@ -603,7 +603,7 @@ export async function displayNotification({ title, body, data = {}, onClick } = 
   const options = {
     body: finalBody,
     icon: '/icons/icon-192.png',
-    badge: '/icons/icon-192.png',
+    badge: '/icons/badge-96.png',
     tag: notificationTag(data, type),
     data: { ...data, target },
     requireInteraction: type === 'BOOKING_REQUEST' || type === 'DELAY_TIME_PROPOSAL' || type === 'DELAY_BOOKING',

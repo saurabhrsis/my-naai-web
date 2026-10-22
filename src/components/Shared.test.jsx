@@ -42,7 +42,8 @@ describe('ImageWithFallback', () => {
 
   it('letterboxes the brand logo fallback instead of stretching it', () => {
     expect(renderImage({ src: '' }).className).toContain('image-fallback-tile');
-    expect(renderImage({ src: '/assets/brand/naai-logo-dark.svg' }).className).toContain('image-fallback-tile');
+    expect(renderImage({ src: '/assets/brand/mynaai-mark.png' }).className).toContain('image-fallback-tile');
+    expect(renderImage({ src: '' }).className).toContain('image-fallback-tile');
   });
 
   it('keeps photo sources filling their frame', () => {

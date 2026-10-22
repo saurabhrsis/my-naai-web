@@ -1,0 +1,1585 @@
+From f0b0ed1436734243040977abb1c8b2d128f09a4b Mon Sep 17 00:00:00 2001
+From: MyNaai Dev <dev@mynaai.in>
+Date: Wed, 21 Oct 2026 06:13:25 +0000
+Subject: [PATCH] Distributor location: map picker, KM on assign, nearest-first
+ list
+
+---
+ package-lock.json                       |   7 +
+ package.json                            |   1 +
+ src/components/DistributorModal.jsx     |  41 +++-
+ src/components/LocationField.jsx        | 250 ++++++++++++++++++++++++
+ src/components/LocationMap.jsx          | 235 ++++++++++++++++++++++
+ src/components/ShopOrderDetailModal.jsx | 200 ++++++++++++++++++-
+ src/pages/DistributorPortal.jsx         | 119 ++++++++++-
+ src/pages/Distributors.jsx              | 126 +++++++++++-
+ src/pages/ShopOrders.jsx                |  11 ++
+ src/services/communication.jsx          |  42 +++-
+ src/utils/geo.js                        | 164 ++++++++++++++++
+ 11 files changed, 1171 insertions(+), 25 deletions(-)
+ create mode 100644 src/components/LocationField.jsx
+ create mode 100644 src/components/LocationMap.jsx
+ create mode 100644 src/utils/geo.js
+
+diff --git a/package-lock.json b/package-lock.json
+index aaada7f..e146cb1 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -45,6 +45,7 @@
+         "date-fns": "^3.6.0",
+         "embla-carousel-react": "^8.6.0",
+         "input-otp": "^1.4.2",
++        "leaflet": "^1.9.4",
+         "lovable-tagger": "^1.1.13",
+         "lucide-react": "^0.462.0",
+         "next-themes": "^0.3.0",
+@@ -5211,6 +5212,12 @@
+         "json-buffer": "3.0.1"
+       }
+     },
++    "node_modules/leaflet": {
++      "version": "1.9.4",
++      "resolved": "https://registry.npmjs.org/leaflet/-/leaflet-1.9.4.tgz",
++      "integrity": "sha512-nxS1ynzJOmOlHp+iL3FyWqK89GtNL8U8rvlMOsQdTTssxZwCXh8N2NB3GDQOL+YR3XnWyZAxwQixURb+FA74PA==",
++      "license": "BSD-2-Clause"
++    },
+     "node_modules/levn": {
+       "version": "0.4.1",
+       "resolved": "https://registry.npmjs.org/levn/-/levn-0.4.1.tgz",
+diff --git a/package.json b/package.json
+index 2f86e82..fe1184e 100644
+--- a/package.json
++++ b/package.json
+@@ -48,6 +48,7 @@
+     "date-fns": "^3.6.0",
+     "embla-carousel-react": "^8.6.0",
+     "input-otp": "^1.4.2",
++    "leaflet": "^1.9.4",
+     "lovable-tagger": "^1.1.13",
+     "lucide-react": "^0.462.0",
+     "next-themes": "^0.3.0",
+diff --git a/src/components/DistributorModal.jsx b/src/components/DistributorModal.jsx
+index 4d75d8c..6944842 100644
+--- a/src/components/DistributorModal.jsx
++++ b/src/components/DistributorModal.jsx
+@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
+ import { Modal, Form, Button } from "react-bootstrap";
+ import { distributorAPI } from "../services/communication";
+ import { toast } from "react-toastify";
++import LocationField from "./LocationField.jsx";
++import { toPoint } from "../utils/geo";
+ 
+ const DistributorModal = ({ showModal, setShowModal, initialDistributor = null, onSuccess }) => {
+   const isEdit = Boolean(initialDistributor);
+@@ -13,7 +15,10 @@ const DistributorModal = ({ showModal, setShowModal, initialDistributor = null,
+     area: "",
+     deliveryCapability: "",
+     address: "",
+-    password: ""
++    password: "",
++    // The dispatch pin. Kept as an object (not two loose strings) so "no
++    // location" is one null instead of two empty inputs.
++    location: null
+   });
+ 
+   useEffect(() => {
+@@ -26,10 +31,11 @@ const DistributorModal = ({ showModal, setShowModal, initialDistributor = null,
+           area: initialDistributor.area || "",
+           deliveryCapability: initialDistributor.deliveryCapability || "",
+           address: initialDistributor.address || "",
+-          password: ""
++          password: "",
++          location: toPoint({ latitude: initialDistributor.latitude, longitude: initialDistributor.longitude })
+         });
+       } else {
+-        setFormData({ name: "", phone: "", email: "", area: "", deliveryCapability: "", address: "", password: "" });
++        setFormData({ name: "", phone: "", email: "", area: "", deliveryCapability: "", address: "", password: "", location: null });
+       }
+     }
+   }, [showModal, initialDistributor]);
+@@ -41,6 +47,17 @@ const DistributorModal = ({ showModal, setShowModal, initialDistributor = null,
+ 
+   const handleModalClose = () => setShowModal(false);
+ 
++  const handleLocationChange = (next) => {
++    setFormData((prev) => ({ ...prev, location: next }));
++  };
++
++  // Both halves or neither. The backend rejects a lone latitude, and a pin
++  // with one leg is worse than no pin: it silently drops out of every sort.
++  const locationPayload = () => {
++    if (!formData.location) return { latitude: null, longitude: null };
++    return { latitude: formData.location.latitude, longitude: formData.location.longitude };
++  };
++
+   const handleSubmit = async (e) => {
+     e.preventDefault();
+     const payload = {
+@@ -49,7 +66,8 @@ const DistributorModal = ({ showModal, setShowModal, initialDistributor = null,
+       email: formData.email.trim() || null,
+       area: formData.area.trim() || null,
+       deliveryCapability: formData.deliveryCapability.trim() || null,
+-      address: formData.address.trim() || null
++      address: formData.address.trim() || null,
++      ...locationPayload()
+     };
+     if (!payload.name) { toast.error("Distributor name is required"); return; }
+     if (!payload.phone) { toast.error("Phone number is required (distributors log in with it)"); return; }
+@@ -132,7 +150,20 @@ const DistributorModal = ({ showModal, setShowModal, initialDistributor = null,
+               <Form.Label className="fw-semibold small">Address</Form.Label>
+               <Form.Control as="textarea" rows={2} name="address" value={formData.address} onChange={handleChange} placeholder="Warehouse / pickup address" />
+             </div>
+-          
++
++            {/* Dispatch location. This is the point every "how far is the
++                delivery?" number is measured from, so it belongs in the same
++                form as the name and phone — not in a follow-up step nobody
++                completes. */}
++            <div style={{ flex: "1 1 100%", minWidth: 0 }}>
++              <LocationField
++                label="Distributor location"
++                helper="Pickup / base point on the map. The admin panel shows every delivery at this distance from it, nearest first."
++                value={formData.location}
++                onChange={handleLocationChange}
++                disabled={isLoading}
++              />
++            </div>
+           </div>
+         </Modal.Body>
+         <Modal.Footer>
+diff --git a/src/components/LocationField.jsx b/src/components/LocationField.jsx
+new file mode 100644
+index 0000000..db07f30
+--- /dev/null
++++ b/src/components/LocationField.jsx
+@@ -0,0 +1,250 @@
++import { useEffect, useState } from "react";
++import { Button, Form, Spinner } from "react-bootstrap";
++import { Crosshair, ExternalLink, MapPin, Search, Trash2 } from "lucide-react";
++import { toast } from "react-toastify";
++import LocationMap from "./LocationMap.jsx";
++import {
++  formatCoordinates,
++  isValidLatitude,
++  isValidLongitude,
++  mapsUrl,
++  requestBrowserLocation,
++  toCoordinate,
++  toPoint
++} from "../utils/geo";
++
++/**
++ * LocationField — the "where is this?" control used by Add/Edit Distributor
++ * and by the delivery-pin correction on an order.
++ *
++ * Four ways in, because a dispatcher is not always standing at the point:
++ *   1. a map click (or dragging the pin);
++ *   2. "Use my current location" (browser GPS — the phone in their hand);
++ *   3. a place search (OpenStreetMap Nominatim, no key);
++ *   4. typing the coordinates (read off another device or a paper sheet).
++ *
++ * `onChange({ latitude, longitude } | null)` — null clears the pin.
++ */
++const LocationField = ({
++  value = null,
++  onChange,
++  label = "Location",
++  helper = "Pin the pickup / base point. This is what makes the KM and the nearest-first list work.",
++  height = 240,
++  disabled = false,
++  required = false
++}) => {
++  const point = toPoint(value);
++  const [latText, setLatText] = useState(point ? String(point.latitude) : "");
++  const [lngText, setLngText] = useState(point ? String(point.longitude) : "");
++  const [locating, setLocating] = useState(false);
++  const [search, setSearch] = useState("");
++  const [searching, setSearching] = useState(false);
++  const [results, setResults] = useState([]);
++
++  // Keep the text inputs in step with the pin (map click, GPS, or a parent
++  // that loaded a saved distributor), without fighting the user while typing.
++  useEffect(() => {
++    if (!point) {
++      setLatText("");
++      setLngText("");
++      return;
++    }
++    setLatText(String(point.latitude));
++    setLngText(String(point.longitude));
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [point?.latitude, point?.longitude]);
++
++  const commit = (next) => {
++    if (disabled) return;
++    const clean = toPoint(next);
++    onChange?.(clean ? { latitude: clean.latitude, longitude: clean.longitude } : null);
++  };
++
++  const useCurrentLocation = async () => {
++    if (disabled) return;
++    setLocating(true);
++    try {
++      const result = await requestBrowserLocation();
++      if (!result.ok) {
++        toast.error(result.message || "Could not read this device's location");
++        return;
++      }
++      commit({ latitude: result.latitude, longitude: result.longitude });
++      toast.success("Current location captured");
++    } finally {
++      setLocating(false);
++    }
++  };
++
++  const applyTypedCoordinates = () => {
++    const latitude = toCoordinate(latText);
++    const longitude = toCoordinate(lngText);
++    if (latitude === null && longitude === null) {
++      commit(null);
++      return;
++    }
++    if (!isValidLatitude(latitude) || !isValidLongitude(longitude)) {
++      toast.error("Enter a valid pair — latitude −90…90 and longitude −180…180");
++      return;
++    }
++    commit({ latitude, longitude });
++  };
++
++  const runSearch = async (event) => {
++    event.preventDefault();
++    const query = search.trim();
++    if (query.length < 3) {
++      toast.error("Type at least 3 characters to search a place");
++      return;
++    }
++    setSearching(true);
++    try {
++      // Free & key-less. `countrycodes=in` because every partner so far is in
++      // India; drop it if the platform ever delivers elsewhere.
++      const response = await fetch(
++        `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=in&q=${encodeURIComponent(query)}`,
++        { headers: { Accept: "application/json" } }
++      );
++      if (!response.ok) throw new Error("search failed");
++      const rows = await response.json();
++      setResults(Array.isArray(rows) ? rows : []);
++      if (!rows.length) toast.info("No place matched — drop the pin on the map instead.");
++    } catch {
++      toast.error("Place search is unavailable right now — drop the pin on the map instead.");
++    } finally {
++      setSearching(false);
++    }
++  };
++
++  const chooseResult = (row) => {
++    commit({ latitude: Number(row.lat), longitude: Number(row.lon) });
++    setResults([]);
++    setSearch("");
++  };
++
++  const openMap = () => {
++    const url = mapsUrl(point);
++    if (url) window.open(url, "_blank", "noopener,noreferrer");
++  };
++
++  return (
++    <div className="border rounded-3 p-3" style={{ background: "#fff" }}>
++      <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
++        <div>
++          <div className="fw-semibold small text-dark d-flex align-items-center gap-1">
++            <MapPin size={14} /> {label} {required && <span className="text-danger">*</span>}
++          </div>
++          <div className="text-muted" style={{ fontSize: "0.78rem" }}>{helper}</div>
++        </div>
++        <div className="d-flex gap-2">
++          <Button
++            type="button"
++            variant="outline-secondary"
++            size="sm"
++            className="d-flex align-items-center gap-1"
++            onClick={useCurrentLocation}
++            disabled={disabled || locating}
++          >
++            {locating ? <Spinner animation="border" size="sm" /> : <Crosshair size={14} />}
++            {locating ? "Locating…" : "Use my location"}
++          </Button>
++          {point && (
++            <>
++              <Button type="button" variant="outline-primary" size="sm" className="d-flex align-items-center gap-1" onClick={openMap} disabled={disabled}>
++                <ExternalLink size={14} /> Map
++              </Button>
++              <Button type="button" variant="outline-danger" size="sm" className="d-flex align-items-center gap-1" onClick={() => commit(null)} disabled={disabled}>
++                <Trash2 size={14} /> Clear
++              </Button>
++            </>
++          )}
++        </div>
++      </div>
++
++      <LocationMap
++        value={point}
++        onChange={commit}
++        readOnly={disabled}
++        height={height}
++        ariaLabel={`${label} map`}
++      />
++
++      <Form
++        className="d-flex flex-wrap gap-2 align-items-end mt-2"
++        onSubmit={(event) => {
++          event.preventDefault();
++          applyTypedCoordinates();
++        }}
++      >
++        <div style={{ flex: "1 1 130px", minWidth: 0 }}>
++          <Form.Label className="small text-muted mb-1" style={{ fontSize: "0.75rem" }}>Latitude</Form.Label>
++          <Form.Control
++            size="sm"
++            value={latText}
++            inputMode="decimal"
++            placeholder="21.14580"
++            onChange={(event) => setLatText(event.target.value)}
++            onBlur={applyTypedCoordinates}
++            disabled={disabled}
++          />
++        </div>
++        <div style={{ flex: "1 1 130px", minWidth: 0 }}>
++          <Form.Label className="small text-muted mb-1" style={{ fontSize: "0.75rem" }}>Longitude</Form.Label>
++          <Form.Control
++            size="sm"
++            value={lngText}
++            inputMode="decimal"
++            placeholder="79.08820"
++            onChange={(event) => setLngText(event.target.value)}
++            onBlur={applyTypedCoordinates}
++            disabled={disabled}
++          />
++        </div>
++        <div style={{ flex: "1 1 200px", minWidth: 0 }}>
++          <Form.Label className="small text-muted mb-1" style={{ fontSize: "0.75rem" }}>Search a place</Form.Label>
++          <div className="d-flex gap-1">
++            <Form.Control
++              size="sm"
++              value={search}
++              placeholder="e.g. Sitabuldi, Nagpur"
++              onChange={(event) => setSearch(event.target.value)}
++              disabled={disabled}
++            />
++            <Button type="submit" size="sm" variant="outline-secondary" onClick={runSearch} disabled={disabled || searching}>
++              {searching ? <Spinner animation="border" size="sm" /> : <Search size={14} />}
++            </Button>
++          </div>
++        </div>
++      </Form>
++
++      {results.length > 0 && (
++        <div className="list-group mt-2" style={{ maxHeight: "150px", overflowY: "auto" }}>
++          {results.map((row) => (
++            <button
++              key={`${row.place_id}`}
++              type="button"
++              className="list-group-item list-group-item-action py-2 small"
++              onClick={() => chooseResult(row)}
++            >
++              <strong className="d-block text-dark">{row.name || row.display_name}</strong>
++              <span className="text-muted" style={{ fontSize: "0.76rem" }}>{row.display_name}</span>
++            </button>
++          ))}
++        </div>
++      )}
++
++      <div className="mt-2 small text-muted">
++        {point ? (
++          <span>
++            <strong className="text-dark">Saved point:</strong> {formatCoordinates(point)}
++          </span>
++        ) : (
++          <span>No point set — the partner will not appear as “nearest” until one is saved.</span>
++        )}
++      </div>
++    </div>
++  );
++};
++
++export default LocationField;
+diff --git a/src/components/LocationMap.jsx b/src/components/LocationMap.jsx
+new file mode 100644
+index 0000000..8641ac9
+--- /dev/null
++++ b/src/components/LocationMap.jsx
+@@ -0,0 +1,235 @@
++import { useEffect, useMemo, useRef } from "react";
++import L from "leaflet";
++import "leaflet/dist/leaflet.css";
++import { toPoint } from "../utils/geo";
++
++/**
++ * LocationMap — the one map component in the panel.
++ *
++ * Free stack on purpose: OpenStreetMap raster tiles rendered by Leaflet. No
++ * API key, no billing account, no Google Maps SDK to keep in sync with a
++ * project. The component is deliberately small:
++ *
++ *   · read-only mode  — the delivery location on an order, the pin a salon
++ *                       saved, the partner's live position;
++ *   · editable mode   — drop/move a pin (map click, drag, GPS, typed
++ *                       coordinates) while adding or editing a distributor.
++ *
++ * Markers are drawn as div-icons rather than Leaflet's default PNG icon: the
++ * default icon resolves its image path at runtime, which breaks under Vite's
++ * bundling and leaves a broken-image square on the map.
++ */
++
++const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
++const TILE_ATTRIBUTION =
++  '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors';
++// India, zoomed out — the neutral view when nothing has a coordinate yet.
++const FALLBACK_CENTER = [21.1458, 79.0882];
++const FALLBACK_ZOOM = 5;
++
++const pinIcon = (color) =>
++  L.divIcon({
++    className: "mynaai-map-pin-wrap",
++    html: `<span class="mynaai-map-pin" style="--pin-color:${color}"><span class="mynaai-map-pin-dot"></span></span>`,
++    iconSize: [24, 24],
++    iconAnchor: [12, 12]
++  });
++
++const LocationMap = ({
++  value = null,
++  markers = [],
++  onChange = null,
++  readOnly = false,
++  height = 220,
++  zoom = null,
++  fit = false,
++  ariaLabel = "Map",
++  style = {}
++}) => {
++  const containerRef = useRef(null);
++  const mapRef = useRef(null);
++  const layerRef = useRef(null);
++  const onChangeRef = useRef(onChange);
++  const primaryMarkerRef = useRef(null);
++
++  useEffect(() => {
++    onChangeRef.current = onChange;
++  }, [onChange]);
++
++  const point = toPoint(value);
++
++  // Extra pins (the salon's location, the partner's live fix, …). A stable
++  // signature keeps the marker-sync effect from re-running on every render of
++  // a parent that rebuilds its array.
++  const markerSignature = useMemo(
++    () =>
++      (markers || [])
++        .map((marker) => {
++          const p = toPoint(marker);
++          return p ? `${p.latitude.toFixed(5)},${p.longitude.toFixed(5)},${marker.color || ""},${marker.label || ""}` : "";
++        })
++        .filter(Boolean)
++        .join("|"),
++    [markers]
++  );
++
++  /* ---------------- map lifecycle ---------------- */
++  useEffect(() => {
++    if (!containerRef.current || mapRef.current) return undefined;
++    const start = toPoint(value) || { latitude: FALLBACK_CENTER[0], longitude: FALLBACK_CENTER[1] };
++    const map = L.map(containerRef.current, {
++      center: [start.latitude, start.longitude],
++      zoom: zoom || (toPoint(value) ? 13 : FALLBACK_ZOOM),
++      scrollWheelZoom: false,
++      attributionControl: true
++    });
++    L.tileLayer(TILE_URL, { attribution: TILE_ATTRIBUTION, maxZoom: 19 }).addTo(map);
++    mapRef.current = map;
++    layerRef.current = L.layerGroup().addTo(map);
++
++    // A modal that animates in has a 0×0 container at mount; sizing once after
++    // the transition (and on any later resize) is what stops the grey tiles.
++    const settle = () => {
++      try {
++        map.invalidateSize();
++      } catch {
++        /* the map was already torn down */
++      }
++    };
++    const timer = setTimeout(settle, 120);
++    let observer = null;
++    if (typeof ResizeObserver !== "undefined" && containerRef.current) {
++      observer = new ResizeObserver(settle);
++      observer.observe(containerRef.current);
++    }
++    window.addEventListener("resize", settle);
++
++    return () => {
++      clearTimeout(timer);
++      window.removeEventListener("resize", settle);
++      if (observer) observer.disconnect();
++      map.remove();
++      mapRef.current = null;
++      layerRef.current = null;
++      primaryMarkerRef.current = null;
++    };
++    // Mount-only: `value`/`zoom` changes are handled by the sync effect below.
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, []);
++
++  /* ---------------- click / drag to set the pin ---------------- */
++  useEffect(() => {
++    const map = mapRef.current;
++    if (!map || readOnly || !onChange) return undefined;
++    map.getContainer().classList.add("mynaai-map-editable");
++    const handleClick = (event) => {
++      onChangeRef.current?.({
++        latitude: Number(event.latlng.lat.toFixed(6)),
++        longitude: Number(event.latlng.lng.toFixed(6))
++      });
++    };
++    map.on("click", handleClick);
++    return () => {
++      map.off("click", handleClick);
++      map.getContainer()?.classList.remove("mynaai-map-editable");
++    };
++  }, [readOnly, onChange]);
++
++  /* ---------------- markers ---------------- */
++  useEffect(() => {
++    const map = mapRef.current;
++    const layer = layerRef.current;
++    if (!map || !layer) return;
++    layer.clearLayers();
++    primaryMarkerRef.current = null;
++
++    if (point) {
++      const marker = L.marker([point.latitude, point.longitude], {
++        icon: pinIcon(readOnly ? "#0d6efd" : "#198754"),
++        draggable: !readOnly && Boolean(onChange),
++        keyboard: false,
++        title: readOnly ? "Location" : "Drag to adjust the location"
++      }).addTo(layer);
++      if (!readOnly && onChange) {
++        marker.on("dragend", () => {
++          const next = marker.getLatLng();
++          onChangeRef.current?.({
++            latitude: Number(next.lat.toFixed(6)),
++            longitude: Number(next.lng.toFixed(6))
++          });
++        });
++      }
++      primaryMarkerRef.current = marker;
++    }
++
++    const extraPoints = [];
++    (markers || []).forEach((raw) => {
++      const p = toPoint(raw);
++      if (!p) return;
++      extraPoints.push([p.latitude, p.longitude]);
++      L.marker([p.latitude, p.longitude], {
++        icon: pinIcon(raw.color || "#dc3545"),
++        keyboard: false,
++        title: raw.label || "Location"
++      })
++        .addTo(layer)
++        .bindPopup(raw.label ? `<strong>${raw.label}</strong>` : "");
++    });
++
++    if (point) extraPoints.push([point.latitude, point.longitude]);
++    if (!extraPoints.length) return;
++
++    if (fit && extraPoints.length > 1) {
++      map.fitBounds(L.latLngBounds(extraPoints).pad(0.35), { maxZoom: 14, animate: false });
++      return;
++    }
++    map.setView(extraPoints[extraPoints.length - 1], zoom || Math.max(map.getZoom(), 13), { animate: false });
++  }, [point?.latitude, point?.longitude, markerSignature, readOnly, onChange, fit, zoom]);
++
++  const empty = !point && !(markers || []).some((marker) => toPoint(marker));
++
++  return (
++    <div className="position-relative" style={{ borderRadius: "10px", overflow: "hidden", ...style }}>
++      <div
++        ref={containerRef}
++        role="img"
++        aria-label={ariaLabel}
++        style={{ height: `${height}px`, width: "100%", background: "#eef2f6" }}
++      />
++      {empty && (
++        <div
++          className="position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center text-center px-3"
++          style={{ background: "rgba(248,249,250,0.92)", pointerEvents: "none" }}
++        >
++          <div className="small text-muted">
++            <strong className="d-block text-dark mb-1">No location saved yet</strong>
++            {readOnly ? "This record has no coordinates." : "Click the map, drag the pin, or use your current location."}
++          </div>
++        </div>
++      )}
++      <style>{`
++        .mynaai-map-pin {
++          display: block;
++          width: 24px;
++          height: 24px;
++          border-radius: 50% 50% 50% 0;
++          transform: rotate(-45deg);
++          background: var(--pin-color, #198754);
++          border: 2px solid #ffffff;
++          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
++        }
++        .mynaai-map-pin-dot {
++          position: absolute;
++          inset: 6px;
++          border-radius: 50%;
++          background: #ffffff;
++          display: block;
++        }
++        .mynaai-map-editable { cursor: crosshair; }
++        .leaflet-container { font: inherit; }
++      `}</style>
++    </div>
++  );
++};
++
++export default LocationMap;
+diff --git a/src/components/ShopOrderDetailModal.jsx b/src/components/ShopOrderDetailModal.jsx
+index 03d3ad3..43d1eef 100644
+--- a/src/components/ShopOrderDetailModal.jsx
++++ b/src/components/ShopOrderDetailModal.jsx
+@@ -2,8 +2,18 @@ import { useState, useEffect } from "react";
+ import { Modal, Button, Spinner } from "react-bootstrap";
+ import { shopOrderAPI, distributorAPI, API_BASE_URL } from "../services/communication";
+ import { toast } from "react-toastify";
+-import { Plus, CreditCard, UserPlus, CheckCircle2, XCircle, Truck, Ban, Store, MessageSquare, Eye, Edit3 } from "lucide-react";
++import { Plus, CreditCard, UserPlus, CheckCircle2, XCircle, Truck, Ban, Store, MessageSquare, Eye, Edit3, MapPin, Route, Crosshair } from "lucide-react";
+ import { INTERNAL_STATUS_META } from "../pages/ShopOrders.jsx";
++import LocationField from "./LocationField.jsx";
++import LocationMap from "./LocationMap.jsx";
++import {
++  formatCoordinates,
++  formatKm,
++  locationAgeLabel,
++  mapsUrl,
++  sortByDistance,
++  toPoint
++} from "../utils/geo";
+ 
+ const money = (value) => {
+   const num = Number(value);
+@@ -24,6 +34,7 @@ const EVENT_META = {
+   ACCEPTED: { icon: CheckCircle2, color: "#198754", label: "Distributor accepted" },
+   REJECTED: { icon: XCircle, color: "#dc3545", label: "Distributor rejected" },
+   STATUS_CHANGED: { icon: Truck, color: "#0d6efd", label: "Status changed" },
++  DELIVERY_LOCATION_SET: { icon: MapPin, color: "#0d6efd", label: "Delivery location set" },
+   CANCELLED: { icon: Ban, color: "#dc3545", label: "Order cancelled" }
+ };
+ 
+@@ -40,7 +51,7 @@ const actorName = (ev) => {
+   return name ? name : ACTOR_LABELS[ev.actorType] || "System";
+ };
+ 
+-const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onRecordDecision }) => {
++const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onRecordDecision, onRefresh }) => {
+   const [showAssign, setShowAssign] = useState(false);
+   const [distributors, setDistributors] = useState([]);
+   const [distributorLoading, setDistributorLoading] = useState(false);
+@@ -56,11 +67,19 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
+   // Direct Status Override State
+   const [manualStatus, setManualStatus] = useState("");
+ 
++  // Delivery location: the pin the admin/dispatcher sees, and the origin of
++  // every "how far?" number on this screen.
++  const [showLocationEditor, setShowLocationEditor] = useState(false);
++  const [draftLocation, setDraftLocation] = useState(null);
++  const [savingLocation, setSavingLocation] = useState(false);
++
+   useEffect(() => {
+     setShowAssign(false);
+     setShowReject(false);
+     setRejectReason("");
+     setSelectedDistributor("");
++    setShowLocationEditor(false);
++    setDraftLocation(null);
+     if (order) setManualStatus(order.status || "");
+   }, [order]);
+ 
+@@ -70,10 +89,23 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
+   const items = order.items || [];
+   const events = [...(order.events || [])].reverse();
+ 
++  // The order's delivery location — the point every partner's KM is measured
++  // from. `order.deliveryLocation` is computed server-side from the order's
++  // snapshot (falling back to the salon's coordinates).
++  const deliveryPoint = toPoint(order.deliveryLocation) || toPoint(order.address) || toPoint(order.salon);
++
+   const loadDistributors = async () => {
+     setDistributorLoading(true);
+     try {
+-      const first = await distributorAPI.list({ page: 1 });
++      // Sending the delivery point makes the server answer nearest-first with
++      // `distanceKm` on every row, so a partner 40 km away can never be shown
++      // above one 2 km away just because their name starts with "A".
++      const first = await distributorAPI.list({
++        page: 1,
++        latitude: deliveryPoint?.latitude,
++        longitude: deliveryPoint?.longitude,
++        sortBy: deliveryPoint ? "distance" : "name"
++      });
+       if (!first.success) {
+         toast.error(first.message || "Failed to load distributors");
+         return;
+@@ -83,11 +115,20 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
+       const extra = Math.min(totalPages, 5) - 1;
+       if (extra > 0) {
+         const pages = await Promise.all(
+-          Array.from({ length: extra }, (_, i) => distributorAPI.list({ page: i + 2 }))
++          Array.from({ length: extra }, (_, i) =>
++            distributorAPI.list({
++              page: i + 2,
++              latitude: deliveryPoint?.latitude,
++              longitude: deliveryPoint?.longitude,
++              sortBy: deliveryPoint ? "distance" : "name"
++            })
++          )
+         );
+         rows = rows.concat(...pages.filter((p) => p.success).map((p) => p.data?.distributors || []));
+       }
+-      setDistributors(rows);
++      // Belt and braces: sort again locally so an older API build (or a page
++      // fetched without coordinates) still reads nearest-first.
++      setDistributors(deliveryPoint ? sortByDistance(rows, deliveryPoint) : rows);
+     } catch {
+       toast.error("Failed to load distributors");
+     } finally {
+@@ -110,6 +151,30 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
+     }
+   };
+ 
++  const saveDeliveryLocation = async () => {
++    const point = toPoint(draftLocation);
++    if (!point) { toast.error("Pick a point on the map first"); return; }
++    setSavingLocation(true);
++    try {
++      const result = await shopOrderAPI.setDeliveryLocation({
++        orderId: order.orderId,
++        latitude: point.latitude,
++        longitude: point.longitude
++      });
++      if (result.success) {
++        toast.success("Delivery location saved — distances updated");
++        setShowLocationEditor(false);
++        // The parent re-fetches the order by id, so the panel (and the list
++        // behind it) never keeps a stale copy of the old pin or its KM.
++        await onRefresh?.(order.orderId);
++      } else {
++        toast.error(result.message || "Could not save the delivery location");
++      }
++    } finally {
++      setSavingLocation(false);
++    }
++  };
++
+   const recordAccept = async () => {
+     setBusy(true);
+     try { await onRecordDecision(order.orderId, "accept"); }
+@@ -209,6 +274,93 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
+                     </div>
+                   </div>
+                 )}
++
++                {/* Delivery location on the map — the point the distributor
++                    drives to and every KM on this screen is measured from. */}
++                <div className="pt-3 mt-3 border-top">
++                  <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
++                    <div>
++                      <div className="small text-muted fw-semibold d-flex align-items-center gap-1">
++                        <MapPin size={13} /> DELIVERY LOCATION
++                      </div>
++                      <div className="small text-dark">
++                        {deliveryPoint ? formatCoordinates(deliveryPoint) : "No coordinates on file for this delivery"}
++                      </div>
++                      {order.deliveryLocation?.source === "SALON" && (
++                        <div className="text-muted" style={{ fontSize: "0.76rem" }}>Taken from the salon profile</div>
++                      )}
++                    </div>
++                    <div className="d-flex flex-wrap gap-2">
++                      {mapsUrl(deliveryPoint) && (
++                        <a className="btn btn-sm btn-outline-primary d-flex align-items-center gap-1" href={mapsUrl(deliveryPoint)} target="_blank" rel="noopener noreferrer">
++                          <MapPin size={13} /> Open in Maps
++                        </a>
++                      )}
++                      <Button
++                        variant="outline-secondary"
++                        size="sm"
++                        className="d-flex align-items-center gap-1"
++                        onClick={() => {
++                          setDraftLocation(deliveryPoint || null);
++                          setShowLocationEditor((v) => !v);
++                        }}
++                        disabled={busy || order.status === "DELIVERED" || order.status === "CANCELLED"}
++                      >
++                        <Crosshair size={13} /> {showLocationEditor ? "Close pin editor" : deliveryPoint ? "Adjust pin" : "Set pin"}
++                      </Button>
++                    </div>
++                  </div>
++
++                  {showLocationEditor ? (
++                    <>
++                      <LocationField
++                        label="Pin the exact delivery point"
++                        helper="Drop the pin on the gate / building the parcel goes to. Every distributor's KM is measured from here."
++                        value={draftLocation}
++                        onChange={setDraftLocation}
++                        height={230}
++                        disabled={savingLocation}
++                      />
++                      <div className="d-flex gap-2 mt-2">
++                        <Button variant="success" size="sm" onClick={saveDeliveryLocation} disabled={savingLocation || !toPoint(draftLocation)}>
++                          {savingLocation ? "Saving…" : "Save delivery location"}
++                        </Button>
++                        <Button variant="outline-secondary" size="sm" onClick={() => setShowLocationEditor(false)} disabled={savingLocation}>Cancel</Button>
++                      </div>
++                    </>
++                  ) : (
++                    <LocationMap
++                      value={deliveryPoint}
++                      height={190}
++                      readOnly
++                      fit={Boolean(order.distributor)}
++                      markers={
++                        order.distributor && toPoint(order.distributor)
++                          ? [{
++                              latitude: order.distributor.latitude,
++                              longitude: order.distributor.longitude,
++                              color: "#6f42c1",
++                              label: `${order.distributor.name}${Number.isFinite(Number(order.distributor.distanceKm)) ? ` — ${formatKm(order.distributor.distanceKm)} away` : ""}`
++                            }]
++                          : []
++                      }
++                      ariaLabel="Delivery location map"
++                    />
++                  )}
++                  {order.distributor && (
++                    <div className="d-flex flex-wrap gap-3 mt-2 small text-muted">
++                      <span className="d-flex align-items-center gap-1">
++                        <span className="d-inline-block rounded-circle" style={{ width: 9, height: 9, background: "#0d6efd" }} /> Delivery point
++                      </span>
++                      <span className="d-flex align-items-center gap-1">
++                        <span className="d-inline-block rounded-circle" style={{ width: 9, height: 9, background: "#6f42c1" }} /> {order.distributor.name}
++                      </span>
++                      {Number.isFinite(Number(order.distributor.distanceKm)) && (
++                        <span className="fw-semibold text-dark">{formatKm(order.distributor.distanceKm)} apart</span>
++                      )}
++                    </div>
++                  )}
++                </div>
+               </div>
+ 
+               {/* Items Table Card */}
+@@ -351,6 +503,23 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
+                     <div className="fw-bold text-dark">{order.distributor.name}</div>
+                     <div className="small text-muted">{order.distributor.phone}{order.distributor.area ? ` • ${order.distributor.area}` : ""}</div>
+                     {order.distributor.deliveryCapability && <div className="small text-muted mt-1">Capability: {order.distributor.deliveryCapability}</div>}
++                    <div className="d-flex flex-wrap align-items-center gap-2 mt-2">
++                      {Number.isFinite(Number(order.distributor.distanceKm)) ? (
++                        <span className="badge bg-success-subtle text-success-emphasis d-inline-flex align-items-center gap-1">
++                          <Route size={12} /> {formatKm(order.distributor.distanceKm)} from delivery
++                        </span>
++                      ) : (
++                        <span className="badge bg-warning-subtle text-warning-emphasis">Location not shared</span>
++                      )}
++                      {order.distributor.locationUpdatedAt && (
++                        <span className="text-muted" style={{ fontSize: "0.76rem" }}>
++                          pin updated {locationAgeLabel(order.distributor.locationUpdatedAt)}
++                        </span>
++                      )}
++                      {mapsUrl(order.distributor) && (
++                        <a className="small" href={mapsUrl(order.distributor)} target="_blank" rel="noopener noreferrer">Map</a>
++                      )}
++                    </div>
+                   </div>
+                 ) : (
+                   <div className="text-muted small mb-3">Not assigned yet</div>
+@@ -418,7 +587,14 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
+               {showAssign && (
+                 <div style={{ background: "#ffffff", borderRadius: "12px", border: "1px solid #0d6efd", padding: "20px", boxShadow: "0 0.25rem 0.5rem rgba(13, 110, 253, 0.15)", boxSizing: "border-box" }}>
+                   <div className="d-flex align-items-center justify-content-between mb-3">
+-                    <div className="fw-bold text-dark">Choose a Distributor</div>
++                    <div>
++                      <div className="fw-bold text-dark">Choose a Distributor</div>
++                      <div className="text-muted" style={{ fontSize: "0.78rem" }}>
++                        {deliveryPoint
++                          ? `Nearest first — distance from the delivery location (${formatCoordinates(deliveryPoint, 4)})`
++                          : "No delivery pin yet: distances are unavailable. Set the pin above to sort nearest first."}
++                      </div>
++                    </div>
+                     <Button variant="link" size="sm" className="p-0 text-decoration-none" onClick={() => setShowAssign(false)}>Close</Button>
+                   </div>
+                   {distributorLoading ? (
+@@ -439,9 +615,19 @@ const ShopOrderDetailModal = ({ order, onClose, onStatusChange, onAssign, onReco
+                           }}
+                           onClick={() => setSelectedDistributor(d.distributorId)}
+                         >
+-                          <div className="fw-bold text-dark">{d.name}</div>
++                          <div className="d-flex justify-content-between align-items-start gap-2">
++                            <div className="fw-bold text-dark">{d.name}</div>
++                            {Number.isFinite(Number(d.distanceKm)) ? (
++                              <span className="badge bg-success-subtle text-success-emphasis text-nowrap">{formatKm(d.distanceKm)}</span>
++                            ) : (
++                              <span className="badge bg-light text-secondary border text-nowrap">No pin</span>
++                            )}
++                          </div>
+                           <div className="text-muted small">{d.phone} • {d.area || "no area set"}</div>
+                           {d.deliveryCapability && <div className="text-muted" style={{ fontSize: "0.78rem" }}>{d.deliveryCapability}</div>}
++                          {d.locationUpdatedAt && (
++                            <div className="text-muted" style={{ fontSize: "0.74rem" }}>Location updated {locationAgeLabel(d.locationUpdatedAt)}</div>
++                          )}
+                           {!d.isActive && <div className="text-danger" style={{ fontSize: "0.78rem" }}>Disabled — cannot log in</div>}
+                         </button>
+                       ))}
+diff --git a/src/pages/DistributorPortal.jsx b/src/pages/DistributorPortal.jsx
+index 574177c..ead79eb 100644
+--- a/src/pages/DistributorPortal.jsx
++++ b/src/pages/DistributorPortal.jsx
+@@ -1,11 +1,21 @@
+ import { useState, useEffect, useCallback } from "react";
+-import { shopOrderAPI } from "../services/communication";
++import { shopOrderAPI, distributorAPI } from "../services/communication";
+ import Loader from "../components/Loader.jsx";
+ import { toast } from "react-toastify";
+ import { useNavigate } from "react-router-dom";
+-import { Truck, LogOut, Store, Package, Search, ChevronLeft, ChevronRight, Eye, CheckCircle2, XCircle, Ban, MessageSquare } from "lucide-react";
++import { Truck, LogOut, Store, Package, Search, ChevronLeft, ChevronRight, Eye, CheckCircle2, XCircle, Ban, MessageSquare, MapPin, Crosshair, Navigation, Route } from "lucide-react";
+ import { Modal, Button, Spinner } from "react-bootstrap";
+ import { INTERNAL_STATUS_META } from "../pages/ShopOrders.jsx";
++import LocationMap from "../components/LocationMap.jsx";
++import {
++  directionsUrl,
++  distanceKm,
++  formatCoordinates,
++  formatKm,
++  locationAgeLabel,
++  requestBrowserLocation,
++  toPoint
++} from "../utils/geo";
+ 
+ const money = (value) => {
+   const num = Number(value);
+@@ -44,6 +54,7 @@ const EVENT_META = {
+   ACCEPTED: { icon: CheckCircle2, color: "#198754", label: "Accepted" },
+   REJECTED: { icon: XCircle, color: "#dc3545", label: "Rejected" },
+   STATUS_CHANGED: { icon: Truck, color: "#0d6efd", label: "Status changed" },
++  DELIVERY_LOCATION_SET: { icon: MapPin, color: "#0d6efd", label: "Delivery location updated" },
+   CANCELLED: { icon: Ban, color: "#dc3545", label: "Order cancelled" }
+ };
+ 
+@@ -60,8 +71,45 @@ const actorName = (ev) => {
+   return name ? name : ACTOR_LABELS[ev.actorType] || "System";
+ };
+ 
++/**
++ * The delivery point on a map, plus the distance from the distributor's own
++ * location. This is the "how far do I have to ride?" question every partner
++ * asks before accepting — answered before they tap Accept.
++ */
++const DeliveryLocationCard = ({ order, myLocation = null }) => {
++  const delivery = toPoint(order.deliveryLocation) || toPoint(order.salon) || toPoint(order.address);
++  const me = toPoint(myLocation);
++  const km = me && delivery ? distanceKm(me, delivery) : Number.isFinite(Number(order.distributor?.distanceKm)) ? Number(order.distributor.distanceKm) : null;
++  const navigateUrl = directionsUrl(me, delivery);
++
++  return (
++    <div className="pt-3 mt-3 border-top">
++      <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
++        <div>
++          <div className="small text-muted fw-semibold d-flex align-items-center gap-1">
++            <MapPin size={13} /> DELIVERY LOCATION
++          </div>
++          <div className="small text-dark">{delivery ? formatCoordinates(delivery) : "The salon has not shared coordinates for this delivery."}</div>
++          {km !== null && (
++            <div className="small fw-semibold text-success d-flex align-items-center gap-1 mt-1">
++              <Route size={13} /> {formatKm(km)} from your location
++            </div>
++          )}
++          {!me && <div className="text-muted" style={{ fontSize: "0.76rem" }}>Tap <strong>My location</strong> at the top to see the distance from you.</div>}
++        </div>
++        {navigateUrl && (
++          <a className="btn btn-sm btn-outline-primary d-flex align-items-center gap-1" href={navigateUrl} target="_blank" rel="noopener noreferrer">
++            <Navigation size={13} /> Navigate
++          </a>
++        )}
++      </div>
++      <LocationMap value={delivery} height={210} readOnly ariaLabel="Delivery location map" />
++    </div>
++  );
++};
++
+ // Distributor Order Detail Modal with Fixed Rejection Layout & Acceptance Gate
+-const DistributorOrderDetailModal = ({ order, onClose, onAccept, onReject, onAdvance, busy }) => {
++const DistributorOrderDetailModal = ({ order, myLocation = null, onClose, onAccept, onReject, onAdvance, busy }) => {
+   const [showReject, setShowReject] = useState(false);
+   const [rejectReason, setRejectReason] = useState("");
+   const [selectedNewStatus, setSelectedNewStatus] = useState("");
+@@ -137,6 +185,9 @@ const DistributorOrderDetailModal = ({ order, onClose, onAccept, onReject, onAdv
+                   </div>
+                 </div>
+               )}
++
++              {/* Where the parcel goes, and how far that is from you. */}
++              <DeliveryLocationCard order={order} myLocation={myLocation} />
+             </div>
+ 
+             {/* Items Summary Table */}
+@@ -359,6 +410,41 @@ const DistributorPortal = () => {
+ 
+   const navigate = useNavigate();
+   const userData = localStorage.getItem("userData") ? JSON.parse(localStorage.getItem("userData")) : {};
++  // The distributor's own position — the origin of every distance shown in
++  // this portal. Refreshed from the browser's GPS; persisted on the server so
++  // the admin's nearest-first list uses the same point.
++  const [myLocation, setMyLocation] = useState(() => toPoint(userData));
++  const [locating, setLocating] = useState(false);
++
++  const shareMyLocation = async () => {
++    setLocating(true);
++    try {
++      const fix = await requestBrowserLocation();
++      if (!fix.ok) {
++        toast.error(fix.message || "Could not read this device's location");
++        return;
++      }
++      const result = await distributorAPI.updateLocation({ latitude: fix.latitude, longitude: fix.longitude });
++      if (!result.success) {
++        toast.error(result.message || "Could not save your location");
++        return;
++      }
++      const next = {
++        latitude: result.data?.latitude ?? fix.latitude,
++        longitude: result.data?.longitude ?? fix.longitude,
++        locationUpdatedAt: result.data?.locationUpdatedAt || new Date().toISOString()
++      };
++      setMyLocation({ latitude: next.latitude, longitude: next.longitude });
++      try {
++        localStorage.setItem("userData", JSON.stringify({ ...userData, ...next }));
++      } catch {
++        /* storage blocked — the in-memory copy still powers the distances */
++      }
++      toast.success("Location updated — the admin now sees you at this point");
++    } finally {
++      setLocating(false);
++    }
++  };
+ 
+   useEffect(() => {
+     if (localStorage.getItem("role") !== "distributor") {
+@@ -498,9 +584,20 @@ const DistributorPortal = () => {
+               <div className="text-muted small text-truncate">{userData?.name || "Authorized Partner"}</div>
+             </div>
+           </div>
+-          <button className="btn btn-outline-secondary btn-sm d-flex align-items-center gap-2 fw-semibold px-3 py-2 rounded-3 flex-shrink-0" onClick={handleLogout}>
+-            <LogOut size={16} /> <span className="d-none d-sm-inline">Logout</span>
+-          </button>
++          <div className="d-flex align-items-center gap-2 flex-shrink-0">
++            <button
++              className={`btn btn-sm d-flex align-items-center gap-2 fw-semibold px-3 py-2 rounded-3 ${myLocation ? "btn-outline-success" : "btn-success"}`}
++              onClick={shareMyLocation}
++              disabled={locating}
++              title={myLocation ? `Location shared ${locationAgeLabel(userData.locationUpdatedAt) || "just now"}` : "Share your location so deliveries can be sorted by distance"}
++            >
++              <Crosshair size={16} />
++              <span className="d-none d-sm-inline">{locating ? "Locating…" : myLocation ? "Update location" : "My location"}</span>
++            </button>
++            <button className="btn btn-outline-secondary btn-sm d-flex align-items-center gap-2 fw-semibold px-3 py-2 rounded-3" onClick={handleLogout}>
++              <LogOut size={16} /> <span className="d-none d-sm-inline">Logout</span>
++            </button>
++          </div>
+         </div>
+       </nav>
+ 
+@@ -621,6 +718,15 @@ const DistributorPortal = () => {
+                           </span>
+                         </div>
+                         <div className="text-muted small">Last Activity: {dateTime(lastActionDate)}</div>
++                        {(() => {
++                          const delivery = toPoint(o.deliveryLocation) || toPoint(o.salon) || toPoint(o.address);
++                          const km = myLocation && delivery ? distanceKm(myLocation, delivery) : (o.distributor?.distanceKm ?? null);
++                          return km !== null ? (
++                            <div className="small fw-semibold text-success d-flex align-items-center gap-1 mt-1">
++                              <Route size={13} /> {formatKm(km)} away
++                            </div>
++                          ) : null;
++                        })()}
+                       </div>
+ 
+                       <div className="col-12 col-md-3">
+@@ -683,6 +789,7 @@ const DistributorPortal = () => {
+       {selectedOrder && (
+         <DistributorOrderDetailModal
+           order={selectedOrder}
++          myLocation={myLocation}
+           onClose={() => setSelectedOrder(null)}
+           onAccept={handleAccept}
+           onReject={handleReject}
+diff --git a/src/pages/Distributors.jsx b/src/pages/Distributors.jsx
+index b8cf5e4..e3b0bb0 100644
+--- a/src/pages/Distributors.jsx
++++ b/src/pages/Distributors.jsx
+@@ -7,7 +7,16 @@ import Loader from "../components/Loader.jsx";
+ import DistributorModal from "../components/DistributorModal.jsx";
+ import { toast } from "react-toastify";
+ import { useNavigate } from "react-router-dom";
+-import { Truck, Plus } from "lucide-react";
++import { Truck, Plus, Crosshair, MapPin, X, Route } from "lucide-react";
++import LocationMap from "../components/LocationMap.jsx";
++import {
++  formatCoordinates,
++  formatKm,
++  mapsUrl,
++  requestBrowserLocation,
++  sortByDistance,
++  toPoint
++} from "../utils/geo";
+ 
+ const money = (value) => {
+   const num = Number(value);
+@@ -26,12 +35,24 @@ const Distributors = () => {
+   const [editingDistributor, setEditingDistributor] = useState(null);
+   const [activeFilter, setActiveFilter] = useState("ALL");
+   const [confirmModal, setConfirmModal] = useState({ show: false, target: null });
++  // The point distances are measured FROM. Left empty the tab stays A–Z; set
++  // it (GPS, or a pin on the mini map) and the list becomes a dispatch list:
++  // nearest distributor first, KM on every row.
++  const [reference, setReference] = useState(null);
++  const [showReferenceMap, setShowReferenceMap] = useState(false);
++  const [locating, setLocating] = useState(false);
+   const navigate = useNavigate();
+ 
+   const fetchDistributors = useCallback(async () => {
+     try {
+       setIsLoading(true);
+-      const result = await distributorAPI.list({ page: currentPage, searchString: debouncedSearch });
++      const result = await distributorAPI.list({
++        page: currentPage,
++        searchString: debouncedSearch,
++        latitude: reference?.latitude,
++        longitude: reference?.longitude,
++        sortBy: reference ? "distance" : "name"
++      });
+       if (result.success) {
+         setDistributors(result.data?.distributors || []);
+         setTotalPages(result.data?.pagination?.totalPages || 1);
+@@ -43,7 +64,7 @@ const Distributors = () => {
+     } finally {
+       setIsLoading(false);
+     }
+-  }, [currentPage, debouncedSearch]);
++  }, [currentPage, debouncedSearch, reference]);
+ 
+   useEffect(() => {
+     const timer = setTimeout(() => {
+@@ -85,7 +106,28 @@ const Distributors = () => {
+     }
+   };
+ 
+-  const visible = distributors.filter((d) => (activeFilter === "ALL" ? true : activeFilter === "ACTIVE" ? d.isActive : !d.isActive));
++  // The server already ordered the page nearest-first when a reference point
++  // is set; sorting again locally keeps the rows right even if an older API
++  // build ignores the new parameters (best of both, no wrong labels).
++  const ordered = reference ? sortByDistance(distributors, reference) : distributors;
++  const visible = ordered.filter((d) => (activeFilter === "ALL" ? true : activeFilter === "ACTIVE" ? d.isActive : !d.isActive));
++  const nearest = visible.find((d) => Number.isFinite(Number(d.distanceKm)));
++
++  const useMyLocation = async () => {
++    setLocating(true);
++    try {
++      const result = await requestBrowserLocation();
++      if (!result.ok) {
++        toast.error(result.message || "Could not read this device's location");
++        return;
++      }
++      setReference({ latitude: result.latitude, longitude: result.longitude });
++      setCurrentPage(1);
++      toast.success("Sorting by distance from your current location");
++    } finally {
++      setLocating(false);
++    }
++  };
+ 
+   const FILTERS = [
+     { key: "ALL", label: "All" },
+@@ -123,6 +165,55 @@ const Distributors = () => {
+           </div>
+         </div>
+ 
++        {/* Distance reference — the point every KM on this page is measured
++            from. Optional: without it the tab keeps its A–Z order. */}
++        <div className="card shadow-sm mb-3 bg-white border-0 flex-shrink-0" style={{ borderRadius: "12px" }}>
++          <div className="card-body p-3">
++            <div className="d-flex flex-wrap align-items-center gap-2">
++              <div className="d-flex align-items-center gap-2 me-auto">
++                <span className="badge bg-light text-secondary border d-flex align-items-center gap-1">
++                  <Route size={13} />
++                  {reference ? "Sorted: nearest first" : "Sorted: A–Z"}
++                </span>
++                {reference ? (
++                  <span className="small text-muted">
++                    from <strong className="text-dark">{formatCoordinates(reference)}</strong>
++                    {nearest && Number.isFinite(Number(nearest.distanceKm)) ? (
++                      <> · nearest partner is <strong className="text-dark">{formatKm(nearest.distanceKm)}</strong> away</>
++                    ) : null}
++                  </span>
++                ) : (
++                  <span className="small text-muted">Set a reference point to show the delivery KM on every partner.</span>
++                )}
++              </div>
++              <div className="d-flex flex-wrap gap-2">
++                <button className="btn btn-sm btn-outline-success d-flex align-items-center gap-1" onClick={useMyLocation} disabled={locating}>
++                  <Crosshair size={14} /> {locating ? "Locating…" : "Use my location"}
++                </button>
++                <button className="btn btn-sm btn-outline-secondary d-flex align-items-center gap-1" onClick={() => setShowReferenceMap((v) => !v)}>
++                  <MapPin size={14} /> {showReferenceMap ? "Hide map" : "Pick on map"}
++                </button>
++                {reference && (
++                  <button className="btn btn-sm btn-outline-danger d-flex align-items-center gap-1" onClick={() => { setReference(null); setCurrentPage(1); }}>
++                    <X size={14} /> Clear
++                  </button>
++                )}
++              </div>
++            </div>
++            {showReferenceMap && (
++              <div className="mt-3">
++                <LocationMap
++                  value={reference}
++                  onChange={(next) => { setReference(next); setCurrentPage(1); }}
++                  height={220}
++                  ariaLabel="Distance reference map"
++                />
++                <div className="small text-muted mt-1">Click the map (or drag the pin) to measure every partner from that point.</div>
++              </div>
++            )}
++          </div>
++        </div>
++
+         <div className="flex-grow-1 p-3 shadow-sm border-0" style={{ overflowY: "auto", backgroundColor: "#ffffff", borderRadius: "12px" }}>
+           {isLoading ? (
+             <div className="text-center py-5"><Loader size="sm" /></div>
+@@ -139,6 +230,7 @@ const Distributors = () => {
+                     <th>Distributor</th>
+                     <th>Contact</th>
+                     <th>Area</th>
++                    <th className="text-nowrap">Distance</th>
+                     <th>Delivery Capability</th>
+                     <th>Status</th>
+                     <th className="text-end">Actions</th>
+@@ -155,7 +247,19 @@ const Distributors = () => {
+                         <div>{d.phone}</div>
+                         {d.email && <div className="text-muted small">{d.email}</div>}
+                       </td>
+-                      <td>{d.area || "—"}</td>
++                      <td>
++                        <div>{d.area || "—"}</div>
++                        <div className="text-muted" style={{ fontSize: "0.76rem" }}>
++                          {toPoint(d) ? `Pinned ${formatCoordinates(d, 3)}` : "No location set"}
++                        </div>
++                      </td>
++                      <td className="text-nowrap">
++                        {Number.isFinite(Number(d.distanceKm)) ? (
++                          <span className="badge bg-success-subtle text-success-emphasis">{formatKm(d.distanceKm)}</span>
++                        ) : (
++                          <span className="text-muted small">{reference ? (toPoint(d) ? "—" : "No pin") : "—"}</span>
++                        )}
++                      </td>
+                       <td>{d.deliveryCapability || "—"}</td>
+                       <td>
+                         {d.isActive
+@@ -164,6 +268,18 @@ const Distributors = () => {
+                       </td>
+                       <td className="text-end">
+                         <div className="d-flex align-items-center justify-content-end gap-2">
++                          {mapsUrl(d) && (
++                            <a
++                              className="btn btn-sm px-2 py-1"
++                              href={mapsUrl(d)}
++                              target="_blank"
++                              rel="noopener noreferrer"
++                              title="Open this distributor's location in Maps"
++                              style={{ color: "#1e7e34", border: "1px solid #a3d9b1", background: "#eaf7ee" }}
++                            >
++                              Map
++                            </a>
++                          )}
+                           <button className="button22 px-2 py-1" onClick={() => { setEditingDistributor(d); setShowModal(true); }}>Edit</button>
+                           <button
+                             className="btn btn-sm px-2 py-1"
+diff --git a/src/pages/ShopOrders.jsx b/src/pages/ShopOrders.jsx
+index 300db35..f60790b 100644
+--- a/src/pages/ShopOrders.jsx
++++ b/src/pages/ShopOrders.jsx
+@@ -91,6 +91,16 @@ const ShopOrders = () => {
+     }
+   }, []);
+ 
++  // Re-read ONE order (after a status move, an assignment or a delivery-pin
++  // correction) and put it back on screen with its fresh distances.
++  const handleRefreshOrder = async (orderId) => {
++    const result = await shopOrderAPI.adminGetById(orderId);
++    if (result.success && result.data) {
++      setSelectedOrder(result.data);
++      fetchOrders();
++    }
++  };
++
+   const handleStatusChange = async (orderId, status) => {
+     try {
+       const result = await shopOrderAPI.updateStatus({ orderId, status });
+@@ -235,6 +245,7 @@ const ShopOrders = () => {
+           onStatusChange={handleStatusChange}
+           onAssign={handleAssign}
+           onRecordDecision={handleRecordDecision}
++          onRefresh={handleRefreshOrder}
+         />
+       </div>
+     </Layout>
+diff --git a/src/services/communication.jsx b/src/services/communication.jsx
+index fa81a2d..560d1a4 100644
+--- a/src/services/communication.jsx
++++ b/src/services/communication.jsx
+@@ -1405,9 +1405,19 @@ export const shopProductAPI = {
+ 
+ // Delivery partners (distributors tab)
+ export const distributorAPI = {
+-  list: async ({ page = 1, searchString = "" } = {}) => {
++  // `latitude`/`longitude` is the reference point the distances are measured
++  // from — the order's delivery location. Sending the pair switches the list
++  // to nearest-first with `distanceKm` on every row.
++  list: async ({ page = 1, searchString = "", latitude, longitude, sortBy } = {}) => {
+     try {
+-      const response = await api.post('/api/distributors/list', { page, searchString });
++      const response = await api.post('/api/distributors/list', {
++        page,
++        searchString,
++        ...(Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude))
++          ? { latitude: Number(latitude), longitude: Number(longitude) }
++          : {}),
++        ...(sortBy ? { sortBy } : {})
++      });
+       return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
+     } catch (error) {
+       return { success: false, message: error.response?.data?.message || "Failed to fetch distributors", error: error.response?.data };
+@@ -1429,6 +1439,23 @@ export const distributorAPI = {
+       return { success: false, message: error.response?.data?.message || "Failed to update distributor", error: error.response?.data };
+     }
+   },
++  /**
++   * Live location. The distributor portal calls this with its own token (no
++   * distributorId needed); the admin calls it with `distributorId` to correct
++   * a pin. Same endpoint, same columns — one source of truth for the KM math.
++   */
++  updateLocation: async ({ distributorId, latitude, longitude } = {}) => {
++    try {
++      const response = await api.post('/api/distributors/location', {
++        ...(distributorId ? { distributorId } : {}),
++        latitude,
++        longitude
++      });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to save the location", error: error.response?.data };
++    }
++  },
+   // Distributor portal login (phone or email + the password the admin set).
+   login: async ({ identifier, password }) => {
+     try {
+@@ -1458,6 +1485,17 @@ export const shopOrderAPI = {
+       return { success: false, message: error.response?.data?.message || "Failed to fetch order", error: error.response?.data };
+     }
+   },
++  // Admin: place or correct the delivery pin on an order. A salon without
++  // coordinates (or a delivery to a different gate) would otherwise have no
++  // map and no KM while assigning a distributor.
++  setDeliveryLocation: async ({ orderId, latitude, longitude }) => {
++    try {
++      const response = await api.post('/api/shop-orders/admin-set-delivery-location', { orderId, latitude, longitude });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to save the delivery location", error: error.response?.data };
++    }
++  },
+   assignDistributor: async ({ orderId, distributorId, notes = "" }) => {
+     try {
+       const response = await api.post('/api/shop-orders/admin-assign-distributor', { orderId, distributorId, notes });
+diff --git a/src/utils/geo.js b/src/utils/geo.js
+new file mode 100644
+index 0000000..8a36bc3
+--- /dev/null
++++ b/src/utils/geo.js
+@@ -0,0 +1,164 @@
++// Geo helpers for the admin panel + distributor portal.
++//
++// The admin needs one answer about two points on the map: HOW FAR APART are
++// they? Every surface that shows it (the distributor list, the assign drawer
++// on an order, the distributor portal, a live GPS refresh) asks this module,
++// so the KM in two places can never disagree.
++//
++// It is the great-circle (haversine) distance, the same formula the backend
++// uses in `my_naai_backend/src/utils/geo.js`; the server is the source of
++// truth for stored `distanceKm`, and these helpers exist so the UI can sort
++// and label without a round trip (and still work while offline).
++const EARTH_RADIUS_KM = 6371;
++
++export const toCoordinate = (value) => {
++  if (value === null || value === undefined) return null;
++  if (typeof value === "string" && value.trim() === "") return null;
++  const n = Number(value);
++  return Number.isFinite(n) ? n : null;
++};
++
++export const isValidLatitude = (value) => {
++  const n = toCoordinate(value);
++  return n !== null && n >= -90 && n <= 90;
++};
++
++export const isValidLongitude = (value) => {
++  const n = toCoordinate(value);
++  return n !== null && n >= -180 && n <= 180;
++};
++
++// A location needs BOTH halves; half a coordinate is a data-entry bug.
++export const toPoint = (source) => {
++  if (!source) return null;
++  const latitude = toCoordinate(source.latitude);
++  const longitude = toCoordinate(source.longitude);
++  if (latitude === null || longitude === null) return null;
++  if (!isValidLatitude(latitude) || !isValidLongitude(longitude)) return null;
++  return { latitude, longitude };
++};
++
++export const haversineKm = (fromLat, fromLon, toLat, toLon) => {
++  const lat1 = Number(fromLat);
++  const lon1 = Number(fromLon);
++  const lat2 = Number(toLat);
++  const lon2 = Number(toLon);
++  if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return null;
++  const dLat = ((lat2 - lat1) * Math.PI) / 180;
++  const dLon = ((lon2 - lon1) * Math.PI) / 180;
++  const a =
++    Math.sin(dLat / 2) ** 2 +
++    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
++  return EARTH_RADIUS_KM * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a))));
++};
++
++export const roundKm = (km, digits = 2) => {
++  if (!Number.isFinite(km)) return null;
++  const factor = 10 ** digits;
++  return Math.round(km * factor) / factor;
++};
++
++export const distanceKm = (from, to) => {
++  const a = toPoint(from);
++  const b = toPoint(to);
++  if (!a || !b) return null;
++  return roundKm(haversineKm(a.latitude, a.longitude, b.latitude, b.longitude));
++};
++
++// "4.2 km" / "850 m" — a dispatcher reads metres for a walk across the road,
++// kilometres for anything further. `null` means "no location", never 0.
++export const formatKm = (km) => {
++  if (!Number.isFinite(Number(km))) return null;
++  const value = Number(km);
++  if (value < 1) return `${Math.max(0, Math.round(value * 1000))} m`;
++  return `${value < 10 ? value.toFixed(1) : Math.round(value)} km`;
++};
++
++// Nearest first. Partners with no pin go last (unknown is not "near"), then
++// ties break by name so the list does not reshuffle between renders.
++export const sortByDistance = (rows = [], reference = null) => {
++  const list = [...rows];
++  if (!toPoint(reference)) {
++    return list.sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || "")));
++  }
++  return list.sort((a, b) => {
++    const aKm = Number.isFinite(Number(a?.distanceKm)) ? Number(a.distanceKm) : distanceKm(a, reference);
++    const bKm = Number.isFinite(Number(b?.distanceKm)) ? Number(b.distanceKm) : distanceKm(b, reference);
++    if (aKm === null && bKm === null) return String(a?.name || "").localeCompare(String(b?.name || ""));
++    if (aKm === null) return 1;
++    if (bKm === null) return -1;
++    if (aKm !== bKm) return aKm - bKm;
++    return String(a?.name || "").localeCompare(String(b?.name || ""));
++  });
++};
++
++// Key-less deep link — opens whatever map app the device has.
++export const mapsUrl = (source) => {
++  const point = toPoint(source);
++  if (!point) return null;
++  return `https://www.google.com/maps/search/?api=1&query=${point.latitude},${point.longitude}`;
++};
++
++export const directionsUrl = (from, to) => {
++  const start = toPoint(from);
++  const end = toPoint(to);
++  if (!end) return null;
++  if (!start) return mapsUrl(end);
++  return `https://www.google.com/maps/dir/?api=1&origin=${start.latitude},${start.longitude}&destination=${end.latitude},${end.longitude}`;
++};
++
++// "21.14580, 79.08820" — enough precision to identify a gate, short enough to
++// read out over the phone.
++export const formatCoordinates = (source, digits = 5) => {
++  const point = toPoint(source);
++  if (!point) return "";
++  return `${point.latitude.toFixed(digits)}, ${point.longitude.toFixed(digits)}`;
++};
++
++// A stored live fix is only useful while it is fresh; the admin should be able
++// to see that a partner's pin was set three weeks ago.
++export const locationAgeLabel = (value) => {
++  if (!value) return "";
++  const then = new Date(value).getTime();
++  if (!Number.isFinite(then)) return "";
++  const minutes = Math.max(0, Math.round((Date.now() - then) / 60000));
++  if (minutes < 2) return "just now";
++  if (minutes < 60) return `${minutes} min ago`;
++  const hours = Math.round(minutes / 60);
++  if (hours < 24) return `${hours} hr ago`;
++  const days = Math.round(hours / 24);
++  if (days < 30) return `${days} day${days === 1 ? "" : "s"} ago`;
++  return new Date(then).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
++};
++
++// Browser GPS, in one place so both the admin panel and the distributor
++// portal ask the same way (and report the same reasons when it fails).
++export const requestBrowserLocation = ({ timeout = 12000, maximumAge = 30000 } = {}) =>
++  new Promise((resolve) => {
++    if (typeof navigator === "undefined" || !navigator.geolocation) {
++      resolve({ ok: false, message: "This browser cannot share a location." });
++      return;
++    }
++    if (typeof window !== "undefined" && window.isSecureContext === false) {
++      resolve({ ok: false, message: "Location needs an HTTPS page." });
++      return;
++    }
++    navigator.geolocation.getCurrentPosition(
++      (position) => resolve({
++        ok: true,
++        latitude: position.coords.latitude,
++        longitude: position.coords.longitude,
++        accuracy: position.coords.accuracy
++      }),
++      (error) => resolve({
++        ok: false,
++        code: error?.code || 0,
++        message: error?.code === 1
++          ? "Location permission was blocked. Allow it in the browser, then try again."
++          : error?.code === 2
++            ? "Your device has no location fix right now."
++            : "Getting your location took too long. Try again."
++      }),
++      { enableHighAccuracy: true, timeout, maximumAge }
++    );
++  });
+-- 
+2.39.5
+
