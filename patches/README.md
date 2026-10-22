@@ -8,10 +8,23 @@ and verified with `git apply --check` on a clean checkout:
 | [`backend-shop-customers.patch`](backend-shop-customers.patch) | `rightserveinfotechsystems/my_naai_backend` | customers as a second buyer + the website's no-token API |
 | [`admin-panel-shop-customers.patch`](admin-panel-shop-customers.patch) | `rightserveinfotechsystems/my-naai-frontend` | the admin panel shows who bought each shop order |
 | [`backend-shop-catalog-filters.patch`](backend-shop-catalog-filters.patch) | `rightserveinfotechsystems/my_naai_backend` | **apply after the first one** — search, filters, sort and paging on the server |
+| [`backend-shop-schema-selfheal.patch`](backend-shop-schema-selfheal.patch) | `rightserveinfotechsystems/my_naai_backend` | **apply after the other two** — the API repairs the `salon_id` / `buyer_type` schema itself instead of 500-ing |
 
 `backend-shop-catalog-filters.patch` is a follow-up: it edits
 `listShopProducts.js`, which `backend-shop-customers.patch` already rewrote, so
-apply them **in that order**.
+apply them **in that order**. `backend-shop-schema-selfheal.patch` comes last —
+it extends `shopOrder.service.js` / `shopCart.service.js` after both rewrites.
+
+**What the last patch is for.** The code can ship before the SQL runs (it did:
+every customer checkout returned *null value in column "salon_id" … violates
+not-null constraint*). With it applied, `index.js` repairs the two-buyer schema
+once at boot — the same idempotent DDL as the migration — and a write that still
+trips the old constraint is replayed once after the repair. It is a no-op on a
+migrated database, it cannot affect a salon order (dropping `NOT NULL` never
+rejects a value), and it logs + gives up when the database user has no `ALTER`
+right, so the shopper still gets the honest "not set up yet" message. The SQL
+is still the fix of record; this only means the shop works without a psql
+session.
 
 The earlier [`backend-distributor-location.patch`](backend-distributor-location.patch)
 and [`admin-panel-distributor-location.patch`](admin-panel-distributor-location.patch)
@@ -26,9 +39,10 @@ cd my_naai_backend
 git am /path/to/patches/backend-shop-customers.patch     # keeps the commit message
 # or: git apply /path/to/patches/backend-shop-customers.patch
 
-# backend, in this order (the second patch edits a file the first rewrote)
+# backend, in this order (each edits files the previous one rewrote)
 git am /path/to/patches/backend-shop-customers.patch
 git am /path/to/patches/backend-shop-catalog-filters.patch
+git am /path/to/patches/backend-shop-schema-selfheal.patch
 
 # admin panel
 git clone https://github.com/rightserveinfotechsystems/my-naai-frontend.git
@@ -158,6 +172,12 @@ The **code** patch is deployed but its **database migration was not run**.
 Sequelize's `allowNull: true` is a model declaration — it never alters a column
 that already exists, so Postgres still requires a salon on every order and the
 first customer order dies at the INSERT.
+
+`backend-shop-schema-selfheal.patch` removes the need for a psql session: the
+API runs this same DDL at boot and replays a blocked write once. If the message
+still appears after that patch is deployed, the database user cannot `ALTER
+TABLE` (check the deploy log for `[shop-schema] could not repair …`) — then the
+SQL below is the only way.
 
 Fix it once, either way:
 

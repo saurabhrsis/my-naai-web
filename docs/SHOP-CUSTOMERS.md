@@ -354,9 +354,16 @@ address, both of which a customer order has.
 
 The two repos' changes are ready as patches in
 [`patches/`](../patches/README.md) — `git am patches/backend-shop-customers.patch`
-in `my_naai_backend`, `git am patches/admin-panel-shop-customers.patch` in
-`my-naai-frontend`.
+then `patches/backend-shop-catalog-filters.patch` then
+`patches/backend-shop-schema-selfheal.patch` in `my_naai_backend`, and
+`git am patches/admin-panel-shop-customers.patch` in `my-naai-frontend`.
 
+0. `backend-shop-schema-selfheal.patch` makes step 1 self-service: the API runs
+   the same idempotent DDL once at boot and replays a write that trips the old
+   `salon_id` NOT NULL. It is a no-op on a migrated database and nothing about a
+   salon order changes (a salon order always carries its salon id). It only
+   covers the columns and nullability — the foreign keys and the cart's unique
+   key still come from the SQL, so run step 1 anyway.
 1. Apply the migration + models (columns are nullable/defaulted — deploy is safe
    with the old code still running). Run the SQL **for real** —
    [`patches/migrations/2026-10-22-shop-customers.sql`](../patches/migrations/2026-10-22-shop-customers.sql)
