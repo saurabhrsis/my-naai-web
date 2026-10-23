@@ -2136,12 +2136,16 @@ img.image-fallback-tile {
 .shop-search .shop-search-clear { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: rgba(255, 255, 255, .08); color: var(--muted-light); cursor: pointer; transition: background .15s, color .15s; }
 .shop-search .shop-search-clear:hover { color: var(--white); background: rgba(255, 255, 255, .16); }
 
-/* Three facets: Category, For, Price. Two per row on a phone (a 3-up strip at
-   320px clipped every label), three across from 560px. */
-.shop-filters-selects { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-@media (min-width: 560px) and (max-width: 899px) { .shop-filters-selects { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; } }
+/* Three facets — Category, For, Price — on ONE line at every width.
+   They used to sit two per row on a phone (Category + For, then a lone Price
+   underneath), so the strip read as two rows and the third filter looked
+   orphaned. A 3-up strip is ~90px per select at 320px, so the phone rules
+   below drop the decorative leading icon (the caret already says "select") and
+   tighten the gutters instead of clipping the labels. */
+.shop-filters-selects { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+@media (min-width: 560px) and (max-width: 899px) { .shop-filters-selects { gap: 10px; } }
 .shop-filter-select { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.shop-filter-label { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+.shop-filter-label { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .shop-select-shell { position: relative; display: block; }
 .shop-select-icon, .shop-select-caret { position: absolute; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--muted); transition: color .15s; }
 .shop-select-icon { left: 10px; }
@@ -2192,11 +2196,17 @@ img.image-fallback-tile {
 /* The photo box is a touch shorter than square (0.88 × its width). At the
    4–5 column widths a full square made the card ~40px taller than the name,
    price and ADD underneath actually need, so a row of four filled the
-   whole laptop fold. Cropping 12% off the bottom keeps the product centred
-   and every card in a row the same height. */
+   whole laptop fold. The frame is fixed; the photo inside it is never cropped
+   (see `.shop-card-image`), so every card in a row stays the same height
+   whatever ratio the admin uploaded. */
 .shop-card-media { position: relative; display: block; width: 100%; aspect-ratio: 25 / 22; padding: 0; border: 0; background: #101414; cursor: pointer; overflow: hidden; }
-.shop-card-image { width: 100%; height: 100%; object-fit: cover; object-position: center; transition: transform .35s ease; }
-.shop-card:hover .shop-card-image { transform: scale(1.06); }
+/* The photo is shown WHOLE — never cut.
+   `cover` filled the frame but chopped the top, the bottom or a corner off any
+   product shot that was not exactly 25:22 (a bottle lost its cap, a box its
+   lid), so the image is `contain`ed inside the frame instead. The 9px gutter
+   keeps the product clear of the card's rounded corners, and there is no hover
+   zoom any more: scaling a contained photo crops it again by definition. */
+.shop-card-image { width: 100%; height: 100%; padding: 9px; object-fit: contain; object-position: center; }
 /* Soft shade behind the badges so "% off" and the rating stay legible over a
    white product shot as well as a dark one. */
 .shop-card-shade { position: absolute; inset: auto 0 0; height: 46%; background: linear-gradient(180deg, transparent, rgba(6, 9, 8, .6)); pointer-events: none; }
@@ -2270,6 +2280,14 @@ img.image-fallback-tile {
   .shop-orders-screen .page-header { align-items: center; min-height: 0; margin-bottom: 12px; }
   .shop-orders-screen .page-header-action { align-self: center; }
 
+  /* The three facets share one line on a phone too. At 320px that is ~90px
+     per select, so the leading icon gives way to the text (the caret still
+     marks it as a select) and the gutters shrink to the minimum. */
+  .shop-select-icon { display: none; }
+  .shop-filter-label { font-size: 8px; letter-spacing: .07em; }
+  .shop-select-shell select { height: 38px; padding: 0 19px 0 9px; font-size: 10.5px; }
+  .shop-select-caret { right: 6px; }
+
   .shop-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
   .skeleton-card.shop-skeleton { min-height: 222px; }
 
@@ -2277,8 +2295,13 @@ img.image-fallback-tile {
   .shop-card:hover { transform: none; box-shadow: none; }
 
   .shop-card-media { width: 100%; flex: none; aspect-ratio: 25 / 22; }
-  .shop-card-image { transition: none; }
-  .shop-card:hover .shop-card-image { transform: none; }
+  .shop-card-image { padding: 7px; }
+
+  /* Details hero: square on a phone so a square product shot fills the width
+     instead of sitting in a wide letterbox. The photo is still `contain`ed, so
+     an odd aspect ratio is shown whole. */
+  .shop-detail-hero { aspect-ratio: 1 / 1; max-height: none; }
+  .shop-detail-hero-image { padding: 8px; }
 
   /* At 320px each card is only ~143px wide, so the name, price and rating
      each get one step down in type to stay on their own rows. */
@@ -2314,23 +2337,27 @@ img.image-fallback-tile {
   .shop-card-body { padding: 7px 8px 8px; }
   .shop-card-body h3 { font-size: 12px; }
   .shop-card-price-row strong { font-size: 13px; }
-  /* Two 46%-wide selects per row: the icon and the caret keep their 10px
-     gutters, and the label gets the rest of the width instead of clipping. */
-  .shop-select-shell select { height: 38px; padding: 0 24px 0 27px; font-size: 10.5px; }
-  .shop-select-icon { left: 8px; }
-  .shop-select-caret { right: 7px; }
-  .shop-filter-label { font-size: 8.5px; }
+  /* Three 30%-wide selects on one line: the caret keeps its gutter and the
+     label gets the rest of the width instead of clipping. */
+  .shop-select-shell select { height: 36px; padding: 0 17px 0 8px; font-size: 10px; }
+  .shop-select-caret { right: 5px; }
+  .shop-filter-label { font-size: 7.5px; letter-spacing: .05em; }
+  .shop-filters-selects { gap: 5px; }
 }
 
 /* ── Product details page (the full page a product card opens) ── */
 .shop-detail-page { padding-bottom: 148px; }
 .skeleton-card.shop-detail-skeleton { min-height: 280px; }
+/* Hero photo: the whole product, never a crop. `contain` on a square-ish frame
+   keeps a bottle's cap and a box's lid in the picture; the frame is square on
+   a phone (a product shot is usually square, so it fills the width) and 4:3 on
+   a laptop, where a full-width square would be taller than the fold. */
 .shop-detail-hero { position: relative; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; background: #101414; aspect-ratio: 4 / 3; max-height: 400px; }
-.shop-detail-hero-image { width: 100%; height: 100%; object-fit: cover; object-position: center; }
+.shop-detail-hero-image { width: 100%; height: 100%; padding: 10px; object-fit: contain; object-position: center; }
 .shop-off-badge-hero { top: 10px; right: 10px; left: auto; }
 .shop-detail-thumbs { display: flex; gap: 8px; margin-top: 9px; }
 .shop-detail-thumb { width: 52px; height: 52px; flex: none; padding: 0; border: 2px solid var(--line); border-radius: 10px; overflow: hidden; background: #101414; cursor: pointer; }
-.shop-detail-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: center; }
+.shop-detail-thumb img { width: 100%; height: 100%; padding: 3px; object-fit: contain; object-position: center; }
 .shop-detail-thumb.active { border-color: var(--shop-green); box-shadow: 0 0 0 3px rgba(46, 204, 113, .18); }
 .shop-detail-tags { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 10px; }
 .shop-detail-tag { padding: 4px 11px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted-light); background: var(--card); font-size: 10.5px; font-weight: 700; }
@@ -2357,6 +2384,10 @@ img.image-fallback-tile {
 .shop-stock-chip.large { min-height: 44px; display: inline-flex; align-items: center; min-width: 128px; justify-content: center; }
 
 /* ── Cart ── */
+/* `padding-bottom` is the space reserved under the last card for the fixed
+   checkout bar. On a phone that is handled per shell further down (the shells
+   already reserve room for their own chrome); 176px stays as the fallback for
+   any container that is neither. */
 .shop-cart-screen { padding-bottom: 176px; }
 .shop-checkout-screen { padding-bottom: 96px; }
 .shop-cart-footer { position: fixed; z-index: 39; left: max(10px, var(--safe-left, 0px)); right: max(10px, var(--safe-right, 0px)); bottom: calc(max(9px, var(--safe-bottom, 0px)) + 66px); display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px 11px 18px; border: 1px solid var(--line); border-radius: 18px; background: var(--card); box-shadow: 0 18px 48px rgba(0, 0, 0, .45); }
@@ -2365,6 +2396,31 @@ img.image-fallback-tile {
 .shop-cart-footer-amount strong { color: var(--white); font-size: 17px; }
 .shop-cart-footer-amount span { color: var(--muted-light); font-size: 10.5px; font-weight: 700; }
 .shop-cart-footer .btn { flex: none; border-radius: 12px; }
+/* Phones: the bar is an OVERLAY on the bill, not a block parked above it.
+   It used to sit ~40px above the Bill details card, with dead space between
+   the two — and on the public website (which has no bottom nav) another 66px
+   of empty screen under the bar. Now the card runs a few pixels UNDER the bar,
+   so the checkout button reads as a layer floating over the bill.
+   The clearance a shell needs is its own bottom padding (the app reserves
+   100px for the bottom nav, the website 24px, 32px from 760px) plus the number
+   below; the bar itself is 70px tall (11px + 11px padding and a 46px button)
+   and sits `safe + 66px` above the edge in the app. */
+@media (max-width: 899px) {
+  .workspace-content .shop-cart-screen { padding-bottom: 34px; }
+  .guest-content .shop-cart-screen { padding-bottom: 44px; }
+  /* No bottom nav on the public website, so the same bar would float 66px
+     above the edge: park it at the screen edge instead. */
+  .guest-content .shop-cart-footer { bottom: max(10px, var(--safe-bottom)); }
+}
+
+/* The bar on a 320px phone: a slightly smaller button and gap keep
+   "Proceed to checkout" and the amount on one line instead of pushing the
+   button past the bar's edge. (Kept here, after the base rule, so it wins.) */
+@media (max-width: 380px) {
+  .shop-cart-footer { gap: 8px; padding: 10px 10px 10px 13px; }
+  .shop-cart-footer .btn { gap: 5px; padding: 0 11px; font-size: 11.5px; }
+  .shop-cart-footer-amount span { font-size: 9.5px; }
+}
 /* The sign-in dialog a visitor gets on "Proceed to checkout" (Modal). Small on
    purpose: it states why an account is needed and hands over to the OTP page. */
 .shop-gate-icon { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 11px; background: var(--shop-green-wash); color: var(--shop-green-soft); }
