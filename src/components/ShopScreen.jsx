@@ -442,10 +442,14 @@ export function ShopScreen({ session, navigate, notify }) {
           My orders is NOT a public shortcut: order history lives in the
           signed-in dashboard, so a visitor never sees a door they cannot
           open — the cart is enough here. */}
+      {/* The plain PageHeader variant, exactly like Discover / My bookings /
+          Account: same h1, same font, same margins. The shop used the
+          `subtitleBelow` variant (the only screen that did), which laid the
+          heading out in a separate top row and made "Naai Shop" look like a
+          different app's title. */}
       <PageHeader
         title={copy.title}
         subtitle={copy.subtitle}
-        subtitleBelow
         action={
           <div className="shop-header-actions">
             <button type="button" className="refresh-text-button shop-header-action" onClick={openCart} aria-label={`My cart${totals.itemCount > 0 ? `, ${totals.itemCount} item${totals.itemCount === 1 ? '' : 's'}` : ''}`}>
