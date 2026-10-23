@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ConfirmProvider } from './ConfirmDialog';
-import { ShopProductDetailScreen, ShopQuantityControl, ShopScreen } from './ShopScreen';
+import { ShopProductCard, ShopProductDetailScreen, ShopQuantityControl, ShopScreen } from './ShopScreen';
 import { ShopCartScreen, ShopCheckoutScreen } from './ShopCartCheckout';
 import { ShopOrderScreen, ShopOrdersScreen } from './ShopOrders';
 import { addToCart, clearShopStorage, findOrder, placeOrder, readCart, readOrders, setOrderSyncState } from '../lib/shopOrders';
@@ -221,6 +221,40 @@ describe('ShopScreen', () => {
     // A hover zoom on a contained photo crops it again by definition.
     const zoom = shopCssRules().filter(rule => /\.shop-card.*image/.test(rule.selector) && /scale\(/.test(rule.body));
     expect(zoom).toEqual([]);
+  });
+
+  // Reported with a screenshot: a portrait upload inside the wider frame left
+  // two bands of the card's flat black around a white product shot, which read
+  // as a broken image. The band is now a blurred copy of the photo itself.
+  it('fills the space around a photo with a blurred copy of it', async () => {
+    const product = {
+      id: 'p1', name: 'Ghar face wash', image: 'face-wash.jpg', price: 149, mrp: 229,
+      category: 'skin-face', gender: 'unisex', rating: 4.9, available: true, salonName: '',
+    };
+    const { container } = await render(
+      <ShopProductCard product={product} qty={0} onAdd={vi.fn()} onSetQty={vi.fn()} onOpen={vi.fn()} />
+    );
+    const card = container.querySelector('.shop-card');
+    const backdrop = card.querySelector('.shop-card-backdrop');
+    expect(backdrop).not.toBeNull();
+    // The same file the <img> shows, used as a background.
+    const source = card.querySelector('.shop-card-image').getAttribute('src');
+    expect(source).toBeTruthy();
+    expect(backdrop.getAttribute('style')).toContain(source);
+
+    // A product with no photo keeps the plain frame (the placeholder is
+    // already a designed tile — a blurred logo behind it would be noise).
+    const blank = await render(
+      <ShopProductCard product={{ ...product, image: '' }} qty={0} onAdd={vi.fn()} onSetQty={vi.fn()} onOpen={vi.fn()} />
+    );
+    expect(blank.container.querySelector('.shop-card-backdrop')).toBeNull();
+    // Behind the photo and every overlay, inside the frame's own stacking
+    // context — otherwise it would paint over the photo or under the card.
+    const media = shopCssRules().find(rule => /\.shop-card-media\b/.test(rule.selector));
+    expect(media?.body).toMatch(/isolation:\s*isolate/);
+    const layer = shopCssRules().find(rule => /\.shop-card-backdrop\b/.test(rule.selector));
+    expect(layer?.body).toMatch(/z-index:\s*-1/);
+    expect(layer?.body).toMatch(/filter:\s*blur\(/);
   });
 
   it('loads every catalog page, not just the first 20 products', async () => {

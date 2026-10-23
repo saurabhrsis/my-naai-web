@@ -97,10 +97,17 @@ export function ShopQuantityControl({ qty, onAdd, onSet, disabled = false, small
 // discount badge reads on a white product shot as well as a dark one.
 export function ShopProductCard({ product, qty, onAdd, onSetQty, onOpen }) {
   const off = discountPercent(product);
+  const imageUrl = getFileUrl(product.image);
   return (
     <article className={cx('shop-card', !product.available && 'out-of-stock')}>
       <button type="button" className="shop-card-media" onClick={() => onOpen?.(product)} aria-label={`View ${product.name}`}>
-        <ImageWithFallback src={getFileUrl(product.image)} fallback={PRODUCT_PLACEHOLDER} alt={product.name} className="shop-card-image" />
+        {/* The photo is shown whole, so an upload that is not the frame's ratio
+            leaves a band on two sides. That band used to be the card's black
+            background ("black space" around a white product shot); it is now a
+            blurred copy of the SAME photo, so the empty area carries the
+            picture's own colours instead of a hard black edge. */}
+        {imageUrl && <span className="shop-card-backdrop" style={{ backgroundImage: `url("${imageUrl}")` }} aria-hidden="true" />}
+        <ImageWithFallback src={imageUrl} fallback={PRODUCT_PLACEHOLDER} alt={product.name} className="shop-card-image" />
         <span className="shop-card-shade" aria-hidden="true" />
         {off > 0 && <span className="shop-off-badge">{off}% off</span>}
         {product.rating > 0 && (
@@ -624,12 +631,16 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
   const off = discountPercent(product);
   const genderLabel = SHOP_GENDERS.find(g => g.id === product.gender)?.label || 'Unisex';
   const city = session?.user?.salon?.city || session?.user?.city || '';
+  // Same treatment as the card: the photo is never cropped, and the space it
+  // does not fill is a blurred copy of itself rather than the dark frame.
+  const heroImage = getFileUrl(images[Math.min(activeImage, images.length - 1)] || '');
 
   return (
     <div className="screen shop-detail-page">
       <PageHeader title="Product details" onBack={() => navigate('shop')} />
       <div className="shop-detail-hero">
-        <ImageWithFallback src={getFileUrl(images[Math.min(activeImage, images.length - 1)] || '')} fallback={PRODUCT_PLACEHOLDER} alt={product.name} className="shop-detail-hero-image" />
+        {heroImage && <span className="shop-detail-hero-backdrop" style={{ backgroundImage: `url("${heroImage}")` }} aria-hidden="true" />}
+        <ImageWithFallback src={heroImage} fallback={PRODUCT_PLACEHOLDER} alt={product.name} className="shop-detail-hero-image" />
         {!product.available && <span className="shop-stock-veil">Out of stock</span>}
         {off > 0 && <span className="shop-off-badge shop-off-badge-hero">{off}% off</span>}
       </div>
