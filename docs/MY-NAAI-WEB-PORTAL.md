@@ -384,12 +384,19 @@ A pass over all customer, partner and shared screens at 320 px, 375 px, 768 px,
   capped `4 / 3`, the detail hero `3 / 2` and barber slots `1 / 1`, always with
   `object-position: center` (top for faces).
 - **Naai Shop photos are shown whole, never cropped.** Product cards and the
-  product-details hero frame the photo with `object-fit: contain` (25:22 on the
-  card, square on a phone and 4:3 on a laptop for the hero) and an inner gutter
-  that keeps the product clear of the card's rounded corners; the card's hover
-  zoom is gone, because scaling a contained photo crops it again. The three shop
-  facets (Category / For / Price) share **one line at every width** from 320 px
-  up — the phone rules drop the decorative leading icon and tighten the gutters
+  product-details hero frame the photo with `object-fit: contain` (square on a
+  phone, 25:22 on a laptop for the card; square on a phone and 4:3 on a laptop
+  for the hero) and an inner gutter that keeps the product clear of the card's
+  rounded corners; the card's hover zoom is gone, because scaling a contained
+  photo crops it again. The band a non-square photo does not fill is a
+  **blurred, over-scaled copy of the same photo** (`.shop-card-backdrop` /
+  `.shop-detail-hero-backdrop`, `z-index: -1` inside the frame's own stacking
+  context), so a white product shot never sits in a black letterbox.
+  **Upload spec for the catalogue team: square 1200 × 1200 JPG, white
+  background, product at ~85% of the frame** — see
+  [`docs/SHOP-IMAGE-GUIDE.md`](SHOP-IMAGE-GUIDE.md). The three shop facets
+  (Category / For / Price) share **one line at every width** from 320 px up —
+  the phone rules drop the decorative leading icon and tighten the gutters
   instead of wrapping the third filter onto its own row.
 - The cart's "Proceed to checkout" bar is an **overlay**: the Bill details card
   runs a few pixels underneath it (the phone clearance is set per shell, since

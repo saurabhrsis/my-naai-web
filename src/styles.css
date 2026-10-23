@@ -2199,17 +2199,31 @@ img.image-fallback-tile {
    whole laptop fold. The frame is fixed; the photo inside it is never cropped
    (see `.shop-card-image`), so every card in a row stays the same height
    whatever ratio the admin uploaded. */
-.shop-card-media { position: relative; display: block; width: 100%; aspect-ratio: 25 / 22; padding: 0; border: 0; background: #101414; cursor: pointer; overflow: hidden; }
+.shop-card-media { position: relative; isolation: isolate; display: block; width: 100%; aspect-ratio: 25 / 22; padding: 0; border: 0; background: #101414; cursor: pointer; overflow: hidden; }
+/* The space a photo does not fill is filled by the PHOTO ITSELF.
+   `contain` never cuts the product, which means an upload whose ratio is not
+   the frame's leaves a band on two sides — and that band used to be the card's
+   flat black, which read as "broken image" next to a white product shot
+   (`#101414` behind white looks like a hole in the card). The blurred,
+   over-scaled copy below turns that band into a soft glow of the same picture:
+   white-background shots get a white halo, dark ones a dark one, and there is
+   never a hard black edge. `z-index: -1` inside the media's own stacking
+   context puts it above the frame's background and under every overlay
+   (photo, shade, badges), so nothing above it has to change. */
+.shop-card-backdrop { position: absolute; inset: -18%; z-index: -1; background-position: center; background-size: cover; filter: blur(16px) saturate(1.15); pointer-events: none; }
 /* The photo is shown WHOLE — never cut.
    `cover` filled the frame but chopped the top, the bottom or a corner off any
    product shot that was not exactly 25:22 (a bottle lost its cap, a box its
-   lid), so the image is `contain`ed inside the frame instead. The 9px gutter
+   lid), so the image is `contain`ed inside the frame instead. The 7px gutter
    keeps the product clear of the card's rounded corners, and there is no hover
    zoom any more: scaling a contained photo crops it again by definition. */
-.shop-card-image { width: 100%; height: 100%; padding: 9px; object-fit: contain; object-position: center; }
+.shop-card-image { width: 100%; height: 100%; padding: 7px; object-fit: contain; object-position: center; }
 /* Soft shade behind the badges so "% off" and the rating stay legible over a
-   white product shot as well as a dark one. */
-.shop-card-shade { position: absolute; inset: auto 0 0; height: 46%; background: linear-gradient(180deg, transparent, rgba(6, 9, 8, .6)); pointer-events: none; }
+   white product shot as well as a dark one. Short and light on purpose: at 46%
+   of the frame reaching .6 black it darkened the bottom half of every product
+   photo — on a white-background shot that read as a black band under the
+   product rather than as a badge backdrop. */
+.shop-card-shade { position: absolute; inset: auto 0 0; height: 34%; background: linear-gradient(180deg, transparent, rgba(6, 9, 8, .45)); pointer-events: none; }
 .shop-off-badge { position: absolute; top: 9px; left: 9px; z-index: 2; padding: 3px 8px; border-radius: 8px; background: var(--shop-green); color: #04160b; font-size: 9.5px; font-weight: 800; letter-spacing: .03em; box-shadow: 0 4px 12px rgba(0, 0, 0, .32); }
 .shop-off-badge.inline { position: static; display: inline-block; margin-left: 0; vertical-align: middle; }
 .shop-card-rating { position: absolute; z-index: 2; right: 9px; bottom: 9px; display: inline-flex; align-items: center; gap: 3px; padding: 3px 7px; border-radius: 8px; background: rgba(8, 12, 11, .66); color: #eafff2; font-size: 10px; font-weight: 800; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
@@ -2289,13 +2303,19 @@ img.image-fallback-tile {
   .shop-select-caret { right: 6px; }
 
   .shop-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
-  .skeleton-card.shop-skeleton { min-height: 222px; }
+  /* Card media is square on a phone now, so the loading placeholder is
+     ~17px taller too — otherwise the grid jumps when the photos arrive. */
+  .skeleton-card.shop-skeleton { min-height: 240px; }
 
   .shop-card { flex-direction: column; border-radius: 14px; }
   .shop-card:hover { transform: none; box-shadow: none; }
 
-  .shop-card-media { width: 100%; flex: none; aspect-ratio: 25 / 22; }
-  .shop-card-image { padding: 7px; }
+  /* Square on a phone. The catalog's uploads are square product shots, and a
+     25:22 frame left a band on each side of every one of them; 1:1 shows the
+     photo at full width with no band at all (and a portrait upload loses less
+     to the matte). Cards grow ~13px, which the two-up grid absorbs. */
+  .shop-card-media { width: 100%; flex: none; aspect-ratio: 1 / 1; }
+  .shop-card-image { padding: 6px; }
 
   /* Details hero: square on a phone so a square product shot fills the width
      instead of sitting in a wide letterbox. The photo is still `contain`ed, so
@@ -2351,8 +2371,11 @@ img.image-fallback-tile {
 /* Hero photo: the whole product, never a crop. `contain` on a square-ish frame
    keeps a bottle's cap and a box's lid in the picture; the frame is square on
    a phone (a product shot is usually square, so it fills the width) and 4:3 on
-   a laptop, where a full-width square would be taller than the fold. */
-.shop-detail-hero { position: relative; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; background: #101414; aspect-ratio: 4 / 3; max-height: 400px; }
+   a laptop, where a full-width square would be taller than the fold. Like the
+   cards, the band the photo does not fill is a blurred copy of the photo, so a
+   white shot never sits in a black letterbox. */
+.shop-detail-hero { position: relative; isolation: isolate; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; background: #101414; aspect-ratio: 4 / 3; max-height: 400px; }
+.shop-detail-hero-backdrop { position: absolute; inset: -18%; z-index: -1; background-position: center; background-size: cover; filter: blur(20px) saturate(1.15); pointer-events: none; }
 .shop-detail-hero-image { width: 100%; height: 100%; padding: 10px; object-fit: contain; object-position: center; }
 .shop-off-badge-hero { top: 10px; right: 10px; left: auto; }
 .shop-detail-thumbs { display: flex; gap: 8px; margin-top: 9px; }
