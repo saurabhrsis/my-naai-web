@@ -1,6 +1,7 @@
 import React from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ConfirmProvider } from './ConfirmDialog';
 import { ShopProductDetailScreen, ShopQuantityControl, ShopScreen } from './ShopScreen';
@@ -99,6 +100,33 @@ function buttonsContaining(text, root = document.body) {
   return Array.from(root.querySelectorAll('button')).filter(node => node.textContent.includes(text));
 }
 
+// The shop's phone behaviour is CSS-only (grid columns, image fit, the floating
+// bar's geometry), so those guarantees are pinned by reading the stylesheet.
+// The walker keeps each rule's enclosing `@media` in `context`, so an assertion
+// can tell the phone rule from the laptop one.
+function shopCssRules() {
+  const css = readFileSync(`${process.cwd()}/src/styles.css`, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules = [];
+  let context = '';
+  let selector = '';
+  let buffer = '';
+  let depth = 0;
+  for (const char of css) {
+    if (char === '{') {
+      depth += 1;
+      if (depth === 1 && /^\s*@/.test(buffer)) { context = buffer.trim(); selector = ''; } else selector = buffer.trim();
+      buffer = '';
+    } else if (char === '}') {
+      if (selector) rules.push({ selector, context, body: buffer });
+      depth -= 1;
+      if (depth === 0) context = '';
+      buffer = '';
+      selector = '';
+    } else buffer += char;
+  }
+  return rules;
+}
+
 beforeEach(() => {
   localStorage.clear();
   resetShopSettingsCache(); // each test re-fetches its own rules
@@ -167,6 +195,32 @@ describe('ShopScreen', () => {
     expect(toolbar).not.toBeNull();
     // Header, then the toolbar — nothing (no subtitle row, no banner) between.
     expect(container.querySelector('.page-header').nextElementSibling).toBe(toolbar);
+  });
+
+  // Reported from the phone: Category and For shared a row and Price dropped to
+  // a second one, so the strip read as two rows. The three facets are one line
+  // at every width now — the phone rules shrink the box, never the layout.
+  it('keeps all three filters on one line at every width', async () => {
+    const rows = shopCssRules().filter(rule => /\.shop-filters-selects\b/.test(rule.selector) && /grid-template-columns/.test(rule.body));
+    expect(rows.length).toBeGreaterThan(0);
+    rows.forEach(rule => {
+      const columns = rule.body.match(/grid-template-columns\s*:\s*([^;]+)/)[1].trim();
+      expect(columns).toMatch(/^repeat\(3,/);
+    });
+  });
+
+  it('shows the product photo whole on the card and the details page', () => {
+    const fit = selector => shopCssRules()
+      .filter(rule => selector.test(rule.selector) && /object-fit/.test(rule.body))
+      .map(rule => rule.body.match(/object-fit\s*:\s*([^;]+)/)[1].trim());
+    // `cover` cut the top/bottom/corner off every photo that was not exactly
+    // the frame's ratio; `contain` never crops.
+    expect(fit(/\.shop-card-image\b/)).toEqual(['contain']);
+    expect(fit(/\.shop-detail-hero-image\b/)).toEqual(['contain']);
+    expect(fit(/\.shop-detail-thumb img\b/)).toEqual(['contain']);
+    // A hover zoom on a contained photo crops it again by definition.
+    const zoom = shopCssRules().filter(rule => /\.shop-card.*image/.test(rule.selector) && /scale\(/.test(rule.body));
+    expect(zoom).toEqual([]);
   });
 
   it('loads every catalog page, not just the first 20 products', async () => {
@@ -530,6 +584,31 @@ describe('ShopCartScreen', () => {
   it('shows the empty state when the cart is empty', async () => {
     const { container } = await render(<ShopCartScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
     expect(container.textContent).toContain('Your cart is empty');
+  });
+
+  // Reported from the phone: the "Proceed to checkout" bar floated in its own
+  // band with a gap above the Bill details card (and, on the website, 66px of
+  // empty screen under it, because that shell has no bottom nav). The bar is an
+  // overlay now: the bill card runs a few pixels underneath it.
+  it('floats the checkout bar over the bill details on a phone', () => {
+    const rules = shopCssRules();
+    const find = pattern => rules.find(rule => pattern.test(rule.selector));
+    const padding = pattern => Number((find(pattern)?.body.match(/padding-bottom\s*:\s*(\d+)px/) || [])[1]);
+
+    // The website has no bottom nav to clear, so the bar sits at the edge.
+    expect(find(/\.guest-content \.shop-cart-footer\b/)?.body).toMatch(/bottom\s*:\s*max\(10px/);
+
+    // Both shells trim the space reserved below the bill, so the card ends
+    // underneath the bar instead of 176px above it (the old base padding).
+    const appPad = padding(/\.workspace-content \.shop-cart-screen\b/);
+    const sitePad = padding(/\.guest-content \.shop-cart-screen\b/);
+    expect(appPad).toBeGreaterThan(0);
+    expect(sitePad).toBeGreaterThan(0);
+    expect(appPad).toBeLessThan(60);
+    expect(sitePad).toBeLessThan(80);
+    // The two shells reserve different amounts (100px vs 24px for their own
+    // chrome), which is why the number below the card is not the same.
+    expect(sitePad).toBeGreaterThan(appPad);
   });
 
   // The reported bug: one ₹99 product, and the cart strip showed ₹199 because

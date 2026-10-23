@@ -383,6 +383,19 @@ A pass over all customer, partner and shared screens at 320 px, 375 px, 768 px,
   (pixel-height fallback for browsers without `aspect-ratio`), product tiles a
   capped `4 / 3`, the detail hero `3 / 2` and barber slots `1 / 1`, always with
   `object-position: center` (top for faces).
+- **Naai Shop photos are shown whole, never cropped.** Product cards and the
+  product-details hero frame the photo with `object-fit: contain` (25:22 on the
+  card, square on a phone and 4:3 on a laptop for the hero) and an inner gutter
+  that keeps the product clear of the card's rounded corners; the card's hover
+  zoom is gone, because scaling a contained photo crops it again. The three shop
+  facets (Category / For / Price) share **one line at every width** from 320 px
+  up — the phone rules drop the decorative leading icon and tighten the gutters
+  instead of wrapping the third filter onto its own row.
+- The cart's "Proceed to checkout" bar is an **overlay**: the Bill details card
+  runs a few pixels underneath it (the phone clearance is set per shell, since
+  the app reserves 100 px for its bottom nav and the public website, which has
+  none, reserves 24–32 px), so the button reads as a layer over the bill rather
+  than a block parked above it with dead space in between.
 - **Default images look intentional.** `ImageWithFallback` letterboxes any SVG
   fallback (`.image-fallback-tile`: `object-fit: contain` + proportional padding
   on a branded gold/green gradient) instead of stretching the square logo tile

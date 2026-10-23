@@ -487,8 +487,12 @@ export function ShopScreen({ session, navigate, notify }) {
         </div>
 
         <section className="shop-filters-selects" aria-label="Filter products">
+          {/* The default reads "All", not "All categories": the three facets
+              share one line on a phone, and the longest label in the strip
+              decides whether the row fits. Each select already carries its own
+              name above it ("Category"), so nothing is lost. */}
           <ShopFilterSelect label="Category" ariaLabel="Category" icon={Tag} value={category} onChange={event => setCategory(event.target.value)}>
-            <option value="all">All categories</option>
+            <option value="all">All</option>
             {categories.map(item => (
               <option key={item.id} value={item.id}>{item.label}</option>
             ))}
