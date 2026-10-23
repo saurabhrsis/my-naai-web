@@ -5,7 +5,7 @@ import {
   ChevronRight,
   CircleAlert,
   CircleUserRound,
-  Download,
+  // Download, // the install buttons now render themselves (InstallControl)
   HelpCircle,
   History,
   BellRing,
@@ -41,7 +41,8 @@ import {
   requestLocation,
   requestNotifications,
 } from './lib/permissions';
-import { InstallAppButton, LoginPermissionCard, NotificationSetupCard, PermissionSheet } from './components/PermissionUI';
+import { InstallAppButton, InstallControl, LoginPermissionCard, NotificationSetupCard, PermissionSheet } from './components/PermissionUI';
+import { watchInstallPrompt } from './lib/install';
 import { BuzzerTestCard } from './components/BuzzerTestCard';
 import { BOOKING_ALERT_WINDOW_MS, BookingRequestAlert } from './components/BookingRequestAlert';
 // The deviceToken rule is shared (lib/apiPayload) so the Alerts & permissions
@@ -337,32 +338,12 @@ function AppRoot() {
     const timer = window.setTimeout(() => finish(null), 2500);
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, []);
-  const [installPrompt, setInstallPrompt] = useState(() => {
-    // Check if prompt was already captured in index.html
-    if (typeof window !== 'undefined' && window.deferredPWAInstallPrompt) {
-      return window.deferredPWAInstallPrompt;
-    }
-    return null;
-  });
-  useEffect(() => {
-    const onBeforeInstall = event => { event.preventDefault(); setInstallPrompt(event); window.deferredPWAInstallPrompt = event; };
-    const onPwaAvailable = () => {
-      if (window.deferredPWAInstallPrompt) setInstallPrompt(window.deferredPWAInstallPrompt);
-    };
-    const onPwaInstalled = () => setInstallPrompt(null);
-    // Check for existing prompt on mount (in case it fired before React)
-    if (window.deferredPWAInstallPrompt) setInstallPrompt(window.deferredPWAInstallPrompt);
-    window.addEventListener('beforeinstallprompt', onBeforeInstall);
-    window.addEventListener('pwa-install-available', onPwaAvailable);
-    window.addEventListener('pwa-installed', onPwaInstalled);
-    window.addEventListener('appinstalled', onPwaInstalled);
-    return () => {
-      window.removeEventListener('beforeinstallprompt', onBeforeInstall);
-      window.removeEventListener('pwa-install-available', onPwaAvailable);
-      window.removeEventListener('pwa-installed', onPwaInstalled);
-      window.removeEventListener('appinstalled', onPwaInstalled);
-    };
-  }, []);
+  // The browser's install prompt is owned by src/lib/install.js: it can be used
+  // once, it must never be awaited forever, and a device that cannot show it
+  // must still get the manual steps. Every install control (sidebar, hamburger
+  // menu, login pill) goes through it, so none of them can be the one that does
+  // nothing when tapped.
+  useEffect(() => watchInstallPrompt(), []);
   // Unlock the Web Audio buzzer on the first user gesture so a later booking
   // buzz can actually make a sound (browsers block audio until an interaction).
   useEffect(() => {
@@ -544,18 +525,6 @@ function AppRoot() {
       window.removeEventListener('mynaai:session-expired', onSessionExpired);
     };
   }, []);
-  const install = async () => {
-    const promptEvent = installPrompt;
-    if (!promptEvent) return;
-    try {
-      promptEvent.prompt();
-      await promptEvent.userChoice;
-    } catch (installError) {
-      console.debug(getErrorMessage(installError, 'Could not open the install prompt.'));
-    } finally {
-      setInstallPrompt(null);
-    }
-  };
   // Re-arm per-booking reminders (30 minutes before the slot) that survived a
   // page reload. OS-scheduled reminders (TimestampTrigger browsers) live in
   // the service worker and need nothing here.
@@ -580,20 +549,20 @@ function AppRoot() {
     // (the block above). Anything else renders immediately, exactly as before.
     if (restoring) return <SessionRestoreSplash />;
     const showLogin = route.name === 'login' || !PUBLIC_ROUTE_NAMES.includes(route.name);
-    if (showLogin) return <AuthFlow onComplete={completeAuth} notifyInstall={installPrompt ? install : null} onBrowseBack={backToBrowse} initialRole={String(route.params?.role || '').toUpperCase() === 'SALON' ? 'SALON' : 'USER'} />;
+    if (showLogin) return <AuthFlow onComplete={completeAuth} onBrowseBack={backToBrowse} initialRole={String(route.params?.role || '').toUpperCase() === 'SALON' ? 'SALON' : 'USER'} />;
     // /salon-partner (the salon-owner landing page) is where a partner tries
     // the portal before an account exists, so it carries the signed-out buzzer
     // check — reachable on iOS without signing in.
-    return <GuestShell route={route} navigate={navigate} notifyInstall={installPrompt ? install : null} showBuzzerCheck={route.name === 'partner'} />;
+    return <GuestShell route={route} navigate={navigate} showBuzzerCheck={route.name === 'partner'} />;
   }
-  return <AppShell session={session} route={route} navigate={navigate} onLogout={logout} onLogoutToLogin={logoutToLogin} onSessionUpdate={updateSessionUser} notifyInstall={installPrompt ? install : null} />;
+  return <AppShell session={session} route={route} navigate={navigate} onLogout={logout} onLogoutToLogin={logoutToLogin} onSessionUpdate={updateSessionUser} />;
 }
 
 // The pre-login shell: full salon discovery without an account. The header
 // keeps login + install one tap away; every account-gated action (booking
 // steps, bookmarks) funnels to login with the exact route remembered for
 // afterwards. No onboarding slides, no marketing wall — salons first.
-export function GuestShell({ route, navigate, notifyInstall, showBuzzerCheck = false, notify: notifyProp = null }) {
+export function GuestShell({ route, navigate, showBuzzerCheck = false, notify: notifyProp = null }) {
   const [toast, setToast] = useState(null);
   // Phones cannot fit four route labels + Install + Login on one row: the row
   // used to overflow and pushed the Login pill half off the screen. The links
@@ -663,7 +632,7 @@ export function GuestShell({ route, navigate, notifyInstall, showBuzzerCheck = f
         ))}
       </nav>
       <div className="site-navbar-actions">
-        <InstallAppButton onInstall={notifyInstall} />
+        <InstallAppButton />
         <button className="guest-login-button" onClick={() => guestNavigate('login')}><CircleUserRound size={15} /> Login</button>
         <button
           type="button"
@@ -706,7 +675,7 @@ export function GuestShell({ route, navigate, notifyInstall, showBuzzerCheck = f
   </div>;
 }
 
-function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole = 'USER' }) {
+function AuthFlow({ onComplete, onBrowseBack = null, initialRole = 'USER' }) {
   // No splash view anymore — discovery is public and login is only shown when
   // the visitor actually needs an account, so the auth flow always opens here.
   const [view, setView] = useState('login');
@@ -929,9 +898,9 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
   };
 
 
-  if (view === 'register') return <SalonRegistration initialData={salonRegistrationData} onBack={() => { setSalonRegistrationData(null); setView('login'); }} onComplete={onComplete} notifyInstall={notifyInstall} />;
+  if (view === 'register') return <SalonRegistration initialData={salonRegistrationData} onBack={() => { setSalonRegistrationData(null); setView('login'); }} onComplete={onComplete} />;
 
-  return <div className="auth-page login-page"><div className="auth-visual"><div className="auth-visual-image" /><div className="auth-image-shade" /><div className="auth-visual-content"><Brand light /><div><span className="eyebrow">SALON & GROOMING, REIMAGINED</span><h1>Less waiting.<br /><em>More you.</em></h1><p>Book a great salon nearby and make the time yours.</p></div><div className="visual-quote"><span></span><p>Your time is valuable. We’re here to give it back.</p></div></div></div><div className="auth-form-panel"><div className="mobile-auth-brand"><Brand /></div><div className="auth-form-wrap">{onBrowseBack && <button className="login-back" onClick={onBrowseBack}><ChevronRight size={15} className="rotate-180" /> Browse salons</button>}<span className="eyebrow">WELCOME TO MY NAAI</span><span className="login-hero-badge"><Sparkles size={12} /> {role === 'USER' ? 'Customer login' : 'Salon partner'}</span><h1>{step === 'phone' ? role === 'USER' ? 'Login to book your favorite salon' : 'Grow your salon with My Naai' : step === 'new-user' ? 'One last thing.' : 'Check your phone.'}</h1><p className="auth-subtitle">{step === 'phone' ? role === 'USER' ? 'Sign in and book your next visit.' : 'Sign in and never miss a booking.' : step === 'new-user' ? `Let\u2019s create your My Naai profile for +91 ${mobile}.` : `Enter the 6-digit code sent to +91 ${mobile}.`}</p>{step === 'phone' && <LoginPermissionCard className="login-perm-card" onToken={() => { alertsDeclined.current = false; }} onDismiss={() => { alertsDeclined.current = true; }} />}{step === 'phone' && <div className="login-actions"><InstallAppButton onInstall={notifyInstall} /></div>}{step === 'phone' && <div className="role-switch"><button className={role === 'USER' ? 'active' : ''} onClick={() => { setRole('USER'); setError(''); }}><CircleUserRound size={16} /> Customer</button><button className={role === 'SALON' ? 'active' : ''} onClick={() => { setRole('SALON'); setError(''); }}><Store size={16} /> Salon partner</button></div>}{notice && !error && <div className="form-notice" role="status"><BellRing size={16} /><span>{notice}</span><button type="button" onClick={() => setNotice('')} aria-label="Dismiss"><X size={14} /></button></div>}{error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}{step === 'phone' && <form onSubmit={requestOtp}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" autoComplete="tel" maxLength="10" value={mobile} onChange={event => setMobile(event.target.value.replace(/\D/g, ''))} placeholder="Enter 10-digit number" autoFocus /></div></Field><Button type="submit" loading={busy}>Continue with OTP <ChevronRight size={17} /></Button></form>}{step === 'otp' && <form onSubmit={verify}><Field label="One-time password"><input className="otp-input" inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="· · · · · ·" autoFocus /></Field><Button type="submit" loading={busy}>Verify code <ChevronRight size={17} /></Button><button className="resend-link" type="button" onClick={requestOtp}>Resend code</button><button className="back-form-link" type="button" onClick={() => { setStep('phone'); setOtp(''); setError(''); }}>Use a different number</button></form>}{step === 'new-user' && <form onSubmit={createAccount}><Field label="Your name"><input value={name} onChange={event => setName(event.target.value)} placeholder="How should we call you?" autoFocus /></Field><Button type="submit" loading={busy}>Create my account <ChevronRight size={17} /></Button></form>}</div><p className="auth-legal">By continuing, you agree to My Naai’s <button type="button" onClick={() => softNavigate('/terms')}>Terms &amp; Conditions</button> and <button type="button" onClick={() => softNavigate('/privacy-policy')}>Privacy Policy</button>.</p></div>
+  return <div className="auth-page login-page"><div className="auth-visual"><div className="auth-visual-image" /><div className="auth-image-shade" /><div className="auth-visual-content"><Brand light /><div><span className="eyebrow">SALON & GROOMING, REIMAGINED</span><h1>Less waiting.<br /><em>More you.</em></h1><p>Book a great salon nearby and make the time yours.</p></div><div className="visual-quote"><span></span><p>Your time is valuable. We’re here to give it back.</p></div></div></div><div className="auth-form-panel"><div className="mobile-auth-brand"><Brand /></div><div className="auth-form-wrap">{onBrowseBack && <button className="login-back" onClick={onBrowseBack}><ChevronRight size={15} className="rotate-180" /> Browse salons</button>}<span className="eyebrow">WELCOME TO MY NAAI</span><span className="login-hero-badge"><Sparkles size={12} /> {role === 'USER' ? 'Customer login' : 'Salon partner'}</span><h1>{step === 'phone' ? role === 'USER' ? 'Login to book your favorite salon' : 'Grow your salon with My Naai' : step === 'new-user' ? 'One last thing.' : 'Check your phone.'}</h1><p className="auth-subtitle">{step === 'phone' ? role === 'USER' ? 'Sign in and book your next visit.' : 'Sign in and never miss a booking.' : step === 'new-user' ? `Let\u2019s create your My Naai profile for +91 ${mobile}.` : `Enter the 6-digit code sent to +91 ${mobile}.`}</p>{step === 'phone' && <LoginPermissionCard className="login-perm-card" onToken={() => { alertsDeclined.current = false; }} onDismiss={() => { alertsDeclined.current = true; }} />}{step === 'phone' && <div className="login-actions"><InstallAppButton /></div>}{step === 'phone' && <div className="role-switch"><button className={role === 'USER' ? 'active' : ''} onClick={() => { setRole('USER'); setError(''); }}><CircleUserRound size={16} /> Customer</button><button className={role === 'SALON' ? 'active' : ''} onClick={() => { setRole('SALON'); setError(''); }}><Store size={16} /> Salon partner</button></div>}{notice && !error && <div className="form-notice" role="status"><BellRing size={16} /><span>{notice}</span><button type="button" onClick={() => setNotice('')} aria-label="Dismiss"><X size={14} /></button></div>}{error && <div className="form-error" role="alert"><Info size={16} />{error}</div>}{step === 'phone' && <form onSubmit={requestOtp}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" autoComplete="tel" maxLength="10" value={mobile} onChange={event => setMobile(event.target.value.replace(/\D/g, ''))} placeholder="Enter 10-digit number" autoFocus /></div></Field><Button type="submit" loading={busy}>Continue with OTP <ChevronRight size={17} /></Button></form>}{step === 'otp' && <form onSubmit={verify}><Field label="One-time password"><input className="otp-input" inputMode="numeric" autoComplete="one-time-code" maxLength="6" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ''))} placeholder="· · · · · ·" autoFocus /></Field><Button type="submit" loading={busy}>Verify code <ChevronRight size={17} /></Button><button className="resend-link" type="button" onClick={requestOtp}>Resend code</button><button className="back-form-link" type="button" onClick={() => { setStep('phone'); setOtp(''); setError(''); }}>Use a different number</button></form>}{step === 'new-user' && <form onSubmit={createAccount}><Field label="Your name"><input value={name} onChange={event => setName(event.target.value)} placeholder="How should we call you?" autoFocus /></Field><Button type="submit" loading={busy}>Create my account <ChevronRight size={17} /></Button></form>}</div><p className="auth-legal">By continuing, you agree to My Naai’s <button type="button" onClick={() => softNavigate('/terms')}>Terms &amp; Conditions</button> and <button type="button" onClick={() => softNavigate('/privacy-policy')}>Privacy Policy</button>.</p></div>
       <PermissionSheet
         open={alertSheet.open}
         state={alertSheet.state}
@@ -944,7 +913,7 @@ function AuthFlow({ onComplete, notifyInstall, onBrowseBack = null, initialRole 
 
 
 
-function SalonRegistration({ initialData, onBack, onComplete, notifyInstall }) {
+function SalonRegistration({ initialData, onBack, onComplete }) {
   const [step, setStep] = useState('profile');
   const mobile = initialData?.mobile || '';
   const tempToken = initialData?.tempToken || '';
@@ -1044,7 +1013,7 @@ function SalonRegistration({ initialData, onBack, onComplete, notifyInstall }) {
     return <SubscriptionScreen params={{ registrationData: { ...profile, phoneNumber: mobile, tempToken, genderType: business.genderType, agentCode: business.agentCode, deviceToken: effectiveToken, latitude: Number(latitude), longitude: Number(longitude), businessHours: { openingTime: `${business.openingTime}:00`, closingTime: `${business.closingTime}:00`, breakStartTime: null, breakEndTime: null }, services: DEFAULT_SERVICES[business.genderType.toLowerCase()] || [] }, onBack }} notify={(type, message) => setError(message)} onAuthComplete={onComplete} />;
   }
   const title = step === 'profile' ? 'Tell us about you.' : 'Set up your day.';
-  return <div className="auth-page registration-page"><div className="registration-back"><button className="icon-btn ghost" onClick={step === 'profile' ? onBack : () => setStep('profile')} aria-label="Go back"><ChevronRight size={19} className="rotate-180" /></button><Brand />{notifyInstall && <button className="install-auth-button registration-install-button" onClick={notifyInstall}><Download size={14} /> Install app</button>}</div><div className="registration-card"><div className="registration-progress"><span className="active" /><span className={step === 'business' ? 'active' : ''} /><span /><span /></div><span className="eyebrow">SALON PARTNER · STEP {step === 'profile' ? '2' : '3'} OF 3</span><h1>{title}</h1><p className="auth-subtitle">{step === 'profile' ? 'A few details help customers find you.' : 'Tell us when you are ready for your next customer.'}</p><NotificationSetupCard compact />{error && <div className="form-error"><Info size={16} />{error}</div>}{step === 'profile' && <form onSubmit={continueProfile}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" value={mobile} readOnly aria-label="Registered mobile number" /></div></Field><Field label="Owner name"><input value={profile.ownerName} onChange={event => setProfile(current => ({ ...current, ownerName: event.target.value }))} placeholder="Your full name" autoFocus /></Field><Field label="Salon name"><input value={profile.salonName} onChange={event => setProfile(current => ({ ...current, salonName: event.target.value }))} placeholder="What is your salon called?" /></Field><Field label="Address line 1"><textarea rows="3" value={profile.addressLine1} onChange={event => setProfile(current => ({ ...current, addressLine1: event.target.value }))} placeholder="Area, street, building" /></Field><Field label="Address line 2" hint="Optional"><input value={profile.addressLine2} onChange={event => setProfile(current => ({ ...current, addressLine2: event.target.value }))} placeholder="Landmark" /></Field><div className="form-two-col"><Field label="City"><input value={profile.city} onChange={event => setProfile(current => ({ ...current, city: event.target.value }))} placeholder="City" /></Field><SelectField label="State" value={profile.state} onChange={event => setProfile(current => ({ ...current, state: event.target.value }))} options={STATE_OPTIONS} placeholder="Select state" /></div><div className="form-two-col"><Field label="Pincode" hint="Optional"><input inputMode="numeric" maxLength="6" value={profile.pincode} onChange={event => setProfile(current => ({ ...current, pincode: event.target.value.replace(/\D/g, '').slice(0, 6) }))} placeholder="Pincode" /></Field><Field label="Email" hint="Optional"><input type="email" value={profile.email} onChange={event => setProfile(current => ({ ...current, email: event.target.value }))} placeholder="owner@example.com" /></Field></div><div className={cx('registration-location', latitude !== null && longitude !== null && 'ready')}><MapPin size={15} /><span>{latitude !== null && longitude !== null ? `Location ready · ${Number(latitude).toFixed(4)}, ${Number(longitude).toFixed(4)}` : locationError || (locationAllowed ? 'Detecting salon location…' : 'Allow location so customers can find your salon nearby.')}</span><button type="button" onClick={detectLocation} disabled={locationBusy}>{locationBusy ? 'Detecting…' : locationAllowed ? 'Retry' : 'Allow location'}</button></div><PermissionSheet
+  return <div className="auth-page registration-page"><div className="registration-back"><button className="icon-btn ghost" onClick={step === 'profile' ? onBack : () => setStep('profile')} aria-label="Go back"><ChevronRight size={19} className="rotate-180" /></button><Brand /><InstallAppButton className="registration-install-button" /></div><div className="registration-card"><div className="registration-progress"><span className="active" /><span className={step === 'business' ? 'active' : ''} /><span /><span /></div><span className="eyebrow">SALON PARTNER · STEP {step === 'profile' ? '2' : '3'} OF 3</span><h1>{title}</h1><p className="auth-subtitle">{step === 'profile' ? 'A few details help customers find you.' : 'Tell us when you are ready for your next customer.'}</p><NotificationSetupCard compact />{error && <div className="form-error"><Info size={16} />{error}</div>}{step === 'profile' && <form onSubmit={continueProfile}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" value={mobile} readOnly aria-label="Registered mobile number" /></div></Field><Field label="Owner name"><input value={profile.ownerName} onChange={event => setProfile(current => ({ ...current, ownerName: event.target.value }))} placeholder="Your full name" autoFocus /></Field><Field label="Salon name"><input value={profile.salonName} onChange={event => setProfile(current => ({ ...current, salonName: event.target.value }))} placeholder="What is your salon called?" /></Field><Field label="Address line 1"><textarea rows="3" value={profile.addressLine1} onChange={event => setProfile(current => ({ ...current, addressLine1: event.target.value }))} placeholder="Area, street, building" /></Field><Field label="Address line 2" hint="Optional"><input value={profile.addressLine2} onChange={event => setProfile(current => ({ ...current, addressLine2: event.target.value }))} placeholder="Landmark" /></Field><div className="form-two-col"><Field label="City"><input value={profile.city} onChange={event => setProfile(current => ({ ...current, city: event.target.value }))} placeholder="City" /></Field><SelectField label="State" value={profile.state} onChange={event => setProfile(current => ({ ...current, state: event.target.value }))} options={STATE_OPTIONS} placeholder="Select state" /></div><div className="form-two-col"><Field label="Pincode" hint="Optional"><input inputMode="numeric" maxLength="6" value={profile.pincode} onChange={event => setProfile(current => ({ ...current, pincode: event.target.value.replace(/\D/g, '').slice(0, 6) }))} placeholder="Pincode" /></Field><Field label="Email" hint="Optional"><input type="email" value={profile.email} onChange={event => setProfile(current => ({ ...current, email: event.target.value }))} placeholder="owner@example.com" /></Field></div><div className={cx('registration-location', latitude !== null && longitude !== null && 'ready')}><MapPin size={15} /><span>{latitude !== null && longitude !== null ? `Location ready · ${Number(latitude).toFixed(4)}, ${Number(longitude).toFixed(4)}` : locationError || (locationAllowed ? 'Detecting salon location…' : 'Allow location so customers can find your salon nearby.')}</span><button type="button" onClick={detectLocation} disabled={locationBusy}>{locationBusy ? 'Detecting…' : locationAllowed ? 'Retry' : 'Allow location'}</button></div><PermissionSheet
           open={locationSheetOpen}
           kind="location"
           state={locationSheetState}
@@ -1067,7 +1036,7 @@ function Brand({ light = false }) {
   );
 }
 
-function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessionUpdate, notifyInstall }) {
+function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessionUpdate }) {
   const isSalon = session.role === 'SALON';
   const confirm = useConfirm();
   // Even on the paywall the partner gets the same in-app confirmation: the
@@ -1529,7 +1498,7 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
   // public site (home, salon page, About/FAQ/Terms/Privacy, Contact) drop their
   // marketing footer and review carousel here. See SurfaceProvider in Shared.jsx.
   return <SurfaceProvider value="app"><div className={cx('app-shell', isSalon && 'salon-shell', isSubscriptionGateScreen && 'subscription-gate-shell', !showBottomNav && 'utility-shell')}>
-    {!isSubscriptionGateScreen && <Sidebar session={session} nav={nav} route={route} navigate={shellNavigate} onLogout={onLogout} notifyInstall={notifyInstall} />}
+    {!isSubscriptionGateScreen && <Sidebar session={session} nav={nav} route={route} navigate={shellNavigate} onLogout={onLogout} />}
     <main className="workspace">
       {!isSubscriptionGateScreen && <MobileShellBar
         session={session}
@@ -1537,7 +1506,6 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
         route={route}
         navigate={shellNavigate}
         onLogout={onLogout}
-        notifyInstall={notifyInstall}
       />}
       <div className={cx('workspace-content', (isSubscriptionGateScreen || utilityRoutes.includes(route.name)) && 'utility-content', isSubscriptionGateScreen && 'subscription-gate-content')}>
         {isSubscriptionLocked && (
@@ -1591,11 +1559,11 @@ function SubscriptionGateLoading() {
   return <div className="subscription-gate-loading" role="status" aria-live="polite"><div className="subscription-gate-mark"><Store size={22} /></div><h1>Checking your salon subscription</h1><p>One moment while we verify access to your salon dashboard.</p><Spinner label="Checking subscription…" /></div>;
 }
 
-function Sidebar({ session, nav, route, navigate, onLogout, notifyInstall }) {
+function Sidebar({ session, nav, route, navigate, onLogout }) {
   const isSalon = session.role === 'SALON';
   const confirm = useConfirm();
   const signOut = async () => { if (await confirm(LOGOUT_CONFIRM)) onLogout?.(); };
-  return <aside className="sidebar"><Brand /><div className="sidebar-role"><span className="role-mark">{isSalon ? <Store size={15} /> : <Scissors size={15} />}</span><span><small>Signed in as</small><strong>{isSalon ? 'Salon partner' : 'Customer'}</strong></span></div><nav className="sidebar-nav"><button className={route.name === 'notifications' ? 'active' : ''} onClick={() => navigate('notifications')}><Bell size={18} /><span>Notifications</span>{route.name === 'notifications' && <i />}</button>{nav.map(item => <button key={item.name} className={route.name === item.name ? 'active' : ''} onClick={() => navigate(item.name)}><item.icon size={18} /><span>{item.label}</span>{route.name === item.name && <i />}</button>)}</nav><div className="sidebar-bottom">{notifyInstall && <button className="install-side-button" onClick={notifyInstall}><Download size={16} /><span>Install My Naai</span></button>}<div className="sidebar-tip"><Sparkles size={16} /><p>{isSalon ? 'Keep your profile fresh to stand out nearby.' : 'Your next great look is closer than you think.'}</p></div><button className="sidebar-logout" onClick={signOut}><LogOut size={16} /> Sign out</button></div></aside>;
+  return <aside className="sidebar"><Brand /><div className="sidebar-role"><span className="role-mark">{isSalon ? <Store size={15} /> : <Scissors size={15} />}</span><span><small>Signed in as</small><strong>{isSalon ? 'Salon partner' : 'Customer'}</strong></span></div><nav className="sidebar-nav"><button className={route.name === 'notifications' ? 'active' : ''} onClick={() => navigate('notifications')}><Bell size={18} /><span>Notifications</span>{route.name === 'notifications' && <i />}</button>{nav.map(item => <button key={item.name} className={route.name === item.name ? 'active' : ''} onClick={() => navigate(item.name)}><item.icon size={18} /><span>{item.label}</span>{route.name === item.name && <i />}</button>)}</nav><div className="sidebar-bottom"><InstallControl variant="sidebar" /><div className="sidebar-tip"><Sparkles size={16} /><p>{isSalon ? 'Keep your profile fresh to stand out nearby.' : 'Your next great look is closer than you think.'}</p></div><button className="sidebar-logout" onClick={signOut}><LogOut size={16} /> Sign out</button></div></aside>;
 }
 
 // The in-app top bar for phones and tablets (the sidebar takes over at 1024px).
@@ -1609,7 +1577,7 @@ function Sidebar({ session, nav, route, navigate, onLogout, notifyInstall }) {
 //   2. The bell had no real hit area and no accessible state.
 // `.mobile-menu-button` existed in the stylesheet for this control but was
 // never rendered — this is that button, finally wired up.
-function MobileShellBar({ session, nav, route, navigate, onLogout, notifyInstall }) {
+function MobileShellBar({ session, nav, route, navigate, onLogout }) {
   const isSalon = session.role === 'SALON';
   const [menuOpen, setMenuOpen] = useState(false);
   const barRef = useRef(null);
@@ -1661,7 +1629,7 @@ function MobileShellBar({ session, nav, route, navigate, onLogout, notifyInstall
       <button className={cx(notificationsActive && 'active')} aria-current={notificationsActive ? 'page' : undefined} onClick={() => go('notifications')}>
         <Bell size={18} /><span>Notifications</span>
       </button>
-      {notifyInstall && <button onClick={() => { setMenuOpen(false); notifyInstall(); }}><Download size={18} /><span>Install My Naai</span></button>}
+      <InstallControl variant="menu" className="mobile-shell-menu-install" onActivate={() => setMenuOpen(false)} />
       <button className="mobile-shell-menu-logout" onClick={signOut}><LogOut size={18} /><span>Sign out</span></button>
     </nav>
   </div>;
