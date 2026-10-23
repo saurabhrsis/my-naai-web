@@ -42,7 +42,6 @@ import {
   promptsAvailable,
   isIosDevice,
   isIosPwaInstalled,
-  isStandalone,
   permissionSteps,
   readPermission,
   rememberAskChoice,
@@ -51,6 +50,7 @@ import {
   siteHost,
 } from '../lib/permissions';
 import { formatPushDiagnostics, getPushDiagnostics, getPushStatus, getPushToken, isPushConfigured, watchNotificationPermission } from '../lib/push';
+import { INSTALL_RESULT, hasInstallPrompt, isInstalled, requestInstall } from '../lib/install';
 
 // Compact login rows call the browser's permission API directly from each Allow
 // tap. The login surface never opens an app dialog; a permission already blocked
@@ -972,9 +972,10 @@ export function NotificationSetupCard({ compact = false, onEnabled }) {
 }
 
 // ── Install guides ───────────────────────────────────────────────────────────
-export function IosInstallHelp({ open, onClose }) {
+export function IosInstallHelp({ open, onClose, note = '' }) {
   return (
     <Modal open={open} onClose={onClose} title="Install My Naai on iPhone" footer={<Button onClick={onClose}>Got it</Button>}>
+      {note && <p className="install-fallback-note">{note}</p>}
       <p className="modal-lede">iPhone only allows web notifications after My Naai is added to your Home Screen. It takes a few seconds:</p>
       <ol className="ios-install-steps">
         <li>In Safari, tap the <strong>Share</strong> button (the square with an arrow) at the bottom of the screen.</li>
@@ -1026,11 +1027,12 @@ const INSTALL_STEPS = {
   ],
 };
 
-export function InstallStepsHelp({ open, onClose }) {
+export function InstallStepsHelp({ open, onClose, note = '' }) {
   const browser = detectBrowser();
   const steps = INSTALL_STEPS[browser] || INSTALL_STEPS.other;
   return (
     <Modal open={open} onClose={onClose} title="Install My Naai" footer={<Button onClick={onClose}>Got it</Button>}>
+      {note && <p className="install-fallback-note">{note}</p>}
       <p className="modal-lede">A few taps in {browserLabel(browser)}:</p>
       <ol className="ios-install-steps install-steps">{steps.map((step, index) => <li key={`${browser}-${index + 1}`}>{step}</li>)}</ol>
       <p className="permission-help-note">Once installed: full-screen app, one-tap launch, and booking alerts with the buzzer even when the browser is closed.</p>
@@ -1038,14 +1040,33 @@ export function InstallStepsHelp({ open, onClose }) {
   );
 }
 
-// The guest shell and login page always offer a way to install — install UI
-// hidden until `beforeinstallprompt` meant most first-time mobile visitors never
-// saw the easiest route to background alerts. Already installed → nothing.
-export function InstallAppButton({ onInstall = null }) {
-  const [helpOpen, setHelpOpen] = useState(false);
-  const [standalone, setStandaloneState] = useState(() => isStandalone());
+// One install control for every surface — the login/guest pill, the sidebar
+// row and the hamburger menu entry — so no surface can be the one that does
+// nothing. The flow it guarantees:
+//
+//   tap → the browser's own install dialog, if this device still has one;
+//       → otherwise (and after a spent/failed prompt) the step-by-step guide
+//         for the browser in use, with a note saying why it opened.
+//
+// The button shows "Opening…" the moment it is tapped, so a slow or missing
+// native dialog can never look like a frozen page. A dismissed dialog is
+// respected silently; an installed app stops offering to install itself.
+export function InstallControl({
+  variant = 'pill', // 'pill' | 'sidebar' | 'menu'
+  className = '',
+  label = null,
+  onInstalled = null,
+  // Called first, so a menu that hosts the control can close itself before the
+  // install dialog (or the guide) appears over it.
+  onActivate = null,
+}) {
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [note, setNote] = useState('');
+  const [pending, setPending] = useState(false);
+  const [installed, setInstalled] = useState(() => isInstalled());
+
   useEffect(() => {
-    const check = () => setStandaloneState(isStandalone());
+    const check = () => setInstalled(isInstalled());
     window.addEventListener('pwa-installed', check);
     window.addEventListener('appinstalled', check);
     return () => {
@@ -1053,16 +1074,59 @@ export function InstallAppButton({ onInstall = null }) {
       window.removeEventListener('appinstalled', check);
     };
   }, []);
-  if (standalone) return null;
-  const open = () => { if (onInstall) onInstall(); else setHelpOpen(true); };
+
+  if (installed) return null;
+
+  const start = async () => {
+    if (pending) return;
+    onActivate?.();
+    setNote('');
+    // No usable prompt: go straight to the manual steps instead of a tap that
+    // appears to do nothing.
+    if (!hasInstallPrompt()) {
+      setGuideOpen(true);
+      return;
+    }
+    setPending(true);
+    const result = await requestInstall();
+    setPending(false);
+    if (result === INSTALL_RESULT.ACCEPTED) {
+      setInstalled(true);
+      onInstalled?.();
+      return;
+    }
+    // The user closed the browser's dialog on purpose — do not nag.
+    if (result === INSTALL_RESULT.DISMISSED) return;
+    setNote(result === INSTALL_RESULT.TIMEOUT
+      ? 'Your browser did not open the install dialog. You can still add My Naai by hand:'
+      : '');
+    setGuideOpen(true);
+  };
+
+  const iosGuide = isIosDevice() && !isIosPwaInstalled();
+  const text = label || (variant === 'pill' ? 'Install app' : 'Install My Naai');
+  const content = pending
+    ? <><Spinner size={variant === 'menu' ? 16 : 14} /> Opening…</>
+    : <><Download size={variant === 'menu' ? 18 : variant === 'sidebar' ? 16 : 14} /> {text}</>;
+
+  const button = variant === 'sidebar'
+    ? <button type="button" className={cx('install-side-button', className)} onClick={start} disabled={pending} aria-busy={pending || undefined}>{content}</button>
+    : variant === 'menu'
+      ? <button type="button" className={className} onClick={start} disabled={pending} aria-busy={pending || undefined}>{content}</button>
+      : <button type="button" className={cx('install-auth-button install-login-button', className)} onClick={start} disabled={pending} aria-busy={pending || undefined}>{content}</button>;
+
   return (
     <>
-      <button type="button" className="install-auth-button install-login-button" onClick={open}>
-        <Download size={14} /> Install app
-      </button>
-      {isIosDevice() && !isIosPwaInstalled()
-        ? <IosInstallHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
-        : <InstallStepsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />}
+      {button}
+      {iosGuide
+        ? <IosInstallHelp open={guideOpen} onClose={() => setGuideOpen(false)} note={note} />
+        : <InstallStepsHelp open={guideOpen} onClose={() => setGuideOpen(false)} note={note} />}
     </>
   );
+}
+
+// Back-compat name for the pill used on the login, guest and registration
+// screens; the flow itself is InstallControl's.
+export function InstallAppButton({ onInstall = null, className = '' }) {
+  return <InstallControl variant="pill" className={className} onInstalled={onInstall} />;
 }

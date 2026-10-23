@@ -79,6 +79,7 @@ vi.mock('./lib/socket', () => ({
 vi.mock('./lib/buzzer', () => ({ playBuzzer: vi.fn(), unlockBuzzer: vi.fn() }));
 
 import * as push from './lib/push';
+import { clearInstallPrompt } from './lib/install';
 import App from './App';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -113,6 +114,10 @@ const signIn = (role, path) => {
 beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
+  // The deferred install prompt is module state: a prompt captured by one test
+  // must not still be answering the next test's tap.
+  clearInstallPrompt();
+  delete window.deferredPWAInstallPrompt;
   setPath('/');
   userSalonList.mockReset().mockResolvedValue({ status: 'SUCCESS', data: { salons: [] } });
   userSalonListPublic.mockReset().mockResolvedValue({ status: 'SUCCESS', data: { salons: [] } });
@@ -136,8 +141,8 @@ afterEach(() => {
 // button and the salon registration header) without ever being imported. React
 // evaluates the JSX on render, so the salon portal threw and white-screened.
 describe('Install affordances render without a ReferenceError', () => {
-  // The sidebar only renders its Install button when a beforeinstallprompt
-  // event has been captured — fire the real event the app listens for.
+  // Fires the real event the app listens for, for the cases where the browser
+  // does offer its own install dialog.
   const fireInstallPrompt = async () => {
     await act(async () => {
       const event = new Event('beforeinstallprompt');
@@ -171,6 +176,40 @@ describe('Install affordances render without a ReferenceError', () => {
 
     expect(container.querySelector('.app-shell')).not.toBeNull();
     expect(container.querySelector('.install-side-button svg')).not.toBeNull();
+  });
+
+  // Reported as "when we click on install it feels stuck, or there is UI
+  // somewhere but it never shows": the button used to exist ONLY after
+  // `beforeinstallprompt`, and a spent/failed prompt left it doing nothing.
+  it('offers install even before the browser announces a prompt, and always answers', async () => {
+    signIn('USER', '/home');
+    await mount();
+
+    // No beforeinstallprompt was fired: the control is still there.
+    const install = container.querySelector('.install-side-button');
+    expect(install).not.toBeNull();
+
+    await act(async () => { install.click(); });
+    await flush();
+
+    // …and the tap produces the step-by-step guide instead of silence.
+    const guide = container.querySelector('.modal-card');
+    expect(guide).not.toBeNull();
+    expect(guide.textContent).toMatch(/install my naai/i);
+    expect(guide.querySelectorAll('.ios-install-steps li').length).toBeGreaterThan(0);
+  });
+
+  it('uses the browser prompt once, then falls back to the guide', async () => {
+    signIn('USER', '/home');
+    await mount();
+    await fireInstallPrompt();
+
+    const install = container.querySelector('.install-side-button');
+    await act(async () => { install.click(); });
+    await flush();
+    // The prompt was accepted: nothing is left to install.
+    expect(container.querySelector('.modal-card')).toBeNull();
+    expect(container.querySelector('.install-side-button')).toBeNull();
   });
 });
 

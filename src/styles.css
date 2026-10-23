@@ -152,6 +152,12 @@ img { display: block; max-width: 100%; }
 .install-auth-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 11px; border: 1px solid rgba(232, 185, 126, .4); border-radius: 30px; background: rgba(232, 185, 126, .12); color: var(--gold); font-size: 11px; font-weight: 700; white-space: nowrap; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .install-auth-button:hover { background: rgba(232, 185, 126, .2); }
 .install-login-button { margin: 0 0 14px; align-self: flex-start; }
+/* While the browser's install dialog is opening the control says so — a tap
+   must never look like it did nothing. */
+.install-auth-button:disabled, .install-side-button:disabled { opacity: .72; cursor: progress; }
+/* Shown above the manual steps when the browser refused to open its own
+   install dialog (or had already used it). */
+.install-fallback-note { margin: 0 0 12px; padding: 9px 11px; border: 1px solid rgba(232, 185, 126, .32); border-radius: 10px; background: rgba(232, 185, 126, .1); color: var(--gold); font-size: 11.5px; line-height: 1.45; }
 .registration-install-button { margin-left: auto; }
 /* Thin, low-noise "back to salons" escape on the login page — the guest shell
    promises browse-first, so the login page must never feel like a wall. */
@@ -2108,6 +2114,11 @@ img.image-fallback-tile {
 }
 
 .shop-screen { padding-bottom: 148px; }
+/* The heading row is the same component every other tab uses; only the gap
+   BELOW it is tighter here, because a search field follows it directly. It was
+   20px (16px from the old split header) plus the subtitle row, which read as an
+   empty band above the search bar. */
+.shop-screen .page-header { margin-bottom: 10px; }
 
 /* Search + the three facets.
    PHONE: the field owns its row, the selects sit two per row below it.
@@ -2242,15 +2253,14 @@ img.image-fallback-tile {
    two columns stay scannable from a 320px phone to a small tablet. */
 @media (max-width: 639px) {
   /* The tagline duplicates the title on small screens — drop it. */
-  .shop-screen .page-header-leading p,
-  .shop-screen .page-header-subtitle { display: none; }
+  .shop-screen .page-header-leading p { display: none; }
 
   /* Heading and the two shortcuts on ONE line: bare icons with the cart count
      as a badge. This is what keeps "Naai Shop" untruncated at 320px without
-     pushing the shortcuts onto a second row. */
-  .shop-screen .page-header { margin-bottom: 12px; }
-  .shop-screen .page-header-top { gap: 10px; min-height: 0; }
-  .shop-screen .page-header-leading h1 { font-size: 23px; margin-top: 0; }
+     pushing the shortcuts onto a second row. The title itself carries no
+     override at any width — it is the shared `.page-header-leading h1`
+     (25px here), exactly like Discover, My bookings and Account. */
+  .shop-screen .page-header { margin-bottom: 8px; min-height: 0; }
   .shop-header-action { width: 38px; height: 38px; padding: 0; justify-content: center; }
   .shop-header-action-label { display: none; }
   .shop-header-count { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 3px; border: 2px solid var(--black); font-size: 9px; }
@@ -2414,7 +2424,10 @@ img.image-fallback-tile {
   .shop-cart-item { gap: 14px; padding: 16px; }
   .shop-cart-image { width: 84px; height: 84px; }
   .shop-cart-screen { padding-bottom: 30px; }
-  .shop-cart-footer { position: sticky; bottom: 24px; left: auto; right: auto; margin-left: auto; max-width: 360px; box-shadow: 0 14px 40px rgba(0, 0, 0, .38); }
+  /* The bar sits directly under the sticky bill on a laptop; without its own
+     margin its top border ran into the bill's bottom border and the two read as
+     one glued block. */
+  .shop-cart-footer { position: sticky; bottom: 24px; left: auto; right: auto; margin: 16px 0 0 auto; max-width: 360px; box-shadow: 0 14px 40px rgba(0, 0, 0, .38); }
 }
 
 /* Bill card (cart + checkout + order). */

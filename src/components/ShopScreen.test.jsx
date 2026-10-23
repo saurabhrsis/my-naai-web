@@ -122,6 +122,53 @@ beforeEach(() => {
 });
 
 describe('ShopScreen', () => {
+  // Reported from the shop: the "Naai Shop" heading looked like a different
+  // app's title, and there was an empty band above the search bar. The shop was
+  // the only screen using PageHeader's `subtitleBelow` variant; it now renders
+  // the plain header every other tab uses, with only a tighter gap below it.
+  it('uses the same page header as every other tab', async () => {
+    const { container } = await render(<ShopScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    const header = container.querySelector('.page-header');
+
+    expect(header).not.toBeNull();
+    // The split variant (a separate top row + its own subtitle element) is the
+    // thing that made the title lay out differently.
+    expect(header.classList.contains('page-header-split')).toBe(false);
+    expect(container.querySelector('.page-header-top')).toBeNull();
+    expect(container.querySelector('.page-header-subtitle')).toBeNull();
+
+    // The h1 and the tagline live in the shared leading block, like My bookings
+    // and Account, so they inherit the same font size and family.
+    const leading = header.querySelector('.page-header-leading');
+    expect(leading.querySelector('h1').textContent).toBe('Naai Shop');
+    expect(leading.querySelector('p').textContent).toContain('Grooming stock for your salon');
+    // No wrapper row around the title.
+    expect(header.firstElementChild).toBe(leading);
+  });
+
+  it('never restyles the title: no shop-scoped font or size rule', async () => {
+    // The heading must inherit the shared `.page-header-leading h1` exactly.
+    // Any `.shop-screen … h1` rule that sets a font or a size is the bug coming
+    // back, so the stylesheet itself is checked.
+    const { readFileSync } = await import('node:fs');
+    const css = readFileSync(`${process.cwd()}/src/styles.css`, 'utf8');
+    const rules = css.match(/[^{}]*\{[^}]*\}/g) || [];
+    const offenders = rules.filter(rule => {
+      const [selector, body] = rule.split('{');
+      if (!/\.shop-/.test(selector) || !/h1/.test(selector)) return false;
+      return /(^|;|\s)(font-size|font-family|font-weight|font)\s*:/.test(body);
+    });
+    expect(offenders).toEqual([]);
+  });
+
+  it('keeps the search field directly under the heading', async () => {
+    const { container } = await render(<ShopScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    const toolbar = container.querySelector('.shop-toolbar');
+    expect(toolbar).not.toBeNull();
+    // Header, then the toolbar — nothing (no subtitle row, no banner) between.
+    expect(container.querySelector('.page-header').nextElementSibling).toBe(toolbar);
+  });
+
   it('loads every catalog page, not just the first 20 products', async () => {
     const pageOne = [{ productId: 'p1', productName: 'Page One Oil', price: 100, isAvailable: true }];
     const pageTwo = [{ productId: 'p2', productName: 'Page Two Wax', price: 200, isAvailable: true }];
