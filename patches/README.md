@@ -5,6 +5,7 @@ and verified with `git apply --check` on a clean checkout:
 
 | Patch | Repo | What it does |
 | --- | --- | --- |
+| [`backend-shop-category-filter.patch`](backend-shop-category-filter.patch) | `rightserveinfotechsystems/my_naai_backend` | **the "Load more 88" fix** — the shop's category and gender filters become exact SQL, so the count, the pages and the grid are one list ([docs](../docs/BACKEND-SHOP-CATEGORY-FILTER.md)) |
 | [`backend-5-salon-services.patch`](backend-5-salon-services.patch) | `rightserveinfotechsystems/my_naai_backend` | `POST /api/salons/services/save` — the whole menu in one transaction, for the portal's Edit services screen ([docs](../docs/BACKEND-SALON-SERVICES-API.md)) |
 | [`backend-shop-customers.patch`](backend-shop-customers.patch) | `rightserveinfotechsystems/my_naai_backend` | customers as a second buyer + the website's no-token API |
 | [`admin-panel-shop-customers.patch`](admin-panel-shop-customers.patch) | `rightserveinfotechsystems/my-naai-frontend` | the admin panel shows who bought each shop order |
@@ -44,6 +45,12 @@ git am /path/to/patches/backend-shop-customers.patch     # keeps the commit mess
 git am /path/to/patches/backend-shop-customers.patch
 git am /path/to/patches/backend-shop-catalog-filters.patch
 git am /path/to/patches/backend-shop-schema-selfheal.patch
+
+# backend — the shop's filtered counts (independent of the three above, but it
+# edits the same service, so take it after them)
+git am /path/to/patches/backend-shop-category-filter.patch
+npm run shop:test-categories        # the classification table, both sides
+npm run shop:backfill-categories    # dry run; then re-run with -- --apply
 
 # admin panel
 git clone https://github.com/rightserveinfotechsystems/my-naai-frontend.git

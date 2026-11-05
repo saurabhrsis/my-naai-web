@@ -73,6 +73,7 @@ import {
   getInitials,
   normalizeDistanceInKm,
   getSalonStatus,
+  salonHoursLabel,
   ImageWithFallback,
   Modal,
   normalizeSalon,
@@ -378,6 +379,9 @@ function SalonCard({ salon, saved, onSelect, onBook, onShare, onBookmark, userLo
     event.stopPropagation();
     if (salon.latitude && salon.longitude) window.open(`https://www.google.com/maps/search/?api=1&query=${salon.latitude},${salon.longitude}`, '_blank', 'noopener,noreferrer');
   };
+  // The card used to advertise a waiting time; it now shows when the salon is
+  // open, which is a fact from the salon's own schedule.
+  const hoursLabel = salonHoursLabel(salon.businessHours);
   return (
     <article className="salon-card" onClick={() => onSelect(salon)}>
       <div className="salon-card-image-wrap">
@@ -390,7 +394,7 @@ function SalonCard({ salon, saved, onSelect, onBook, onShare, onBookmark, userLo
         <div className="salon-card-heading"><div><span className="salon-type">{salon.genderType || 'UNISEX'} SALON</span><h3>{salon.name}</h3></div></div>
         <button className="salon-address" onClick={openMap}><MapPin size={14} /> <span>{salon.address}</span></button>
         <div className="salon-card-footer">
-          <span className="wait-copy"><Clock3 size={14} /> {salon.isOpen ? salon.waitTime : 'Come back later'}</span>
+          <span className="salon-hours-copy"><Clock3 size={14} /> {salon.isOpen ? (hoursLabel || 'Open now') : 'Come back later'}</span>
           <div className="salon-card-cta">
             <button className="card-share-button" aria-label={`Share ${salon.name}`} onClick={event => { event.stopPropagation(); onShare(salon); }}><Share2 size={15} /></button>
             <button className={cx('card-book-button', !salon.isOpen && 'disabled')} disabled={!salon.isOpen} onClick={event => { event.stopPropagation(); onBook(salon); }}>{salon.isOpen ? 'Book now' : 'Closed'}</button>
@@ -1142,8 +1146,12 @@ export function SalonDetailScreen({ session, params, navigate, notify }) {
             {primaryHours.openingTime && <span><Clock3 size={14} /> {formatTime(primaryHours.openingTime)} – {formatTime(primaryHours.closingTime)}</span>}
           </div>
           <button className="detail-location" onClick={() => window.open(fullAddress ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fullAddress)}` : `https://www.google.com/maps/search/?api=1&query=${details.latitude},${details.longitude}`, '_blank', 'noopener,noreferrer')}><MapPin size={17} /><span>{fullAddress || 'Address unavailable'}</span><ExternalLink size={14} /></button>
+          {/* No "Current wait" tile. A waiting time is a claim about the chairs
+              inside, and the salon takes walk-ins: an offline customer who sits
+              down while the page is open makes any minute count wrong. The
+              customer is told when to arrive by the salon's own confirmation
+              instead of by a number this screen invented. */}
           <div className="detail-stat-grid">
-            <div><Timer size={17} /><span><small>Current wait</small><strong>{details.waitTime || '10–15 min'}</strong></span></div>
             <div><Scissors size={17} /><span><small>Services</small><strong>{services.length || '—'} to choose</strong></span></div>
             <div><UsersRound size={17} /><span><small>Specialists</small><strong>{barbers.length || '—'}</strong></span></div>
           </div>

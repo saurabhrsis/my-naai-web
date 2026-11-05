@@ -36,6 +36,55 @@ describe('inferCategory', () => {
   });
 });
 
+// The backend filters the catalog in SQL now, with its own copy of the table
+// above (my_naai_backend/src/services/shopCategoryRules.js). A product and a
+// filter must resolve the same way on both sides or a filtered page will be
+// hiding cards its own count includes — the "2 products, 88 more" report. This
+// table is the contract: it is the SAME table the backend's test asserts, so a
+// rule added here without adding it there fails loudly instead of quietly
+// disagreeing in production.
+describe('category classification parity with the backend', () => {
+  const PARITY = [
+    ['Keratin Repair Shampoo 200ml', 'hair-care'],
+    ['Matte Clay Pomade 90g', 'beard-grooming'],
+    ['Beard Oil 30ml', 'beard-grooming'],
+    ['Beard Trimmer Pro', 'tools-equipment'],
+    ['Hair Clipper 2200', 'tools-equipment'],
+    ['Argan Hair Serum 100ml', 'hair-care'],
+    ['Henna Hair Colour Pack', 'hair-colour'],
+    ['Sandalwood Perfume 50ml', 'fragrance'],
+    ['Face Cleanser for Oily Skin', 'skin-face'],
+    ['Hair Spa Ritual Kit', 'kits-sets'],
+    ['Salon Cape & Apron Set', 'tools-equipment'],
+    ['Castor Hair Oil 200ml', 'hair-care'],
+    ['Mystery Ritual', 'hair-care'],
+  ];
+
+  it('classifies every catalogue sample the way the server does', () => {
+    for (const [name, category] of PARITY) {
+      expect([name, inferCategory(name)]).toEqual([name, category]);
+    }
+  });
+
+  it('reads an explicit category value with the server\'s precedence', () => {
+    const category = item => normalizeShopProduct(item).category;
+    // A known id and a known label.
+    expect(category({ productName: 'Anything', category: 'hair-care' })).toBe('hair-care');
+    expect(category({ productName: 'Anything', category: 'Tools & equipment' })).toBe('tools-equipment');
+    // Free text an older admin record carries, read by the keyword rules.
+    expect(category({ productName: 'Anything', category: 'Hair Colour and Chemical Products' })).toBe('hair-colour');
+    // A category the admin added after this build: a slug stands for itself, so
+    // products filed under it stay selectable instead of being re-filed.
+    expect(category({ productName: 'Shaving Foam', category: 'shaving' })).toBe('shaving');
+    // Nothing usable: the name decides.
+    expect(category({ productName: 'Beard Oil 30ml', category: '' })).toBe('beard-grooming');
+  });
+
+  it('never reports a category outside the taxonomy for a plain name', () => {
+    for (const [name] of PARITY) expect(inferCategory(name)).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
+  });
+});
+
 describe('inferGender', () => {
   it('reads gender from common product words', () => {
     expect(inferGender('Beard Wax for Men')).toBe('men');
