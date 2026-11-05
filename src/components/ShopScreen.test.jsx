@@ -1166,6 +1166,81 @@ describe('the shop for customers and website visitors', () => {
     expect(buttonsContaining('Show more products', container)).toHaveLength(0);
   });
 
+  // Reported from the shop, with a screenshot: pick a category after the first
+  // load and only 2 products appear, yet the button underneath still says "Show
+  // more products (88)" — eight times over. The total came from the server's
+  // count for a SUPERSET query and was never re-read for the filter, so it
+  // described a catalogue the grid was not showing. Now that the backend filters
+  // in SQL (docs/BACKEND-SHOP-CATEGORY-FILTER.md) the count is the filtered one;
+  // and if a deployment ever answers with a total that does not describe the
+  // cards on screen, the number is dropped instead of lying.
+  it('quotes a load-more count that describes the filtered grid', async () => {
+    const shelf = (n) => ({
+      status: 'SUCCESS',
+      data: {
+        products: [{ productId: `p${n}`, productName: `Beard balm ${n}`, price: 199, rating: 4.5, isAvailable: true }],
+        // The server counted the shelf it was asked for: 3 beard products in
+        // total, one per page.
+        pagination: {
+          page: n, limit: 1, totalProducts: 3, totalPages: 3,
+          applied: { searchString: '', category: 'beard-grooming', gender: '', priceRange: '', sort: 'popular' },
+        },
+      },
+    });
+    shopProductList.mockImplementation(({ page: n }) => Promise.resolve(shelf(n)));
+
+    const { container } = await render(<ShopScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    const setFilter = async (label, value) => {
+      const select = Array.from(container.querySelectorAll('select')).find(item => item.getAttribute('aria-label') === label);
+      select.value = value;
+      await act(async () => { select.dispatchEvent(new Event('change', { bubbles: true })); });
+    };
+
+    await setFilter('Category', 'beard-grooming');
+    // The filter went to the server, not into a client-side slice.
+    expect(shopProductList).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, category: 'beard-grooming' }));
+    expect(container.querySelectorAll('.shop-card')).toHaveLength(1);
+    const more = buttonsContaining('Show more products', container)[0];
+    expect(more.textContent.replace(/\s+/g, ' ')).toContain('Show more products (2)');
+
+    await act(async () => { more.click(); });
+    await flush();
+    expect(shopProductList).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2, category: 'beard-grooming' }));
+    expect(buttonsContaining('Show more products', container)[0].textContent.replace(/\s+/g, ' ')).toContain('Show more products (1)');
+
+    await act(async () => { buttonsContaining('Show more products', container)[0].click(); });
+    await flush();
+    expect(container.querySelectorAll('.shop-card')).toHaveLength(3);
+    expect(buttonsContaining('Show more products', container)).toHaveLength(0);
+  });
+
+  it('never prints a remaining count that the grid contradicts', async () => {
+    // The old-shape answer: the server resolved the facet as a superset (88 rows
+    // in total, one of which the grid cannot show under this category) while the
+    // cards on screen are the client-narrowed few. The number must go, not shrink.
+    shopProductList.mockResolvedValue({
+      status: 'SUCCESS',
+      data: {
+        products: [
+          { productId: 'only', productName: 'Beard Oil 30ml', price: 199, rating: 4.5, isAvailable: true },
+          // A row the shelf does not claim — exactly what the superset query sent.
+          { productId: 'stray', productName: 'Keratin Shampoo 200ml', price: 499, rating: 4.5, isAvailable: true },
+        ],
+        pagination: {
+          page: 1, limit: 24, totalProducts: 88, totalPages: 4,
+          applied: { searchString: '', category: 'beard-grooming', gender: '', priceRange: '', sort: 'popular' },
+        },
+      },
+    });
+    const { container } = await render(<ShopScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    const select = Array.from(container.querySelectorAll('select')).find(item => item.getAttribute('aria-label') === 'Category');
+    select.value = 'beard-grooming';
+    await act(async () => { select.dispatchEvent(new Event('change', { bubbles: true })); });
+
+    const more = buttonsContaining('Show more products', container)[0];
+    expect(more.textContent.replace(/\s+/g, ' ')).not.toMatch(/\(\d+\)/);
+  });
+
   it('opens a small sign-in dialog when a visitor tries to check out', async () => {
     addToCart('guest', { id: 'sp1', name: 'Beard Oil 30ml', price: 199, mrp: 0, image: '', category: 'beard-grooming', gender: 'men' });
     const navigate = vi.fn();

@@ -1,0 +1,655 @@
+From a8be7a8c66b8d0d6ccb468b4f42cfd9d081796c4 Mon Sep 17 00:00:00 2001
+From: MyNaai <dev@mynaai.in>
+Date: Thu, 5 Nov 2026 16:21:18 +0000
+Subject: [PATCH] Shop catalog: filter categories in SQL, so the count matches
+ the grid
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Reported from the live shop, with a screenshot: the first load is fine, but
+choosing a category shows two products while the button underneath still
+reads "Show more products (88)".
+
+The count was never wrong about its own query. `listCatalog` resolved
+`category` as a SUPERSET — the requested id, the label an admin typed, and
+every row whose `category` was empty or unrecognised — so a filtered request
+still counted most of the catalog. The website then applied its own keyword
+rules to those rows and rendered the two that really belong to the shelf,
+while the load-more count kept quoting the superset. Search and gender had
+the same shape, and no amount of client-side patching can reconcile a total
+with a grid the total does not describe.
+
+So the classification moves into the query:
+
+- `src/services/shopCategoryRules.js` (new) is the taxonomy and its rules in
+  one place — the same seven categories, the same ordered keyword table, the
+  same precedence the website uses (an explicit value first, then the product
+  name, then the broadest shelf). `categoryCaseSql()` compiles those rules to
+  a `CASE` expression and `genderCaseSql()` does the same for gender.
+- `listCatalog` compares that expression with `=`, so the `WHERE`, the
+  `COUNT`, `totalProducts`, `totalPages` and the rendered page all describe
+  one list. `findAndCountAll` needs no join: the expression only reads the
+  row it is counting, so the count and the page cannot disagree.
+- An explicit `category` is honoured even when this build has never seen it
+  (a slug the admin added later stands for itself, exactly as the website
+  treats it), and the two vocabularies for gender — men/women/unisex from the
+  control, MALE/FEMALE/UNISEX in the column — resolve to the same value.
+- Admin create/update no longer leaves a blank `category` when the admin
+  meant to classify: they fill in what the name infers, the same fallback
+  the shop uses.
+- `npm run shop:backfill-categories` (dry run by default, `-- --apply` to
+  write) fills the column for the rows that predate it, so the admin panel
+  and any SQL report count the same shelves the shop shows. It only touches
+  values that are not already a category id.
+- `npm run shop:test-categories` pins the classification table; the website
+  pins the same rows in `src/lib/shopCatalog.test.js`, so a rule that changes
+  on one side fails on the other instead of quietly reproducing this bug.
+
+Nothing else about the catalog changes: search, price range, stock and the
+three sort orders behave as before, `pagination.applied` is still echoed, and
+a request without a category is untouched.
+---
+ package.json                                  |   4 +-
+ scripts/backfill-shop-categories.js           |  65 +++++
+ scripts/test-shop-categories.js               |  90 +++++++
+ .../shopProduct/adminCreateShopProduct.js     |   7 +-
+ .../shopProduct/adminUpdateShopProduct.js     |   8 +-
+ src/services/shopCategoryRules.js             | 232 ++++++++++++++++++
+ src/services/shopProduct.service.js           |  78 ++----
+ 7 files changed, 429 insertions(+), 55 deletions(-)
+ create mode 100644 scripts/backfill-shop-categories.js
+ create mode 100644 scripts/test-shop-categories.js
+ create mode 100644 src/services/shopCategoryRules.js
+
+diff --git a/package.json b/package.json
+index 21c849c..dfc96d4 100644
+--- a/package.json
++++ b/package.json
+@@ -6,7 +6,9 @@
+   "scripts": {
+     "test": "echo \"Error: no test specified\" && exit 1",
+     "start": "node index.js",
+-    "dev": "nodemon index.js"
++    "dev": "nodemon index.js",
++    "shop:backfill-categories": "node scripts/backfill-shop-categories.js",
++    "shop:test-categories": "node scripts/test-shop-categories.js"
+   },
+   "repository": {
+     "type": "git",
+diff --git a/scripts/backfill-shop-categories.js b/scripts/backfill-shop-categories.js
+new file mode 100644
+index 0000000..7e5e6e8
+--- /dev/null
++++ b/scripts/backfill-shop-categories.js
+@@ -0,0 +1,65 @@
++#!/usr/bin/env node
++// Fills in `shop_products.category` for rows whose value is empty or free text.
++//
++// The filter (services/shopProduct.service.js) resolves every row from its
++// explicit category or, failing that, from its name — so the shop is already
++// correct without this. Running it makes the COLUMN say what the filter says:
++// the admin panel stops showing a blank shelf, a SQL report counts the same
++// shelves the shop does, and the catalog filter becomes a plain index-friendly
++// equality instead of a CASE.
++//
++//   npm run shop:backfill-categories            # dry run: report only
++//   npm run shop:backfill-categories -- --apply # write the changes
++//
++// It only ever touches rows whose category is NOT already one of the taxonomy's
++// ids, so it is safe to run twice and it never overwrites an admin's choice.
++const { Op } = require('sequelize');
++const db = require('../src/database/models');
++const rules = require('../src/services/shopCategoryRules');
++
++const APPLY = process.argv.includes('--apply');
++
++const run = async () => {
++  const rows = await db.ShopProduct.findAll({
++    where: { deletedAt: null },
++    attributes: ['productId', 'productName', 'category'],
++    order: [['createdAt', 'ASC']]
++  });
++
++  const changes = [];
++  for (const row of rows) {
++    const current = String(row.category || '').trim().toLowerCase();
++    if (rules.CATEGORY_IDS.includes(current)) continue; // already an id — leave it
++    const resolved = rules.resolveCategory({ category: row.category, productName: row.productName });
++    if (resolved === current) continue;
++    changes.push({ productId: row.productId, productName: row.productName, from: row.category || '(empty)', to: resolved });
++  }
++
++  console.log(`Scanned ${rows.length} product(s); ${changes.length} would change.`);
++  for (const change of changes.slice(0, 25)) {
++    console.log(`  ${change.productName}: ${change.from} → ${change.to}`);
++  }
++  if (changes.length > 25) console.log(`  … and ${changes.length - 25} more`);
++
++  if (!APPLY) {
++    console.log('\nDry run. Re-run with `-- --apply` to write these changes.');
++    return;
++  }
++
++  let written = 0;
++  for (const change of changes) {
++    const [affected] = await db.ShopProduct.update(
++      { category: change.to },
++      { where: { productId: change.productId } }
++    );
++    written += affected;
++  }
++  console.log(`\nUpdated ${written} product(s).`);
++};
++
++run()
++  .then(() => process.exit(0))
++  .catch((error) => {
++    console.error('Backfill failed:', error.message);
++    process.exit(1);
++  });
+diff --git a/scripts/test-shop-categories.js b/scripts/test-shop-categories.js
+new file mode 100644
+index 0000000..0aa7dac
+--- /dev/null
++++ b/scripts/test-shop-categories.js
+@@ -0,0 +1,90 @@
++#!/usr/bin/env node
++// Guards the shop's category/gender classification, and its parity with the web.
++//
++// The catalog filter is a SQL CASE built from these rules (services/
++// shopCategoryRules.js), and the website classifies a product with its own copy
++// of the same table (src/lib/shopCatalog.js in the web repo). If the two drift,
++// a filtered page contains fewer cards than its own count promises — the exact
++// "2 products, load more 88" report. This script pins the shared table; the web
++// repo pins the same rows in src/lib/shopCatalog.test.js, so a rule added on one
++// side fails on the other.
++//
++//   npm run shop:test-categories
++const assert = require('assert');
++const rules = require('../src/services/shopCategoryRules');
++
++// Keep in step with PARITY in my-naai-web/src/lib/shopCatalog.test.js.
++const PARITY = [
++  ['Keratin Repair Shampoo 200ml', 'hair-care'],
++  ['Matte Clay Pomade 90g', 'beard-grooming'],
++  ['Beard Oil 30ml', 'beard-grooming'],
++  ['Beard Trimmer Pro', 'tools-equipment'],
++  ['Hair Clipper 2200', 'tools-equipment'],
++  ['Argan Hair Serum 100ml', 'hair-care'],
++  ['Henna Hair Colour Pack', 'hair-colour'],
++  ['Sandalwood Perfume 50ml', 'fragrance'],
++  ['Face Cleanser for Oily Skin', 'skin-face'],
++  ['Hair Spa Ritual Kit', 'kits-sets'],
++  ['Salon Cape & Apron Set', 'tools-equipment'],
++  ['Castor Hair Oil 200ml', 'hair-care'],
++  ['Mystery Ritual', 'hair-care']
++];
++
++let failures = 0;
++const check = (label, actual, expected) => {
++  try {
++    assert.deepStrictEqual(actual, expected);
++  } catch {
++    failures += 1;
++    console.error(`  ✗ ${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
++  }
++};
++
++console.log('Category, from the product name:');
++for (const [name, category] of PARITY) check(name, rules.inferCategory(name), category);
++console.log(`  ✓ ${PARITY.length} names`);
++
++console.log('Category, from an explicit value:');
++for (const [value, expected] of [
++  ['hair-care', 'hair-care'],
++  ['HAIR-CARE', 'hair-care'],
++  ['Hair care', 'hair-care'],
++  ['Tools & equipment', 'tools-equipment'],
++  ['Hair Colour and Chemical Products', 'hair-colour'],
++  ['shaving', 'shaving'], // a category the admin added after this build
++  ['', ''],
++  ['nonsense value', '']
++]) {
++  check(JSON.stringify(value), rules.resolveCategoryId(value), expected);
++}
++
++console.log('  ✓ explicit values\nGender:');
++for (const [name, expected] of [
++  ['Beard Oil 30ml', 'MALE'],
++  ['Ladies Hair Spa', 'FEMALE'],
++  ['Unisex Comb', 'UNISEX'],
++  ['Shampoo', 'UNISEX']
++]) {
++  check(name, rules.resolveGender({ productName: name }), expected);
++}
++check('explicit MALE wins', rules.resolveGender({ productName: 'Ladies Spa Kit', gender: 'MALE' }), 'MALE');
++check('the shop vocabulary resolves', rules.resolveGenderValue('men'), 'MALE');
++console.log('  ✓ gender');
++
++console.log('SQL shape:');
++const categorySql = rules.categoryCaseSql();
++check('balanced parentheses', (categorySql.match(/\(/g) || []).length, (categorySql.match(/\)/g) || []).length);
++check('no unbalanced quotes', (categorySql.match(/'/g) || []).length % 2, 0);
++check('starts with CASE', categorySql.startsWith('CASE '), true);
++check('ends with END', categorySql.endsWith(' END'), true);
++check(
++  'quotes are escaped in the SQL',
++  rules.categoryCaseSql({ categoryColumn: "x' OR 1=1 --" }).includes("''"),
++  true
++);
++
++if (failures) {
++  console.error(`\n${failures} check(s) failed.`);
++  process.exit(1);
++}
++console.log('  ✓ SQL\n\nAll shop category checks passed.');
+diff --git a/src/controller/shopProduct/adminCreateShopProduct.js b/src/controller/shopProduct/adminCreateShopProduct.js
+index 517d070..50387c2 100644
+--- a/src/controller/shopProduct/adminCreateShopProduct.js
++++ b/src/controller/shopProduct/adminCreateShopProduct.js
+@@ -1,6 +1,7 @@
+ const { adminCreateShopProductSchema } = require('../../validations/shopProduct.validation');
+ const shopProductService = require('../../services/shopProduct.service');
+ const shopCategoryService = require('../../services/shopCategory.service');
++const categoryRules = require('../../services/shopCategoryRules');
+ 
+ // Company admin: add a product to the company's own shop catalog. No salon
+ // is involved — this table is separate from the salons' customer products.
+@@ -30,7 +31,11 @@ const adminCreateShopProduct = async (request, response) => {
+             isAvailable: value.isAvailable,
+             productImage: value.productImage || null,
+             mrp: value.mrp ?? null,
+-            category: categoryId,
++            // Empty is still allowed, but it is no longer LEFT empty: the same
++            // keyword rules the storefront uses fill in the shelf the name proves
++            // the product belongs to. That keeps the column equal to the filter
++            // (see services/shopCategoryRules.js) instead of drifting apart.
++            category: categoryId || categoryRules.inferCategory(value.productName),
+             // NULL keeps the shop UI's name-based gender fallback alive.
+             gender: value.gender || null,
+             description: value.description || null
+diff --git a/src/controller/shopProduct/adminUpdateShopProduct.js b/src/controller/shopProduct/adminUpdateShopProduct.js
+index 3fd4588..9ad434b 100644
+--- a/src/controller/shopProduct/adminUpdateShopProduct.js
++++ b/src/controller/shopProduct/adminUpdateShopProduct.js
+@@ -1,6 +1,7 @@
+ const { adminUpdateShopProductSchema } = require('../../validations/shopProduct.validation');
+ const shopProductService = require('../../services/shopProduct.service');
+ const shopCategoryService = require('../../services/shopCategory.service');
++const categoryRules = require('../../services/shopCategoryRules');
+ 
+ // Company admin: partially update a shop product. Unsent fields are left
+ // as-is.
+@@ -25,7 +26,12 @@ const adminUpdateShopProduct = async (request, response) => {
+         // Validated against the shared list, exactly like create — a rename of
+         // the category's LABEL must not be typed into a product by hand.
+         if (category !== undefined) {
+-            dataToUpdate.category = await shopCategoryService.requireCategoryId(category, { allowEmpty: true });
++            const resolved = await shopCategoryService.requireCategoryId(category, { allowEmpty: true });
++            // Cleared (or an unrealised value) alongside a new name: classify the
++            // name, exactly like create. Without a name to go on, the row is left
++            // unclassified and the catalog filter still resolves it from the name
++            // it already has.
++            dataToUpdate.category = resolved || (productName !== undefined ? categoryRules.inferCategory(productName) : '');
+         }
+         if (gender !== undefined) dataToUpdate.gender = gender || null;
+         if (description !== undefined) dataToUpdate.description = description || null;
+diff --git a/src/services/shopCategoryRules.js b/src/services/shopCategoryRules.js
+new file mode 100644
+index 0000000..6d97f9d
+--- /dev/null
++++ b/src/services/shopCategoryRules.js
+@@ -0,0 +1,232 @@
++// The shop's taxonomy, in ONE place, for the server to classify with.
++//
++// The storefront has always classified products itself (src/lib/shopCatalog.js in
++// the web repo: an ordered keyword table, first match wins, unmatched names land
++// in "hair care"). That was fine while the catalogue was filtered in the browser,
++// but the moment the server took over filtering the two sides disagreed: the
++// server's category filter was a deliberate SUPERSET (it also returned every row
++// with an empty or unrecognised `category`, so the client could classify those),
++// which made `pagination.totalProducts` describe the whole catalogue instead of
++// the chosen shelf. The shop then showed 2 products with "Show more products
++// (88)" — a count of rows the filter does not actually include.
++//
++// So the rules live here now, next to the data, and the server resolves each row
++// to exactly one category id: the explicit one when it is known, otherwise the
++// same keyword inference the storefront uses on the product name. Filtering on
++// that resolved value makes the count, the pages and the grid the same list —
++// which is what "filter the db, show the db's data" means.
++//
++// Keep this table in step with src/lib/shopCatalog.js in the web repo. They are
++// intentionally identical: id, label, order and keywords.
++
++const SHOP_CATEGORIES = [
++  { id: 'hair-care', label: 'Hair care' },
++  { id: 'beard-grooming', label: 'Beard & grooming' },
++  { id: 'skin-face', label: 'Skin & face' },
++  { id: 'fragrance', label: 'Fragrance' },
++  { id: 'hair-colour', label: 'Hair colour' },
++  { id: 'tools-equipment', label: 'Tools & equipment' },
++  { id: 'kits-sets', label: 'Kits & sets' },
++];
++
++const CATEGORY_IDS = SHOP_CATEGORIES.map((category) => category.id);
++
++// Ordered: the FIRST match wins, so specific gear beats a generic "oil" and a
++// "beard kit" files under kits-sets. A RegExp entry must match whole words.
++const CATEGORY_RULES = [
++  ['tools-equipment', ['clipper', 'trimmer', 'straight razor', 'razor', 'shaver', 'comb', 'cape', 'apron', 'towel', 'scissor', 'dryer', 'styler', 'straightener', 'curling iron', 'curler', 'mirror stand']],
++  // "pack" stays out: "Colour Pack 100g" is a size descriptor, not a bundle.
++  ['kits-sets', ['kit', 'combo', 'bundle', /(^|[^a-z])sets?([^a-z]|$)/i]],
++  ['fragrance', ['perfume', 'deodorant', 'deo', 'cologne', 'attar']],
++  ['hair-colour', ['colour', 'color', 'henna', 'dye', 'greys']],
++  ['beard-grooming', ['beard', 'mustache', 'stubble', 'pomade']],
++  ['skin-face', ['face', 'skin', 'sunscreen', 'spf', 'moisturiser', 'moisturizer', 'lotion', 'toner', 'cleanser', 'scrub', 'face mask', 'glow', 'brow', 'lashes', 'lip']],
++  ['hair-care', ['shampoo', 'conditioner', 'serum', 'oil', 'spa', 'keratin', 'gel', 'hairspray', 'hair spray', 'hair mask', 'balm', 'butter', 'treatment', 'fall control', 'fall', 'scalp', 'hair']],
++];
++
++// Where a name that matches no rule at all belongs — the broadest shelf, which
++// is what the storefront has always done.
++const DEFAULT_CATEGORY = 'hair-care';
++
++// The shop's control says men/women/unisex; the column stores MALE/FEMALE/UNISEX.
++// Both vocabularies resolve, so a filter and a product can never be speaking
++// different languages.
++const GENDER_VALUES = {
++  men: 'MALE',
++  male: 'MALE',
++  m: 'MALE',
++  women: 'FEMALE',
++  woman: 'FEMALE',
++  female: 'FEMALE',
++  f: 'FEMALE',
++  unisex: 'UNISEX',
++  all: 'UNISEX',
++  both: 'UNISEX',
++  family: 'UNISEX'
++};
++
++const normalizeText = (value) => String(value ?? '').trim().toLowerCase();
++
++const escapeLike = (value) => String(value).replace(/[\\%_]/g, (match) => `\\${match}`);
++
++function keywordMatches(text, keyword) {
++  if (keyword instanceof RegExp) return keyword.test(text);
++  return text === keyword || text.includes(keyword);
++}
++
++/** The category a product NAME classifies into (first rule wins). */
++function inferCategory(name) {
++  const text = normalizeText(name);
++  for (const [category, keywords] of CATEGORY_RULES) {
++    if (keywords.some((keyword) => keywordMatches(text, keyword))) return category;
++  }
++  return DEFAULT_CATEGORY;
++}
++
++// An id-shaped value: "hair-care", "shaving", "beard-oils". The admin panel
++// creates a category with a slug like this and files products under it, so an
++// explicit slug that is not in THIS build's list is still a category of its own
++// — keeping it is what lets a newly added category be filtered before the next
++// deploy, on both sides of the API.
++const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
++
++/**
++ * An explicit category value — an id, a label, or the free text an older admin
++ * record may carry ("Hair Colour and Chemical Products") — as a category id.
++ * Returns '' when the value says nothing this taxonomy recognises.
++ */
++function resolveCategoryId(value) {
++  const text = normalizeText(value);
++  if (!text) return '';
++  const direct = SHOP_CATEGORIES.find(
++    (category) => category.id === text || category.label.toLowerCase() === text
++  );
++  if (direct) return direct.id;
++  if (SLUG_PATTERN.test(text)) return text; // an admin's newer category
++  const rule = CATEGORY_RULES.find(([, keywords]) => keywords.some((keyword) => keywordMatches(text, keyword)));
++  return rule ? rule[0] : '';
++}
++
++/**
++ * The category of a row, with the same precedence the storefront uses: the
++ * explicit value when it resolves, otherwise the name's inference. Always one of
++ * CATEGORY_IDS, never ''.
++ */
++function resolveCategory({ category, productName } = {}) {
++  return resolveCategoryId(category) || inferCategory(productName);
++}
++
++/** The gender a NAME implies, as the column stores it ('' when it implies none). */
++const GENDER_MEN_RULES = ['beard', 'mustache', 'stubble', 'pomade', "men's", 'for men', 'groom', 'barber'];
++const GENDER_WOMEN_RULES = ['women', 'woman', 'ladies', 'bridal', 'lashes', 'lipstick', "women's", 'for women'];
++
++function inferGender(name) {
++  const text = normalizeText(name);
++  if (!text) return '';
++  if (text.includes('unisex') || text.includes('family')) return 'UNISEX';
++  const men = GENDER_MEN_RULES.some((word) => text.includes(word));
++  const women = GENDER_WOMEN_RULES.some((word) => text.includes(word));
++  if (men && !women) return 'MALE';
++  if (women && !men) return 'FEMALE';
++  if (men && women) return 'UNISEX';
++  return '';
++}
++
++/** An explicit gender value as the column stores it ('' when unrecognised). */
++function resolveGenderValue(value) {
++  return GENDER_VALUES[normalizeText(value)] || '';
++}
++
++function resolveGender({ gender, productName } = {}) {
++  return resolveGenderValue(gender) || inferGender(productName) || 'UNISEX';
++}
++
++// ── SQL ──────────────────────────────────────────────────────────────────────
++// A row's resolved category, as a Postgres CASE expression built from the rules
++// above. Used in WHERE so the COUNT and the page are the same list; the strings
++// are all from this file (never from a request), so nothing here is injectable.
++
++const quote = (value) => `'${String(value).replace(/'/g, "''")}'`;
++
++const nameLike = (keyword, column) => {
++  if (keyword instanceof RegExp) return `lower(${column}) ~* ${quote(keyword.source)}`;
++  return `lower(${column}) LIKE ${quote(`%${escapeLike(keyword)}%`)}`;
++};
++
++const anyKeyword = (keywords, column) => `(${keywords.map((keyword) => nameLike(keyword, column)).join(' OR ')})`;
++
++/**
++ * `CASE WHEN … END` mapping a shop_products row to one of CATEGORY_IDS.
++ * Precedence, exactly like `resolveCategory`:
++ *   1. an explicit value that is already an id (a slug) or a label;
++ *   2. an explicit value that is free text the keyword rules recognise
++ *      ("Hair Colour and Chemical Products" → hair-colour);
++ *   3. the product name, first rule wins;
++ *   4. DEFAULT_CATEGORY.
++ */
++function categoryCaseSql({ categoryColumn = 'category', nameColumn = 'product_name' } = {}) {
++  const whens = [];
++  const lowerCategory = `lower(coalesce(${categoryColumn}, ''))`;
++
++  // 1a. a value that is already a category id — this build's, or one the admin
++  // added after it — stands for itself.
++  whens.push(`WHEN ${lowerCategory} ~ ${quote(SLUG_PATTERN.source)} THEN ${lowerCategory}`);
++
++  // 1b. a label ("Hair care", "Tools & equipment") stands for its id.
++  for (const category of SHOP_CATEGORIES) {
++    whens.push(`WHEN ${lowerCategory} = ${quote(category.label.toLowerCase())} THEN ${quote(category.id)}`);
++  }
++
++  // 2. free text on the category column, by keyword, first rule wins.
++  CATEGORY_RULES.forEach(([category, keywords], index) => {
++    const positive = anyKeyword(keywords, `coalesce(${categoryColumn}, '')`);
++    const earlier = CATEGORY_RULES.slice(0, index).flatMap(([, earlierKeywords]) => earlierKeywords);
++    const notEarlier = earlier.length ? `NOT ${anyKeyword(earlier, `coalesce(${categoryColumn}, '')`)}` : 'TRUE';
++    whens.push(`WHEN ${positive} AND ${notEarlier} THEN ${quote(category)}`);
++  });
++
++  // 3. the name, by keyword, first rule wins.
++  CATEGORY_RULES.forEach(([category, keywords], index) => {
++    const positive = anyKeyword(keywords, nameColumn);
++    const earlier = CATEGORY_RULES.slice(0, index).flatMap(([, earlierKeywords]) => earlierKeywords);
++    const notEarlier = earlier.length ? `NOT ${anyKeyword(earlier, nameColumn)}` : 'TRUE';
++    whens.push(`WHEN ${positive} AND ${notEarlier} THEN ${quote(category)}`);
++  });
++
++  return `CASE ${whens.join(' ')} ELSE ${quote(DEFAULT_CATEGORY)} END`;
++}
++
++/**
++ * The same idea for gender: an explicit value, else what the name implies, else
++ * UNISEX. Shops filter on "men / women / unisex" the way the storefront shows it,
++ * so the count has to be computed from the resolved value too.
++ */
++function genderCaseSql({ genderColumn = 'gender', nameColumn = 'product_name' } = {}) {
++  const whens = [
++    `WHEN ${genderColumn} IS NOT NULL THEN ${genderColumn}::text`,
++  ];
++  const nameText = `lower(${nameColumn})`;
++  const any = (words) => `(${words.map((word) => `${nameText} LIKE ${quote(`%${word}%`)}`).join(' OR ')})`;
++  whens.push(`WHEN ${nameText} LIKE '%unisex%' OR ${nameText} LIKE '%family%' THEN 'UNISEX'`);
++  whens.push(`WHEN ${any(GENDER_MEN_RULES)} AND NOT ${any(GENDER_WOMEN_RULES)} THEN 'MALE'`);
++  whens.push(`WHEN ${any(GENDER_WOMEN_RULES)} AND NOT ${any(GENDER_MEN_RULES)} THEN 'FEMALE'`);
++  whens.push(`WHEN ${any(GENDER_MEN_RULES)} AND ${any(GENDER_WOMEN_RULES)} THEN 'UNISEX'`);
++  return `CASE ${whens.join(' ')} ELSE 'UNISEX' END`;
++}
++
++module.exports = {
++  SHOP_CATEGORIES,
++  CATEGORY_IDS,
++  CATEGORY_RULES,
++  DEFAULT_CATEGORY,
++  GENDER_VALUES,
++  normalizeText,
++  inferCategory,
++  inferGender,
++  resolveCategoryId,
++  resolveCategory,
++  resolveGender,
++  resolveGenderValue,
++  categoryCaseSql,
++  genderCaseSql
++};
+diff --git a/src/services/shopProduct.service.js b/src/services/shopProduct.service.js
+index 08622ae..6d84144 100644
+--- a/src/services/shopProduct.service.js
++++ b/src/services/shopProduct.service.js
+@@ -1,5 +1,6 @@
+-const { Op, fn, col, where } = require('sequelize');
++const { Op, where, literal } = require('sequelize');
+ const db = require('../database/models');
++const categoryRules = require('./shopCategoryRules');
+ const DEFAULT_LIMIT = parseInt(process.env.PAGE_LIMIT) || 20;
+ // One page of the shop grid: the website asks for 24, the mobile app keeps the
+ // server default. Above this a single request would return the whole catalog.
+@@ -11,25 +12,6 @@ const MAX_LIMIT = 60;
+  * `products`). The catalog is company-wide: there is no salon scoping.
+  */
+ 
+-// The shop's category ids, with the labels an admin may have typed instead of
+-// the id. Kept in step with the web/mobile taxonomy (src/lib/shopCatalog.js):
+-// an id and its label must select the same rows, or the same filter would show
+-// a different shelf on the website and in the app.
+-const CATEGORY_LABELS = {
+-  'hair-care': 'hair care',
+-  'beard-grooming': 'beard & grooming',
+-  'skin-face': 'skin & face',
+-  'fragrance': 'fragrance',
+-  'hair-colour': 'hair colour',
+-  'tools-equipment': 'tools & equipment',
+-  'kits-sets': 'kits & sets'
+-};
+-
+-const KNOWN_CATEGORY_VALUES = [
+-  ...Object.keys(CATEGORY_LABELS),
+-  ...Object.values(CATEGORY_LABELS)
+-];
+-
+ // priceRange ids come straight from the shop's dropdown.
+ const PRICE_RANGES = {
+   under500: { [Op.lt]: 500 },
+@@ -37,9 +19,6 @@ const PRICE_RANGES = {
+   over1000: { [Op.gt]: 1000 }
+ };
+ 
+-// The gender column stores MALE/FEMALE/UNISEX; the shop speaks men/women/unisex.
+-const GENDER_VALUES = { men: 'MALE', women: 'FEMALE', unisex: 'UNISEX' };
+-
+ const SORTS = {
+   'price-asc': [['price', 'ASC'], ['productName', 'ASC']],
+   'price-desc': [['price', 'DESC'], ['productName', 'ASC']],
+@@ -50,44 +29,39 @@ const SORTS = {
+ const asBool = (value) => value === true || value === 'true' || value === 1 || value === '1';
+ 
+ /**
+- * A category is a SUPERSET filter.
++ * The category filter, EXACTLY.
++ *
++ * A product's category is the explicit value when it is known, otherwise the
++ * keyword inference on its name — the same precedence the storefront uses, and
++ * the same table (src/services/shopCategoryRules.js). The SQL CASE that resolves
++ * it is what the WHERE clause compares against, so:
++ *
++ *   · `totalProducts` counts the shelf the user asked for, not the catalogue;
++ *   · page N of a filtered query is page N of THAT list — "Show more" can no
++ *     longer promise 88 products under a category that holds 2;
++ *   · rows whose `category` column is empty or free text are still found, under
++ *     the shelf their name proves they belong to.
+  *
+- * `category` on this table is optional and free-text ('' = "let the client
+- * classify it from the name"), so the server must return every row the
+- * client's own classifier could file under the requested category:
+- *   - the id, or the label an admin typed instead of the id;
+- *   - rows with no category at all;
+- *   - rows with text this service does not recognise (an admin's free-text
+- *     shelf) — those are mapped by the client's keyword rules.
+- * Anything the client then does not classify into the chosen category is
+- * dropped there, so the grid can never show a product the filter excludes.
+- * Being a superset only costs a little extra paging, never a missing product.
++ * It used to be a superset (id, label, empty and unrecognised rows alike) so the
++ * client could classify what the server could not. That made the pagination a
++ * lie: the count described the whole catalogue while the grid applied the
++ * client's own rules to it.
+  */
+ const categoryWhere = (category) => {
+-  const value = String(category || '').trim().toLowerCase();
+-  if (!value) return null;
+-  const wanted = [value, CATEGORY_LABELS[value]].filter(Boolean);
+-  return {
+-    [Op.or]: [
+-      where(fn('lower', col('category')), { [Op.in]: wanted }),
+-      { category: { [Op.is]: null } },
+-      { category: '' },
+-      where(fn('lower', col('category')), { [Op.notIn]: KNOWN_CATEGORY_VALUES })
+-    ]
+-  };
++  const id = categoryRules.resolveCategoryId(category);
++  if (!id) return null;
++  return where(literal(categoryRules.categoryCaseSql()), '=', id);
+ };
+ 
+ /**
+- * A gender filter keeps the rows whose gender is not set: those are inferred
+- * from the product name by the client (the same rule the shop always used), so
+- * excluding them here would hide products the user's filter actually matches.
++ * The gender filter, resolved the same way: an explicit MALE/FEMALE/UNISEX wins,
++ * otherwise the name's inference, otherwise UNISEX. The shop's "men / women /
++ * unisex" therefore counts exactly what it shows.
+  */
+ const genderWhere = (gender) => {
+-  const value = GENDER_VALUES[String(gender || '').trim().toLowerCase()];
++  const value = categoryRules.resolveGenderValue(gender);
+   if (!value) return null;
+-  return {
+-    [Op.or]: [{ gender: value }, { gender: { [Op.is]: null } }]
+-  };
++  return where(literal(categoryRules.genderCaseSql()), '=', value);
+ };
+ 
+ // The buying side (salon app/web, a mobile user, or the public website with no
+-- 
+2.39.5
+

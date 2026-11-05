@@ -460,7 +460,8 @@ img { display: block; max-width: 100%; }
 .salon-address { display: flex; align-items: flex-start; gap: 6px; width: 100%; margin: 10px 0 14px; padding: 0; color: var(--gold); background: transparent; text-align: left; font-size: 11px; line-height: 1.35; }
 .salon-address svg { flex: none; margin-top: 1px; }
 .salon-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.wait-copy { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; }
+.wait-copy, .salon-hours-copy { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; }
+.salon-card .salon-hours-copy { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .salon-card-cta { display: flex; align-items: center; gap: 7px; flex: none; }
 .card-share-button { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 9px; border: 1px solid var(--line); background: rgba(255,255,255,.05); color: var(--gold); }
 .card-share-button:hover { background: rgba(232,185,126,.12); }
@@ -632,7 +633,7 @@ img { display: block; max-width: 100%; }
 .detail-location svg:first-child { flex: none; }
 .detail-location span { flex: 1; }
 .detail-location svg:last-child { flex: none; margin-top: 2px; color: var(--muted); }
-.detail-stat-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 19px; }
+.detail-stat-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 19px; }
 .detail-stat-grid > div { display: flex; align-items: flex-start; gap: 6px; padding: 10px 7px; border-radius: 11px; background: #121717; }
 .detail-stat-grid svg { flex: none; color: var(--gold); }
 .detail-stat-grid span { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -1996,7 +1997,7 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
      compact Book now sit on the right. The booking CTA is a card helper, not a
      banner — a full-width 38px button dwarfed the card content it belonged to. */
   .salon-card-footer { flex-wrap: nowrap; gap: 10px; }
-  .salon-card .wait-copy { flex: 1 1 auto; min-width: 0; font-size: 10.5px; }
+  .salon-card .wait-copy, .salon-card .salon-hours-copy { flex: 1 1 auto; min-width: 0; font-size: 10.5px; }
   .salon-card-cta { flex: none; gap: 6px; }
   .salon-card-cta .card-book-button { flex: none; min-height: 32px; padding: 0 13px; border-radius: 9px; font-size: 10.5px; }
   .salon-card-cta .card-share-button { flex: none; width: 32px; height: 32px; }
@@ -2048,7 +2049,7 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .detail-stat-grid > div { padding: 9px 5px; }
   .detail-stat-grid strong { font-size: 9px; }
   .salon-card-cta .card-book-button { padding: 0 10px; }
-  .salon-card .wait-copy { font-size: 10px; }
+  .salon-card .wait-copy, .salon-card .salon-hours-copy { font-size: 10px; }
   .booking-calendar { width: 53px; }
   .booking-main { padding: 12px 10px; }
   .booking-title-row h3 { font-size: 13px; }

@@ -60,7 +60,7 @@ const CATEGORY_RULES = [
   ['kits-sets', ['kit', 'combo', 'bundle', /(^|[^a-z])sets?([^a-z]|$)/i]],
   ['fragrance', ['perfume', 'deodorant', 'deo', 'cologne', 'attar']],
   ['hair-colour', ['colour', 'color', 'henna', 'dye', 'greys']],
-  ['beard-grooming', ['beard', 'mustache', 'mustache', 'stubble', 'pomade']],
+  ['beard-grooming', ['beard', 'mustache', 'stubble', 'pomade']],
   ['skin-face', ['face', 'skin', 'sunscreen', 'spf', 'moisturiser', 'moisturizer', 'lotion', 'toner', 'cleanser', 'scrub', 'face mask', 'glow', 'brow', 'lashes', 'lip']],
   ['hair-care', ['shampoo', 'conditioner', 'serum', 'oil', 'spa', 'keratin', 'gel', 'hairspray', 'hair spray', 'hair mask', 'balm', 'butter', 'treatment', 'fall control', 'fall', 'scalp', 'hair']],
 ];
@@ -84,6 +84,15 @@ function keywordMatches(text, keyword) {
   return text === keyword || text.includes(keyword);
 }
 
+// An id-shaped value: "hair-care", "shaving", "beard-oils". The admin panel
+// creates categories with slugs like these; a slug the seed list has never heard
+// of is still a category of its own, so it is kept as the id instead of being
+// re-filed under a shelf the filter cannot select. The backend resolves an
+// explicit value with exactly this precedence (services/shopCategoryRules.js),
+// so a product and a filter agree on which shelf they mean — which is what makes
+// the server's count and the grid's cards the same list.
+const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
 // Explicit values the backend or the salon editor may send, normalised to the
 // shop's ids. Anything unrecognised falls through to inference.
 function readExplicitCategory(value) {
@@ -91,6 +100,7 @@ function readExplicitCategory(value) {
   if (!text) return '';
   const direct = SHOP_CATEGORIES.find(category => category.id === text || category.label.toLowerCase() === text);
   if (direct) return direct.id;
+  if (SLUG_PATTERN.test(text)) return text; // a category the admin added later
   const rule = CATEGORY_RULES.find(([, keywords]) => keywords.some(keyword => keywordMatches(text, keyword)));
   return rule ? rule[0] : '';
 }

@@ -940,6 +940,37 @@ Then test on an HTTPS deployment with a real customer and salon account:
 - **Width tiers are explicit:** phones < 560px (one column, stacked footer blocks, one review per screen), small tablets 560–759px (two-up partner benefits/steps, +10px body padding), tablets 760–1023px (two-column salon/product/plan grids, phone chrome), laptops 1024–1599px (sidebar, three salon columns, larger headings and promo band), and wide 1600px+ (four salon columns on the 1460px rail). The contact form's **Send message** button is full-width only while the form is one column and hugs its label from 640px up, and the partner three-step grid stays two-up until 900px because the number badge eats 60px of every card.
 - View the app at 320 px and 375 px: plan cards, time slots and every grid keep readable two-column chips, and tapping a login/search/profile field on an iPhone does not zoom the page.
 - Check the header wordmark: the M and the N are the same size on the login page, the mobile header and the desktop sidebar.
+- Open a salon page and a salon card: **no** "Current wait" and no minutes anywhere, with the salon's opening hours in their place ([§13.1](#131-no-waiting-time-is-promised-while-booking)).
+- In the shop, pick a category and read the load-more button: the number is that shelf's own size and reaches zero at the end — never "88" under a filter showing two products ([`docs/BACKEND-SHOP-CATEGORY-FILTER.md`](BACKEND-SHOP-CATEGORY-FILTER.md)).
+
+## 13.1 No waiting time is promised while booking
+
+The salon page used to carry a **Current wait** tile ("10–15 min"), and every
+salon card carried the same number as a chip. Both are gone.
+
+A waiting time is a claim about the chairs inside the salon, and a salon serves
+walk-in customers: someone can sit down while the page is open, so the number is
+wrong the moment it is printed, and the customer who arrives on the strength of
+it is the one who waits. The customer is told when to arrive by the salon's own
+answer to the booking request instead of by a number the portal invented.
+
+What replaced it is a fact from the salon's own record:
+
+| Where | Before | Now |
+| --- | --- | --- |
+| Salon card (`.salon-card`) | `.wait-copy` — the queue estimate, or `'Come back later'` | `.salon-hours-copy` — the salon's opening hours from `businessHours` (`09:00 am – 09:00 pm`), or `Open now` when the record has no schedule |
+| Salon page stat row (`.detail-stat-grid`) | 3 tiles: Current wait, Services, … | 2 tiles: Services and the next real fact |
+
+`normalizeSalon` no longer manufactures a `waitTime` (`src/components/Shared.jsx`
+had a `'10–15 min'` default), and `salonHoursLabel()` formats the hours with the
+same `formatTime` the detail page uses. Nothing else reads a wait time, so the
+slot picker, the checkout modal and the booking request never showed one — the
+estimate existed only where it was removed.
+
+Pinned by `src/components/SalonWaitCopy.test.jsx`: the salon page and the card
+must not contain "Current wait", "Estimated wait", or the minutes, even when the
+API still sends `waitTime` / `totalWaitTime`.
+
 ## 14. Known console noise (not a MyNaai bug)
 
 While Chrome DevTools is open, its Performance panel injects an anonymous helper script that can throw:

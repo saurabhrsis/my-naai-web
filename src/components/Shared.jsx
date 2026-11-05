@@ -139,6 +139,17 @@ export function getSalonStatus(businessHours = [], explicitOpen, now = new Date(
   return { isOpen, text: isOpen ? 'OPEN NOW' : 'CLOSED', color: isOpen ? GREEN : RED };
 }
 
+// The salon's own opening hours, as one line ("09:00 am – 09:00 pm"), or '' when
+// the record carries no schedule. The salon card shows this where it used to
+// advertise a waiting time: opening hours are a fact from the salon's record, a
+// queue estimate is a guess that a walk-in customer invalidates the moment they
+// sit down.
+export function salonHoursLabel(businessHours) {
+  const schedule = Array.isArray(businessHours) ? businessHours[0] : businessHours;
+  if (!schedule?.openingTime || !schedule?.closingTime) return '';
+  return `${formatTime(schedule.openingTime)} – ${formatTime(schedule.closingTime)}`;
+}
+
 export function normalizeSalon(item = {}) {
   const status = getSalonStatus(item.businessHours, item.isOpen);
   return {
@@ -154,7 +165,9 @@ export function normalizeSalon(item = {}) {
     isOpen: status.isOpen,
     statusText: status.text,
     statusColor: status.color,
-    waitTime: item.totalWaitTime?.display || item.waitTime || '10–15 min',
+    // No `waitTime` any more: the portal does not quote a waiting time (salons
+    // take walk-ins, so any number would be a guess). The salon's own opening
+    // hours are shown instead — see salonHoursLabel.
   };
 }
 

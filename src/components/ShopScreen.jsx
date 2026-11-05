@@ -443,7 +443,16 @@ export function ShopScreen({ session, navigate, notify }) {
     setPriceRange('all');
   };
 
-  const remaining = Math.max(0, pages.total - products.length);
+  // How many more the SERVER still holds, and whether that number describes the
+  // grid on screen. `pages.total` is the server's own count for this query, so
+  // once the backend resolves a product's category the way the grid does (see
+  // docs/BACKEND-SHOP-CATEGORY-FILTER.md) these agree. If they do not — an older
+  // deployment that answered with a superset, or a row the client classifies
+  // differently — the number is withheld instead of advertising "88 more"
+  // products under a shelf that holds 2. That exact lie is what was reported.
+  const loaded = products.length;
+  const countDescribesGrid = visible.length === loaded;
+  const remaining = Math.max(0, pages.total - loaded);
 
   return (
     <div className="screen shop-screen">
@@ -548,7 +557,7 @@ export function ShopScreen({ session, navigate, notify }) {
               <Button variant="secondary" onClick={loadMore} disabled={loadingMore}>
                 {loadingMore
                   ? <><RefreshCw size={15} className="spin" /> Loading more…</>
-                  : <>Show more products{remaining > 0 ? ` (${remaining})` : ''}</>}
+                  : <>Show more products{countDescribesGrid && remaining > 0 ? ` (${remaining})` : ''}</>}
               </Button>
             </div>
           )}
