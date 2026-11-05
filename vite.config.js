@@ -126,12 +126,59 @@ const DEV_MOCK_ENDPOINTS = {
   '/api/users/update': { status: 'SUCCESS' },
   '/api/booking/get-booking-list': { status: 'SUCCESS', data: { bookings: [] } },
   '/api/booking/get-list': { status: 'SUCCESS', data: { bookings: [] } },
-  '/api/booking/get-completed-bookings': { status: 'SUCCESS', data: { bookings: [] } },
+  // Customer history, with the three shapes the row has to cope with: a
+  // registered customer with a number, a walk-in whose number was typed in, and a
+  // walk-in with the `0000000000` placeholder the API sends when there is none —
+  // which the screen must not print.
+  '/api/booking/get-completed-bookings': {
+    status: 'SUCCESS',
+    data: {
+      bookings: [
+        { bookingId: 'dev-history-1', bookingDate: new Date().toISOString(), bookingTime: '11:30:00', userName: 'Amit Jichkar', userPhone: '9876543210', barberName: 'Amit Jichkar', services: 'Haircut, Beard trim', totalAmount: 450 },
+        { bookingId: 'dev-history-2', bookingDate: new Date(Date.now() - 86400000).toISOString(), bookingTime: '18:00:00', userName: 'Neha Deshmukh', userPhone: '9123456780', barberName: 'Rahul Wankhede', services: 'Hair spa', totalAmount: 900 },
+        { bookingId: 'dev-history-3', bookingDate: new Date(Date.now() - 2 * 86400000).toISOString(), bookingTime: '10:00:00', userName: 'Walk-in guest', userPhone: '0000000000', barberName: 'Amit Jichkar', services: 'Shaving', totalAmount: 40 },
+      ],
+    },
+  },
   '/api/products/list': { status: 'SUCCESS', data: { products: SHOP_PRODUCT_FIXTURES.slice(0, 4) } },
   // The bill rules the shop quotes from, on both doors (the website reads the
   // public one). Without this a preview shows the built-in defaults instead.
   '/api/shop-settings/get': { status: 'SUCCESS', data: { freeDeliveryAbove: 499, deliveryFee: 49, discountPercent: 0, codThreshold: 0, codCharges: 0 } },
   '/api/shop-public/settings/get': { status: 'SUCCESS', data: { freeDeliveryAbove: 499, deliveryFee: 49, discountPercent: 0, codThreshold: 0, codCharges: 0 } },
+  // The salon's leads tab (booking REQUESTS). One live request, one accepted,
+  // one rejected and one the window closed on — enough to show every state of
+  // the screen, including the "auto-cancelled" bucket.
+  '/api/bookingRequest/salon/list': body => {
+    const now = Date.now();
+    const mins = value => new Date(now - value * 60000).toISOString();
+    const requests = [
+      { bookingRequestId: 'dev-req-1', customerName: 'Rohit Deshmukh', customerPhone: '9876500001', bookingDate: new Date(now + 86400000).toISOString().slice(0, 10), bookingTime: '18:30:00', status: 'PENDING', createdAt: new Date(now - 15000).toISOString(), services: [{ serviceId: 's1', serviceName: 'Haircut', price: 300 }, { serviceId: 's2', serviceName: 'Beard trim', price: 150 }] },
+      { bookingRequestId: 'dev-req-2', customerName: 'Sana Khan', bookingDate: new Date(now + 86400000).toISOString().slice(0, 10), bookingTime: '12:00:00', status: 'ACCEPTED', createdAt: mins(40), services: [{ serviceId: 's3', serviceName: 'Hair spa', price: 900 }] },
+      { bookingRequestId: 'dev-req-3', customerName: 'Amit Rane', bookingDate: new Date(now + 172800000).toISOString().slice(0, 10), bookingTime: '16:00:00', status: 'REJECTED', createdAt: mins(90), services: [{ serviceId: 's4', serviceName: 'Fade cut', price: 250 }] },
+      { bookingRequestId: 'dev-req-4', customerName: 'Neha Patil', bookingDate: new Date(now + 86400000).toISOString().slice(0, 10), bookingTime: '19:00:00', status: 'PENDING', createdAt: mins(25), services: [{ serviceId: 's5', serviceName: 'Global colour', price: 2400 }] },
+    ];
+    const wanted = String(body?.status || 'ALL').toUpperCase();
+    const filtered = wanted === 'ALL' ? requests : requests.filter(item => item.status === wanted);
+    return { status: 'SUCCESS', data: { requests: filtered, pagination: { page: 1, limit: 20, totalPages: 1, totalRequests: filtered.length } } };
+  },
+  // The partner price list, exactly the shape `POST /api/salons/plans/list`
+  // answers with once the backend patch is deployed — including a free trial of
+  // 90 days and a plan taken off sale, so the subscription screen can be reviewed
+  // against a backend that owns the numbers instead of against the seed.
+  '/api/salons/plans/list': {
+    status: 'SUCCESS',
+    data: {
+      plans: [
+        { id: 'monthly', title: 'Monthly Plan', label: 'Monthly Plan', price: 199, days: 30, duration: '1 Month (30 Days)', note: 'Flexible month-to-month growth', badge: '', sortOrder: 0, isActive: true, isFree: false },
+        { id: 'trial_2_months', title: 'Introductory', label: 'Introductory', price: 299, days: 60, duration: '2 Months (60 Days)', note: 'A gentle start for new partners', badge: '', sortOrder: 1, isActive: true, isFree: false },
+        { id: 'quarterly', title: 'Quarterly Plan', label: 'Quarterly Plan', price: 499, days: 90, duration: '3 Months (90 Days)', note: 'Best value for busy salons', badge: 'BEST VALUE', best: true, isRecommended: true, sortOrder: 2, isActive: true, isFree: false },
+      ],
+      freeTrial: { id: 'Free', title: 'Free trial', label: 'Free trial', price: 0, days: 90, duration: '3 Months (90 Days)', note: 'Start your salon journey at no cost', badge: 'DEFAULT', isFree: true },
+      currency: 'INR',
+      source: 'fixture',
+    },
+  },
+  '/api/bookingRequest/owner-action': { status: 'SUCCESS' },
   '/api/notifications/register-device': { status: 'SUCCESS' },
   '/api/notifications/test-push': { status: 'SUCCESS' },
   '/api/notifications/get-salon-notification-list': { status: 'SUCCESS', data: { notifications: [] } },

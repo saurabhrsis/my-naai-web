@@ -232,6 +232,39 @@ describe('getRouteFromPath', () => {
     expect(routeToPath('bookings', {})).toBe('/bookings');
   });
 
+  // "I go back from Schedule appointment to change a service and the services
+  // are not showing." The booking steps used to keep the salon record only in
+  // memory, so the browser's Back re-parsed a URL that carried nothing and the
+  // services screen rendered an empty list. Both steps are URLs now.
+  it('keeps the salon and the chosen services in the booking URLs', () => {
+    expect(routeToPath('services', { salonId: 'salon-42', salon: { salonName: 'X' } })).toBe('/services?salonId=salon-42');
+    expect(routeToPath('schedule', {
+      salonId: 'salon-42',
+      salon: { salonName: 'X' },
+      selectedServices: [{ serviceId: 'svc-1' }, { serviceId: 'svc-2' }],
+    })).toBe('/schedule?salonId=salon-42&services=svc-1,svc-2');
+    // …and back again, which is what a Back/Forward or a reload actually does.
+    expect(parseRoutePath('/services?salonId=salon-42')).toEqual({ name: 'services', params: { salonId: 'salon-42' } });
+    expect(parseRoutePath('/schedule?salonId=salon-42&services=svc-1,svc-2')).toEqual({
+      name: 'schedule',
+      params: { salonId: 'salon-42', serviceIds: ['svc-1', 'svc-2'] },
+    });
+    // A schedule opened with no services still parses — the screen shows its own
+    // empty state rather than crashing on a missing list.
+    expect(parseRoutePath('/schedule?salonId=salon-42').params).toEqual({ salonId: 'salon-42' });
+  });
+
+  // The menu editor is its own page, so it gets its own readable address — a
+  // partner can be sent "open /edit-services" and land on the right screen.
+  it('gives the services editor its own readable URL, and keeps it salon-only', () => {
+    expect(routeToPath('editServices')).toBe('/edit-services');
+    expect(parseRoutePath('/edit-services')).toEqual({ name: 'editServices', params: {} });
+    // A customer opening it is not shown a partner screen: it is not one of the
+    // routes a signed-out visitor may resolve.
+    setPath('/edit-services');
+    expect(getRouteFromPath(undefined).name).not.toBe('editServices');
+  });
+
   it('opens salon links for guests but keeps account screens gated', () => {
     // No role = browsing before login: home and the salon page are public.
     setPath('/salon/salon-42');
@@ -310,6 +343,32 @@ describe('App routing on mount', () => {
     root = null;
     container = null;
     vi.clearAllMocks();
+  });
+
+  // The website closes a page with the review wall and the multi-column footer.
+  // The panel is the app: it ends at its own bottom navigation, and on a phone
+  // that footer sat underneath the fixed bar. Reported from the device as "the
+  // website footer and testimonial are showing in the Discover tab after login".
+  it('does not render the website footer or the review wall inside the panel', async () => {
+    signIn('USER', '/');
+    await mount();
+    expect(container.querySelector('.app-shell')).not.toBeNull();
+    expect(container.querySelector('.site-footer')).toBeNull();
+    expect(container.querySelector('.testimonial-section')).toBeNull();
+    expect(container.textContent).not.toContain('What customers & salon owners say');
+  });
+
+  it('keeps them on the public website, which is where they sell', async () => {
+    await mount(); // no session: the guest shell
+    expect(container.querySelector('.guest-shell')).not.toBeNull();
+    expect(container.querySelector('.site-footer')).not.toBeNull();
+    expect(container.querySelector('.testimonial-section')).not.toBeNull();
+  });
+
+  it('keeps them off the salon page and the info pages inside the panel', async () => {
+    signIn('USER', '/about');
+    await mount();
+    expect(container.querySelector('.site-footer')).toBeNull();
   });
 
   it('renders the screen named in the hash for a customer', async () => {

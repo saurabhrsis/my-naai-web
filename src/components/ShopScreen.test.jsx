@@ -223,6 +223,71 @@ describe('ShopScreen', () => {
     expect(zoom).toEqual([]);
   });
 
+  // Reported with a screenshot at ~1440px: on a laptop the details page was
+  // ONE column — a 400px photo, then metre-wide cards holding a single line of
+  // 12px copy — so most of the window was empty and the page read as a phone
+  // screen stretched sideways. Photo left, buying copy right, from 900px.
+  it('lays the product details page out in two columns on a laptop', async () => {
+    const { container } = await render(
+      <ShopProductDetailScreen session={SESSION} params={{ productId: 'sp8' }} navigate={vi.fn()} notify={vi.fn()} />
+    );
+    const layout = container.querySelector('.shop-detail-layout');
+    expect(layout).not.toBeNull();
+
+    // Photo on the left; tags, name, price, quantity, About and Delivery on the
+    // right. The DOM order is unchanged, so a phone still stacks them exactly
+    // as before (gallery above the copy).
+    const [gallery, info] = Array.from(layout.children);
+    expect(gallery.className).toContain('shop-detail-gallery');
+    expect(gallery.querySelector('.shop-detail-hero')).not.toBeNull();
+    expect(gallery.querySelector('.shop-detail-thumbs')).not.toBeNull();
+    expect(info.className).toContain('shop-detail-info');
+    expect(info.querySelector('.shop-detail-tags')).not.toBeNull();
+    expect(info.querySelector('.shop-detail-name').textContent).toBe('Twin Image Shampoo 100ml');
+    expect(info.querySelector('.shop-detail-price-row')).not.toBeNull();
+    expect(info.querySelector('.shop-detail-action')).not.toBeNull();
+    expect(info.querySelectorAll('.shop-detail-card')).toHaveLength(2);
+
+    // Nothing you act on is left under the photo.
+    expect(gallery.querySelector('.shop-detail-name')).toBeNull();
+    expect(gallery.querySelector('.shop-detail-price-row')).toBeNull();
+    expect(gallery.querySelector('.shop-detail-action')).toBeNull();
+    expect(gallery.querySelectorAll('.shop-detail-card')).toHaveLength(0);
+
+    const rules = shopCssRules();
+    const layoutRules = rules.filter(rule => /^\.shop-detail-layout$/.test(rule.selector));
+    // One column by default — a phone is untouched...
+    const base = layoutRules.find(rule => rule.context === '');
+    expect(base.body).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\)/);
+    // ...and no `gap` on the stacked layout, which would double the 14px the
+    // tag row already carries.
+    expect(base.body).not.toMatch(/\bgap:/);
+    // ...two from 900px, with the photo in a fixed column.
+    const laptop = layoutRules.find(rule => /900px/.test(rule.context));
+    expect(laptop.body).toMatch(/grid-template-columns:\s*clamp\(280px, 34%, 440px\) minmax\(0, 1fr\)/);
+
+    // The page is capped and centred: 12px copy across the full 1384px of a
+    // 1440px window is the unreadable line the screenshot showed.
+    const capped = rules.find(rule => /^\.shop-detail-page$/.test(rule.selector) && /max-width/.test(rule.body));
+    expect(capped.body).toMatch(/max-width:\s*1180px/);
+    expect(capped.body).toMatch(/margin:\s*0 auto/);
+
+    // In its own column the hero is square (the uploads are square) and the
+    // last word on the frame is the laptop rule, not the old 360px cap.
+    const heroRules = rules.filter(rule => /^\.shop-detail-hero$/.test(rule.selector) && /900px/.test(rule.context));
+    expect(heroRules.at(-1).body).toMatch(/aspect-ratio:\s*1 \/ 1/);
+    expect(heroRules.at(-1).body).toMatch(/max-height:\s*440px/);
+
+    // The price and its rating sit together at the left instead of being
+    // pushed to opposite ends of a very wide row.
+    const priceRow = rules.filter(rule => /^\.shop-detail-price-row$/.test(rule.selector) && /900px/.test(rule.context));
+    expect(priceRow.at(-1).body).toMatch(/justify-content:\s*flex-start/);
+
+    // The photo still follows the copy down a long page.
+    const sticky = rules.find(rule => /^\.shop-detail-gallery$/.test(rule.selector) && /position/.test(rule.body));
+    expect(sticky.body).toMatch(/position:\s*sticky/);
+  });
+
   // Reported with a screenshot: a portrait upload inside the wider frame left
   // two bands of the card's flat black around a white product shot, which read
   // as a broken image. The band is now a blurred copy of the photo itself.

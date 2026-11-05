@@ -1,0 +1,1219 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MyNaai Dev <dev@mynaai.in>
+Date: Wed, 5 Nov 2026 10:00:00 +0530
+Subject: [PATCH] Shop categories: one list for the admin panel, the website and the app
+
+The shop classified products in the browser (a keyword guess over the name, plus
+whatever free text the admin panel wrote into `shop_products.category`). Two
+consequences the client reported:
+
+  · the panel offered its own eight long labels, so a category the admin created
+    was invisible on the website;
+  · free text was mapped by guesswork — a bottle of herbal hair oil filed under
+    "Hair Colour and Chemical Products" showed up as HAIR COLOUR.
+
+This patch makes the list a table, with one endpoint behind it and one slug rule
+shared by the panel, the website, the app and the bulk importer.
+
+  POST /api/shop-categories/list           any signed-in user (app / website)
+  POST /api/shop-public/categories/list    no token, rate-limited, 5 min cache
+  POST /api/shop-categories/admin/list     admin: every row + productCount
+  POST /api/shop-categories/admin/create   admin: { label, sortOrder? }
+  POST /api/shop-categories/admin/update   admin: { id, label?, sortOrder?, isActive? }
+  POST /api/shop-categories/admin/delete   admin: { id, reassignTo? }
+
+Rules the code enforces (and the website already relies on):
+
+  · the id is the label's slug, FIXED at creation. Renaming a label never
+    changes the id, because every product stores the id. `create` refuses a
+    duplicate id or a duplicate label.
+  · `sort_order` accepts 0 — the first chip — and a new category is appended
+    after the highest position.
+  · deleting a category that has products is refused with the count in the
+    message; with `reassignTo` the products move first (both the id and the old
+    label spelling), then the row is deleted.
+  · `is_active = false` hides it from the storefront filter but leaves it on the
+    products already filed under it, and stays visible in the panel.
+  · product create/update now validate `category` against this table and answer
+    `Unknown category "x" — use one of the ids from the category list`. An empty
+    value is still allowed (the shop falls back to inference).
+
+Files
+
+  new  src/utils/categorySlug.js                    the one slug rule
+  new  src/database/models/shopCategory.model.js    shop_categories
+  new  src/database/config/ensureShopSchema.js      idempotent DDL guard
+  new  src/services/shopCategory.service.js         list / create / update /
+                                                    delete / resolveCategoryId
+  new  src/controller/shopCategory/*.js             five thin controllers
+  new  src/routes/shopCategory.routes.js            mounted at /shop-categories
+  new  migrations/2026-11-05-shop-categories-leads-bulk.sql
+                                                    categories + lead columns +
+                                                    bulk-import tables (one file,
+                                                    three features, idempotent)
+  mod  src/routes/routes.js                         mounts /shop-categories
+  mod  src/routes/shopPublic.routes.js              adds /categories/list (POST + GET)
+  mod  src/controller/shopProduct/adminCreateShopProduct.js
+  mod  src/controller/shopProduct/adminUpdateShopProduct.js
+
+The migration also re-files the eight legacy panel labels onto the seven real
+categories (Hair Care Products -> hair-care, Shaving and Beard Products ->
+beard-grooming, Facial and Skin Care Products -> skin-face, …) so the storefront
+filter has seven chips instead of fifteen. Anything it does not recognise is left
+untouched: the website still shows a chip for it, and the panel lists it under
+"unmatched" so it can be re-filed by hand. Review before running:
+
+  SELECT category, COUNT(*) FROM shop_products
+   WHERE deleted_at IS NULL GROUP BY category ORDER BY 2 DESC;
+
+`src/database/config/ensureShopSchema.js` is the belt to that braces: it creates
+the table and inserts the seven seeds once per process (no-op on a migrated
+database), so the panel and the API answer even where nobody ran the SQL. It
+deliberately does NOT rewrite existing catalogue rows — that stays in the
+migration, where it can be reviewed first.
+
+Apply order: this patch -> backend-2-booking-request-leads -> backend-3-shop-bulk-products.
+This one stands alone; the next two import `ensureShopSchema`.
+
+Verified: every file passes `node --check`; `src/routes/routes` loads and exposes
+the five routes; the service was exercised against a stub ORM for create /
+rename / hide / delete-refused / reassign-then-delete / resolve, including the
+`sort_order: 0` case.
+---
+ .../2026-11-05-shop-categories-leads-bulk.sql      | 148 +++++++++
+ .../shopCategory/adminCreateShopCategory.js        |  30 ++
+ .../shopCategory/adminDeleteShopCategory.js        |  39 +++
+ .../shopCategory/adminListShopCategories.js        |  36 +++
+ .../shopCategory/adminUpdateShopCategory.js        |  30 ++
+ src/controller/shopCategory/listShopCategories.js  |  36 +++
+ .../shopProduct/adminCreateShopProduct.js          |  11 +-
+ .../shopProduct/adminUpdateShopProduct.js          |   9 +-
+ src/database/config/ensureShopSchema.js            | 147 +++++++++
+ src/database/models/shopCategory.model.js          |  57 ++++
+ src/routes/routes.js                               |   4 +
+ src/routes/shopCategory.routes.js                  |  32 ++
+ src/routes/shopPublic.routes.js                    |   7 +
+ src/services/shopCategory.service.js               | 338 +++++++++++++++++++++
+ src/utils/categorySlug.js                          |  39 +++
+ 15 files changed, 959 insertions(+), 4 deletions(-)
+
+diff --git a/migrations/2026-11-05-shop-categories-leads-bulk.sql b/migrations/2026-11-05-shop-categories-leads-bulk.sql
+new file mode 100644
+index 0000000..4623fe9
+--- /dev/null
++++ b/migrations/2026-11-05-shop-categories-leads-bulk.sql
+@@ -0,0 +1,148 @@
++-- 2026-11-05-shop-categories-leads-bulk.sql
++--
++-- Three things the portal, the admin panel and the API now depend on, in one
++-- idempotent file. Every statement is IF NOT EXISTS / ON CONFLICT, so running it
++-- twice is harmless and running it on a fresh database gives the same result as
++-- running it on production.
++--
++--   1. `shop_categories` — the ONE category list (admin panel, website, app).
++--   2. `booking_requests` answer window + outcome columns — the leads tab.
++--   3. `shop_product_imports` + `shop_products.bulk_import_id` — bulk upload
++--      audit trail and undo.
++--
++-- The code also carries a self-heal guard for (1) and (2)
++-- (src/database/config/ensureShopSchema.js), so an un-migrated deployment still
++-- answers instead of throwing "relation does not exist". This file is the fix of
++-- record: run it before deploying, and the guards become no-ops.
++
++BEGIN;
++
++-- =====================================================================
++-- 1. Product categories — one list for the panel, the website and the app
++-- =====================================================================
++CREATE TABLE IF NOT EXISTS shop_categories (
++    id          VARCHAR(64) PRIMARY KEY,          -- slug, stored on the product
++    label       VARCHAR(120) NOT NULL,            -- what customers read
++    sort_order  INTEGER NOT NULL DEFAULT 0,       -- the filter's order
++    is_active   BOOLEAN NOT NULL DEFAULT TRUE,    -- false = hidden, not deleted
++    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
++    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
++);
++
++-- The seven the shop has always shown. The ids are hand-named (not the slug of
++-- the label) and must match DEFAULT_SHOP_CATEGORIES in
++-- my-naai-web/src/lib/shopCategories.js — that is the website's fallback list,
++-- so a backend without this table still shows the same seven chips.
++INSERT INTO shop_categories (id, label, sort_order) VALUES
++    ('hair-care',      'Hair care',         0),
++    ('beard-grooming', 'Beard & grooming',  1),
++    ('skin-face',      'Skin & face',       2),
++    ('fragrance',      'Fragrance',         3),
++    ('hair-colour',    'Hair colour',       4),
++    ('tools-equipment','Tools & equipment', 5),
++    ('kits-sets',      'Kits & sets',       6)
++ON CONFLICT (id) DO NOTHING;
++
++-- The admin panel used to offer eight long free-text labels in its product
++-- editor. Products filed under those labels are moved onto a real category id so
++-- the storefront's filter has seven chips, not fifteen. Review the mapping
++-- before running this section in production:
++--
++--   SELECT category, COUNT(*) FROM shop_products
++--    WHERE deleted_at IS NULL GROUP BY category ORDER BY 2 DESC;
++--
++-- Anything this mapping does not recognise is left exactly as it is: the website
++-- still shows an extra chip for it (a retired or unknown shelf stays reachable),
++-- and the admin can re-file those products from the panel. No row is deleted and
++-- no product is hidden.
++UPDATE shop_products SET category = 'hair-care'
++ WHERE deleted_at IS NULL AND lower(trim(category)) IN ('hair care products', 'hair styling products');
++UPDATE shop_products SET category = 'hair-colour'
++ WHERE deleted_at IS NULL AND lower(trim(category)) = 'hair colour and chemical products';
++UPDATE shop_products SET category = 'beard-grooming'
++ WHERE deleted_at IS NULL AND lower(trim(category)) = 'shaving and beard products';
++UPDATE shop_products SET category = 'skin-face'
++ WHERE deleted_at IS NULL AND lower(trim(category)) IN ('facial and skin care products', 'waxing products');
++UPDATE shop_products SET category = 'tools-equipment'
++ WHERE deleted_at IS NULL AND lower(trim(category)) IN ('salon tools and accessories', 'salon hygiene and disposable items');
++
++CREATE INDEX IF NOT EXISTS idx_shop_products_category ON shop_products (lower(category));
++
++-- =====================================================================
++-- 2. Booking REQUESTS (leads) — the answer window and the outcome
++-- =====================================================================
++-- Requests are NOT bookings. `booking_requests` is the lead a customer sent;
++-- `booking` / `booking_list` holds the chair that exists after an accept. These
++-- columns describe the lead only.
++ALTER TABLE booking_requests ADD COLUMN IF NOT EXISTS expires_at    TIMESTAMPTZ;
++ALTER TABLE booking_requests ADD COLUMN IF NOT EXISTS responded_at  TIMESTAMPTZ;
++ALTER TABLE booking_requests ADD COLUMN IF NOT EXISTS booking_id     UUID;
++ALTER TABLE booking_requests ADD COLUMN IF NOT EXISTS routed_barber_id UUID;
++
++-- Existing rows: the window started when the request was created and lasted 60
++-- seconds. Backfilling `expires_at` lets the sweeper and the leads list classify
++-- old rows instead of treating every one of them as still answerable.
++UPDATE booking_requests
++   SET expires_at = created_at + INTERVAL '60 seconds'
++ WHERE expires_at IS NULL;
++
++-- A request that is still PENDING long after its window is, factually, an
++-- auto-cancel that the sweeper has not written yet. Do not touch PENDING rows
++-- the sweeper could still legitimately reach (a fresh one); the WHERE clause is
++-- the same one the sweeper uses, so the two cannot disagree.
++UPDATE booking_requests
++   SET status = 'AUTO_CANCELLED', responded_at = COALESCE(responded_at, expires_at)
++ WHERE status = 'PENDING' AND expires_at < NOW();
++
++CREATE INDEX IF NOT EXISTS idx_booking_requests_salon_status
++    ON booking_requests (salon_id, status, created_at DESC);
++CREATE INDEX IF NOT EXISTS idx_booking_requests_pending_expiry
++    ON booking_requests (expires_at) WHERE status = 'PENDING';
++CREATE INDEX IF NOT EXISTS idx_booking_requests_customer
++    ON booking_requests (customer_id, created_at DESC);
++
++-- The salon's counters in one row, for anything that reads them outside the API
++-- (a report, a spreadsheet, a support call). The API computes the same numbers
++-- with one GROUP BY so it works even where this view was never created.
++CREATE OR REPLACE VIEW salon_lead_counts AS
++SELECT salon_id,
++       COUNT(*)                                                 AS received,
++       COUNT(*) FILTER (WHERE status = 'PENDING')               AS awaiting,
++       COUNT(*) FILTER (WHERE status = 'ACCEPTED')              AS accepted,
++       COUNT(*) FILTER (WHERE status = 'REJECTED')              AS rejected,
++       COUNT(*) FILTER (WHERE status = 'AUTO_CANCELLED')        AS auto_cancelled,
++       COUNT(*) FILTER (WHERE status = 'CANCELLED')             AS cancelled_by_customer,
++       COUNT(*) FILTER (WHERE status IN ('ACCEPTED', 'REJECTED')) AS answered,
++       MAX(created_at)                                          AS last_received_at
++  FROM booking_requests
++ GROUP BY salon_id;
++
++-- =====================================================================
++-- 3. Bulk product upload — the audit trail and the undo handle
++-- =====================================================================
++CREATE TABLE IF NOT EXISTS shop_product_imports (
++    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
++    admin_id      VARCHAR(64) NOT NULL,
++    file_name     VARCHAR(255) NOT NULL,
++    mode          VARCHAR(16) NOT NULL DEFAULT 'CREATE_ONLY',
++    rows_total    INTEGER NOT NULL DEFAULT 0,
++    rows_created  INTEGER NOT NULL DEFAULT 0,
++    rows_updated  INTEGER NOT NULL DEFAULT 0,
++    rows_failed   INTEGER NOT NULL DEFAULT 0,
++    report        JSONB NOT NULL DEFAULT '{}'::jsonb,
++    undone_at     TIMESTAMPTZ,
++    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
++);
++
++ALTER TABLE shop_products ADD COLUMN IF NOT EXISTS bulk_import_id UUID;
++CREATE INDEX IF NOT EXISTS idx_shop_products_bulk_import ON shop_products (bulk_import_id);
++
++-- The sheet's optional columns need somewhere to land: stock on hand, the
++-- barcode, the HSN code and the GST rate. All nullable, so nothing that exists
++-- today changes, and the single-product form keeps writing only what it knows.
++ALTER TABLE shop_products ADD COLUMN IF NOT EXISTS stock_count INTEGER;
++ALTER TABLE shop_products ADD COLUMN IF NOT EXISTS bar_code    VARCHAR(64);
++ALTER TABLE shop_products ADD COLUMN IF NOT EXISTS hsn_code    VARCHAR(16);
++ALTER TABLE shop_products ADD COLUMN IF NOT EXISTS gst_percent DECIMAL(5, 2);
++
++COMMIT;
+diff --git a/src/controller/shopCategory/adminCreateShopCategory.js b/src/controller/shopCategory/adminCreateShopCategory.js
+new file mode 100644
+index 0000000..d2b1679
+--- /dev/null
++++ b/src/controller/shopCategory/adminCreateShopCategory.js
+@@ -0,0 +1,30 @@
++const shopCategoryService = require('../../services/shopCategory.service');
++
++/**
++ * Add a category to the one list.
++ *
++ * Body: `{ label, id?, sortOrder?, isActive? }`. The id is generated from the
++ * label (`"Nail care"` -> `nail-care`) unless the caller pins it; the panel does
++ * not pin it, and the response tells it what was generated so it can show the
++ * id in the "this never changes" note.
++ */
++const adminCreateShopCategory = async (request, response) => {
++    try {
++        const { id, label, sortOrder, isActive } = request.body || {};
++        const category = await shopCategoryService.create({ id, label, sortOrder, isActive });
++
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: 'Category added successfully',
++            data: { category }
++        });
++    } catch (error) {
++        console.error('ADMIN CREATE SHOP CATEGORY ERROR:', error);
++        return response.status(error.status || 500).json({
++            status: 'FAILED',
++            message: error.message
++        });
++    }
++};
++
++module.exports = adminCreateShopCategory;
+diff --git a/src/controller/shopCategory/adminDeleteShopCategory.js b/src/controller/shopCategory/adminDeleteShopCategory.js
+new file mode 100644
+index 0000000..078d481
+--- /dev/null
++++ b/src/controller/shopCategory/adminDeleteShopCategory.js
+@@ -0,0 +1,39 @@
++const shopCategoryService = require('../../services/shopCategory.service');
++
++/**
++ * Delete a category — refused while products use it.
++ *
++ * Body: `{ id, reassignTo? }`. With `reassignTo` the products are moved first
++ * and then the row is deleted; without it, a category with products answers
++ * `FAILED` naming the count, which is the panel's cue to offer
++ * "Move 12 products to…".
++ *
++ * The refusal is a 200 with `status: 'FAILED'` — the same convention the rest of
++ * this API uses for "the request was understood and declined", so the panel
++ * reads `message` and shows it rather than parsing a status code.
++ */
++const adminDeleteShopCategory = async (request, response) => {
++    try {
++        const { id, reassignTo } = request.body || {};
++        const result = await shopCategoryService.remove({ id, reassignTo });
++
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: result.movedProducts
++                ? `Category deleted, ${result.movedProducts} products moved`
++                : 'Category deleted',
++            data: result
++        });
++    } catch (error) {
++        console.error('ADMIN DELETE SHOP CATEGORY ERROR:', error);
++        // 404 = no such category; 400 = refused (in use, bad reassign target);
++        // anything else is ours to fix and must not look like a declined action.
++        const status = error.status === 404 ? 404 : error.status === 400 ? 200 : 500;
++        return response.status(status).json({
++            status: 'FAILED',
++            message: error.message
++        });
++    }
++};
++
++module.exports = adminDeleteShopCategory;
+diff --git a/src/controller/shopCategory/adminListShopCategories.js b/src/controller/shopCategory/adminListShopCategories.js
+new file mode 100644
+index 0000000..6bdd64a
+--- /dev/null
++++ b/src/controller/shopCategory/adminListShopCategories.js
+@@ -0,0 +1,36 @@
++const shopCategoryService = require('../../services/shopCategory.service');
++
++/**
++ * The admin panel's Categories manager.
++ *
++ * Every category, including the hidden ones (the panel has to be able to un-hide
++ * a row, so hiding must not make it unreadable), each with `productCount`, plus
++ * `unmatched`: the free-text values that no category owns. Those are the rows an
++ * admin has to re-file, and showing them is what stops "twelve products on a
++ * shelf nobody can see".
++ *
++ * Body: `{ includeInactive: true }` (default true).
++ */
++const adminListShopCategories = async (request, response) => {
++    try {
++        const { includeInactive = true } = request.body || {};
++        const data = await shopCategoryService.listAdmin({ includeInactive });
++
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: 'Shop categories fetched successfully',
++            data: {
++                ...data,
++                count: data.categories.length
++            }
++        });
++    } catch (error) {
++        console.error('ADMIN LIST SHOP CATEGORIES ERROR:', error);
++        return response.status(error.status || 500).json({
++            status: 'FAILED',
++            message: error.message
++        });
++    }
++};
++
++module.exports = adminListShopCategories;
+diff --git a/src/controller/shopCategory/adminUpdateShopCategory.js b/src/controller/shopCategory/adminUpdateShopCategory.js
+new file mode 100644
+index 0000000..c47b3a3
+--- /dev/null
++++ b/src/controller/shopCategory/adminUpdateShopCategory.js
+@@ -0,0 +1,30 @@
++const shopCategoryService = require('../../services/shopCategory.service');
++
++/**
++ * Rename, re-order or hide a category.
++ *
++ * Body: `{ id, label?, sortOrder?, isActive? }`. `id` identifies the row and can
++ * never be changed — products store it, so re-slugging a category would orphan
++ * every product filed under it. The panel says so next to the field; this
++ * endpoint is where that promise is kept.
++ */
++const adminUpdateShopCategory = async (request, response) => {
++    try {
++        const { id, label, sortOrder, isActive } = request.body || {};
++        const category = await shopCategoryService.update({ id, label, sortOrder, isActive });
++
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: 'Category updated successfully',
++            data: { category }
++        });
++    } catch (error) {
++        console.error('ADMIN UPDATE SHOP CATEGORY ERROR:', error);
++        return response.status(error.status || 500).json({
++            status: 'FAILED',
++            message: error.message
++        });
++    }
++};
++
++module.exports = adminUpdateShopCategory;
+diff --git a/src/controller/shopCategory/listShopCategories.js b/src/controller/shopCategory/listShopCategories.js
+new file mode 100644
+index 0000000..fd4bf86
+--- /dev/null
++++ b/src/controller/shopCategory/listShopCategories.js
+@@ -0,0 +1,36 @@
++const shopCategoryService = require('../../services/shopCategory.service');
++
++/**
++ * The storefront's category list.
++ *
++ * ONE handler answers three doors — `POST /api/shop-categories/list` (a signed-in
++ * customer or salon), `POST /api/shop-public/categories/list` and its GET twin
++ * (no token at all) — so the website, the app and the panel cannot be served
++ * different lists.
++ *
++ * Only ACTIVE categories are returned, in the admin's order. `data.categories`
++ * is the shape the website reads; the extra `count` lets a client that shows a
++ * number beside a chip do it without a second call.
++ */
++const listShopCategories = async (request, response) => {
++    try {
++        const categories = await shopCategoryService.listActive();
++
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: 'Shop categories fetched successfully',
++            data: {
++                categories,
++                count: categories.length
++            }
++        });
++    } catch (error) {
++        console.error('LIST SHOP CATEGORIES ERROR:', error);
++        return response.status(error.status || 500).json({
++            status: 'FAILED',
++            message: error.message
++        });
++    }
++};
++
++module.exports = listShopCategories;
+diff --git a/src/controller/shopProduct/adminCreateShopProduct.js b/src/controller/shopProduct/adminCreateShopProduct.js
+index 5359f07..517d070 100644
+--- a/src/controller/shopProduct/adminCreateShopProduct.js
++++ b/src/controller/shopProduct/adminCreateShopProduct.js
+@@ -1,5 +1,6 @@
+ const { adminCreateShopProductSchema } = require('../../validations/shopProduct.validation');
+ const shopProductService = require('../../services/shopProduct.service');
++const shopCategoryService = require('../../services/shopCategory.service');
+ 
+ // Company admin: add a product to the company's own shop catalog. No salon
+ // is involved — this table is separate from the salons' customer products.
+@@ -16,6 +17,12 @@ const adminCreateShopProduct = async (request, response) => {
+         }
+ 
+         const value = validationResult.value;
++        // A product may only be filed under a category from the shared list —
++        // free text is what let "Hair Colour and Chemical Products" put a bottle
++        // of hair oil under HAIR COLOUR on the website. An empty value is still
++        // allowed: the shop then falls back to its name-based inference.
++        const categoryId = await shopCategoryService.requireCategoryId(value.category, { allowEmpty: true });
++
+         const dataToInsert = {
+             productName: value.productName,
+             price: value.price,
+@@ -23,7 +30,7 @@ const adminCreateShopProduct = async (request, response) => {
+             isAvailable: value.isAvailable,
+             productImage: value.productImage || null,
+             mrp: value.mrp ?? null,
+-            category: value.category || '',
++            category: categoryId,
+             // NULL keeps the shop UI's name-based gender fallback alive.
+             gender: value.gender || null,
+             description: value.description || null
+@@ -50,7 +57,7 @@ const adminCreateShopProduct = async (request, response) => {
+         });
+     } catch (error) {
+         console.log('error', error);
+-        return response.status(500).json({ status: 'FAILED', message: error.message });
++        return response.status(error.status || 500).json({ status: 'FAILED', message: error.message });
+     }
+ };
+ module.exports = adminCreateShopProduct;
+diff --git a/src/controller/shopProduct/adminUpdateShopProduct.js b/src/controller/shopProduct/adminUpdateShopProduct.js
+index 50cf5cb..3fd4588 100644
+--- a/src/controller/shopProduct/adminUpdateShopProduct.js
++++ b/src/controller/shopProduct/adminUpdateShopProduct.js
+@@ -1,5 +1,6 @@
+ const { adminUpdateShopProductSchema } = require('../../validations/shopProduct.validation');
+ const shopProductService = require('../../services/shopProduct.service');
++const shopCategoryService = require('../../services/shopCategory.service');
+ 
+ // Company admin: partially update a shop product. Unsent fields are left
+ // as-is.
+@@ -21,7 +22,11 @@ const adminUpdateShopProduct = async (request, response) => {
+         if (price !== undefined) dataToUpdate.price = price;
+         if (rating !== undefined) dataToUpdate.rating = rating;
+         if (mrp !== undefined) dataToUpdate.mrp = mrp ?? null;
+-        if (category !== undefined) dataToUpdate.category = category || '';
++        // Validated against the shared list, exactly like create — a rename of
++        // the category's LABEL must not be typed into a product by hand.
++        if (category !== undefined) {
++            dataToUpdate.category = await shopCategoryService.requireCategoryId(category, { allowEmpty: true });
++        }
+         if (gender !== undefined) dataToUpdate.gender = gender || null;
+         if (description !== undefined) dataToUpdate.description = description || null;
+         if (typeof isAvailable === 'boolean') {
+@@ -45,7 +50,7 @@ const adminUpdateShopProduct = async (request, response) => {
+         });
+     } catch (error) {
+         console.log('error', error);
+-        return response.status(500).json({ status: 'FAILED', message: error.message });
++        return response.status(error.status || 500).json({ status: 'FAILED', message: error.message });
+     }
+ };
+ module.exports = adminUpdateShopProduct;
+diff --git a/src/database/config/ensureShopSchema.js b/src/database/config/ensureShopSchema.js
+new file mode 100644
+index 0000000..06905ad
+--- /dev/null
++++ b/src/database/config/ensureShopSchema.js
+@@ -0,0 +1,147 @@
++// database/config/ensureShopSchema.js
++//
++// The belt to the migration's braces.
++//
++// Three features ship in this release and each of them reads a column or a
++// table that a database which never ran
++// `migrations/2026-11-05-shop-categories-leads-bulk.sql` does not have:
++//
++//   · `shop_categories` — the shop's category list. Missing, the website's
++//     filter silently falls back to its seed list (survivable), and the admin's
++//     Categories manager throws (not survivable — the panel shows an empty
++//     page).
++//   · `booking_requests.expires_at` / `responded_at` / `booking_id` — the 60
++//     second answer window and the leads tab. Missing, the new tab 500s, and
++//     the client falls back to reading notifications.
++//   · `shop_products.bulk_import_id`, the sheet's optional columns and
++//     `shop_product_imports` — bulk upload. Missing, every import fails with
++//     "column does not exist".
++//
++// This guard runs the same idempotent DDL once per process: at boot, and again
++// (best-effort) the first time a feature touches the schema. Every statement is
++// `IF NOT EXISTS` / `ON CONFLICT`, so:
++//
++//   · on a migrated database it is a no-op;
++//   · existing rows keep their meaning (the new columns are nullable, and the
++//     category seed is inserted with the ids the shop already used);
++//   · if the database user lacks ALTER rights it logs and gives up, and the API
++//     keeps answering with what the database can actually do.
++//
++// Deliberately NOT done here: the legacy free-text-to-id rewrite of
++// `shop_products.category` and the auto-cancel backfill. Both CHANGE existing
++// rows, and a boot-time side effect that rewrites a catalogue is exactly what
++// nobody wants at 2 a.m. They stay in the migration, where they can be reviewed
++// first.
++const db = require('../models');
++
++const SEED_CATEGORIES = [
++    ['hair-care', 'Hair care', 0],
++    ['beard-grooming', 'Beard & grooming', 1],
++    ['skin-face', 'Skin & face', 2],
++    ['fragrance', 'Fragrance', 3],
++    ['hair-colour', 'Hair colour', 4],
++    ['tools-equipment', 'Tools & equipment', 5],
++    ['kits-sets', 'Kits & sets', 6]
++];
++
++const SEED_VALUES = SEED_CATEGORIES
++    .map(([id, label, order]) => `('${id}', '${label.replace(/'/g, "''")}', ${order})`)
++    .join(',\n    ');
++
++const STATEMENTS = [
++    // ── The one category list ────────────────────────────────────────────
++    `CREATE TABLE IF NOT EXISTS shop_categories (
++        id          VARCHAR(64) PRIMARY KEY,
++        label       VARCHAR(120) NOT NULL,
++        sort_order  INTEGER NOT NULL DEFAULT 0,
++        is_active   BOOLEAN NOT NULL DEFAULT TRUE,
++        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
++        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
++    );`,
++    `INSERT INTO shop_categories (id, label, sort_order) VALUES
++    ${SEED_VALUES}
++    ON CONFLICT (id) DO NOTHING;`,
++
++    // ── The lead's answer window ─────────────────────────────────────────
++    `ALTER TABLE IF EXISTS booking_requests ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;`,
++    `ALTER TABLE IF EXISTS booking_requests ADD COLUMN IF NOT EXISTS responded_at TIMESTAMPTZ;`,
++    `ALTER TABLE IF EXISTS booking_requests ADD COLUMN IF NOT EXISTS booking_id UUID;`,
++    `ALTER TABLE IF EXISTS booking_requests ADD COLUMN IF NOT EXISTS routed_barber_id UUID;`,
++    // A request created before this release has no window; give it the one it
++    // would have had. This is a value fill, not a status change — the sweeper
++    // decides what happens next.
++    `UPDATE booking_requests SET expires_at = created_at + INTERVAL '60 seconds' WHERE expires_at IS NULL;`,
++    `CREATE INDEX IF NOT EXISTS idx_booking_requests_salon_status ON booking_requests (salon_id, status, created_at DESC);`,
++    `CREATE INDEX IF NOT EXISTS idx_booking_requests_pending_expiry ON booking_requests (expires_at) WHERE status = 'PENDING';`,
++
++    // ── Bulk upload ──────────────────────────────────────────────────────
++    `CREATE TABLE IF NOT EXISTS shop_product_imports (
++        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
++        admin_id      VARCHAR(64) NOT NULL,
++        file_name     VARCHAR(255) NOT NULL,
++        mode          VARCHAR(16) NOT NULL DEFAULT 'CREATE_ONLY',
++        rows_total    INTEGER NOT NULL DEFAULT 0,
++        rows_created  INTEGER NOT NULL DEFAULT 0,
++        rows_updated  INTEGER NOT NULL DEFAULT 0,
++        rows_failed   INTEGER NOT NULL DEFAULT 0,
++        report        JSONB NOT NULL DEFAULT '{}'::jsonb,
++        undone_at     TIMESTAMPTZ,
++        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
++    );`,
++    `ALTER TABLE IF EXISTS shop_products ADD COLUMN IF NOT EXISTS bulk_import_id UUID;`,
++    `ALTER TABLE IF EXISTS shop_products ADD COLUMN IF NOT EXISTS stock_count INTEGER;`,
++    `ALTER TABLE IF EXISTS shop_products ADD COLUMN IF NOT EXISTS bar_code VARCHAR(64);`,
++    `ALTER TABLE IF EXISTS shop_products ADD COLUMN IF NOT EXISTS hsn_code VARCHAR(16);`,
++    `ALTER TABLE IF EXISTS shop_products ADD COLUMN IF NOT EXISTS gst_percent DECIMAL(5, 2);`,
++    `CREATE INDEX IF NOT EXISTS idx_shop_products_bulk_import ON shop_products (bulk_import_id);`
++];
++
++let ensured = false;
++let inFlight = null;
++
++/**
++ * Run the DDL. Resolves true when everything the database can be asked for was
++ * asked for, false when at least one statement was refused — callers must not
++ * assume success.
++ *
++ * Statements are independent: one failure (say, no CREATE TABLE right, but
++ * ALTER right present) does not stop the rest, because a half-repaired schema is
++ * strictly better than none and the log says which statement was refused.
++ */
++const ensureShopSchema = async ({ force = false } = {}) => {
++    if (ensured && !force) return true;
++    if (inFlight) return inFlight;
++
++    inFlight = (async () => {
++        const failures = [];
++        for (const statement of STATEMENTS) {
++            try {
++                await db.sequelize.query(statement);
++            } catch (error) {
++                failures.push(error.message);
++            }
++        }
++
++        if (failures.length) {
++            console.error(
++                '[shop-schema] could not finish the shop/leads schema — run migrations/2026-11-05-shop-categories-leads-bulk.sql:',
++                failures[0]
++            );
++            return false;
++        }
++
++        ensured = true;
++        console.log('[shop-schema] shop_categories, booking_requests window and bulk-import columns present');
++        return true;
++    })().finally(() => {
++        inFlight = null;
++    });
++
++    return inFlight;
++};
++
++module.exports = {
++    ensureShopSchema,
++    SHOP_SCHEMA_STATEMENTS: STATEMENTS,
++    SEED_CATEGORIES
++};
+diff --git a/src/database/models/shopCategory.model.js b/src/database/models/shopCategory.model.js
+new file mode 100644
+index 0000000..27c6619
+--- /dev/null
++++ b/src/database/models/shopCategory.model.js
+@@ -0,0 +1,57 @@
++const { DataTypes } = require('sequelize');
++
++/**
++ * Shop product category — the ONE list the admin panel, the website and the
++ * mobile app all read.
++ *
++ * Before this table each surface had its own list: the admin panel offered a
++ * hard-coded array of eight long labels ("Hair Colour and Chemical Products"),
++ * the website inferred a category from the product's name, and the app did its
++ * own guess. A category created in the panel was invisible to customers, and a
++ * product filed under a long free-text label was shown under whatever shelf the
++ * keyword rules happened to pick.
++ *
++ * `id` is a slug and it is FIXED at creation: `shop_products.category` stores
++ * it, so renaming a label must never rewrite the id (that would orphan every
++ * product filed under it). `sort_order` is the order the customer's filter
++ * shows — the admin's order, not an alphabetical guess.
++ */
++module.exports = (sequelize) => {
++    const ShopCategory = sequelize.define('ShopCategory', {
++        id: {
++            type: DataTypes.STRING(64),
++            primaryKey: true
++        },
++
++        // What the customer reads on the filter chip and on a product card.
++        label: {
++            type: DataTypes.STRING(120),
++            allowNull: false
++        },
++
++        // 0 is a valid position (the first chip), so this is never defaulted
++        // from `||` arithmetic anywhere — see the ordering notes in
++        // shopCategory.service.js.
++        sortOrder: {
++            type: DataTypes.INTEGER,
++            allowNull: false,
++            defaultValue: 0,
++            field: 'sort_order'
++        },
++
++        // Hiding a category removes it from the storefront's filter but leaves
++        // it on the products already filed under it.
++        isActive: {
++            type: DataTypes.BOOLEAN,
++            allowNull: false,
++            defaultValue: true,
++            field: 'is_active'
++        }
++    }, {
++        tableName: 'shop_categories',
++        timestamps: true,
++        underscored: true
++    });
++
++    return ShopCategory;
++};
+diff --git a/src/routes/routes.js b/src/routes/routes.js
+index a441fd8..27811f9 100644
+--- a/src/routes/routes.js
++++ b/src/routes/routes.js
+@@ -14,6 +14,7 @@ const distributorRouter = require('./distributor.routes');
+ const shopOrderRouter = require('./shopOrder.routes');
+ const shopSettingsRouter = require('./shopSettings.routes');
+ const shopPublicRouter = require('./shopPublic.routes');
++const shopCategoryRouter = require('./shopCategory.routes');
+ const razorpayWebhook = require('../controller/razorpay/razorpayWebhook');
+ const notificationRouter = require('./notification.routes');
+ const bookingRequestRouter = require('./bookingRequest.routes');
+@@ -42,6 +43,9 @@ routes.use('/shop-cart', shopCartRouter);
+ routes.use('/distributors', distributorRouter);
+ routes.use('/shop-orders', shopOrderRouter);
+ routes.use('/shop-settings', shopSettingsRouter);
++// The shop's category list: ONE table read by the admin panel, the website and
++// the app. Mounted beside the catalog it classifies.
++routes.use('/shop-categories', shopCategoryRouter);
+ // The website storefront: catalog + bill rules with NO token (a visitor
+ // browses before signing in). Same handlers, no auth chain, edge-cacheable
+ // and rate-limited per IP.
+diff --git a/src/routes/shopCategory.routes.js b/src/routes/shopCategory.routes.js
+new file mode 100644
+index 0000000..d2cb358
+--- /dev/null
++++ b/src/routes/shopCategory.routes.js
+@@ -0,0 +1,32 @@
++const express = require('express');
++const authenticateUserOrSalon = require('../utils/middleware/authUserOrSalon.middleware');
++const { authenticateAdmin } = require('../utils/middleware/auth.middleware');
++const listShopCategories = require('../controller/shopCategory/listShopCategories');
++const adminListShopCategories = require('../controller/shopCategory/adminListShopCategories');
++const adminCreateShopCategory = require('../controller/shopCategory/adminCreateShopCategory');
++const adminUpdateShopCategory = require('../controller/shopCategory/adminUpdateShopCategory');
++const adminDeleteShopCategory = require('../controller/shopCategory/adminDeleteShopCategory');
++
++/**
++ * The shop's category list — one table, one list, four readers.
++ *
++ *   POST /api/shop-categories/list        the product editor + a signed-in shop
++ *   POST /api/shop-public/categories/list the token-free storefront door
++ *                                         (mounted in shopPublic.routes.js)
++ *   POST /api/shop-categories/admin/*     the admin panel's manager
++ *
++ * A signed-in customer (app / website) and a salon both read the first door: a
++ * category list is not private, but the token keeps the open endpoint from being
++ * the only way in — and it is the door the panel's product editor uses, where a
++ * token is always present.
++ */
++const shopCategoryRouter = express.Router();
++
++shopCategoryRouter.post('/list', authenticateUserOrSalon, listShopCategories);
++
++shopCategoryRouter.post('/admin/list', authenticateAdmin, adminListShopCategories);
++shopCategoryRouter.post('/admin/create', authenticateAdmin, adminCreateShopCategory);
++shopCategoryRouter.post('/admin/update', authenticateAdmin, adminUpdateShopCategory);
++shopCategoryRouter.post('/admin/delete', authenticateAdmin, adminDeleteShopCategory);
++
++module.exports = shopCategoryRouter;
+diff --git a/src/routes/shopPublic.routes.js b/src/routes/shopPublic.routes.js
+index 9a0dba5..db9e842 100644
+--- a/src/routes/shopPublic.routes.js
++++ b/src/routes/shopPublic.routes.js
+@@ -2,6 +2,7 @@ const express = require('express');
+ const publicReadLimiter = require('../utils/middleware/publicReadLimiter.middleware');
+ const listShopProducts = require('../controller/shopProduct/listShopProducts');
+ const getShopSettings = require('../controller/shopSettings/getShopSettings');
++const listShopCategories = require('../controller/shopCategory/listShopCategories');
+ 
+ /**
+  * The open storefront: the catalog and the shop's commerce rules, with NO
+@@ -41,6 +42,12 @@ const cacheFor = (seconds) => (_request, response, next) => {
+ shopPublicRouter.post('/products/list', publicReadLimiter, cacheFor(60), listShopProducts);
+ shopPublicRouter.get('/products/list', publicReadLimiter, cacheFor(60), bodyFromQuery, listShopProducts);
+ 
++// The category list the shop's filter is built from. It changes when an admin
++// adds a category, not per visitor, so five minutes of staleness buys a
++// storefront whose filter opens with the page.
++shopPublicRouter.post('/categories/list', publicReadLimiter, cacheFor(300), listShopCategories);
++shopPublicRouter.get('/categories/list', publicReadLimiter, cacheFor(300), bodyFromQuery, listShopCategories);
++
+ // Delivery charges, the free-delivery threshold, the COD limit and the
+ // discount are terms of sale, not secrets: the shop cannot quote an honest
+ // bill without them.
+diff --git a/src/services/shopCategory.service.js b/src/services/shopCategory.service.js
+new file mode 100644
+index 0000000..f501fcd
+--- /dev/null
++++ b/src/services/shopCategory.service.js
+@@ -0,0 +1,338 @@
++const { Op, fn, col, where } = require('sequelize');
++const db = require('../database/models');
++const { ensureShopSchema } = require('../database/config/ensureShopSchema');
++const { toCategoryId, CATEGORY_ID_MAX } = require('../utils/categorySlug');
++
++/**
++ * Shop categories — the ONE list the admin panel, the website and the app read.
++ *
++ * Every surface used to keep its own answer to "what is this product's
++ * category?": the panel offered eight long labels, the website guessed from the
++ * product name. This service is the single answer:
++ *
++ *   · `listActive()`   the storefront's filter (active rows, admin's order),
++ *   · `listAdmin()`    the panel's manager (every row + how many products use
++ *                      it, because deleting a shelf with products on it is how
++ *                      a catalogue silently loses items),
++ *   · `resolveCategoryId()` the guard for every write — a product may only be
++ *                      filed under a category that exists.
++ *
++ * The id is a slug FIXED at creation: `shop_products.category` stores it, so a
++ * label rename keeps the id (and therefore every product) intact. That is why
++ * `update` refuses to change an id even when the caller sends one.
++ */
++
++const MAX_LABEL = 120;
++const MAX_SORT = 100000;
++
++// Errors carry their status so the controllers stay one-liners. A service
++// failure that a caller can fix (a duplicate id, a used category) is a 400; a
++// failure they cannot (database down) stays a 500.
++const fail = (message, status = 400) => {
++    const error = new Error(message);
++    error.status = status;
++    return error;
++};
++
++const normalizeLabel = (value) => String(value ?? '').trim().replace(/\s+/g, ' ');
++
++const normalizeSort = (value, fallback = 0) => {
++    // 0 is the first chip, so this must never be a `||` default.
++    const parsed = Number.parseInt(value, 10);
++    if (!Number.isFinite(parsed)) return fallback;
++    return Math.max(0, Math.min(MAX_SORT, parsed));
++};
++
++const normalizeFlag = (value, fallback = true) => {
++    if (value === undefined || value === null || value === '') return fallback;
++    if (typeof value === 'boolean') return value;
++    const text = String(value).trim().toLowerCase();
++    if (['true', '1', 'yes', 'active', 'shown'].includes(text)) return true;
++    if (['false', '0', 'no', 'hidden', 'inactive'].includes(text)) return false;
++    return fallback;
++};
++
++// The storefront reads this shape (`{ id, label, sortOrder }`); the panel reads
++// the same plus `isActive` and `productCount`.
++const toRow = (row, productCount) => ({
++    id: row.id,
++    label: row.label,
++    sortOrder: Number(row.sortOrder ?? row.sort_order ?? 0),
++    isActive: row.isActive !== false,
++    ...(productCount === undefined ? {} : { productCount })
++});
++
++/**
++ * How many live products sit on each category.
++ *
++ * `shop_products.category` is free text and old rows may still hold a legacy
++ * label, so a product counts towards a category when its value IS the id or IS
++ * the category's label (case-insensitively). Anything else is reported under
++ * `unmatched` — that is the list an admin needs to re-file by hand, and it is
++ * also what makes "delete refused, 12 products" honest instead of off by five.
++ */
++const usageByCategory = async (categories) => {
++    const rows = await db.ShopProduct.findAll({
++        attributes: ['category', [fn('COUNT', col('product_id')), 'total']],
++        where: { deletedAt: null },
++        group: ['category'],
++        raw: true
++    });
++
++    const byKey = new Map();
++    rows.forEach((row) => {
++        const key = String(row.category || '').trim().toLowerCase();
++        if (!key) return;
++        byKey.set(key, (byKey.get(key) || 0) + Number(row.total || 0));
++    });
++
++    const counts = new Map();
++    const known = new Set();
++    categories.forEach((category) => {
++        const id = String(category.id).toLowerCase();
++        const label = String(category.label || '').toLowerCase();
++        known.add(id);
++        known.add(label);
++        counts.set(category.id, (byKey.get(id) || 0) + (byKey.get(label) || 0));
++    });
++
++    const unmatched = [];
++    byKey.forEach((total, key) => {
++        if (!known.has(key)) unmatched.push({ value: key, productCount: total });
++    });
++
++    return { counts, unmatched };
++};
++
++/**
++ * The storefront's filter list: active only, ordered by the admin's
++ * `sort_order` (ties broken by id so two surfaces never disagree).
++ */
++const listActive = async () => {
++    await ensureShopSchema();
++    const rows = await db.ShopCategory.findAll({
++        where: { isActive: true },
++        order: [['sortOrder', 'ASC'], ['id', 'ASC']]
++    });
++    return rows.map((row) => toRow(row));
++};
++
++/**
++ * The admin panel's manager: every row, with how many products use it.
++ * `includeInactive` defaults to TRUE here — the panel must be able to see a
++ * hidden category to un-hide it.
++ */
++const listAdmin = async ({ includeInactive = true } = {}) => {
++    await ensureShopSchema();
++    const where = includeInactive ? {} : { isActive: true };
++    const rows = await db.ShopCategory.findAll({
++        where,
++        order: [['sortOrder', 'ASC'], ['id', 'ASC']]
++    });
++    const { counts, unmatched } = await usageByCategory(rows);
++    return {
++        categories: rows.map((row) => toRow(row, counts.get(row.id) || 0)),
++        // Free-text values no category owns. The panel shows them under the
++        // manager so a shelf the admin forgot about is visible, not guessed at.
++        unmatched
++    };
++};
++
++/** The bare list of ids, used to validate a product write. */
++const categoryIds = async () => {
++    await ensureShopSchema();
++    const rows = await db.ShopCategory.findAll({ attributes: ['id'], raw: true });
++    return rows.map((row) => row.id);
++};
++
++/**
++ * Turn whatever a caller sent into a real category id.
++ *
++ * Accepted, in order: an exact id ("hair-care"), a label in any case ("Hair
++ * Care"), or a label's slug ("hair care" -> "hair-care"). Anything else is
++ * `null` — the caller decides whether that is a 400 or a skipped row, and the
++ * message can then name what was actually sent.
++ *
++ * The slug fallback matters for hand-written sheets: "Tools & equipment"
++ * slugs to "tools-and-equipment", which is NOT the seeded id, so the lookup by
++ * label has to run first or a perfectly correct sheet row would fail.
++ */
++const resolveCategoryId = async (value) => {
++    const raw = String(value ?? '').trim();
++    if (!raw) return '';
++
++    await ensureShopSchema();
++    const rows = await db.ShopCategory.findAll({ attributes: ['id', 'label'], raw: true });
++    const wantedId = raw.toLowerCase();
++    const wantedLabel = raw.toLowerCase();
++
++    const byId = rows.find((row) => String(row.id).toLowerCase() === wantedId);
++    if (byId) return byId.id;
++
++    const byLabel = rows.find((row) => String(row.label).toLowerCase() === wantedLabel);
++    if (byLabel) return byLabel.id;
++
++    // Then the slug: "Nail care" and "nail-care" must land on the same row, and
++    // so must "tools and equipment" (what a spreadsheet tends to contain) and
++    // the seeded id "tools-equipment".
++    const slug = toCategoryId(raw);
++    const bySlugId = rows.find((row) => String(row.id).toLowerCase() === slug);
++    if (bySlugId) return bySlugId.id;
++
++    const bySlugLabel = rows.find((row) => toCategoryId(row.label) === slug);
++    return bySlugLabel ? bySlugLabel.id : null;
++};
++
++/** Validate a product's category, throwing the message a human can act on. */
++const requireCategoryId = async (value, { allowEmpty = true } = {}) => {
++    const resolved = await resolveCategoryId(value);
++    if (resolved === null) {
++        throw fail(`Unknown category "${String(value).trim()}" — use one of the ids from the category list`);
++    }
++    if (!resolved && !allowEmpty) {
++        throw fail('Category is required');
++    }
++    return resolved;
++};
++
++const requireUniqueLabel = async (label, exceptId) => {
++    const rows = await db.ShopCategory.findAll({ attributes: ['id', 'label'], raw: true });
++    const clash = rows.find((row) => (
++        String(row.label).toLowerCase() === label.toLowerCase() && row.id !== exceptId
++    ));
++    if (clash) throw fail(`A category called "${clash.label}" already exists`);
++};
++
++const create = async ({ id, label, sortOrder, isActive } = {}) => {
++    await ensureShopSchema();
++    const cleanLabel = normalizeLabel(label);
++    if (cleanLabel.length < 2 || cleanLabel.length > MAX_LABEL) {
++        throw fail(`A category name must be 2–${MAX_LABEL} characters`);
++    }
++
++    const wantedId = toCategoryId(id || cleanLabel);
++    if (!wantedId) throw fail('A category name must contain at least one letter or digit');
++    if (wantedId.length > CATEGORY_ID_MAX) throw fail(`A category id may be at most ${CATEGORY_ID_MAX} characters`);
++
++    const existing = await db.ShopCategory.findByPk(wantedId);
++    if (existing) throw fail(`A category with the id "${wantedId}" already exists ("${existing.label}")`);
++
++    await requireUniqueLabel(cleanLabel);
++
++    const row = await db.ShopCategory.create({
++        id: wantedId,
++        label: cleanLabel,
++        // A new category goes to the end of the filter unless the caller says
++        // where it belongs.
++        sortOrder: normalizeSort(sortOrder, (await nextSortOrder())),
++        isActive: normalizeFlag(isActive, true)
++    });
++
++    return toRow(row, 0);
++};
++
++const nextSortOrder = async () => {
++    const rows = await db.ShopCategory.findAll({ attributes: ['sortOrder'], raw: true });
++    if (!rows.length) return 0;
++    return Math.max(...rows.map((row) => Number(row.sortOrder) || 0)) + 1;
++};
++
++/**
++ * Partial update. `id` is accepted only to IDENTIFY the row — it can never be
++ * changed, because products reference it (and a renamed id would orphan them).
++ */
++const update = async ({ id, label, sortOrder, isActive } = {}) => {
++    await ensureShopSchema();
++    const wantedId = toCategoryId(id || '');
++    if (!wantedId) throw fail('Category id is required');
++
++    const row = await db.ShopCategory.findByPk(wantedId);
++    if (!row) throw fail(`No category with the id "${wantedId}"`, 404);
++
++    const patch = {};
++
++    if (label !== undefined) {
++        const cleanLabel = normalizeLabel(label);
++        if (cleanLabel.length < 2 || cleanLabel.length > MAX_LABEL) {
++            throw fail(`A category name must be 2–${MAX_LABEL} characters`);
++        }
++        await requireUniqueLabel(cleanLabel, row.id);
++        patch.label = cleanLabel;
++    }
++
++    if (sortOrder !== undefined) patch.sortOrder = normalizeSort(sortOrder, row.sortOrder);
++    if (isActive !== undefined) patch.isActive = normalizeFlag(isActive, row.isActive);
++
++    if (!Object.keys(patch).length) throw fail('No fields to update');
++
++    await row.update(patch);
++    const { counts } = await usageByCategory([row]);
++    return toRow(row, counts.get(row.id) || 0);
++};
++
++/**
++ * Move the products off a category before it disappears.
++ *
++ * Both spellings are moved: the category's id and its LABEL, because a product
++ * filed before this table existed may still carry the label as free text. Only
++ * moving the id would leave rows pointing at a shelf that no longer exists.
++ * Returns how many rows were re-filed.
++ */
++const reassignProducts = async (fromId, toId, fromCategory) => {
++    const keys = [String(fromId).toLowerCase(), String(fromCategory?.label || '').toLowerCase()].filter(Boolean);
++    const [moved] = await db.ShopProduct.update(
++        { category: toId },
++        { where: { deletedAt: null, [Op.and]: [where(fn('lower', col('category')), { [Op.in]: keys })] } }
++    );
++    return moved;
++};
++
++/**
++ * Delete a category.
++ *
++ * Refused while products use it, unless the caller names a `reassignTo` — the
++ * admin panel offers "Move 12 products to…" and only then deletes. Silently
++ * orphaning products is what makes a shelf vanish from the storefront.
++ */
++const remove = async ({ id, reassignTo } = {}) => {
++    await ensureShopSchema();
++    const wantedId = toCategoryId(id || '');
++    if (!wantedId) throw fail('Category id is required');
++
++    const row = await db.ShopCategory.findByPk(wantedId);
++    if (!row) throw fail(`No category with the id "${wantedId}"`, 404);
++
++    const { counts } = await usageByCategory([row]);
++    const inUse = counts.get(row.id) || 0;
++
++    let moved = 0;
++    if (inUse > 0) {
++        if (!reassignTo) {
++            throw fail(`This category is used by ${inUse} product${inUse === 1 ? '' : 's'} — choose where to move them before deleting`);
++        }
++        const target = await resolveCategoryId(reassignTo);
++        if (!target) throw fail(`Unknown category "${String(reassignTo).trim()}" to move the products to`);
++        if (target === row.id) throw fail('Choose a different category to move the products to');
++        // `row` (the category being deleted) is what carries the label the old
++        // products may still hold — not the target.
++        moved = await reassignProducts(row.id, target, row);
++    }
++
++    await row.destroy();
++    return { id: row.id, label: row.label, movedProducts: moved };
++};
++
++module.exports = {
++    listActive,
++    listAdmin,
++    categoryIds,
++    resolveCategoryId,
++    requireCategoryId,
++    create,
++    update,
++    remove,
++    // Exported for the bulk importer and for tests: the same rules, no DB.
++    normalizeFlag,
++    normalizeSort,
++    usageByCategory
++};
+diff --git a/src/utils/categorySlug.js b/src/utils/categorySlug.js
+new file mode 100644
+index 0000000..df63c41
+--- /dev/null
++++ b/src/utils/categorySlug.js
+@@ -0,0 +1,39 @@
++// utils/categorySlug.js
++//
++// ONE slug rule for a product-category id.
++//
++// A category's `id` is what a product stores (`shop_products.category`) and
++// what the shop's filter sends back, so the same label must produce the same id
++// in every place that can create one:
++//
++//   · the admin panel's Categories manager (src/components/ShopCategoriesModal),
++//   · the website's reader (my-naai-web/src/lib/shopCategories.js,
++//     `categoryIdFromLabel`) — the two must agree or a category created in one
++//     place cannot be selected in the other,
++//   · the bulk importer, which may be handed a LABEL where an id belongs.
++//
++// The rule is deliberately boring: lowercase, `&` becomes `and`, everything
++// that is not a letter or a digit becomes a single `-`, then trim the edges.
++//
++//   "Tools & equipment"  -> "tools-and-equipment"
++//   "  Nail care "       -> "nail-care"
++//   "Men's grooming"     -> "men-s-grooming"
++//
++// It is NOT idempotent against the seed ids on purpose: the seven categories
++// the shop ships with ("tools-equipment", "kits-sets") were named by hand, so
++// the seed is inserted with explicit ids and a rename never re-slugs an
++// existing row (products reference the id).
++const CATEGORY_ID_MAX = 64;
++
++const toCategoryId = (label = '') => String(label)
++    .trim()
++    .toLowerCase()
++    .replace(/&/g, 'and')
++    .replace(/[^a-z0-9]+/g, '-')
++    .replace(/^-+|-+$/g, '')
++    .slice(0, CATEGORY_ID_MAX)
++    // A trailing '-' can appear after the slice; strip it so the stored id is
++    // always clean.
++    .replace(/-+$/g, '');
++
++module.exports = { toCategoryId, CATEGORY_ID_MAX };

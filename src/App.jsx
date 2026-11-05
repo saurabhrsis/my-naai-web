@@ -9,6 +9,7 @@ import {
   HelpCircle,
   History,
   BellRing,
+  Inbox,
   Info,
   LogOut,
   MapPin,
@@ -82,6 +83,10 @@ import {
   // screen itself is kept in SalonScreens.jsx.
   SalonQueueScreen,
 } from './components/SalonScreens';
+// The menu editor is its own screen and its own file — it shares nothing with
+// the profile editor except the shape of a service row.
+import { EditSalonServicesScreen } from './components/EditSalonServices';
+import { SalonLeadsScreen } from './components/SalonLeads';
 import { ShopProductDetailScreen, ShopScreen } from './components/ShopScreen';
 import { ShopCartScreen, ShopCheckoutScreen } from './components/ShopCartCheckout';
 import { shopStorageOwnerId } from './lib/shopBuyer';
@@ -113,6 +118,10 @@ const USER_NAV = [
 ];
 const SALON_NAV = [
   { name: 'queue', label: 'Customer queue', short: 'Queue', icon: UsersRound },
+  // Requests ≠ bookings. The queue works from accepted BOOKINGS; this tab is the
+  // salon's LEADS — every request that arrived, what was accepted, rejected or
+  // auto-cancelled, and the answer rate. Both tables are separate on the server.
+  { name: 'bookingRequests', label: 'Booking requests', short: 'Requests', icon: Inbox },
   { name: 'history', label: 'History', short: 'History', icon: History },
   { name: 'shop', label: 'Naai Shop', short: 'Shop', icon: ShoppingBag },
   // Old partner "Products" tab — retired for the same reason as the customer one:
@@ -171,7 +180,7 @@ const SHOP_ROUTE_NAMES = ['shop', 'shopProduct', 'shopCart', 'shopCheckout', 'sh
 // Products tabs pointed at them. A stale /products link is aliased onto the shop
 // in src/lib/routes.js, so it still lands somewhere useful.
 const USER_ROUTE_NAMES = ['home', 'bookings', 'account', 'detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'privacy', 'contact', ...SHOP_ROUTE_NAMES];
-const SALON_ROUTE_NAMES = ['queue', 'history', ...SHOP_ROUTE_NAMES, 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
+const SALON_ROUTE_NAMES = ['queue', 'history', ...SHOP_ROUTE_NAMES, 'account', 'notifications', 'editProfile', 'editServices', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
 // Every route a visitor may open WITHOUT an account — salons are browsable
 // first, login only appears when they try to book (the client's headline
 // ask). The info pages are public too: the site footer links About/FAQ/Terms/
@@ -1024,13 +1033,14 @@ function SalonRegistration({ initialData, onBack, onComplete }) {
 function Brand({ light = false }) {
   return (
     <div className={cx('brand', light && 'brand-light')}>
-      {/* One official lockup: the M monogram with "My Naai" hand-lettered under
-          it (the wordmark is part of the artwork, so no text is repeated beside
-          it). The mark on its own is used where the lockup would be too narrow
-          — phone bars, checked by the same 1023px breakpoint that decides
-          whether the sidebar or the top bar is on screen. */}
-      <img className="brand-lockup" src="/assets/brand/mynaai-logo.png" alt="" decoding="async" />
+      {/* The 2026 logo is the "m" monogram on its own (no lettered wordmark in
+          the artwork), so the name is set as text beside it. The wordmark drops
+          away below 1024px — the same breakpoint that decides whether the
+          sidebar or the phone top bar is on screen — because "m + My Naai" does
+          not fit a 320px bar next to the actions. The alt-free images plus the
+          screen-reader span keep one accessible name either way. */}
       <img className="brand-mark" src="/assets/brand/mynaai-mark.png" alt="" decoding="async" />
+      <span className="brand-word" aria-hidden="true">My Naai</span>
       <span className="sr-only">My Naai</span>
     </div>
   );
@@ -1472,11 +1482,18 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
       return <HomeScreen {...props} />;
     }
     if (route.name === 'queue') return <SalonQueueScreen {...props} />;
+    // The leads tab: booking REQUESTS (accept / reject / auto-cancelled), never
+    // the bookings the queue works from — different table, different screen.
+    if (route.name === 'bookingRequests') return <SalonLeadsScreen {...props} />;
     if (route.name === 'history') return <SalonHistoryScreen {...props} />;
     // if (route.name === 'salonProducts') return <SalonProductsScreen {...props} />; // retired tab
     if (route.name === 'account') return <SalonAccountScreen {...props} onLogout={onLogout} />;
     if (route.name === 'notifications') return <NotificationsScreen {...props} />;
     if (route.name === 'editProfile') return <EditSalonProfileScreen {...props} params={route.params} onLogout={onLogout} />;
+    // The menu on its own: the salon account's "Edit services" button opens this
+    // instead of the whole profile editor, so a partner changing a price never
+    // re-saves the address, the photos, the hours or the team.
+    if (route.name === 'editServices') return <EditSalonServicesScreen {...props} />;
     if (route.name === 'bookingRequest') return <BookingRequestScreen {...props} params={route.params} />;
     if (route.name === 'subscription') return <SubscriptionScreen {...props} params={route.params} />;
     if (route.name === 'salonAbout') return <PartnerInfo type="about" navigate={navForScreens} />;

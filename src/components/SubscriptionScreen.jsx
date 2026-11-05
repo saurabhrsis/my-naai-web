@@ -16,7 +16,8 @@ import { api, resetPlanExpiredAlert } from '../lib/api';
 import { getPushToken, isPushConfigured } from '../lib/push';
 import { normalizeDeviceToken } from '../lib/apiPayload';
 import { rememberLoginToken } from '../lib/deviceToken';
-import { FREE_ONBOARDING_PLAN, PARTNER_PLANS, RENEWAL_PLANS, getSubscriptionState } from '../lib/planDetails';
+import { freePlanForScreen, getSubscriptionState, plansForScreen, setLivePlanCatalog } from '../lib/planDetails';
+import { usePlanCatalog } from '../lib/planCatalog';
 import { getSalonSubscriptionProfile, salonProfileFromResponse } from '../lib/salonProfile';
 import {
   clearPendingPayment,
@@ -34,9 +35,12 @@ import {
 } from '../lib/razorpay';
 import { Button, GOLD, PageHeader, cx, formatCurrency, getErrorMessage } from './Shared';
 
-// Plan catalog, renewal plans and the free onboarding plan live in
-// src/lib/planDetails.js so the subscription picker and the active-plan
-// displays always use the mobile app's names and prices.
+// The plan list is the ADMIN PANEL's data: `usePlanCatalog` reads
+// POST /api/salons/plans/list (seed → cached → server) and derives both the
+// purchase list and the renewal list from it, so a price or a trial length the
+// admin changes is what this screen charges, on the website and in the app. The
+// free trial is a catalog entry too — 90 days by default — instead of a constant
+// in this bundle.
 
 const SUPPORT_PHONE = '8380017393';
 // The logo Razorpay renders inside its checkout sheet. Razorpay loads the
@@ -103,9 +107,14 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
   const isUpgrade = Boolean(isForcedRenewal || params.isUpgrade || params.mode === 'RENEW');
   const isOnboarding = params.isOnboarding === true || params.isOnboarding === 'true';
   const showFreeOnboarding = isOnboarding && !isRegistration;
-  const paidPlans = isUpgrade ? RENEWAL_PLANS : PARTNER_PLANS;
-  const plans = showFreeOnboarding ? [FREE_ONBOARDING_PLAN, ...paidPlans] : paidPlans;
-  const [selected, setSelected] = useState(() => (showFreeOnboarding ? FREE_ONBOARDING_PLAN.id : isRegistration ? 'trial_2_months' : ''));
+  const catalog = usePlanCatalog();
+  // Keep the shared lookup in step, so the active-plan card on other screens
+  // names the admin's title for the stored plan id.
+  useEffect(() => { setLivePlanCatalog(catalog); }, [catalog]);
+  const freeTrial = freePlanForScreen(catalog);
+  const paidPlans = plansForScreen(catalog, { isUpgrade });
+  const plans = showFreeOnboarding ? [freeTrial, ...paidPlans] : paidPlans;
+  const [selected, setSelected] = useState(() => (showFreeOnboarding ? 'Free' : isRegistration ? 'trial_2_months' : ''));
   const [loading, setLoading] = useState(false);
   const [paymentState, setPaymentState] = useState('idle');
   const [notice, setNotice] = useState(null);
@@ -422,7 +431,7 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
     const plan = plans.find(item => item.id === selected);
     if (!plan) return notify?.('error', 'Please choose a plan to continue.');
     setNotice(null);
-    if (showFreeOnboarding && plan.id === FREE_ONBOARDING_PLAN.id) return completeFreeOnboarding();
+    if (showFreeOnboarding && plan.id === freeTrial.id) return completeFreeOnboarding();
     let liveRegistration = registrationData;
     if (isRegistration) {
       // Validate the token before opening payment. A token carried from the OTP
@@ -479,7 +488,7 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
         : () => navigate(-1);
 
   return <div className={cx('screen', 'subscription-screen', isForcedRenewal && 'forced-renewal-screen')}><PageHeader title={isForcedRenewal ? 'Renew your salon subscription' : isUpgrade ? 'Renew your plan' : 'Choose your plan'} subtitle={isForcedRenewal ? 'Your subscription has expired. Renewal is required before you can use the salon portal.' : isOnboarding ? 'Choose how you want to start your salon journey.' : isUpgrade ? 'Keep your salon visible and ready for bookings.' : 'Start building your salon presence on My Naai.'} onBack={handleBack} />
-    <div className="subscription-intro"><div className="subscription-mark"><Crown size={21} /></div><div><strong>{isForcedRenewal ? 'Renewal required to continue' : isOnboarding ? 'Your salon is ready for a final choice' : isUpgrade ? 'Keep the momentum going' : 'Simple plans for growing salons'}</strong><p>{isForcedRenewal ? 'Choose a renewal plan and complete payment to unlock your queue, history, products and account.' : isOnboarding ? 'Start with a 20-day free trial or choose a paid plan.' : 'No confusing tiers. Pick what fits your business today.'}</p></div></div>
+    <div className="subscription-intro"><div className="subscription-mark"><Crown size={21} /></div><div><strong>{isForcedRenewal ? 'Renewal required to continue' : isOnboarding ? 'Your salon is ready for a final choice' : isUpgrade ? 'Keep the momentum going' : 'Simple plans for growing salons'}</strong><p>{isForcedRenewal ? 'Choose a renewal plan and complete payment to unlock your queue, history, products and account.' : isOnboarding ? `Start with a ${freeTrial.days}-day free trial or choose a paid plan.` : 'No confusing tiers. Pick what fits your business today.'}</p></div></div>
     {notice && <div className={cx('payment-notice', `notice-${notice.tone || 'info'}`)} role="status"><span className="payment-notice-mark">{notice.tone === 'error' ? <CircleAlert size={17} /> : notice.tone === 'info' ? <WalletCards size={17} /> : <CheckCircle2 size={17} />}</span><div><strong>{notice.title}</strong><p>{notice.text}</p></div><button type="button" onClick={() => setNotice(null)} aria-label="Dismiss message"><X size={15} /></button></div>}
     {recovery && <div className="payment-recovery" role="status">
       <span className="payment-notice-mark"><CircleAlert size={17} /></span>
@@ -498,11 +507,11 @@ export function SubscriptionScreen({ params = {}, session, navigate, notify, onA
         <button type="button" className="text-link" onClick={() => { setRecovery(null); clearPendingPayment(); }}>Dismiss</button>
       </div>
     </div>}
-    <div className="plan-grid">{plans.map(plan => <button className={cx('plan-card', selected === plan.id && 'active')} key={plan.id} onClick={() => setSelected(plan.id)} disabled={loading}><span className="plan-card-title">{plan.title}</span><strong>{plan.displayPrice || formatCurrency(plan.price)}</strong><span className="plan-duration">{plan.duration}</span><small>{plan.note}</small><span className="plan-radio" aria-hidden="true">{selected === plan.id && <Check size={13} />}</span>{plan.best && <span className="plan-best">{plan.id === FREE_ONBOARDING_PLAN.id ? 'DEFAULT' : 'BEST VALUE'}</span>}</button>)}</div>
+    <div className="plan-grid">{plans.map(plan => <button className={cx('plan-card', selected === plan.id && 'active')} key={plan.id} onClick={() => setSelected(plan.id)} disabled={loading}><span className="plan-card-title">{plan.title}</span><strong>{plan.displayPrice || formatCurrency(plan.price)}</strong><span className="plan-duration">{plan.duration}</span><small>{plan.note}</small><span className="plan-radio" aria-hidden="true">{selected === plan.id && <Check size={13} />}</span>{plan.best && <span className="plan-best">{(plan.badge || (plan.id === freeTrial.id ? 'DEFAULT' : 'BEST VALUE')).toUpperCase()}</span>}</button>)}</div>
     <div className="plan-benefits"><span><CheckCircle2 size={16} /> Be discoverable nearby</span><span><CheckCircle2 size={16} /> Manage your live queue</span><span><CheckCircle2 size={16} /> Get booking updates</span></div>
     {stateCopy && <div className="payment-progress" role="status"><LoaderCircle className="spin" size={16} /><span><strong>{stateCopy.title}</strong><small>{stateCopy.text}</small></span></div>}
     {isMobile && !stateCopy && <p className="payment-method-note"><Smartphone size={16} /><span>Razorpay may open your UPI app — Google Pay, PhonePe, Paytm or BHIM. Pay there, then come straight back to this page. My Naai confirms the payment automatically, so please do not pay twice.</span></p>}
-    <Button className="subscription-continue" onClick={continuePlan} loading={loading} disabled={gateway.status === 'unavailable'}>{isOnboarding && selected === FREE_ONBOARDING_PLAN.id ? 'Start free trial' : isUpgrade ? 'Renew plan' : 'Continue to payment'} <ChevronRight size={17} /></Button>
+    <Button className="subscription-continue" onClick={continuePlan} loading={loading} disabled={gateway.status === 'unavailable'}>{isOnboarding && selected === freeTrial.id ? `Start ${freeTrial.days}-day free trial` : isUpgrade ? 'Renew plan' : 'Continue to payment'} <ChevronRight size={17} /></Button>
     <div className={cx('gateway-status', `gateway-${gateway.status}`)}>
       {gateway.status === 'ready' ? <CheckCircle2 size={15} /> : gateway.status === 'checking' ? <LoaderCircle className="spin" size={15} /> : <CircleAlert size={15} />}
       <span>{gateway.status === 'ready' ? 'Secure payments powered by Razorpay · UPI, cards, netbanking and wallets' : gateway.status === 'checking' ? 'Preparing Razorpay Checkout…' : 'Razorpay Checkout could not load on this network'}</span>

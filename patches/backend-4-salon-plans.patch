@@ -1,0 +1,1231 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MyNaai Dev <dev@mynaai.in>
+Date: Wed, 5 Nov 2026 10:00:00 +0530
+Subject: [PATCH] Backend: partner plans — prices, durations and the free trial as data
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The partner price list was constants in three repositories: the day counts in
+`src/utils/plan.util.js`, the prices in the website bundle, another copy in the
+app — plus a literal `+ 20` for the free trial in `salonLogin.js`. A price change
+meant a release of everything, and the copies had already drifted: the portal sold
+₹199/₹299/₹499 with a 20-day trial, the app's renewal screen still showed the old
+₹99/₹179/₹249 ladder, and this API granted a window neither screen described.
+
+It is one table now, `partner_plans`, owned by the admin panel.
+
+  · `partner_plans` — id (string, immutable: `salons.planType` stores it), label,
+    price, days, note, badge, is_recommended, sort_order, is_active, is_free.
+    Auto-loaded by `models/index.js` like every other model.
+  · `ensurePlanSchema.js` — idempotent CREATE TABLE + `ON CONFLICT (id) DO NOTHING`
+    seed + index, called at boot beside `ensureShopBuyerSchema()`. Re-running it
+    never resets a price an admin has changed.
+  · Seeded exactly what was on sale before: `Free` 0/90 (the client's default
+    trial), `monthly` 199/30, `trial_2_months` 299/60, `quarterly` 499/90.
+  · `partnerPlan.service.js` — listPublic, listAdmin (per-plan salon counts plus
+    the `orphaned` legacy ids), durationDays, defaultTrialDays, priceOf,
+    assertPayableAmount, create, update, remove. Legacy `yearly` (365) and `FREE`
+    (90) stay honoured so old subscriptions keep renewing; an unknown id is refused
+    rather than silently defaulting.
+  · `POST /api/salons/plans/list` — PUBLIC, registered above
+    `salonRouter.use(authenticateAdmin)`: the registration screen shows prices
+    before anyone has an account. Answers
+    `{ data: { plans, freeTrial, currency, source } }`, falling back to the shipped
+    catalog (`source: 'fallback'`) if the table cannot be read.
+  · `POST /api/salons/admin/plans/{list,create,update,delete}` — admin only. Update
+    keeps the id immutable; delete is refused while salons are on the plan unless
+    `deactivate: true`, and the free trial can never be deleted.
+  · Acceptance paths now read the table: `create-salon-with-plan` and
+    `renew-salon-plan` take their duration from `durationDays(planType)` and — when
+    a `totalAmount` is sent — refuse a payment that is not the stored price
+    (±₹0.5) instead of charging it. `salonLogin.js` replaces the hard-coded
+    `+ 20` with `defaultTrialDays()`.
+  · `migrations/2026-11-05-partner-plans.sql` — schema, seed and the one data step
+    this feature implies: a still-running free trial is extended to 90 days. Only
+    free plans, only inside their original window; a paid plan is never touched and
+    an expired trial is not resurrected. The previewing SELECT is in the file.
+
+Verified on a fresh clone: `node --check` clean on all 14 files, the model
+registers as `PartnerPlan → partner_plans` with exactly the migration's columns,
+and — with the router mounted over a stub ORM — `POST /api/salons/plans/list`
+answers 200 SUCCESS with no token while `POST /api/salons/admin/plans/list`
+answers 401. The service was exercised end to end: create, price change, duration
+change, delete refused while salons are on it, deactivate, second free plan
+refused, unknown id refused, duplicate label refused, amount guard at ±₹0.5.
+---
+ index.js                                      |   8 +-
+ migrations/2026-11-05-partner-plans.sql       |  85 ++++
+ .../razorpay/createSalonWithPlan.js           |  24 +-
+ src/controller/razorpay/renewSalonPlan.js     |  18 +-
+ .../salon/plan/adminCreatePartnerPlan.js      |  27 ++
+ .../salon/plan/adminDeletePartnerPlan.js      |  31 ++
+ .../salon/plan/adminListPartnerPlans.js       |  23 +
+ .../salon/plan/adminUpdatePartnerPlan.js      |  27 ++
+ src/controller/salon/plan/listPartnerPlans.js |  26 ++
+ src/controller/salon/salonLogin.js            |   8 +-
+ src/database/config/ensurePlanSchema.js       | 109 +++++
+ src/database/models/partnerPlan.model.js      | 102 +++++
+ src/routes/salon.routes.js                    |  15 +
+ src/services/partnerPlan.service.js           | 420 ++++++++++++++++++
+ src/utils/plan.util.js                        |  33 +-
+ 15 files changed, 944 insertions(+), 12 deletions(-)
+ create mode 100644 migrations/2026-11-05-partner-plans.sql
+ create mode 100644 src/controller/salon/plan/adminCreatePartnerPlan.js
+ create mode 100644 src/controller/salon/plan/adminDeletePartnerPlan.js
+ create mode 100644 src/controller/salon/plan/adminListPartnerPlans.js
+ create mode 100644 src/controller/salon/plan/adminUpdatePartnerPlan.js
+ create mode 100644 src/controller/salon/plan/listPartnerPlans.js
+ create mode 100644 src/database/config/ensurePlanSchema.js
+ create mode 100644 src/database/models/partnerPlan.model.js
+ create mode 100644 src/services/partnerPlan.service.js
+
+diff --git a/index.js b/index.js
+index 0d91ef0..58c0579 100644
+--- a/index.js
++++ b/index.js
+@@ -6,6 +6,7 @@ const dotenv = require("dotenv");
+ const helmet = require('helmet');
+ const { closeConnection, connectDb } = require("./src/database/config/db");
+ const { ensureShopBuyerSchema } = require("./src/database/config/ensureShopBuyerSchema");
++const { ensurePlanSchema } = require("./src/database/config/ensurePlanSchema");
+ const db = require("./src/database/models");
+ const routes = require("./src/routes/routes");
+ const errorHandler = require("./src/utils/middleware/error.middleware");
+@@ -204,7 +205,12 @@ require('./cron/bookingCompletionCron');
+ // fails on `salon_id` not-null. Repair it once here (idempotent, no-op on a
+ // migrated database) instead of waiting for someone to run SQL.
+ connectDb().then((connected) => {
+-    if (connected) ensureShopBuyerSchema();
++    if (connected) {
++        ensureShopBuyerSchema();
++        // The partner price list. Same deal: idempotent DDL, so a migrated
++        // database sees a no-op and the console says so once.
++        ensurePlanSchema();
++    }
+ });
+ // sendPushNotification("fc2A21LpQ4W3IBj7ry6RyW:APA91bHexWAirHUAVKOZKqsl_BSxon1wTcvqhk40qWCWE1YGzQjdd76Q520S-zuX0rUtcNfyux60kk7GdtuNtm6H6f_G60SL4ODvKPTUbx55qBmKWtQVrjI","Test Title","This is test notification body")
+ // listen on PORT
+diff --git a/migrations/2026-11-05-partner-plans.sql b/migrations/2026-11-05-partner-plans.sql
+new file mode 100644
+index 0000000..6fae828
+--- /dev/null
++++ b/migrations/2026-11-05-partner-plans.sql
+@@ -0,0 +1,85 @@
++-- 2026-11-05-partner-plans.sql
++--
++-- The partner price list became DATA. Until now the plan prices and the free
++-- trial length were constants in the backend (`src/utils/plan.util.js`), in the
++-- website bundle (`PARTNER_PLANS`) and in the mobile app, so changing a price
++-- meant a release of three repositories — and the trial was a hard-coded
++-- `+ 20 days` in `salonLogin.js` while the portal advertised 20 days and the
++-- pricing screen said 60.
++--
++-- One table now holds all of it. Idempotent: every statement is IF NOT EXISTS /
++-- ON CONFLICT, so running it twice is harmless, and running it on a database
++-- that already has the table never resets a price an admin has changed.
++--
++-- The free trial the client asked for is 90 days: it is the `Free` row below,
++-- and its `days` value is what a brand-new salon's window is computed from.
++
++BEGIN;
++
++CREATE TABLE IF NOT EXISTS partner_plans (
++    id             VARCHAR(40) PRIMARY KEY,       -- stored on salons.planType: NEVER re-slugged
++    label          VARCHAR(120) NOT NULL,         -- what the card says
++    price          DECIMAL(10, 2) NOT NULL DEFAULT 0, -- rupees
++    days           INTEGER NOT NULL DEFAULT 30,   -- the length granted, source of truth
++    note           VARCHAR(200),
++    badge          VARCHAR(24),                   -- "BEST VALUE" / "DEFAULT" ribbon
++    is_recommended BOOLEAN NOT NULL DEFAULT FALSE,
++    sort_order     INTEGER NOT NULL DEFAULT 0,
++    is_active      BOOLEAN NOT NULL DEFAULT TRUE, -- false = off sale, still valid for holders
++    is_free        BOOLEAN NOT NULL DEFAULT FALSE, -- exactly one row: the trial
++    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
++    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
++);
++
++-- What the three repositories sold before this release, at the same ids (every
++-- `salons.planType` and every subscription row stores one of them), with the
++-- free trial lengthened from 20 to 90 days.
++INSERT INTO partner_plans (id, label, price, days, note, badge, is_recommended, sort_order, is_active, is_free) VALUES
++    ('Free',           'Free trial',      0,   90, 'Start your salon journey at no cost', 'DEFAULT',    TRUE,  -1, TRUE, TRUE),
++    ('monthly',        'Monthly Plan',    199, 30, 'Flexible month-to-month growth',      NULL,         FALSE,  0, TRUE, FALSE),
++    ('trial_2_months', 'Introductory',    299, 60, 'A gentle start for new partners',     NULL,         FALSE,  1, TRUE, FALSE),
++    ('quarterly',      'Quarterly Plan',  499, 90, 'Best value for busy salons',          'BEST VALUE', TRUE,   2, TRUE, FALSE)
++ON CONFLICT (id) DO NOTHING;
++
++CREATE INDEX IF NOT EXISTS idx_partner_plans_order ON partner_plans (is_active, sort_order);
++
++-- ── Salons on a plan that this table does not hold ──────────────────────────
++-- A legacy id (`yearly`, or the `FREE` uppercase some older rows carry) has no
++-- row to renew against. This returns them so the admin panel can show the gap
++-- ("these 3 salons are on a plan that no longer exists") instead of the renewal
++-- screen silently charging the 30-day default. Nothing is rewritten here: an id
++-- is never changed behind a partner's back — `yearly` keeps working through the
++-- legacy map in `plan.util.js` and `partnerPlan.service.js`.
++--
++--   SELECT planType, COUNT(*) FROM salons
++--    WHERE planType IS NOT NULL
++--      AND planType NOT IN (SELECT id FROM partner_plans)
++--    GROUP BY planType ORDER BY 2 DESC;
++--
++-- ── The trial backfill (REVIEW BEFORE RUNNING) ──────────────────────────────
++-- New salons get 90 days from now on. Salons created under the old 20-day rule
++-- were given a window that the portal advertised inconsistently; the client asked
++-- for a 90-day default, so the ones whose trial is still running are extended to
++-- match. This touches ONLY the free plan, only salons whose plan type is the free
++-- one, and only while they are still inside their original window — a salon that
++-- has already paid for a plan is never touched, and an expired trial is not
++-- resurrected.
++--
++-- Preview it first:
++--
++--   SELECT salon_id, plan_type, plan_start_date, plan_end_date
++--     FROM salons
++--    WHERE plan_type IN ('FREE', 'Free')
++--      AND plan_end_date < plan_start_date + INTERVAL '90 days'
++--      AND plan_end_date > NOW();
++--
++UPDATE salons
++   SET plan_end_date = plan_start_date + INTERVAL '90 days',
++       updated_at = NOW()
++ WHERE plan_type IN ('FREE', 'Free')
++   AND plan_start_date IS NOT NULL
++   AND plan_end_date IS NOT NULL
++   AND plan_end_date < plan_start_date + INTERVAL '90 days'
++   AND plan_end_date > NOW();
++
++COMMIT;
+diff --git a/src/controller/razorpay/createSalonWithPlan.js b/src/controller/razorpay/createSalonWithPlan.js
+index 0a4e4e6..ba0dc10 100644
+--- a/src/controller/razorpay/createSalonWithPlan.js
++++ b/src/controller/razorpay/createSalonWithPlan.js
+@@ -5,7 +5,8 @@ const { sequelize } = require('../../database/config/db');
+ const razorpay = require("../../services/razorpay.service");
+ const { getAdminUserByPhone } = require('../../services/admin.service');
+ const jwt = require("jsonwebtoken");
+-const { isPlanActive, getPlanEndDate } = require('../../utils/plan.util');
++const { getPlanEndDate } = require('../../utils/plan.util');
++const partnerPlanService = require('../../services/partnerPlan.service');
+ const db = require('../../database/models');
+ 
+ 
+@@ -75,8 +76,12 @@ const createSalonWithPlan = async (request, response) => {
+         // const daysToAdd = plans[planType] ?? 30;
+         // const planEndDate = new Date(planStartDate);
+         // planEndDate.setDate(planStartDate.getDate() + daysToAdd);
++        // The length AND the price come from `partner_plans` (the admin panel's
++        // list), not from a map in this file: changing the quarterly plan to 100
++        // days or ₹599 in the panel changes what this endpoint grants and charges.
++        const planDays = await partnerPlanService.durationDays(planType);
+         const planStartDate = new Date();
+-        const planEndDate = getPlanEndDate(planStartDate, planType);
++        const planEndDate = getPlanEndDate(planStartDate, planType, { days: planDays });
+ 
+ 
+ 
+@@ -120,6 +125,21 @@ const createSalonWithPlan = async (request, response) => {
+             }
+         }
+ 
++        // Nobody may pay ₹1 for a ₹499 plan: the amount the client sent has to
++        // match the price the admin set for this plan id. A client that omits
++        // `totalAmount` (an older build) is left to Razorpay's own record.
++        if (totalAmount !== undefined && totalAmount !== null && totalAmount !== '') {
++            try {
++                await partnerPlanService.assertPayableAmount({ planType, amount: totalAmount });
++            } catch (priceError) {
++                await t.rollback();
++                return response.status(200).json({
++                    status: "FAILED",
++                    message: priceError.message,
++                });
++            }
++        }
++
+         /* ---------------- CREATE Salon ---------------- */
+         const salon = await salonService.createSalon({
+             salonName,
+diff --git a/src/controller/razorpay/renewSalonPlan.js b/src/controller/razorpay/renewSalonPlan.js
+index 74d14cb..1856bee 100644
+--- a/src/controller/razorpay/renewSalonPlan.js
++++ b/src/controller/razorpay/renewSalonPlan.js
+@@ -3,6 +3,7 @@ const transactionService = require('../../services/transaction.service');
+ const { sequelize } = require('../../database/config/db');
+ const razorpay = require("../../services/razorpay.service");
+ const { isPlanActive, getPlanEndDate } = require('../../utils/plan.util');
++const partnerPlanService = require('../../services/partnerPlan.service');
+ const db = require('../../database/models');
+ 
+ const renewSalonPlan = async (request, response) => {
+@@ -59,7 +60,22 @@ const renewSalonPlan = async (request, response) => {
+             startDate = new Date(salon.planEndDate);
+         }
+ 
+-        const endDate = getPlanEndDate(startDate, planType);
++        // The renewal extension is the admin's `days` for this plan, and the
++        // amount must be the admin's price — a plan re-priced in the panel is
++        // charged (and honoured) at the new price on the very next renewal.
++        const planDays = await partnerPlanService.durationDays(planType);
++        if (totalAmount !== undefined && totalAmount !== null && totalAmount !== '') {
++            try {
++                await partnerPlanService.assertPayableAmount({ planType, amount: totalAmount });
++            } catch (priceError) {
++                await t.rollback();
++                return response.status(400).json({
++                    status: "FAILED",
++                    message: priceError.message,
++                });
++            }
++        }
++        const endDate = getPlanEndDate(startDate, planType, { days: planDays });
+ 
+         
+ //  otherwise start from today
+diff --git a/src/controller/salon/plan/adminCreatePartnerPlan.js b/src/controller/salon/plan/adminCreatePartnerPlan.js
+new file mode 100644
+index 0000000..88b1347
+--- /dev/null
++++ b/src/controller/salon/plan/adminCreatePartnerPlan.js
+@@ -0,0 +1,27 @@
++const partnerPlanService = require('../../../services/partnerPlan.service');
++
++/**
++ * POST /api/salons/admin/plans/create — admin.
++ *
++ * Body: { id?, label, price, days, note?, badge?, isRecommended?, sortOrder? }
++ * `id` is optional on create and permanent once written: `salons.planType`
++ * stores it, so a rename must never move a partner onto a different plan.
++ */
++const adminCreatePartnerPlan = async (request, response) => {
++    try {
++        const plan = await partnerPlanService.create(request.body || {});
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: `"${plan.label}" is on sale now`,
++            data: { plan }
++        });
++    } catch (error) {
++        console.log('error=>>> adminCreatePartnerPlan', error);
++        return response.status(error.status || 500).json({
++            status: 'FAILED',
++            message: error.message || 'Could not create the plan'
++        });
++    }
++};
++
++module.exports = adminCreatePartnerPlan;
+diff --git a/src/controller/salon/plan/adminDeletePartnerPlan.js b/src/controller/salon/plan/adminDeletePartnerPlan.js
+new file mode 100644
+index 0000000..9b57487
+--- /dev/null
++++ b/src/controller/salon/plan/adminDeletePartnerPlan.js
+@@ -0,0 +1,31 @@
++const partnerPlanService = require('../../../services/partnerPlan.service');
++
++/**
++ * POST /api/salons/admin/plans/delete — admin.
++ *
++ * Body: { id, deactivate? }
++ *
++ * Refused while anybody is on the plan, unless `deactivate: true` is sent — which
++ * takes it off sale and keeps it valid for the salons that already hold it. The
++ * free trial can never be deleted: it is what a new partner starts on.
++ */
++const adminDeletePartnerPlan = async (request, response) => {
++    try {
++        const result = await partnerPlanService.remove(request.body || {});
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: result.deleted
++                ? 'Plan removed'
++                : `Plan taken off sale — ${result.salons} salon${result.salons === 1 ? '' : 's'} keep their existing subscription`,
++            data: result
++        });
++    } catch (error) {
++        console.log('error=>>> adminDeletePartnerPlan', error);
++        return response.status(error.status || 500).json({
++            status: 'FAILED',
++            message: error.message || 'Could not remove the plan'
++        });
++    }
++};
++
++module.exports = adminDeletePartnerPlan;
+diff --git a/src/controller/salon/plan/adminListPartnerPlans.js b/src/controller/salon/plan/adminListPartnerPlans.js
+new file mode 100644
+index 0000000..b339dad
+--- /dev/null
++++ b/src/controller/salon/plan/adminListPartnerPlans.js
+@@ -0,0 +1,23 @@
++const partnerPlanService = require('../../../services/partnerPlan.service');
++
++/**
++ * POST /api/salons/admin/plans/list — admin.
++ *
++ * Every plan, including the inactive ones, with how many salons are on each.
++ * That count is the point: deactivating a plan live salons sit on is the only
++ * way this table can hurt a partner.
++ */
++const adminListPartnerPlans = async (request, response) => {
++    try {
++        const data = await partnerPlanService.listAdmin();
++        return response.status(200).json({ status: 'SUCCESS', data });
++    } catch (error) {
++        console.log('error=>>> adminListPartnerPlans', error);
++        return response.status(error.status || 500).json({
++            status: 'FAILED',
++            message: error.message || 'Could not load the plans'
++        });
++    }
++};
++
++module.exports = adminListPartnerPlans;
+diff --git a/src/controller/salon/plan/adminUpdatePartnerPlan.js b/src/controller/salon/plan/adminUpdatePartnerPlan.js
+new file mode 100644
+index 0000000..e9e303b
+--- /dev/null
++++ b/src/controller/salon/plan/adminUpdatePartnerPlan.js
+@@ -0,0 +1,27 @@
++const partnerPlanService = require('../../../services/partnerPlan.service');
++
++/**
++ * POST /api/salons/admin/plans/update — admin.
++ *
++ * `id` only identifies the row. Everything a partner sees — label, price, days,
++ * note, badge, whether it is recommended, its order, whether it is on sale — can
++ * change, and the next price a client reads is this one.
++ */
++const adminUpdatePartnerPlan = async (request, response) => {
++    try {
++        const plan = await partnerPlanService.update(request.body || {});
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: `"${plan.label}" updated`,
++            data: { plan }
++        });
++    } catch (error) {
++        console.log('error=>>> adminUpdatePartnerPlan', error);
++        return response.status(error.status || 500).json({
++            status: 'FAILED',
++            message: error.message || 'Could not update the plan'
++        });
++    }
++};
++
++module.exports = adminUpdatePartnerPlan;
+diff --git a/src/controller/salon/plan/listPartnerPlans.js b/src/controller/salon/plan/listPartnerPlans.js
+new file mode 100644
+index 0000000..53c489a
+--- /dev/null
++++ b/src/controller/salon/plan/listPartnerPlans.js
+@@ -0,0 +1,26 @@
++const partnerPlanService = require('../../../services/partnerPlan.service');
++
++/**
++ * POST /api/salons/plans/list — PUBLIC.
++ *
++ * The registration screen shows prices before anybody has an account, so this
++ * door has no token (the same reason `/salon-list-public` has none). It answers
++ * only what a client renders: active plans, the free trial and its length.
++ */
++const listPartnerPlans = async (request, response) => {
++    try {
++        const catalog = await partnerPlanService.listPublic();
++        return response.status(200).json({
++            status: 'SUCCESS',
++            data: catalog
++        });
++    } catch (error) {
++        console.log('error=>>> listPartnerPlans', error);
++        return response.status(500).json({
++            status: 'FAILED',
++            message: error.message || 'Could not load the plans'
++        });
++    }
++};
++
++module.exports = listPartnerPlans;
+diff --git a/src/controller/salon/salonLogin.js b/src/controller/salon/salonLogin.js
+index 00b924a..95210d3 100644
+--- a/src/controller/salon/salonLogin.js
++++ b/src/controller/salon/salonLogin.js
+@@ -2,6 +2,7 @@ const salonService = require('../../services/salon.service');
+ const { verifySalonOtpValidationSchema } = require('../../validations/salon.validation');
+ const { generateToken } = require('../../utils/middleware/token.util');
+ const db = require('../../database/models');
++const partnerPlanService = require('../../services/partnerPlan.service');
+ const { DeviceToken } = db;
+ 
+ 
+@@ -129,6 +130,7 @@ const verifySalonOtpLogin = async (request, response) => {
+                 isNewSalon: (salon?.isProfileCompleted && salon?.isProfileCompleted === false) ? true : false
+             });
+         } else {
++            const freeTrialDays = await partnerPlanService.defaultTrialDays();
+             const dataToInsert = {
+                 salonName: "Your Salon Name",
+                 phoneNumber: phoneNumber,
+@@ -138,7 +140,11 @@ const verifySalonOtpLogin = async (request, response) => {
+                 isPlanActive: true,
+                 planType: 'FREE',
+                 planStartDate: new Date(),
+-                planEndDate: new Date(new Date().setDate(new Date().getDate() + 20)), //set for 20 days free trial
++                // The free trial length is the admin panel's `Free` plan
++                // (`partner_plans.days`), 90 days by default. It used to be a
++                // hard-coded `+ 20`, which is why the portal advertised one
++                // trial length and the backend granted another.
++                planEndDate: new Date(new Date().setDate(new Date().getDate() + freeTrialDays)),
+                 totalReviews: 0,
+                 totalRating: 0,
+                 deviceToken: deviceToken || null,
+diff --git a/src/database/config/ensurePlanSchema.js b/src/database/config/ensurePlanSchema.js
+new file mode 100644
+index 0000000..1ff4063
+--- /dev/null
++++ b/src/database/config/ensurePlanSchema.js
+@@ -0,0 +1,109 @@
++const db = require('../models');
++
++/**
++ * Make `partner_plans` real on a database that never ran the migration.
++ *
++ * The plan price list is read on the registration screen, on the renewal screen
++ * and by the admin panel. If the table is missing, all three fall back — but the
++ * ADMIN's plan editor 500s, and worse, `create-salon-with-plan` would fall back
++ * to whatever the deployed code remembered. So the table is created here once
++ * per process, with the same idempotent DDL as
++ * `migrations/2026-11-05-partner-plans.sql`, which is the fix of record:
++ *
++ *   · on a migrated database every statement is a no-op;
++ *   · the seed is `ON CONFLICT (id) DO NOTHING`, so a price the admin has
++ *     already changed is never reset by a redeploy;
++ *   · if the database user lacks CREATE rights this logs and gives up, and the
++ *     API keeps answering with the built-in fallback list.
++ *
++ * Deliberately NOT done here: the legacy 20-day trial backfill. It rewrites
++ * existing salon rows, and a boot-time side effect that silently extends or
++ * shortens somebody's subscription is exactly what must not happen at 3 a.m.
++ * That lives in the migration, where it can be read first.
++ */
++const STATEMENTS = [
++    `CREATE TABLE IF NOT EXISTS partner_plans (
++        id             VARCHAR(40) PRIMARY KEY,
++        label          VARCHAR(120) NOT NULL,
++        price          DECIMAL(10, 2) NOT NULL DEFAULT 0,
++        days           INTEGER NOT NULL DEFAULT 30,
++        note           VARCHAR(200),
++        badge          VARCHAR(24),
++        is_recommended BOOLEAN NOT NULL DEFAULT FALSE,
++        sort_order     INTEGER NOT NULL DEFAULT 0,
++        is_active      BOOLEAN NOT NULL DEFAULT TRUE,
++        is_free        BOOLEAN NOT NULL DEFAULT FALSE,
++        created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
++        updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
++    );`,
++    // The seed is what the three repositories shipped before this release: the
++    // same ids (subscriptions store them), the same prices, and the 90-day free
++    // trial the client asked for.
++    `INSERT INTO partner_plans (id, label, price, days, note, badge, is_recommended, sort_order, is_active, is_free) VALUES
++        ('Free',           'Free trial',       0,   90, 'Start your salon journey at no cost', 'DEFAULT',    TRUE,  -1, TRUE, TRUE),
++        ('monthly',        'Monthly Plan',     199, 30, 'Flexible month-to-month growth',      NULL,         FALSE,  0, TRUE, FALSE),
++        ('trial_2_months', 'Introductory',     299, 60, 'A gentle start for new partners',     NULL,         FALSE,  1, TRUE, FALSE),
++        ('quarterly',      'Quarterly Plan',   499, 90, 'Best value for busy salons',          'BEST VALUE', TRUE,   2, TRUE, FALSE)
++    ON CONFLICT (id) DO NOTHING;`,
++    `CREATE INDEX IF NOT EXISTS idx_partner_plans_order ON partner_plans (is_active, sort_order);`
++];
++
++let ensured = false;
++let inFlight = null;
++
++/**
++ * Run the DDL. Resolves true when the table is usable, false when at least one
++ * statement was refused — callers must not assume success.
++ */
++const ensurePlanSchema = async ({ force = false } = {}) => {
++    if (ensured && !force) return true;
++    if (inFlight) return inFlight;
++
++    inFlight = (async () => {
++        const failures = [];
++        for (const statement of STATEMENTS) {
++            try {
++                await db.sequelize.query(statement);
++            } catch (error) {
++                failures.push(error.message);
++            }
++        }
++        if (failures.length) {
++            console.error(
++                '[plan-schema] could not finish the partner_plans schema — run migrations/2026-11-05-partner-plans.sql:',
++                failures[0]
++            );
++            return false;
++        }
++        ensured = true;
++        console.log('[plan-schema] partner_plans present (price list + free-trial length)');
++        return true;
++    })().finally(() => {
++        inFlight = null;
++    });
++
++    return inFlight;
++};
++
++/**
++ * Wrap a read so a missing table repairs itself once and the read is retried.
++ * The plan list is on the registration screen: a 500 there means nobody can sign
++ * up, so it is worth one silent retry.
++ */
++const withPlanSchema = async (run) => {
++    try {
++        return await run();
++    } catch (error) {
++        const missingTable = /relation .*partner_plans.* does not exist/i.test(String(error?.message || ''));
++        if (!missingTable) throw error;
++        const repaired = await ensurePlanSchema({ force: true });
++        if (!repaired) throw error;
++        return run();
++    }
++};
++
++module.exports = {
++    ensurePlanSchema,
++    withPlanSchema,
++    PLAN_SCHEMA_STATEMENTS: STATEMENTS
++};
+diff --git a/src/database/models/partnerPlan.model.js b/src/database/models/partnerPlan.model.js
+new file mode 100644
+index 0000000..7525a87
+--- /dev/null
++++ b/src/database/models/partnerPlan.model.js
+@@ -0,0 +1,102 @@
++const { DataTypes } = require('sequelize');
++
++/**
++ * Partner plans — the ONE price list, owned by the admin panel.
++ *
++ * Every partner plan the portal, the app and the admin panel charge for lives
++ * here: the price, the number of days, the label and the order the cards appear
++ * in. Before this table the numbers were constants in whichever client was
++ * showing them (`plan.util.js` on the backend, `PARTNER_PLANS` in the website
++ * bundle), so a price change was a code change in three repositories.
++ *
++ * Two things are deliberate:
++ *
++ *   · `id` is a STRING and it is FIXED at creation. `salons.planType` and the
++ *     `subscriptions` rows store it, so renaming "Quarterly Plan" to "Salon
++ *     Growth" must never move a salon onto a different plan. `update` refuses to
++ *     change an id.
++ *   · The free trial is a ROW here too (`isFree`, id `Free`), because its length
++ *     is the "default trial period" the admin owns. A new salon's window comes
++ *     from `days` on that row — 90 by default — instead of the `+ 20` that used
++ *     to be hard-coded in `salonLogin.js`.
++ *
++ * `days` is the source of truth for a plan's length; a display string like
++ * "3 Months (90 Days)" is derived from it everywhere, so the label on the card
++ * can never promise a window the salon does not get.
++ */
++module.exports = (sequelize) => {
++    const PartnerPlan = sequelize.define('PartnerPlan', {
++        id: {
++            type: DataTypes.STRING(40),
++            primaryKey: true,
++            allowNull: false
++        },
++
++        label: {
++            type: DataTypes.STRING(120),
++            allowNull: false
++        },
++
++        // Money in rupees. DECIMAL so ₹249.50 is stored exactly rather than as a
++        // float that Razorpay multiplies by 100.
++        price: {
++            type: DataTypes.DECIMAL(10, 2),
++            allowNull: false,
++            defaultValue: 0
++        },
++
++        days: {
++            type: DataTypes.INTEGER,
++            allowNull: false,
++            defaultValue: 30
++        },
++
++        note: {
++            type: DataTypes.STRING(200),
++            allowNull: true
++        },
++
++        // The word printed on the card's corner ("BEST VALUE", "DEFAULT").
++        badge: {
++            type: DataTypes.STRING(24),
++            allowNull: true
++        },
++
++        isRecommended: {
++            type: DataTypes.BOOLEAN,
++            allowNull: false,
++            defaultValue: false,
++            field: 'is_recommended'
++        },
++
++        sortOrder: {
++            type: DataTypes.INTEGER,
++            allowNull: false,
++            defaultValue: 0,
++            field: 'sort_order'
++        },
++
++        isActive: {
++            type: DataTypes.BOOLEAN,
++            allowNull: false,
++            defaultValue: true,
++            field: 'is_active'
++        },
++
++        // Exactly one plan is the free trial: the one a new salon starts on.
++        isFree: {
++            type: DataTypes.BOOLEAN,
++            allowNull: false,
++            defaultValue: false,
++            field: 'is_free'
++        }
++    }, {
++        tableName: 'partner_plans',
++        timestamps: true,
++        underscored: true,
++        createdAt: 'created_at',
++        updatedAt: 'updated_at'
++    });
++
++    return PartnerPlan;
++};
+diff --git a/src/routes/salon.routes.js b/src/routes/salon.routes.js
+index 58fc08e..c465817 100644
+--- a/src/routes/salon.routes.js
++++ b/src/routes/salon.routes.js
+@@ -31,6 +31,11 @@ const renewSalonPlan = require('../controller/razorpay/renewSalonPlan');
+ const editSalonProfile = require('../controller/salon/editSalonProfile');
+ const getSalonListPublic = require('../controller/salon/get-salon-list-for-public');
+ const salonUpdateBookingTime = require('../controller/booking/update-booking-time');
++const listPartnerPlans = require('../controller/salon/plan/listPartnerPlans');
++const adminListPartnerPlans = require('../controller/salon/plan/adminListPartnerPlans');
++const adminCreatePartnerPlan = require('../controller/salon/plan/adminCreatePartnerPlan');
++const adminUpdatePartnerPlan = require('../controller/salon/plan/adminUpdatePartnerPlan');
++const adminDeletePartnerPlan = require('../controller/salon/plan/adminDeletePartnerPlan');
+ 
+ 
+ 
+@@ -59,6 +64,10 @@ salonRouter.post('/delete-service', deleteSalonService);
+ //user login   
+ salonRouter.post('/salon-list', authenticateUser, listSalonsApp);
+ salonRouter.post('/salon-list-public', getSalonListPublic);
++// The partner price list — PUBLIC, like `/salon-list-public`: the registration
++// screen shows prices before anyone has an account, and the admin panel owns
++// what those prices are.
++salonRouter.post('/plans/list', listPartnerPlans);
+ salonRouter.post('/get-salon-by-id', getSalonByIdUser);
+ salonRouter.get('/get-city-list', authenticateUser, getCityFilterUser)
+ 
+@@ -83,6 +92,12 @@ salonRouter.post('/status', toggleStatus);
+ salonRouter.delete('/delete-salon-by-admin/:salonId', deleteSalonByAdmin);
+ salonRouter.post('/get-salon-by-agent', getSalonsByAgent);
+ 
++// Partner plans — the ONE price list (admin panel → website → app).
++salonRouter.post('/admin/plans/list', adminListPartnerPlans);
++salonRouter.post('/admin/plans/create', adminCreatePartnerPlan);
++salonRouter.post('/admin/plans/update', adminUpdatePartnerPlan);
++salonRouter.post('/admin/plans/delete', adminDeletePartnerPlan);
++
+ 
+ 
+ 
+diff --git a/src/services/partnerPlan.service.js b/src/services/partnerPlan.service.js
+new file mode 100644
+index 0000000..4dabfae
+--- /dev/null
++++ b/src/services/partnerPlan.service.js
+@@ -0,0 +1,420 @@
++const { Op, fn, col } = require('sequelize');
++const db = require('../database/models');
++const { ensurePlanSchema, withPlanSchema } = require('../database/config/ensurePlanSchema');
++
++/**
++ * Partner plans — the ONE price list the website, the app and the admin panel
++ * charge from.
++ *
++ *   · `listPublic()`  what a client renders: active plans in the admin's order,
++ *                     plus the free trial first. No auth — the registration
++ *                     screen shows prices before anybody has an account.
++ *   · `listAdmin()`   every row, with how many salons are currently ON each plan
++ *                     (deactivating a plan with live subscriptions is the way a
++ *                     renewal silently charges a plan that no longer exists).
++ *   · `durationDays()` the single answer to "how long is plan X", used by salon
++ *                     creation, renewal and the free trial. This is what makes an
++ *                     admin's `days` change real instead of cosmetic.
++ *
++ * The built-in FALLBACK list mirrors what the seed inserts, so an un-migrated
++ * deployment still sells the same plans at the same prices instead of a blank
++ * picker.
++ */
++
++const FALLBACK_PLANS = [
++    { id: 'Free', label: 'Free trial', price: 0, days: 90, note: 'Start your salon journey at no cost', badge: 'DEFAULT', isRecommended: true, sortOrder: -1, isActive: true, isFree: true },
++    { id: 'monthly', label: 'Monthly Plan', price: 199, days: 30, note: 'Flexible month-to-month growth', badge: null, isRecommended: false, sortOrder: 0, isActive: true, isFree: false },
++    { id: 'trial_2_months', label: 'Introductory', price: 299, days: 60, note: 'A gentle start for new partners', badge: null, isRecommended: false, sortOrder: 1, isActive: true, isFree: false },
++    { id: 'quarterly', label: 'Quarterly Plan', price: 499, days: 90, note: 'Best value for busy salons', badge: 'BEST VALUE', isRecommended: true, sortOrder: 2, isActive: true, isFree: false }
++];
++
++// Legacy ids that predate the table. `yearly` was in `plan.util.js`'s map and a
++// handful of salons may still carry it, so a renewal on that id must keep
++// working even though no card offers it.
++const LEGACY_DAYS = { yearly: 365, FREE: 90 };
++
++const MAX_DAYS = 3650;
++const MAX_PRICE = 1000000;
++
++const fail = (message, status = 400) => Object.assign(new Error(message), { status });
++
++const toRow = (row) => ({
++    id: row.id,
++    label: row.label,
++    price: Number(row.price ?? 0),
++    days: Number(row.days ?? 0),
++    note: row.note || '',
++    badge: row.badge || '',
++    isRecommended: row.isRecommended !== false && Boolean(row.isRecommended),
++    sortOrder: Number(row.sortOrder ?? 0),
++    isActive: row.isActive !== false,
++    isFree: Boolean(row.isFree),
++    updatedAt: row.updatedAt || row.updated_at || null
++});
++
++// "90" => "3 Months (90 Days)". Derived, never stored: a card cannot promise a
++// window the salon does not get.
++const describeDuration = (days) => {
++    const value = Number(days) || 0;
++    if (!value) return '';
++    if (value === 1) return '1 Day';
++    if (value === 7) return '7 Days (1 Week)';
++    if (value % 30 === 0) {
++        const months = value / 30;
++        return `${months} ${months === 1 ? 'Month' : 'Months'} (${value} Days)`;
++    }
++    return `${value} Days`;
++};
++
++const normalizeText = (value) => String(value ?? '').trim().replace(/\s+/g, ' ');
++
++const normalizeDays = (value, fallback = 30) => {
++    const parsed = Number.parseInt(value, 10);
++    if (!Number.isFinite(parsed)) return fallback;
++    if (parsed < 1 || parsed > MAX_DAYS) throw fail(`A plan must run for 1–${MAX_DAYS} days`);
++    return parsed;
++};
++
++const normalizePrice = (value, fallback = 0) => {
++    if (value === undefined || value === null || value === '') return fallback;
++    const parsed = Number(value);
++    if (!Number.isFinite(parsed) || parsed < 0 || parsed > MAX_PRICE) {
++        throw fail(`A price must be a number between 0 and ${MAX_PRICE}`);
++    }
++    return Math.round(parsed * 100) / 100;
++};
++
++const normalizeFlag = (value, fallback = true) => {
++    if (value === undefined || value === null || value === '') return fallback;
++    if (typeof value === 'boolean') return value;
++    return /^(true|1|yes|active|on)$/i.test(String(value).trim());
++};
++
++const normalizeSort = (value, fallback = 0) => {
++    // 0 is the first card, so this must never be a `||` default.
++    const parsed = Number.parseInt(value, 10);
++    if (!Number.isFinite(parsed)) return fallback;
++    return Math.max(-100, Math.min(100000, parsed));
++};
++
++// "Salon Growth" -> "salon-growth". Only used when the admin creates a plan
++// WITHOUT an id: ids are permanent, so one that is supplied is never rewritten.
++const toPlanId = (label = '') => String(label)
++    .trim()
++    .toLowerCase()
++    .replace(/&/g, 'and')
++    .replace(/[^a-z0-9]+/g, '-')
++    .replace(/^-+|-+$/g, '')
++    .slice(0, 40)
++    .replace(/-+$/g, '');
++
++const orderedRows = (rows) => rows
++    .map(toRow)
++    .sort((a, b) => (a.sortOrder - b.sortOrder) || String(a.label).localeCompare(String(b.label)));
++
++const toPublicPlan = (row) => ({
++    id: row.id,
++    title: row.label,
++    label: row.label,
++    price: row.price,
++    days: row.days,
++    duration: describeDuration(row.days),
++    note: row.note,
++    badge: row.badge,
++    best: row.isRecommended || undefined,
++    sortOrder: row.sortOrder,
++    isActive: row.isActive,
++    isFree: row.isFree
++});
++
++/**
++ * The plan list a client renders. No token required.
++ *
++ * `freeTrial` is returned separately because every client shows it first and
++ * needs its length for the "Start your 90-day free trial" line.
++ */
++const listPublic = async () => {
++    let rows;
++    try {
++        rows = await withPlanSchema(() => db.PartnerPlan.findAll({
++            where: { isActive: true },
++            order: [['sortOrder', 'ASC']],
++            raw: true
++        }));
++    } catch (error) {
++        console.error('[partner-plans] falling back to the built-in list:', error.message);
++        rows = [];
++    }
++
++    const plans = orderedRows(rows).filter(row => !row.isFree);
++    const freeRow = orderedRows(rows).find(row => row.isFree);
++
++    if (!plans.length) {
++        // No table (or nothing active): the built-in list keeps the picker
++        // working, at the prices this release shipped with.
++        return {
++            plans: FALLBACK_PLANS.filter(plan => !plan.isFree).map(toPublicPlan),
++            freeTrial: toPublicPlan(FALLBACK_PLANS[0]),
++            currency: 'INR',
++            source: 'fallback'
++        };
++    }
++
++    return {
++        plans: plans.map(toPublicPlan),
++        freeTrial: toPublicPlan(freeRow || { ...FALLBACK_PLANS[0] }),
++        currency: 'INR',
++        source: 'db'
++    };
++};
++
++/**
++ * How many salons are on each plan right now, and how many of those are live
++ * (plan not yet ended). Deactivating or renaming a plan that live salons hold is
++ * the only way this data hurts somebody, so the count is part of every admin
++ * answer.
++ */
++const usageByPlan = async () => {
++    const [live, all] = await Promise.all([
++        db.Salon.findAll({
++            attributes: ['planType', [fn('COUNT', col('salon_id')), 'total']],
++            where: { isPlanActive: true },
++            group: ['planType'],
++            raw: true
++        }),
++        db.Salon.findAll({
++            attributes: ['planType', [fn('COUNT', col('salon_id')), 'total']],
++            group: ['planType'],
++            raw: true
++        })
++    ]);
++    const total = {};
++    const active = {};
++    all.forEach(row => { if (row.planType) total[row.planType] = Number(row.total) || 0; });
++    live.forEach(row => { if (row.planType) active[row.planType] = Number(row.total) || 0; });
++    return { total, active };
++};
++
++/** The admin panel's view: every row, newest rules, plus who is on what. */
++const listAdmin = async () => {
++    await ensurePlanSchema();
++    const [rows, usage] = await Promise.all([
++        db.PartnerPlan.findAll({ order: [['sortOrder', 'ASC']], raw: true }),
++        usageByPlan()
++    ]);
++    const plans = orderedRows(rows).map(row => ({
++        ...row,
++        duration: describeDuration(row.days),
++        activeSalons: usage.active[row.id] || 0,
++        totalSalons: usage.total[row.id] || 0
++    }));
++    // A plan id that salons are on but the table does not hold (a legacy id like
++    // `yearly`) is reported instead of being invisible: that is exactly the row
++    // an admin needs to create before those salons can renew.
++    const known = new Set(plans.map(plan => plan.id));
++    const orphaned = Object.keys(usage.total)
++        .filter(id => !known.has(id))
++        .map(id => ({ id, totalSalons: usage.total[id] || 0, activeSalons: usage.active[id] || 0 }));
++    return {
++        plans,
++        orphaned,
++        freeTrialDays: plans.find(plan => plan.isFree)?.days ?? FALLBACK_PLANS[0].days,
++        defaultPlanDays: 30,
++        currency: 'INR'
++    };
++};
++
++/**
++ * "How long is this plan?" — the one answer the acceptance paths use.
++ *
++ * Order: the row in `partner_plans` → a legacy id this release still honours →
++ * 30 days. Never throws: a salon creation must not fail because the price table
++ * is unreadable, it must fall back to the window it always had.
++ */
++const durationDays = async (planId) => {
++    const id = String(planId ?? '').trim();
++    if (!id) return 30;
++    try {
++        const row = await withPlanSchema(() => db.PartnerPlan.findByPk(id, { raw: true }));
++        if (row && Number(row.days) > 0) return Number(row.days);
++    } catch (error) {
++        console.error('[partner-plans] could not read the plan length, using the legacy default:', error.message);
++    }
++    if (LEGACY_DAYS[id] !== undefined) return LEGACY_DAYS[id];
++    const fallback = FALLBACK_PLANS.find(plan => plan.id === id);
++    return fallback ? fallback.days : 30;
++};
++
++/** The free trial a brand-new salon starts on (90 days by default). */
++const defaultTrialDays = async () => {
++    try {
++        const row = await withPlanSchema(() => db.PartnerPlan.findOne({ where: { isFree: true }, raw: true }));
++        if (row && Number(row.days) > 0) return Number(row.days);
++    } catch (error) {
++        console.error('[partner-plans] could not read the trial length, using 90 days:', error.message);
++    }
++    return FALLBACK_PLANS[0].days;
++};
++
++/**
++ * The price of a plan, for the server-side amount check. Returns null when the
++ * id is unknown (a legacy or retired id), so the caller can decide whether to
++ * trust the client's amount.
++ */
++const priceOf = async (planId) => {
++    const id = String(planId ?? '').trim();
++    if (!id) return null;
++    try {
++        const row = await withPlanSchema(() => db.PartnerPlan.findByPk(id, { raw: true }));
++        if (row) return Number(row.price ?? 0);
++    } catch (error) {
++        console.error('[partner-plans] could not read the plan price:', error.message);
++    }
++    const fallback = FALLBACK_PLANS.find(plan => plan.id === id);
++    return fallback ? Number(fallback.price) : null;
++};
++
++/**
++ * The check every paid path runs: is this plan real, and does the amount the
++ * client sent match the price the admin set?
++ *
++ * This is what makes an admin price change authoritative. Without it a client
++ * could send `amount: 1` for the quarterly plan and Razorpay would happily make
++ * a ₹1 order for a ₹499 subscription.
++ */
++const assertPayableAmount = async ({ planType, amount }) => {
++    const price = await priceOf(planType);
++    if (price === null) {
++        throw fail(`Unknown plan "${planType}". Refresh the plan list and try again.`);
++    }
++    if (price === 0) {
++        // A free plan is never paid for through the gateway.
++        throw fail('This plan is free — start it without a payment.');
++    }
++    const sent = Number(amount);
++    if (!Number.isFinite(sent) || Math.abs(sent - price) > 0.5) {
++        throw fail(`The price of this plan is ₹${price}. Refresh the plan list and try again.`);
++    }
++    return price;
++};
++
++const requireUniqueLabel = async (label, exceptId) => {
++    const rows = await db.PartnerPlan.findAll({ attributes: ['id', 'label'], raw: true });
++    const clash = rows.find(row => String(row.label).toLowerCase() === label.toLowerCase() && row.id !== exceptId);
++    if (clash) throw fail(`A plan called "${clash.label}" already exists`);
++};
++
++const create = async ({ id, label, title, price, days, note, badge, isRecommended, best, sortOrder, isActive, isFree } = {}) => {
++    await ensurePlanSchema();
++    const cleanLabel = normalizeText(label ?? title);
++    if (cleanLabel.length < 2 || cleanLabel.length > 120) throw fail('A plan name must be 2–120 characters');
++
++    const wantedId = String(id || toPlanId(cleanLabel)).trim().slice(0, 40);
++    if (!wantedId) throw fail('A plan needs an id of letters, digits or dashes');
++
++    const existing = await db.PartnerPlan.findByPk(wantedId);
++    if (existing) throw fail(`A plan with the id "${wantedId}" already exists ("${existing.label}")`);
++    await requireUniqueLabel(cleanLabel);
++
++    const free = normalizeFlag(isFree, false);
++    if (free) {
++        // Exactly one free plan: it is the trial every new salon starts on.
++        const current = await db.PartnerPlan.findOne({ where: { isFree: true } });
++        if (current) throw fail(`"${current.label}" is already the free trial — edit that plan instead`);
++    }
++
++    const maxSort = await db.PartnerPlan.max('sortOrder');
++    const row = await db.PartnerPlan.create({
++        id: wantedId,
++        label: cleanLabel,
++        price: free ? 0 : normalizePrice(price, 0),
++        days: normalizeDays(days, 30),
++        note: normalizeText(note) || null,
++        badge: normalizeText(badge) || null,
++        isRecommended: normalizeFlag(isRecommended ?? best, false),
++        sortOrder: normalizeSort(sortOrder, Number.isFinite(Number(maxSort)) ? Number(maxSort) + 1 : 0),
++        isActive: normalizeFlag(isActive, true),
++        isFree: free
++    });
++    return toRow(row.get({ plain: true }));
++};
++
++/** Partial update. `id` identifies the row and can never change. */
++const update = async ({ id, label, title, price, days, note, badge, isRecommended, best, sortOrder, isActive, isFree } = {}) => {
++    await ensurePlanSchema();
++    const row = await db.PartnerPlan.findByPk(String(id || '').trim());
++    if (!row) throw fail('That plan no longer exists — refresh the list', 404);
++
++    const next = {};
++    const nextLabel = label ?? title;
++    if (nextLabel !== undefined) {
++        const cleanLabel = normalizeText(nextLabel);
++        if (cleanLabel.length < 2 || cleanLabel.length > 120) throw fail('A plan name must be 2–120 characters');
++        await requireUniqueLabel(cleanLabel, row.id);
++        next.label = cleanLabel;
++    }
++    if (price !== undefined) {
++        // A free plan stays free whatever the caller sends; the paid ones must
++        // cost something or the payment path would refuse them.
++        next.price = row.isFree ? 0 : normalizePrice(price, Number(row.price));
++        if (!row.isFree && next.price <= 0) throw fail('A paid plan must cost more than ₹0 — deactivate it instead of pricing it at zero');
++    }
++    if (days !== undefined) next.days = normalizeDays(days, Number(row.days));
++    if (note !== undefined) next.note = normalizeText(note) || null;
++    if (badge !== undefined) next.badge = normalizeText(badge) || null;
++    if (isRecommended !== undefined || best !== undefined) next.isRecommended = normalizeFlag(isRecommended ?? best, false);
++    if (sortOrder !== undefined) next.sortOrder = normalizeSort(sortOrder, Number(row.sortOrder));
++    if (isActive !== undefined) next.isActive = normalizeFlag(isActive, true);
++    if (isFree !== undefined) {
++        const free = normalizeFlag(isFree, Boolean(row.isFree));
++        if (free && !row.isFree) {
++            const current = await db.PartnerPlan.findOne({ where: { isFree: true } });
++            if (current) throw fail(`"${current.label}" is already the free trial`);
++        }
++        next.isFree = free;
++    }
++
++    if (!Object.keys(next).length) return toRow(row.get({ plain: true }));
++    await row.update(next);
++    return toRow(row.get({ plain: true }));
++};
++
++/**
++ * Remove a plan. Refused while any salon is on it — those subscriptions would
++ * otherwise point at a plan that no longer exists, and the renewal screen would
++ * have nothing to renew. The admin either moves them (`deactivate: true`, which
++ * hides the plan from new purchases but keeps it valid for its holders) or
++ * deletes once the count is zero.
++ */
++const remove = async ({ id, deactivate } = {}) => {
++    await ensurePlanSchema();
++    const row = await db.PartnerPlan.findByPk(String(id || '').trim());
++    if (!row) throw fail('That plan no longer exists — refresh the list', 404);
++    if (row.isFree) throw fail('The free trial is required — edit its length instead of deleting it');
++
++    const usage = await db.Salon.count({ where: { planType: row.id } });
++    if (usage > 0) {
++        if (normalizeFlag(deactivate, false)) {
++            await row.update({ isActive: false });
++            return { id: row.id, deleted: false, deactivated: true, salons: usage };
++        }
++        throw fail(`${usage} salon${usage === 1 ? ' is' : 's are'} on "${row.label}" — deactivate it instead of deleting it`);
++    }
++    await row.destroy();
++    return { id: row.id, deleted: true, deactivated: false, salons: 0 };
++};
++
++module.exports = {
++    FALLBACK_PLANS,
++    describeDuration,
++    toPlanId,
++    listPublic,
++    listAdmin,
++    durationDays,
++    defaultTrialDays,
++    priceOf,
++    assertPayableAmount,
++    create,
++    update,
++    remove
++};
+diff --git a/src/utils/plan.util.js b/src/utils/plan.util.js
+index c7bd3fa..a03c07d 100644
+--- a/src/utils/plan.util.js
++++ b/src/utils/plan.util.js
+@@ -1,8 +1,13 @@
++// The FALLBACK lengths only. The real answer is `partner_plans.days`, which the
++// admin panel owns (src/services/partnerPlan.service.durationDays). These stay so
++// the pure helper below keeps working for a legacy id, or when the table cannot
++// be read — a salon creation must not fail because the price list is missing.
+ const plans = {
+   trial_2_months: 60,
+   monthly: 30,
+   quarterly: 90,
+-  yearly: 365
++  yearly: 365,
++  Free: 90
+ };
+ 
+ /**
+@@ -11,15 +16,29 @@ const plans = {
+  * @param {string} planType
+  * @returns {Date}
+  */
+-const getPlanEndDate = (startDate, planType) => {
+-  const daysToAdd = plans[planType] ?? 30;
+-
++/** End date for an explicit number of days (what the admin configured). */
++const getPlanEndDateInDays = (startDate, days) => {
+   const endDate = new Date(startDate);
+-  endDate.setDate(startDate.getDate() + daysToAdd);
+-
++  // `setDate` on a copy, and via UTC-safe arithmetic, so a DST jump never takes
++  // a day off a subscription.
++  endDate.setDate(endDate.getDate() + (Number(days) > 0 ? Number(days) : 30));
+   return endDate;
+ };
+ 
++/**
++ * Returns plan end date as Date object
++ * @param {Date} startDate
++ * @param {string} planType
++ * @param {{ days?: number }} options  when `days` is given it wins: that is the
++ *        length the admin set for this plan in the panel.
++ * @returns {Date}
++ */
++const getPlanEndDate = (startDate, planType, options = {}) => {
++  if (Number(options?.days) > 0) return getPlanEndDateInDays(startDate, options.days);
++  const daysToAdd = plans[planType] ?? 30;
++  return getPlanEndDateInDays(startDate, daysToAdd);
++};
++
+ /**
+  * Checks if plan is still active
+  * @param {string | Date} planEndDate
+@@ -37,4 +56,4 @@ const isPlanActive = (planEndDate) => {
+   return end.getTime() >= now.getTime();
+ };
+ 
+-module.exports = { plans, getPlanEndDate, isPlanActive };
++module.exports = { plans, getPlanEndDate, getPlanEndDateInDays, isPlanActive };

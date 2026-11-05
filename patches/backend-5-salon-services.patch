@@ -1,0 +1,347 @@
+From d3c17f66be13f94f88041a84250defa5d35c166c Mon Sep 17 00:00:00 2001
+From: Arena Agent <agent@arena.ai>
+Date: Thu, 5 Nov 2026 13:11:30 +0000
+Subject: [PATCH] Add a salon services endpoint, so the menu saves on its own
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The web portal's salon account is getting an "Edit services" screen: every
+service open as a row of inputs, saved in one go. Before this there was no
+endpoint for that. `edit-salon-profile` writes services only as part of a full
+profile save — the same request carries the address, the photos, the business
+hours and the barbers, and it rewrites the salon row on the way — so changing
+one price meant re-sending everything.
+
+POST /api/salons/services/save  (authenticateSalon)
+
+  { "services": [ { "serviceId"?, "serviceName", "price", "durationMinutes",
+                    "description"?, "displayOrder"? } ],
+    "removedServiceIds": [ ] }
+
+- The salon comes from the partner's token, never from the body, so one salon
+  cannot write another salon's menu. Every serviceId is checked against the
+  salon's own rows before anything is written.
+- A row with a serviceId updates, a row without one is created, and the list
+  order becomes displayOrder.
+- removedServiceIds is a soft removal (is_active = false), never a DELETE:
+  bookings and queue rows point at the service row. The customer menu already
+  filters on is_active, so the service disappears for them.
+- One transaction: a refused row leaves the menu exactly as it was.
+- Duplicate names (case and spacing ignored) are refused, because two services
+  with one name read as one service with two prices on the customer's screen.
+- No "affected rows" checks: MySQL reports 0 changed rows when an UPDATE writes
+  identical values, so a Save with no edits would be called invalid — the trap
+  in `update-salon`. Ownership is proved up front instead.
+- Answers with the menu as stored, so the portal repaints from the record.
+---
+ src/controller/salon/saveSalonServices.js | 208 ++++++++++++++++++++++
+ src/routes/salon.routes.js                |   5 +
+ src/validations/salon.validation.js       |  46 +++++
+ 3 files changed, 259 insertions(+)
+ create mode 100644 src/controller/salon/saveSalonServices.js
+
+diff --git a/src/controller/salon/saveSalonServices.js b/src/controller/salon/saveSalonServices.js
+new file mode 100644
+index 0000000..22ae012
+--- /dev/null
++++ b/src/controller/salon/saveSalonServices.js
+@@ -0,0 +1,208 @@
++const {
++    salonServicesSaveValidationSchema,
++} = require('../../validations/salon.validation');
++const { Service, sequelize } = require('../../database/models');
++
++// Saving a salon's whole menu, and nothing else.
++//
++// `POST /api/salons/edit-salon-profile` already writes services, but only as part
++// of a full profile save: the same request carries the address, the photos, the
++// business hours and the barbers, and it rewrites the salon row on the way. A
++// partner who only wants to change "Haircut ₹250 → ₹300" therefore re-sends
++// everything, and the web portal's menu editor has to keep the whole profile in
++// sync to change one number.
++//
++// This endpoint is deliberately narrow:
++//
++//   body: { services: [...], removedServiceIds: [...] }
++//
++//   · the salon is taken from the partner's JWT (`request.salon.salonId`), never
++//     from the body, so one salon cannot write another salon's menu;
++//   · a service WITH a serviceId is updated, one WITHOUT is created — the same
++//     existingServices / newServices split `update-salon` uses, in one list, in
++//     the order the partner arranged;
++//   · removedServiceIds is a SOFT removal (`is_active = false`), never a DELETE:
++//     bookings and queue rows point at the service row, and deleting it would
++//     either fail on the foreign key or orphan a customer's history. The customer
++//     menu is `WHERE is_active = 1`, so the service still disappears for them;
++//   · everything happens in one transaction, so a single bad row leaves the menu
++//     exactly as it was — a half-saved menu is worse than a refused save;
++//   · the response returns the menu as it is now stored, so the client repaints
++//     from the record instead of from its own guess.
++//
++// Note on `affected`: this does NOT check the number of changed rows. MySQL
++// reports 0 changed (but 1 matched) rows when an UPDATE writes identical values,
++// so a partner pressing Save without editing anything would be told "invalid
++// serviceId" — which is exactly the trap in `update-salon`. Ownership is proved
++// up front against the salon's own rows instead.
++const MAX_MENU_SIZE = 200;
++
++const asId = value => String(value ?? '').trim();
++const asNumber = value => Number(value);
++
++const serviceNameKey = value => String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
++
++const saveSalonServices = async (request, response) => {
++    const salonId = request.salon?.salonId;
++
++    if (!salonId) {
++        return response.status(401).json({
++            status: 'FAILED',
++            message: 'Salon authentication failed',
++        });
++    }
++
++    // `unknown(true)`: a client that also sends salonId is not scolded — the
++    // token already decided which salon this is, and the field is ignored.
++    const { error, value } = salonServicesSaveValidationSchema.validate(request.body || {}, {
++        abortEarly: true,
++        stripUnknown: false,
++    });
++
++    if (error) {
++        return response.status(400).json({
++            status: 'FAILED',
++            message: error.details[0].message.replace(/['"]/g, ''),
++        });
++    }
++
++    const services = Array.isArray(value.services) ? value.services : [];
++    const removedServiceIds = [...new Set((value.removedServiceIds || []).map(asId).filter(Boolean))];
++
++    if (services.length > MAX_MENU_SIZE) {
++        return response.status(400).json({
++            status: 'FAILED',
++            message: `A menu can hold at most ${MAX_MENU_SIZE} services`,
++        });
++    }
++
++    // Two services with the same name read as one service with two prices on the
++    // customer's screen, so the menu is refused as a whole rather than saved in a
++    // state nobody can explain later. Case and spacing are ignored on purpose.
++    const seenNames = new Map();
++    for (const service of services) {
++        const key = serviceNameKey(service.serviceName);
++        if (!key) continue;
++        if (seenNames.has(key)) {
++            return response.status(400).json({
++                status: 'FAILED',
++                message: `Two services are named "${String(service.serviceName).trim()}". Give them different names.`,
++            });
++        }
++        seenNames.set(key, true);
++    }
++
++    const transaction = await sequelize.transaction();
++
++    try {
++        // What this salon already owns. Every id in the request is checked against
++        // this set, which is what keeps a crafted serviceId from editing, or
++        // switching off, another salon's service.
++        const existing = await Service.findAll({
++            where: { salonId },
++            attributes: ['serviceId'],
++            transaction,
++        });
++        const ownedIds = new Set(existing.map(row => asId(row.serviceId)));
++
++        for (const service of services) {
++            const serviceId = asId(service.serviceId);
++            if (serviceId && !ownedIds.has(serviceId)) {
++                await transaction.rollback();
++                return response.status(400).json({
++                    status: 'FAILED',
++                    message: `Service ${serviceId} is not on your menu`,
++                });
++            }
++        }
++
++        for (const serviceId of removedServiceIds) {
++            if (!ownedIds.has(serviceId)) {
++                await transaction.rollback();
++                return response.status(400).json({
++                    status: 'FAILED',
++                    message: `Service ${serviceId} is not on your menu`,
++                });
++            }
++        }
++
++        const keptIds = new Set(services.map(service => asId(service.serviceId)).filter(Boolean));
++        const contradiction = removedServiceIds.find(serviceId => keptIds.has(serviceId));
++        if (contradiction) {
++            await transaction.rollback();
++            return response.status(400).json({
++                status: 'FAILED',
++                message: 'A service cannot be saved and removed in the same request',
++            });
++        }
++
++        for (let index = 0; index < services.length; index += 1) {
++            const service = services[index];
++            const serviceId = asId(service.serviceId);
++            const record = {
++                serviceName: String(service.serviceName).trim(),
++                price: asNumber(service.price),
++                durationMinutes: asNumber(service.durationMinutes),
++                description: service.description ? String(service.description).trim() : null,
++                displayOrder: Number.isInteger(service.displayOrder) ? service.displayOrder : index,
++                // A service that is sent in the list is on the menu: re-saving a
++                // previously removed one brings it back instead of silently
++                // leaving it invisible.
++                isActive: true,
++            };
++
++            if (serviceId) {
++                await Service.update(record, {
++                    where: { serviceId, salonId },
++                    transaction,
++                });
++            } else {
++                await Service.create({ ...record, salonId }, { transaction });
++            }
++        }
++
++        if (removedServiceIds.length > 0) {
++            await Service.update(
++                { isActive: false },
++                { where: { serviceId: removedServiceIds, salonId }, transaction }
++            );
++        }
++
++        await transaction.commit();
++
++        const menu = await Service.findAll({
++            where: { salonId, isActive: true },
++            attributes: [
++                'serviceId',
++                'serviceName',
++                'price',
++                'durationMinutes',
++                'description',
++                'displayOrder',
++                'isActive',
++            ],
++            order: [['displayOrder', 'ASC'], ['createdAt', 'ASC']],
++        });
++
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: 'Services saved successfully',
++            data: {
++                salonId,
++                services: menu,
++                serviceCount: menu.length,
++                // Removals are soft, so the partner is not told "deleted".
++                removedServiceIds,
++            },
++        });
++    } catch (error) {
++        await transaction.rollback();
++        console.error('Error in saveSalonServices:', error);
++        return response.status(500).json({
++            status: 'FAILED',
++            message: error.message,
++        });
++    }
++};
++
++module.exports = saveSalonServices;
+diff --git a/src/routes/salon.routes.js b/src/routes/salon.routes.js
+index c465817..16fbabc 100644
+--- a/src/routes/salon.routes.js
++++ b/src/routes/salon.routes.js
+@@ -16,6 +16,7 @@ const listSalonsApp = require('../controller/salon/salonList');
+ const getSalonByIdUser = require('../controller/salon/getSalonByIdUser');
+ const listSalons = require('../controller/salon/getSalonList');
+ const deleteSalonService = require('../controller/salon/deleteSalonService');
++const saveSalonServices = require('../controller/salon/saveSalonServices');
+ const { getListFilter } = require('../controller/salon/getList');
+ const { getCityFilterUser } = require('../controller/salon/getFilterListUser');
+ const deleteService = require('../controller/salon/deleteServiceBySalon');
+@@ -58,6 +59,10 @@ salonRouter.post('/delete-salon-service', authenticateSalon, deleteService);
+ salonRouter.post('/renew-salon-plan', authenticateSalon, renewSalonPlan);
+ salonRouter.post('/edit-salon-profile', authenticateSalon, editSalonProfile);
+ salonRouter.post('/delete-service', deleteSalonService);
++// The menu editor's save: the whole list of services in one transaction, plus the
++// ids to take off the menu. Authenticated as the salon, so the salon it writes is
++// the one in the token — never one named in the body.
++salonRouter.post('/services/save', authenticateSalon, saveSalonServices);
+ 
+ 
+ 
+diff --git a/src/validations/salon.validation.js b/src/validations/salon.validation.js
+index b9b18fa..8d4ceb6 100644
+--- a/src/validations/salon.validation.js
++++ b/src/validations/salon.validation.js
+@@ -302,6 +302,50 @@ const salonServiceIdValidationSchema = Joi.object({
+     serviceId: Joi.string().uuid().required()
+ });
+ 
++/**
++ * One service in the menu editor's save. A row WITH a serviceId is an update of a
++ * service this salon already has; a row WITHOUT one is a new service.
++ */
++const salonServiceItemValidationSchema = Joi.object({
++    serviceId: Joi.string().uuid().allow(null, '').optional(),
++    serviceName: Joi.string().trim().min(2).max(100).required().messages({
++        'string.empty': 'Every service needs a name',
++        'string.min': 'Service name must be at least 2 characters',
++        'string.max': 'Service name cannot exceed 100 characters',
++        'any.required': 'Every service needs a name'
++    }),
++    price: Joi.number().min(0).max(1000000).required().messages({
++        'number.base': 'Every service needs a price',
++        'number.min': 'Price cannot be negative',
++        'number.max': 'Price cannot exceed 1000000',
++        'any.required': 'Every service needs a price'
++    }),
++    durationMinutes: Joi.number().integer().min(1).max(1440).required().messages({
++        'number.base': 'Every service needs a duration in minutes',
++        'number.integer': 'Duration must be a whole number of minutes',
++        'number.min': 'Duration must be at least 1 minute',
++        'number.max': 'Duration cannot exceed 24 hours',
++        'any.required': 'Every service needs a duration in minutes'
++    }),
++    description: Joi.string().trim().max(500).allow(null, '').optional(),
++    displayOrder: Joi.number().integer().min(0).max(9999).optional()
++});
++
++/**
++ * The whole menu in one request — the menu editor's save.
++ * The salon is NEVER taken from this body: it comes from the partner's token
++ * (see controller/salon/saveSalonServices.js), so `unknown(true)` only means a
++ * stray field is ignored rather than rejected.
++ */
++const salonServicesSaveValidationSchema = Joi.object({
++    services: Joi.array().items(salonServiceItemValidationSchema).max(200).required().messages({
++        'any.required': 'Send the services you want to keep',
++        'array.base': 'services must be a list of services',
++        'array.max': 'A menu can hold at most 200 services'
++    }),
++    removedServiceIds: Joi.array().items(Joi.string().uuid()).max(200).optional().default([])
++}).unknown(true);
++
+ const salonCreateValidationSchema = Joi.object({
+     ownerName: Joi.string().trim().required(),
+     salonName: Joi.string().trim().required(),
+@@ -365,6 +409,8 @@ module.exports = {
+     updateSalonWithDetailsAppSchema,
+     updateSalonValidationSchemaApp,
+     salonServiceIdValidationSchema,
++    salonServiceItemValidationSchema,
++    salonServicesSaveValidationSchema,
+     verifySalonRegOtpValidationSchema,
+     salonCreateValidationSchema,
+     sendRegSalonOtpValidationSchema,
+-- 
+2.39.5
+

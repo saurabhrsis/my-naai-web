@@ -169,10 +169,14 @@ img { display: block; max-width: 100%; }
    drawn for the dark chrome every header here already uses; no plate, no ring,
    no CSS wordmark beside it (the name is part of the image). */
 .brand { display: inline-flex; align-items: center; color: var(--white); white-space: nowrap; }
-.brand-lockup { height: 52px; width: auto; flex: none; object-fit: contain; filter: drop-shadow(0 4px 14px rgba(0, 0, 0, .45)); }
-.brand-mark { display: none; width: 46px; height: 46px; flex: none; object-fit: contain; }
+/* Brand: the 2026 "m" monogram + the name as text. The mark is always shown;
+   the wordmark is hidden below 1024px (the sidebar/top-bar breakpoint), where
+   the bar has no room for it. */
+.brand-mark { display: block; width: 46px; height: 46px; flex: none; object-fit: contain; }
+.brand-word { flex: none; color: var(--white); font-size: 21px; font-weight: 800; letter-spacing: -.035em; line-height: 1; }
+.brand { gap: 10px; }
 .brand-light { color: white; }
-.brand-light .brand-lockup { filter: drop-shadow(0 6px 20px rgba(0, 0, 0, .55)); }
+.brand-light .brand-mark { filter: drop-shadow(0 6px 20px rgba(0, 0, 0, .55)); }
 .login-page { display: grid; grid-template-columns: 1fr; }
 .auth-visual { display: none; position: relative; overflow: hidden; }
 .auth-visual-image { position: absolute; inset: 0; background: url('/assets/new_background.jpeg') center / cover; filter: saturate(.8); }
@@ -725,7 +729,12 @@ a.detail-info-row:hover { background: rgba(255, 255, 255, .03); }
 .date-choice small { font-size: 9px; font-weight: 700; }
 .date-choice strong { font-size: 25px; line-height: 1; }
 .date-choice span { font-size: 9px; }
-.time-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; max-height: 330px; overflow-y: auto; padding-right: 2px; }
+/* No inner scroll box. The grid used to be capped at 330px with its own
+   scrollbar, so a phone (three columns, up to 24 slots) always showed a second
+   scroll area inside a page that already scrolls: reaching a late slot meant
+   scrolling the box, then the page, then the box again. The page scrolls; the
+   slots simply continue. */
+.time-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; }
 .time-slot { min-height: 41px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border: 1px solid var(--line); border-radius: 10px; color: var(--white); background: var(--card); font-size: 10px; font-weight: 700; }
 .time-slot.active { color: #111; background: var(--gold); border-color: var(--gold); }
 .time-slot.disabled { color: #5d6563; background: #101313; text-decoration: line-through; }
@@ -734,6 +743,62 @@ a.detail-info-row:hover { background: rgba(255, 255, 255, .03); }
 .availability-empty { justify-content: center; text-align: center; line-height: 1.4; }
 .schedule-total { position: sticky; bottom: max(7px, var(--safe-bottom)); margin-top: 2px; }
 .schedule-total strong { color: var(--gold); font-size: 15px; }
+/* Pay at Salon — the booking flow's only payment method, stated at checkout.
+   Same shape as the shop's payment options (radio + icon + copy + tick), in the
+   booking palette, because it IS a payment choice: preselected today, and the
+   place an online option would sit if one is ever offered. */
+.schedule-pay-options { display: flex; flex-direction: column; gap: 9px; }
+.schedule-pay-option { position: relative; display: flex; align-items: center; gap: 11px; padding: 13px; border: 1.5px solid var(--line); border-radius: 15px; background: var(--card); cursor: pointer; transition: border-color .15s, background .15s; }
+.schedule-pay-option.active { border-color: var(--gold); background: var(--gold-wash); }
+.schedule-pay-option input { position: absolute; opacity: 0; pointer-events: none; }
+.schedule-pay-option:focus-within { outline: 2px solid var(--gold); outline-offset: 3px; }
+.schedule-pay-icon { flex: none; color: var(--muted-light); }
+.schedule-pay-option.active .schedule-pay-icon { color: var(--gold); }
+.schedule-pay-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.schedule-pay-copy strong { color: var(--white); font-size: 13px; }
+.schedule-pay-copy small { color: var(--muted-light); font-size: 11px; line-height: 1.45; }
+.schedule-pay-tick { flex: none; display: inline-flex; color: var(--gold); }
+.schedule-pay-note { display: flex; align-items: flex-start; gap: 6px; margin: 9px 2px 0; color: var(--muted); font-size: 10.5px; line-height: 1.45; }
+.schedule-pay-note svg { flex: none; margin-top: 1px; color: var(--green); }
+/* The sticky confirm bar repeats the method under the amount, so the last thing
+   the customer reads before confirming is how they will pay. */
+.schedule-total-pay { display: inline-flex; align-items: center; gap: 4px; color: var(--green); font-size: 9.5px; font-style: normal; font-weight: 700; }
+/* ── The booking checkout ─────────────────────────────────────────────────────
+   The card that stands between "Review & confirm" and the API call: salon,
+   services with prices, date, time, duration, barber, the amount and how it is
+   paid. It reads top-to-bottom in the order a customer checks a counter bill,
+   and the payment note sits last so it is the line beside the button. */
+.booking-review { display: flex; flex-direction: column; gap: 14px; }
+.booking-review-salon { display: flex; align-items: flex-start; gap: 11px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.booking-review-mark { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border-radius: 11px; background: var(--gold-wash); color: var(--gold); }
+.booking-review-salon > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.booking-review-salon small { color: var(--muted); font-size: 9.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.booking-review-salon strong { color: var(--white); font-size: 15px; line-height: 1.3; overflow-wrap: anywhere; }
+.booking-review-place { display: inline-flex; align-items: center; gap: 4px; color: var(--muted-light); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.booking-review-block { display: flex; flex-direction: column; gap: 8px; }
+.booking-review-block h3 { margin: 0; color: var(--muted-light); font-size: 9.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.booking-review-services { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.booking-review-services li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 11px; background: #101514; }
+.booking-review-services span { min-width: 0; color: var(--white); font-size: 12.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.booking-review-services strong { flex: none; color: var(--gold); font-size: 12.5px; }
+.booking-review-total { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 2px 0 0; padding: 10px 11px 0; border-top: 1px solid var(--line); }
+.booking-review-total span { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.booking-review-total strong { color: var(--gold); font-size: 17px; letter-spacing: -.02em; }
+.booking-review-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; margin: 0; }
+.booking-review-facts > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.booking-review-facts dt { color: var(--muted); font-size: 9.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+.booking-review-facts dd { margin: 0; color: var(--white); font-size: 12.5px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.booking-review-pay { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1.5px solid var(--gold); border-radius: 14px; background: var(--gold-wash); }
+.booking-review-pay > svg { flex: none; margin-top: 1px; color: var(--gold); }
+.booking-review-pay strong { display: block; color: var(--gold); font-size: 13px; letter-spacing: -.01em; }
+.booking-review-pay p { margin: 3px 0 0; color: var(--muted-light); font-size: 11.5px; line-height: 1.5; }
+.booking-review-fineprint { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
+.booking-review-fineprint svg { flex: none; margin-top: 1px; color: var(--green); }
+.booking-review-actions { display: flex; gap: 8px; width: 100%; }
+.booking-review-actions .btn { flex: 1; }
+@media (max-width: 380px) {
+  .booking-review-facts { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* Partner dashboard */
 .queue-group { display: grid; gap: 10px; }
@@ -820,6 +885,12 @@ a.detail-info-row:hover { background: rgba(255, 255, 255, .03); }
 .history-copy > div:last-child span { display: inline-flex; align-items: center; gap: 4px; }
 .history-copy svg { color: var(--gold); }
 .history-check { flex: none; color: var(--green); }
+/* The customer's mobile on a history row: a real `tel:` link, so the salon can
+   tap it on a phone, in the gold the partner screens use for "this does
+   something". It sits in the meta row and wraps with the barber and the time. */
+.history-phone { display: inline-flex; align-items: center; gap: 4px; color: var(--gold); font-size: 9px; font-weight: 700; text-decoration: none; white-space: nowrap; }
+.history-phone:hover { text-decoration: underline; text-underline-offset: 2px; }
+.history-phone svg { color: var(--gold); }
 .salon-profile-hero { align-items: flex-start; }
 .salon-profile-photo { width: 64px; height: 70px; flex: none; overflow: hidden; border-radius: 15px; background: #252a2a; }
 .salon-profile-photo img { width: 100%; height: 100%; object-fit: cover; }
@@ -837,9 +908,183 @@ a.detail-info-row:hover { background: rgba(255, 255, 255, .03); }
 .salon-live-status small { color: var(--muted); font-size: 9px; line-height: 1.3; }
 .salon-live-status .toggle { flex: none; flex-direction: column-reverse; gap: 5px; color: var(--gold); font-weight: 700; }
 .salon-profile-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-bottom: 15px; }
-.salon-profile-stats > div { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 11px 5px; border-radius: 12px; background: var(--card); }
+.salon-profile-stats > div, .salon-profile-stats > button { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 11px 5px; border: 0; border-radius: 12px; color: inherit; background: var(--card); font: inherit; }
+.salon-profile-stats > button { cursor: pointer; }
+.salon-profile-stats > button:hover { background: var(--card-raised); }
 .salon-profile-stats strong { color: var(--gold); font-size: 17px; }
 .salon-profile-stats span { color: var(--muted); font-size: 9px; }
+/* Edit + Edit services sit side by side in the account hero; on a narrow phone
+   they share the width instead of pushing the salon name off the card. */
+.salon-profile-actions { display: flex; flex: none; flex-wrap: wrap; gap: 7px; }
+
+/* ── The menu editor (Edit services) ────────────────────────────────────────
+   The opposite of the profile editor's accordion: every service is an open row
+   of inputs from the first paint, because the job is "run down my list and fix
+   the prices". Laptop = one row per service (name, price, minutes, note on a
+   second line); phone = the same fields stacked, with the row's tools on the
+   heading so the inputs keep the full width. */
+.services-editor-screen { padding-bottom: 96px; }
+.service-editor-summary { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
+.service-editor-summary > div:first-child { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.service-editor-summary strong { color: var(--white); font-size: 15px; letter-spacing: -.02em; }
+.service-editor-summary small { color: var(--muted); font-size: 10px; line-height: 1.4; }
+.service-editor-state { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 5px; font-size: 10px; font-weight: 700; }
+.service-editor-saved { display: inline-flex; align-items: center; gap: 4px; color: var(--green); }
+.service-editor-dirty { padding: 4px 8px; border-radius: 999px; color: var(--gold); background: rgba(232,185,126,.14); }
+.service-editor-removed { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; padding: 11px 13px; border: 1px solid rgba(242,123,116,.34); border-radius: 14px; background: rgba(242,123,116,.08); color: #f4b7b3; font-size: 11px; }
+.service-editor-removed > span { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.service-editor-removed small { color: var(--muted); font-size: 9.5px; }
+.service-editor-undo { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border: 1px solid rgba(255,255,255,.16); border-radius: 999px; color: var(--white); background: transparent; font-size: 10px; font-weight: 700; }
+.service-editor-undo:hover { border-color: var(--gold); color: var(--gold); }
+.service-editor-hint { margin: 0 0 10px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.service-editor-hint kbd { padding: 1px 5px; border: 1px solid rgba(255,255,255,.2); border-radius: 5px; color: var(--white); background: #1b2120; font: inherit; font-weight: 700; }
+.service-editor-list { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.service-editor-row { display: flex; flex-direction: column; gap: 9px; padding: 12px; border: 1px solid rgba(255,255,255,.11); border-radius: 15px; background: #151a19; }
+.service-editor-row.is-new { border-color: rgba(232,185,126,.4); }
+.service-editor-row.has-error { border-color: rgba(242,123,116,.55); }
+.service-editor-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.service-editor-index { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: var(--gold); background: rgba(232,185,126,.14); font-size: 10px; font-weight: 800; }
+.service-editor-row-head strong { min-width: 0; overflow: hidden; color: var(--white); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.service-editor-badge { flex: none; padding: 2px 7px; border-radius: 999px; color: var(--gold); background: rgba(232,185,126,.16); font-size: 9px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.service-editor-tools { flex: none; display: flex; gap: 4px; margin-left: auto; }
+.service-editor-tools .icon-btn { width: 32px; height: 32px; }
+.service-editor-tools .icon-btn.danger { color: #f4b7b3; }
+.service-editor-tools .icon-btn:disabled { opacity: .35; cursor: not-allowed; }
+.service-editor-fields { display: grid; gap: 8px; grid-template-columns: minmax(0, 1.7fr) minmax(76px, .6fr) minmax(92px, .62fr); grid-template-areas: "name price duration" "note note note"; }
+.service-editor-fields > .field:nth-child(1) { grid-area: name; }
+.service-editor-fields > .field:nth-child(2) { grid-area: price; }
+.service-editor-fields > .field:nth-child(3) { grid-area: duration; }
+.service-editor-fields > .field:nth-child(4) { grid-area: note; }
+.service-editor-fields .field { margin: 0; }
+.service-editor-fields input, .service-editor-fields select { width: 100%; min-width: 0; min-height: 42px; padding: 0 11px; border: 1px solid rgba(255,255,255,.13); border-radius: 10px; color: #fbfbf9; background: #1b2120; font-size: 13px; }
+.service-editor-fields input:focus, .service-editor-fields select:focus { border-color: var(--gold); background: #212827; outline: none; }
+.service-editor-fields [aria-invalid="true"] { border-color: rgba(242,123,116,.7); }
+.service-editor-actions { position: sticky; z-index: 10; bottom: max(8px, var(--safe-bottom)); display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 16px; padding: 11px 12px; border: 1px solid rgba(232,185,126,.2); border-radius: 16px; background: rgba(19,23,22,.96); box-shadow: 0 14px 35px rgba(0,0,0,.34); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+.service-editor-actions > div:first-child { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.service-editor-actions strong { color: var(--white); font-size: 12px; }
+.service-editor-actions small { color: var(--muted); font-size: 9.5px; }
+.service-editor-buttons { flex: none; display: flex; gap: 7px; }
+.service-editor-buttons .btn { min-height: 40px; padding: 0 12px; font-size: 11px; }
+.empty-state-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.detail-loading { display: flex; align-items: center; justify-content: center; padding: 44px 16px; }
+
+@media (max-width: 720px) {
+  /* Stacked on a phone: the name gets its own line, price and minutes share the
+     next one, and the note sits underneath — no horizontal squeeze at 360px. */
+  .service-editor-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "name name" "price duration" "note note"; }
+  .service-editor-actions { flex-wrap: wrap; }
+  .service-editor-buttons { width: 100%; gap: 6px; }
+  .service-editor-buttons .btn { flex: 1 1 0; min-width: 0; padding: 0 10px; font-size: 10.5px; gap: 5px; }
+  /* Back, Add and Save share one row on a phone. Back is the shortest label, so it
+     keeps its natural width and the other two share what is left — three equal
+     thirds squeeze "Save services" at 320px. */
+  .service-editor-buttons .service-editor-back { flex: 0 0 auto; }
+  .service-editor-hint { display: none; }
+}
+
+/* ── Salon → Booking requests (leads) ───────────────────────────────────────
+   A request is a lead, not a booking: it arrives with a one-minute answer
+   window, and the tab exists to show what came in and what became of it.
+   Mobile-first: four stat tiles two-up, then one card per request with its
+   answer buttons on the card. */
+.salon-leads-screen { padding-bottom: 24px; }
+.lead-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
+.lead-stat { display: flex; flex-direction: column; gap: 3px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.lead-stat span { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.lead-stat span svg { flex: none; }
+.lead-stat strong { color: var(--white); font-size: 22px; font-weight: 800; line-height: 1; }
+.lead-stat.received strong { color: var(--gold); }
+.lead-stat.accepted span svg { color: var(--green); }
+.lead-stat.rejected span svg { color: var(--red); }
+.lead-stat.cancelled span svg { color: var(--muted); }
+.lead-rate { margin: 0 2px 14px; color: var(--muted-light); font-size: 11px; line-height: 1.5; }
+.lead-rate strong { color: var(--gold); }
+.lead-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.lead-filter { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
+.lead-filter select { appearance: none; -webkit-appearance: none; min-height: 38px; padding: 0 30px 0 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--card) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23889190' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 11px center; color: var(--white); font-size: 12px; font-weight: 700; cursor: pointer; }
+.lead-filter select:focus { border-color: rgba(232, 185, 126, .55); outline: none; }
+.lead-count { color: var(--muted); font-size: 11px; font-weight: 700; }
+.lead-note { margin: 0 0 12px; padding: 9px 11px; border: 1px dashed rgba(232, 185, 126, .35); border-radius: 11px; color: var(--muted-light); font-size: 10.5px; line-height: 1.45; }
+.lead-list { display: flex; flex-direction: column; gap: 11px; }
+.skeleton-card.lead-skeleton { min-height: 148px; }
+.lead-card { display: flex; flex-direction: column; gap: 10px; padding: 13px; border: 1px solid var(--line); border-left: 3px solid rgba(232, 185, 126, .45); border-radius: 16px; background: var(--card); }
+.lead-card.lead-awaiting { border-left-color: var(--gold); }
+.lead-card.lead-accepted { border-left-color: var(--green); }
+.lead-card.lead-rejected { border-left-color: var(--red); }
+.lead-card.lead-autoCancelled, .lead-card.lead-cancelled { border-left-color: #3a4140; opacity: .85; }
+.lead-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.lead-card-who { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.lead-avatar { width: 30px; height: 30px; display: inline-flex; flex: none; align-items: center; justify-content: center; border-radius: 10px; color: var(--gold); background: var(--gold-wash); }
+.lead-card-who > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.lead-card-who strong { overflow: hidden; color: var(--white); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.lead-card-who small { color: var(--muted); font-size: 10.5px; }
+.lead-services { display: flex; flex-wrap: wrap; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.lead-services li { padding: 3px 8px; border-radius: 8px; background: rgba(255, 255, 255, .05); color: var(--muted-light); font-size: 10.5px; font-weight: 600; }
+.lead-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.lead-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.lead-meta strong { color: var(--white); font-size: 13.5px; }
+.lead-countdown { display: inline-flex; align-items: center; gap: 4px; color: var(--gold); font-size: 10.5px; font-weight: 700; }
+.lead-closed-note { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10.5px; }
+.lead-actions { display: flex; align-items: center; gap: 7px; margin-left: auto; }
+.lead-icon-button { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 10px; color: var(--muted-light); background: var(--card-raised); }
+.lead-icon-button:hover { color: var(--white); }
+.lead-answer { display: inline-flex; align-items: center; gap: 5px; min-height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 11.5px; font-weight: 700; background: var(--card-raised); color: var(--white); }
+.lead-answer.accept { border-color: rgba(46, 204, 113, .5); background: rgba(46, 204, 113, .14); color: #b8f5cf; }
+.lead-answer.accept:hover { background: rgba(46, 204, 113, .26); }
+.lead-answer.reject { border-color: rgba(242, 123, 116, .4); background: rgba(242, 123, 116, .1); color: #ffc2bd; }
+.lead-answer.reject:hover { background: rgba(242, 123, 116, .2); }
+.lead-answer:disabled { opacity: .6; }
+.lead-open { display: inline-flex; align-items: center; gap: 4px; min-height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted-light); background: transparent; font-size: 11px; font-weight: 700; }
+.lead-pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 16px; color: var(--muted); font-size: 11px; }
+/* On a phone the Booking requests tab leads with the numbers that matter —
+   Received / Accepted / Rejected / Auto-cancelled — and nothing else. Reported
+   from the device: the tagline, the "0% of these requests were answered …" line
+   and the "N requests" counter each took a row on a 360px screen and pushed the
+   cards below the fold, for words that explain the screen rather than answer it.
+   They stay on a tablet and a laptop, where there is room to read them. */
+@media (max-width: 639px) {
+  .salon-leads-screen .page-header-leading p,
+  .salon-leads-screen .lead-rate,
+  .salon-leads-screen .lead-count { display: none; }
+  .salon-leads-screen .lead-toolbar { margin-top: 2px; }
+  .salon-leads-screen .lead-summary { margin-bottom: 10px; }
+}
+
+/* The read-only request sheet (Booking requests → Details).
+   Deliberately plain: it exists so the salon can read a name, a number, the
+   services and the slot — nothing on it is tappable except the phone number and
+   Close. Accept / Reject stay on the card, where a live request is answerable
+   in one tap. */
+.lead-detail { display: flex; flex-direction: column; gap: 14px; }
+.lead-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.lead-detail-head h3 { margin: 3px 0 0; color: var(--white); font-size: 17px; line-height: 1.25; }
+.lead-detail-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px 18px; }
+.lead-detail-row { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
+.lead-detail-row > svg { flex: none; margin-top: 2px; color: var(--gold); }
+.lead-detail-row > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.lead-detail-row small { color: #8d9493; font-size: 9.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+.lead-detail-row strong { color: var(--white); font-size: 12.5px; font-weight: 600; line-height: 1.45; }
+.lead-detail-row a { color: var(--gold); text-decoration: none; }
+.lead-detail-service { display: block; }
+.lead-detail-total { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; color: var(--muted-light); font-size: 11.5px; }
+.lead-detail-total strong { color: var(--white); font-size: 15px; }
+.lead-detail-outcome { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: 10px 12px; border-radius: 12px; background: rgba(255, 255, 255, .04); color: var(--muted-light); font-size: 11.5px; line-height: 1.5; }
+.lead-detail-outcome svg { flex: none; margin-top: 2px; }
+.lead-detail-outcome strong { color: var(--white); }
+.lead-detail-outcome.accepted { background: var(--shop-green-wash); color: #b8f5cf; }
+.lead-detail-outcome.rejected { background: rgba(242, 123, 116, .08); color: #ffc2bd; }
+.lead-detail-outcome.autoCancelled, .lead-detail-outcome.cancelled { color: var(--muted); }
+@media (min-width: 560px) {
+  /* Two columns once the sheet is wider than a phone: six one-line facts on
+     their own rows is a lot of scrolling for six words. */
+  .lead-detail-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .lead-detail-row.services { grid-column: 1 / -1; }
+}
+@media (min-width: 760px) {
+  .lead-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+  .lead-card { padding: 15px 16px; }
+  .lead-card-top { align-items: center; }
+}
 
 /* Notifications, info and requests */
 .notification-card { display: flex; align-items: flex-start; gap: 11px; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
@@ -994,8 +1239,8 @@ a.contact-detail-card:hover { border-color: rgba(232, 185, 126, .35); }
 .site-navbar { position: sticky; top: 0; z-index: 40; flex: none; display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; min-width: 0; padding: calc(9px + var(--safe-top)) max(14px, var(--safe-right)) 9px max(14px, var(--safe-left)); background: rgba(15, 17, 17, .9); border-bottom: 1px solid var(--line); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
 .site-navbar-brand { flex: none; display: flex; align-items: center; min-width: 0; padding: 0; border: 0; background: none; }
 .site-navbar .brand { min-width: 0; }
-.site-navbar .brand-lockup { height: 42px; }
-.site-navbar .brand-mark { width: 38px; height: 38px; }
+.site-navbar .brand-mark { width: 34px; height: 34px; }
+.site-navbar .brand-word { font-size: 18px; }
 .site-nav-links { flex: 1 1 auto; min-width: 0; display: flex; justify-content: center; gap: 2px; }
 .site-nav-links button { position: relative; padding: 9px 10px; border: 0; border-radius: 9px; background: none; color: var(--muted-light); font-size: 13px; font-weight: 600; white-space: nowrap; }
 .site-nav-links button:hover { color: var(--white); background: rgba(255,255,255,.04); }
@@ -1014,8 +1259,7 @@ a.contact-detail-card:hover { border-color: rgba(232, 185, 126, .35); }
   /* Phones and tablets: the monogram alone — the lockup's wordmark would be
      illegible beside the pills and the menu toggle, and the pills need the
      room. Same breakpoint as the sidebar/top-bar swap. */
-  .brand-lockup { display: none; }
-  .brand-mark { display: block; }
+  .brand-word { display: none; }
   .site-nav-toggle { display: inline-flex; }
   .site-navbar .install-auth-button { width: 36px; height: 36px; gap: 0; padding: 0; font-size: 0; justify-content: center; }
   .site-navbar .install-auth-button svg { flex: none; }
@@ -1143,6 +1387,15 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
    with arrow controls, dots and gentle auto-advance — any number of reviews
    works, and the loop is circular (see TestimonialSection). ── */
 .testimonial-section { margin: 34px 0 0; }
+/* The testimonial wall and the site footer are the WEBSITE's closing blocks.
+   The signed-in panel (`.app-shell`) is the app: it ends at its own bottom
+   navigation, so neither block belongs in it — and on a phone the footer sat
+   under the fixed bottom bar where it could not even be reached. Both
+   components already refuse the app surface (useIsAppSurface) and their screens
+   ask for a guest; this rule is the third lock, so an accidental mount in a
+   future screen cannot bring the marketing chrome back into the panel. */
+.app-shell .site-footer,
+.app-shell .testimonial-section { display: none !important; }
 .testimonial-nav { display: flex; gap: 6px; }
 .testimonial-nav button { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; background: var(--card); border: 1px solid var(--line); border-radius: 50%; color: var(--muted-light); }
 .testimonial-nav button:hover { color: var(--gold); border-color: rgba(232, 185, 126, .4); }
@@ -1465,14 +1718,19 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
 .skeleton { background: linear-gradient(100deg, #1c2221 30%, #27302e 45%, #1c2221 60%); background-size: 300% 100%; animation: shimmer 1.4s infinite; }
 @keyframes shimmer { to { background-position: -150% 0; } }
 .modal-backdrop { position: fixed; z-index: 100; inset: 0; display: flex; align-items: flex-end; justify-content: center; padding: max(12px, var(--safe-top)) max(12px, var(--safe-right)) max(12px, var(--safe-bottom)) max(12px, var(--safe-left)); background: rgba(0,0,0,.76); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); overscroll-behavior: contain; }
-.modal-card { width: 100%; max-width: 560px; max-height: min(88vh, 760px); max-height: min(88svh, 760px); overflow: auto; border: 1px solid var(--line-strong); border-radius: 22px 22px 16px 16px; background: #151a19; box-shadow: 0 -10px 60px rgba(0,0,0,.35); }
+/* A dialog is three parts, not one scroll area. The whole card used to scroll
+   (`overflow: auto`), so on a phone the title slid away and the buttons — the
+   only way out, or out-and-confirmed — sat below the fold of an 88vh sheet: the
+   customer had to scroll a card to find the button that closes it. Now the title
+   and the footer stay put and only the middle moves. */
+.modal-card { width: 100%; max-width: 560px; max-height: min(88vh, 760px); max-height: min(88svh, 760px); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 22px 22px 16px 16px; background: #151a19; box-shadow: 0 -10px 60px rgba(0,0,0,.35); }
 .modal-image { max-width: 850px; max-height: 90vh; max-height: 90svh; }
 /* A short question, not a document — the shop's sign-in gate. */
 .modal-sm { max-width: 420px; }
-.modal-header { display: flex; align-items: center; justify-content: space-between; min-width: 0; gap: 10px; padding: 17px 16px 12px; }
+.modal-header { flex: none; display: flex; align-items: center; justify-content: space-between; min-width: 0; gap: 10px; padding: 17px 16px 12px; }
 .modal-header h2 { min-width: 0; margin: 0; font-size: 18px; letter-spacing: -.03em; }
-.modal-body { padding: 0 16px 18px; }
-.modal-footer { display: flex; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--line); }
+.modal-body { flex: 1 1 auto; min-height: 0; padding: 0 16px 18px; overflow-y: auto; overscroll-behavior: contain; }
+.modal-footer { flex: none; display: flex; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--line); }
 .modal-form { display: flex; flex-direction: column; gap: 15px; }
 .modal-form .form-actions { display: flex; gap: 8px; margin-top: 4px; }
 .form-actions .btn { flex: 1; }
@@ -1606,7 +1864,7 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .detail-title-row h2 { font-size: 28px; }
   .select-service-grid { grid-template-columns: 1fr 1fr; gap: 12px; }
   .schedule-screen { max-width: 850px; }
-  .time-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); max-height: 380px; }
+  .time-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
   .schedule-total { max-width: 850px; }
   /* iPad and up: the booking card gets the same 850px reading rail as the
      queue/history/notification cards. Without it the card stretched the full
@@ -1667,8 +1925,10 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .sidebar { position: sticky; top: 0; width: 240px; height: var(--viewport-height); flex: none; display: flex; flex-direction: column; padding: calc(29px + var(--safe-top)) max(18px, var(--safe-right)) calc(21px + var(--safe-bottom)) max(18px, var(--safe-left)); border-right: 1px solid var(--line); background: #0d1010; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
   .sidebar > .brand, .sidebar-role, .sidebar-nav, .sidebar-bottom { flex: none; }
   .sidebar > .brand { padding: 0 8px; margin-bottom: 28px; gap: 12px; }
-  .sidebar > .brand .brand-lockup { height: 58px; }
-  .auth-visual .brand-lockup { height: 62px; }
+  .sidebar > .brand .brand-mark { width: 40px; height: 40px; }
+  .sidebar > .brand .brand-word { font-size: 23px; }
+  .auth-visual .brand-mark { width: 52px; height: 52px; }
+  .auth-visual .brand-word { font-size: 26px; }
   .sidebar-role { display: flex; align-items: center; gap: 10px; padding: 11px; margin-bottom: 18px; border-radius: 13px; background: rgba(255,255,255,.035); }
   .role-mark { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 9px; color: #111; background: var(--gold); }
   .sidebar-role > span:last-child { display: flex; flex-direction: column; gap: 4px; }
@@ -2392,13 +2652,62 @@ img.image-fallback-tile {
 .shop-detail-price-row strong { color: var(--white); font-size: 23px; }
 .shop-detail-price-row s { margin-left: 8px; color: var(--muted); font-size: 13px; }
 .shop-detail-action { margin-bottom: 16px; display: flex; }
-.shop-detail-action > * { flex: 1; }
+.shop-detail-action > * { flex: 1; max-width: 320px; }
+/* On a laptop the details page is a ~1000px column, and the ADD / stepper was
+   `flex: 1` across all of it — a 44px-tall, metre-wide button that read as a
+   banner and made the whole page look unfinished. The control is capped (above)
+   and, from 900px, sized to its content instead of stretching at all. */
+@media (min-width: 900px) {
+  .shop-detail-action > * { flex: 0 0 auto; width: 260px; max-width: 260px; }
+  .shop-detail-hero { max-height: 360px; }
+}
 .shop-detail-card { margin-bottom: 13px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
 .shop-detail-card h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 9px; color: var(--white); font-size: 13px; }
 .shop-detail-card h3 svg { color: var(--shop-green-soft); flex: none; }
 .shop-detail-card p { display: flex; align-items: flex-start; gap: 8px; margin: 5px 0 0; color: var(--muted-light); font-size: 12px; line-height: 1.5; }
 .shop-detail-card p svg { color: var(--shop-green-soft); flex: none; margin-top: 2px; }
 .shop-detail-similar-title { margin: 22px 0 12px; color: var(--white); font-size: 15.5px; }
+
+/* ── The reading width, and the two-column laptop layout ──
+   Reported with a ~1440px screenshot: the details page was ONE column
+   1384px wide — a 400px photo, then full-bleed cards holding a single line of
+   12px copy — so most of the window was empty and the page read as a phone
+   screen stretched sideways. From 900px the photo takes a fixed left column
+   (sticky, so it stays beside the copy while a long description scrolls) and
+   everything you act on — tags, name, price, quantity, About, Delivery — sits
+   in the right one. The page is capped at 1180px and centred: a product page
+   is read, and 1384px of 12px text is a line nobody can follow.
+   Below 900px the grid is one column in DOM order, i.e. the old layout, so a
+   phone is untouched (and no `gap`, which would double the 14px margin the
+   tags already carry). */
+.shop-detail-layout { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; }
+.shop-detail-gallery, .shop-detail-info { min-width: 0; }
+@media (min-width: 900px) {
+  .shop-detail-page { width: 100%; max-width: 1180px; margin: 0 auto; }
+  .shop-detail-layout { grid-template-columns: clamp(280px, 34%, 440px) minmax(0, 1fr); gap: 32px; }
+  /* The photo follows the copy down the page instead of leaving a 400px hole
+     beside the cards. */
+  .shop-detail-gallery { position: sticky; top: 8px; }
+  /* Square in its own column: the catalog's uploads are square, so the 4:3
+     frame letterboxed every one of them behind a blurred band. The column is
+     `clamp(280px, 34%, 440px)`, so a 1024px laptop gets a 330px photo and the
+     copy beside it, not a photo that owns the screen. */
+  .shop-detail-hero { aspect-ratio: 1 / 1; max-height: 440px; }
+  /* The tags start level with the top of the photo — no stray step. */
+  .shop-detail-tags { margin-top: 0; }
+  .shop-detail-name { font-size: 26px; }
+  .shop-detail-seller { margin-bottom: 16px; }
+  /* Price and its rating are one group at the left. `space-between` pushed the
+     rating to the far end of a 1384px row, which is what made a two-word line
+     look like two unrelated things. */
+  .shop-detail-price-row { justify-content: flex-start; gap: 14px; margin-bottom: 16px; }
+  .shop-detail-price-row strong { font-size: 26px; }
+  .shop-detail-card { padding: 16px 18px; }
+  .shop-detail-card p { font-size: 12.5px; }
+  /* Suggestions keep the full page width, under both columns. */
+  .shop-detail-similar-title { margin-top: 30px; font-size: 17px; }
+  .skeleton-card.shop-detail-skeleton { min-height: 380px; }
+}
 /* Large quantity control for the details page (Blinkit's in-page ADD is bigger). */
 .shop-add-button.large { min-height: 44px; min-width: 128px; font-size: 13px; }
 .shop-stepper.large { min-height: 44px; }

@@ -174,3 +174,17 @@ Field semantics (shown in the panel, mirrored on the shop):
   backend (shop settings get/save, order creation with the COD gate, the
   distributor accept → picked → shipped → delivered chain, and the salon's
   tracker mirroring each step).
+
+---
+
+## Related additions (2026-11)
+
+- **Bulk product add** — download a sample sheet, upload the filled one, read a
+  per-row report before anything is written:
+  [`docs/ADMIN-PANEL-BULK-PRODUCTS.md`](ADMIN-PANEL-BULK-PRODUCTS.md) (panel) and
+  [`docs/BACKEND-BULK-PRODUCT-UPLOAD.md`](BACKEND-BULK-PRODUCT-UPLOAD.md) (API).
+- **Category management** — the panel owns the single category list the website
+  and the app read; §2 of the bulk doc, and
+  [`docs/BACKEND-SHOP-CATEGORIES-API.md`](BACKEND-SHOP-CATEGORIES-API.md).
+- **Booking requests tab** — a separate tab for booking REQUESTS (not bookings):
+  [`docs/ADMIN-PANEL-BOOKING-REQUESTS.md`](ADMIN-PANEL-BOOKING-REQUESTS.md).

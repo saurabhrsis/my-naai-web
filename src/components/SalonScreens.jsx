@@ -36,6 +36,8 @@ import { api } from '../lib/api';
 import { closeNotification } from '../lib/push';
 import { DEFAULT_SERVICES } from '../lib/defaultServices';
 import { normalizePlanDetails } from '../lib/planDetails';
+import { LEAD_STATE, LEAD_STATE_LABEL, leadView, normalizeLead } from '../lib/bookingLeads';
+import { customerMobileFrom } from '../lib/customerPhone';
 import {
   EARLIER_OFFSETS,
   LATER_OFFSETS,
@@ -412,12 +414,20 @@ export function SalonQueueScreen({ session, navigate, notify }) {
   </div>;
 }
 
+// One finished visit. The customer's mobile is on the row because the salon uses
+// this screen to call people back ("your usual cut is due") and to answer "who was
+// that?" about yesterday's queue — the name alone is not enough to dial.
+function HistoryCardItem({ item = {} }) {
+  const mobile = customerMobileFrom(item);
+  return <article className="history-card"><div className="history-avatar">{getInitials(item.userName || 'Guest')}</div><div className="history-copy"><div className="history-heading"><h3>{item.userName || 'Guest'}</h3><span>{formatDate(item.bookingDate)}</span></div><p>{item.services || item.serviceNames || 'Salon service'}</p><div><span><UserRound size={13} /> {item.barberName || 'Any specialist'}</span><span><Clock3 size={13} /> {formatTime(item.bookingTime)}</span>{mobile && <a className="history-phone" href={mobile.tel} aria-label={`Call ${item.userName || 'the customer'} on ${mobile.display}`}><Phone size={13} /> {mobile.display}</a>}</div></div><CheckCircle2 className="history-check" size={19} /></article>;
+}
+
 export function SalonHistoryScreen({ notify }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const load = useCallback(async () => { setLoading(true); try { const response = await api.salonQueueHistory(); setItems(response?.bookings || getList(response, ['bookings'])); } catch (error) { notify?.('error', getErrorMessage(error, 'Unable to load booking history.')); } finally { setLoading(false); } }, [notify]);
   useEffect(() => { load(); }, [load]);
-  return <div className="screen history-screen"><PageHeader title="Customer history" subtitle="A record of the work you have completed." action={<button className="refresh-text-button" onClick={load}><History size={15} /> Refresh</button>} />{loading ? <div className="list-stack">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} className="history-skeleton" />)}</div> : items.length ? <div className="history-list">{items.map((item, index) => <article className="history-card" key={item.bookingId || index}><div className="history-avatar">{getInitials(item.userName || 'Guest')}</div><div className="history-copy"><div className="history-heading"><h3>{item.userName || 'Guest'}</h3><span>{formatDate(item.bookingDate)}</span></div><p>{item.services || item.serviceNames || 'Salon service'}</p><div><span><UserRound size={13} /> {item.barberName || 'Any specialist'}</span><span><Clock3 size={13} /> {formatTime(item.bookingTime)}</span></div></div><CheckCircle2 className="history-check" size={19} /></article>)}</div> : <EmptyState icon={History} title="No completed bookings" message="Your completed services will be listed here." />}</div>;
+  return <div className="screen history-screen"><PageHeader title="Customer history" subtitle="A record of the work you have completed." action={<button className="refresh-text-button" onClick={load}><History size={15} /> Refresh</button>} />{loading ? <div className="list-stack">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} className="history-skeleton" />)}</div> : items.length ? <div className="history-list">{items.map((item, index) => <HistoryCardItem item={item} key={item.bookingId || index} />)}</div> : <EmptyState icon={History} title="No completed bookings" message="Your completed services will be listed here." />}</div>;
 }
 
 function normalizeProduct(item = {}) { const images = parseProductImages(item); return { ...item, id: item.productId || item.id, name: item.productName || item.name || 'Unnamed product', price: item.price || 0, rating: Number(item.rating || 0), available: item.isAvailable ?? item.available ?? true, image: images[0] || '', images }; }
@@ -572,8 +582,8 @@ export function SalonAccountScreen({ session, navigate, notify, onSessionUpdate,
   const hasCachedProfile = Boolean(profile.salonName || profile.name || profile.imageUrl || profile.imagesArray?.length);
   if (loading && !hasCachedProfile) return <div className="screen salon-account-screen"><PageHeader title="Salon account" /><div className="account-loading"><Spinner label="Loading salon profile…" /></div></div>;
   const status = getSalonStatus(profile.businessHours, isOpen);
-  const menus = [{ label: 'Edit salon profile', caption: 'Photos, hours, services and specialists', icon: Edit3, route: 'editProfile' }, { label: 'About My Naai', caption: 'How My Naai helps your business', icon: Store, route: 'salonAbout' }, { label: 'Frequently asked questions', caption: 'Partner help and booking basics', icon: Bell, route: 'salonFaq' }, { label: 'Terms & conditions', caption: 'Partner terms', icon: Receipt, route: 'salonTerms' }, { label: 'Subscription plans', caption: 'Upgrade or renew your plan', icon: WalletCards, route: 'subscription', params: { isUpgrade: true } }, { label: 'Need a help?', caption: 'Call 8380017393', icon: Phone, action: () => window.open('tel:8380017393') }];
-  return <div className="screen salon-account-screen"><PageHeader title="Salon account" subtitle="Your business, in one place." action={<button className="refresh-text-button" onClick={load} disabled={loading}>{loading ? <Spinner size={14} /> : <Zap size={15} />} {loading ? 'Updating…' : 'Refresh'}</button>} /><section className="salon-profile-hero"><div className="salon-profile-photo"><ImageWithFallback src={profile.imageUrl || profile.imagesArray?.[0]} fallback="/assets/brand/mynaai-mark.png" alt={profile.salonName || 'Salon'} /></div><div className="salon-profile-copy"><span className="eyebrow">SALON PARTNER</span><h2>{profile.salonName || 'Your salon'}</h2><p><MapPin size={14} /> {profile.addressLine1 || profile.city || 'Add your salon address'}</p><span className={cx('account-status', status.isOpen ? 'open' : 'closed')}><i /> {status.isOpen ? 'Open for bookings' : 'Closed for bookings'}</span></div><Button size="small" variant="secondary" onClick={() => navigate('editProfile')}><Pencil size={15} /> Edit</Button></section><div className="salon-live-status"><div><span className="eyebrow">BOOKING STATUS</span><strong>{status.isOpen ? 'Customers can book you now' : 'Your salon is currently closed'}</strong><small>Toggle this when you are ready to take the next appointment.</small></div><Toggle checked={isOpen} onChange={toggleOpen} label={isOpen ? 'Open' : 'Closed'} /></div><div className="salon-profile-stats"><div><strong>{profile.services?.length || 0}</strong><span>Services</span></div><div><strong>{profile.barbers?.length || 0}</strong><span>Barbers</span></div></div>{planDetails ? <section className={cx('account-card', 'plan-card', !planDetails.isActive && 'plan-expired')}><div className="plan-card-top"><span className="plan-card-mark"><Crown size={18} /></span><div className="plan-card-title"><span className="eyebrow">{planDetails.isActive ? 'ACTIVE PLAN' : 'PLAN EXPIRED'}</span><strong>{planDetails.title}</strong><small>{planDetails.price !== null && planDetails.price > 0 ? `${formatCurrency(planDetails.price)}${planDetails.duration ? ` · ${planDetails.duration}` : ''}` : planDetails.duration || 'My Naai partner plan'}</small></div><StatusPill tone={planDetails.isActive ? 'open' : 'closed'} dot>{planDetails.isActive ? 'Active' : 'Expired'}</StatusPill></div><div className="plan-card-meta">{planDetails.startDate && <div><CalendarDays size={14} /><span><small>Started</small><strong>{formatDate(planDetails.startDate)}</strong></span></div>}{planDetails.expiryDate && <div><Clock3 size={14} /><span><small>{planDetails.isActive ? 'Expires' : 'Expired on'}</small><strong>{formatDate(planDetails.expiryDate)}</strong></span></div>}{planDetails.daysLeft !== null && <div><Zap size={14} /><span><small>Remaining</small><strong>{planDetails.daysLeft > 0 ? `${planDetails.daysLeft} day${planDetails.daysLeft === 1 ? '' : 's'} left` : 'Renewal due'}</strong></span></div>}</div><Button size="small" variant={planDetails.isActive ? 'secondary' : 'primary'} onClick={() => navigate('subscription', { isUpgrade: true })}>{planDetails.isActive ? 'Manage plan' : 'Renew plan'}</Button></section> : <section className="account-card plan-card plan-unknown"><div className="plan-card-top"><span className="plan-card-mark"><Crown size={18} /></span><div className="plan-card-title"><span className="eyebrow">SUBSCRIPTION</span><strong>Plan details unavailable</strong><small>Keep your salon visible with an active plan.</small></div></div><Button size="small" onClick={() => navigate('subscription', { isUpgrade: true })}>View plans</Button></section>}<section className="account-card salon-location-card"><LocationPreview value={profile} title="Salon location" caption={hasCoordinate(profile.latitude) && hasCoordinate(profile.longitude) ? "This is the exact point our admin team and delivery partners navigate to for your shop orders. Keep it on the salon gate, not the street corner." : "No pin yet — this map starts in Nagpur, where My Naai is based. Set your exact point once and every delivery partner navigates straight to your gate."} fallbackPoint={DEFAULT_MAP_CENTRE} height={170} emptyTitle="No pin saved yet" action={<Button size="small" variant="secondary" onClick={() => navigate('editProfile')}><Pencil size={14} /> Set location on map</Button>} /></section><div className="account-card partner-menu">{menus.map(item => <button className="account-menu-row" key={item.label} onClick={item.action || (() => navigate(item.route, item.params || {}))}><span className="account-menu-icon"><item.icon size={18} /></span><span><strong>{item.label}</strong><small>{item.caption}</small></span><ChevronRight size={17} /></button>)}</div>{onLogout && <button className="logout-button partner-logout" type="button" onClick={async () => { if (await confirm(LOGOUT_CONFIRM)) onLogout(); }}><LogOut size={16} /> Logout</button>}<NotificationDiagnostics /><p className="version-label">My Naai partner portal · 1.0</p></div>;
+  const menus = [{ label: 'Edit salon profile', caption: 'Photos, hours, services and specialists', icon: Edit3, route: 'editProfile' }, { label: 'Edit services', caption: 'Prices and timing only, all on one screen', icon: Scissors, route: 'editServices' }, { label: 'About My Naai', caption: 'How My Naai helps your business', icon: Store, route: 'salonAbout' }, { label: 'Frequently asked questions', caption: 'Partner help and booking basics', icon: Bell, route: 'salonFaq' }, { label: 'Terms & conditions', caption: 'Partner terms', icon: Receipt, route: 'salonTerms' }, { label: 'Subscription plans', caption: 'Upgrade or renew your plan', icon: WalletCards, route: 'subscription', params: { isUpgrade: true } }, { label: 'Need a help?', caption: 'Call 8380017393', icon: Phone, action: () => window.open('tel:8380017393') }];
+  return <div className="screen salon-account-screen"><PageHeader title="Salon account" subtitle="Your business, in one place." action={<button className="refresh-text-button" onClick={load} disabled={loading}>{loading ? <Spinner size={14} /> : <Zap size={15} />} {loading ? 'Updating…' : 'Refresh'}</button>} /><section className="salon-profile-hero"><div className="salon-profile-photo"><ImageWithFallback src={profile.imageUrl || profile.imagesArray?.[0]} fallback="/assets/brand/mynaai-mark.png" alt={profile.salonName || 'Salon'} /></div><div className="salon-profile-copy"><span className="eyebrow">SALON PARTNER</span><h2>{profile.salonName || 'Your salon'}</h2><p><MapPin size={14} /> {profile.addressLine1 || profile.city || 'Add your salon address'}</p><span className={cx('account-status', status.isOpen ? 'open' : 'closed')}><i /> {status.isOpen ? 'Open for bookings' : 'Closed for bookings'}</span></div><div className="salon-profile-actions"><Button size="small" variant="secondary" onClick={() => navigate('editProfile')}><Pencil size={15} /> Edit</Button><Button size="small" variant="secondary" onClick={() => navigate('editServices')}><Scissors size={15} /> Edit services</Button></div></section><div className="salon-live-status"><div><span className="eyebrow">BOOKING STATUS</span><strong>{status.isOpen ? 'Customers can book you now' : 'Your salon is currently closed'}</strong><small>Toggle this when you are ready to take the next appointment.</small></div><Toggle checked={isOpen} onChange={toggleOpen} label={isOpen ? 'Open' : 'Closed'} /></div><div className="salon-profile-stats"><button type="button" className="salon-profile-stat-link" onClick={() => navigate('editServices')} aria-label="Edit your services"><strong>{profile.services?.length || 0}</strong><span>Services</span></button><div><strong>{profile.barbers?.length || 0}</strong><span>Barbers</span></div></div>{planDetails ? <section className={cx('account-card', 'plan-card', !planDetails.isActive && 'plan-expired')}><div className="plan-card-top"><span className="plan-card-mark"><Crown size={18} /></span><div className="plan-card-title"><span className="eyebrow">{planDetails.isActive ? 'ACTIVE PLAN' : 'PLAN EXPIRED'}</span><strong>{planDetails.title}</strong><small>{planDetails.price !== null && planDetails.price > 0 ? `${formatCurrency(planDetails.price)}${planDetails.duration ? ` · ${planDetails.duration}` : ''}` : planDetails.duration || 'My Naai partner plan'}</small></div><StatusPill tone={planDetails.isActive ? 'open' : 'closed'} dot>{planDetails.isActive ? 'Active' : 'Expired'}</StatusPill></div><div className="plan-card-meta">{planDetails.startDate && <div><CalendarDays size={14} /><span><small>Started</small><strong>{formatDate(planDetails.startDate)}</strong></span></div>}{planDetails.expiryDate && <div><Clock3 size={14} /><span><small>{planDetails.isActive ? 'Expires' : 'Expired on'}</small><strong>{formatDate(planDetails.expiryDate)}</strong></span></div>}{planDetails.daysLeft !== null && <div><Zap size={14} /><span><small>Remaining</small><strong>{planDetails.daysLeft > 0 ? `${planDetails.daysLeft} day${planDetails.daysLeft === 1 ? '' : 's'} left` : 'Renewal due'}</strong></span></div>}</div><Button size="small" variant={planDetails.isActive ? 'secondary' : 'primary'} onClick={() => navigate('subscription', { isUpgrade: true })}>{planDetails.isActive ? 'Manage plan' : 'Renew plan'}</Button></section> : <section className="account-card plan-card plan-unknown"><div className="plan-card-top"><span className="plan-card-mark"><Crown size={18} /></span><div className="plan-card-title"><span className="eyebrow">SUBSCRIPTION</span><strong>Plan details unavailable</strong><small>Keep your salon visible with an active plan.</small></div></div><Button size="small" onClick={() => navigate('subscription', { isUpgrade: true })}>View plans</Button></section>}<section className="account-card salon-location-card"><LocationPreview value={profile} title="Salon location" caption={hasCoordinate(profile.latitude) && hasCoordinate(profile.longitude) ? "This is the exact point our admin team and delivery partners navigate to for your shop orders. Keep it on the salon gate, not the street corner." : "No pin yet — this map starts in Nagpur, where My Naai is based. Set your exact point once and every delivery partner navigates straight to your gate."} fallbackPoint={DEFAULT_MAP_CENTRE} height={170} emptyTitle="No pin saved yet" action={<Button size="small" variant="secondary" onClick={() => navigate('editProfile')}><Pencil size={14} /> Set location on map</Button>} /></section><div className="account-card partner-menu">{menus.map(item => <button className="account-menu-row" key={item.label} onClick={item.action || (() => navigate(item.route, item.params || {}))}><span className="account-menu-icon"><item.icon size={18} /></span><span><strong>{item.label}</strong><small>{item.caption}</small></span><ChevronRight size={17} /></button>)}</div>{onLogout && <button className="logout-button partner-logout" type="button" onClick={async () => { if (await confirm(LOGOUT_CONFIRM)) onLogout(); }}><LogOut size={16} /> Logout</button>}<NotificationDiagnostics /><p className="version-label">My Naai partner portal · 1.0</p></div>;
 }
 
 function getEditorBusinessHour(value = {}) {
@@ -1296,19 +1306,22 @@ export function EditSalonProfileScreen({ params, session, navigate, notify, onSe
   </form></div>;
 }
 
+// The screen a live booking-request notification opens — the only reason it
+// exists. It is NOT the details view: "Booking requests" → Details opens a
+// read-only sheet, because a request from last month must not offer Accept.
+//
+// It also answers the same question the leads list does, from the same rule
+// (`leadView` in lib/bookingLeads): can this request still be answered right
+// now? A request whose minute is up, or that the server has already accepted,
+// rejected or cancelled, shows its outcome and no buttons at all — the salon is
+// never offered an action that cannot succeed.
 export function BookingRequestScreen({ params, navigate, notify }) {
   const [details, setDetails] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState('');
   const [delayOpen, setDelayOpen] = useState(params?.openDelayModal === true || params?.openDelayModal === 'true');
-  const [deadline, setDeadline] = useState(0);
   const [now, setNow] = useState(Date.now());
-  const [expired, setExpired] = useState(false);
   const bookingRequestId = params?.bookingRequestId || '';
-  // The mobile app shows a 60-second countdown on a booking-request notification
-  // and auto-cancels it after 70s. Mirror that timer here (the web Notification
-  // API cannot render a live chronometer).
-  const DURATION_MS = 60000;
 
   const loadRequest = useCallback(() => {
     if (!bookingRequestId) {
@@ -1317,44 +1330,39 @@ export function BookingRequestScreen({ params, navigate, notify }) {
     }
     setLoading(true);
     return api.getBookingRequestById(bookingRequestId)
-      .then(response => {
-        setDetails(response?.data);
-        const created = response?.data?.createdAt || response?.data?.bookingRequestTime || response?.data?.createdAtTimestamp;
-        const createdMs = created ? new Date(created).getTime() : Date.now();
-        const base = Number.isFinite(createdMs) && createdMs > 0 ? createdMs : Date.now();
-        setDeadline(base + DURATION_MS);
-      })
+      .then(response => { setDetails(response?.data || null); })
       .catch(error => notify?.('error', getErrorMessage(error, 'Unable to load booking request.')))
       .finally(() => setLoading(false));
   }, [bookingRequestId, notify]);
 
   useEffect(() => { loadRequest(); }, [loadRequest]);
 
-  // Countdown ticking + expiry handling. Expiry is a one-time transition: it
-  // closes the browser notification (mobile auto-cancels after 70s) and flips
-  // the card to expired; the user taps Refresh to re-check the server state.
+  // The one-minute window ends while the screen is open, so the clock has to
+  // keep ticking: the countdown, and the moment the buttons retire, both come
+  // from this.
   useEffect(() => {
-    if (!deadline) return undefined;
-    const tick = () => {
-      const remaining = deadline - Date.now();
-      setNow(Date.now());
-      if (remaining <= 0) {
-        setExpired(true);
-        if (bookingRequestId) closeNotification(bookingRequestId);
-      }
-    };
-    const timer = window.setInterval(tick, 1000);
-    tick();
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [bookingRequestId, deadline]);
+  }, []);
 
-  const remaining = deadline ? Math.max(0, deadline - now) : 0;
-  const remainingSeconds = Math.ceil(remaining / 1000);
-  const minutes = Math.floor(remainingSeconds / 60);
-  const seconds = remainingSeconds % 60;
-  const countdownLabel = `${minutes}:${String(seconds).padStart(2, '0')}`;
-  const timerActive = deadline && !expired && remaining > 0;
-  const timerWarning = timerActive && remaining <= 15000;
+  const lead = useMemo(() => {
+    if (!details) return null;
+    // The single-request endpoint names the slot `startTime`; the shared
+    // normaliser (which the leads list also uses) reads `bookingTime`.
+    return normalizeLead({ ...details, bookingTime: details.bookingTime || details.startTime || '' });
+  }, [details]);
+  const view = lead ? leadView(lead, now) : null;
+  const canAnswer = Boolean(view?.canAnswer);
+  const state = view?.state || LEAD_STATE.awaiting;
+  const services = lead?.services?.length ? lead.services : [];
+  const closedLabel = LEAD_STATE_LABEL[state] || 'Closed';
+
+  // A window that closes on screen also closes the browser notification the
+  // salon was handed, so the two cannot disagree.
+  useEffect(() => {
+    if (!details || canAnswer) return;
+    if (state === LEAD_STATE.autoCancelled && bookingRequestId) closeNotification(bookingRequestId);
+  }, [bookingRequestId, canAnswer, details, state]);
 
   const action = async (value, delayMinutes) => {
     setActionLoading(value);
@@ -1369,13 +1377,104 @@ export function BookingRequestScreen({ params, navigate, notify }) {
       navigate('queue');
     } catch (error) {
       notify?.('error', getErrorMessage(error, 'Could not update booking request.'));
+      // "Already answered" / "expired" is a real answer: re-read the request so
+      // the screen stops offering the action that just failed.
+      if (/already|expired|cannot be action|no longer/i.test(String(error?.message || ''))) loadRequest();
     } finally {
       setActionLoading('');
     }
   };
 
-  const refresh = () => { setExpired(false); setDeadline(0); loadRequest(); };
+  // Back goes to the tab this request belongs to — not the Queue, which is
+  // where a booking lives and where an unanswered request does not.
+  const back = () => navigate('bookingRequests');
 
-  if (loading) return <div className="screen"><PageHeader title="Booking request" onBack={() => navigate(-1)} /><div className="account-loading"><Spinner label="Loading request…" /></div></div>;
-  return <div className="screen booking-request-screen"><PageHeader title="New booking request" subtitle="A customer is waiting for your response." onBack={() => navigate('queue')} /><div className="request-card"><div className="request-card-top"><div className="request-avatar">{getInitials(details?.customerName || 'Guest')}</div><div><span className="eyebrow">CUSTOMER</span><h2>{details?.customerName || 'Guest'}</h2><span className="request-status"><i /> {expired ? 'Response window closed' : 'Needs your response'}</span></div><div className={cx('request-timer', timerWarning && 'timer-warning')}><small>{expired ? 'Expired' : timerActive ? `Respond in` : '—'}</small>{timerActive && <strong>{countdownLabel}</strong>}</div></div><div className="request-detail-grid"><div><CalendarDays size={17} /><span><small>Selected date</small><strong>{formatDate(details?.bookingDate)}</strong></span></div><div><Clock3 size={17} /><span><small>Time slot</small><strong>{details?.startTime || '—'} – {details?.endTime || '—'}</strong></span></div><div><Scissors size={17} /><span><small>Services</small><strong>{details?.services || 'Salon service'}</strong></span></div></div></div>{expired && <div className="request-expired-note"><Info size={16} /><p>The 60-second response window has closed. This request may have been released to another customer — refresh to check its current status.</p><button onClick={refresh}><RefreshCw size={15} /> Refresh</button></div>}<div className="request-actions">{!expired && <div><Button variant="success" loading={actionLoading === 'ACCEPT'} onClick={() => action('ACCEPT')}>Accept <Check size={17} /></Button><Button variant="danger" loading={actionLoading === 'REJECT'} onClick={() => action('REJECT')}>Reject <X size={17} /></Button></div>}{!expired && <Button variant="warning" loading={actionLoading === 'DELAY'} onClick={() => setDelayOpen(true)}>Update time <Clock3 size={17} /></Button>}</div><Modal open={delayOpen} onClose={() => setDelayOpen(false)} title="Update time & notify customer"><p className="modal-lede">If you are running a little late, choose a delay. My Naai will send the customer a delay request so they can accept or decline the updated time.</p><div className="delay-options">{[20, 40, 60].map(minutes => <button key={minutes} onClick={() => action('DELAY', minutes)} disabled={Boolean(actionLoading)}><Clock3 size={17} /><span><strong>+{minutes} minutes</strong><small>Send delay request to customer</small></span><ChevronRight size={16} /></button>)}</div></Modal></div>;
+  if (loading) {
+    return <div className="screen"><PageHeader title="Booking request" onBack={back} /><div className="account-loading"><Spinner label="Loading request…" /></div></div>;
+  }
+  if (!details) {
+    return (
+      <div className="screen">
+        <PageHeader title="Booking request" onBack={back} />
+        <EmptyState
+          icon={Info}
+          title="This request is not available"
+          message="It may have been removed, or it belongs to another salon. Your booking requests tab has the full list."
+          action={<Button onClick={() => navigate('bookingRequests')}>Open booking requests <ChevronRight size={16} /></Button>}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="screen booking-request-screen">
+      <PageHeader
+        title={canAnswer ? 'New booking request' : 'Booking request'}
+        subtitle={canAnswer ? 'A customer is waiting for your response.' : 'This request is closed — there is nothing to action.'}
+        onBack={back}
+      />
+      <div className="request-card">
+        <div className="request-card-top">
+          <div className="request-avatar">{getInitials(lead.customerName)}</div>
+          <div>
+            <span className="eyebrow">CUSTOMER</span>
+            <h2>{lead.customerName}</h2>
+            <span className="request-status"><i /> {canAnswer ? 'Needs your response' : closedLabel}</span>
+          </div>
+          {/* The countdown exists only while there is something to answer. */}
+          {canAnswer && (
+            <div className={cx('request-timer', view.remainingMs <= 15000 && 'timer-warning')}>
+              <small>Respond in</small>
+              <strong>{view.countdown}</strong>
+            </div>
+          )}
+        </div>
+        <div className="request-detail-grid">
+          <div><CalendarDays size={17} /><span><small>Selected date</small><strong>{lead.bookingDate ? formatDate(lead.bookingDate) : '—'}</strong></span></div>
+          <div><Clock3 size={17} /><span><small>Time slot</small><strong>{lead.bookingTime ? formatTime(lead.bookingTime) : '—'}</strong></span></div>
+          <div><Scissors size={17} /><span><small>Services</small><strong>{services.length ? services.map(service => service.name).join(', ') : (details.services || 'Salon service')}</strong></span></div>
+          <div><UserRound size={17} /><span><small>Barber</small><strong>{lead.barberName || 'Any available specialist'}</strong></span></div>
+          <div><Phone size={17} /><span><small>Mobile</small><strong>{lead.customerPhone ? <a href={`tel:${lead.customerPhone}`}>{lead.customerPhone}</a> : 'Not provided'}</strong></span></div>
+        </div>
+      </div>
+
+      {/* Closed: what happened, and where the rest is. Never an action. */}
+      {!canAnswer && (
+        <div className="request-expired-note">
+          <Info size={16} />
+          <p>
+            {state === LEAD_STATE.accepted && 'You accepted this request — it is in your customer queue as a booking.'}
+            {state === LEAD_STATE.rejected && 'You rejected this request. The customer was told.'}
+            {state === LEAD_STATE.cancelled && 'The customer withdrew this request.'}
+            {state === LEAD_STATE.delayed && 'You proposed a new time and the request is waiting on the customer.'}
+            {(state === LEAD_STATE.autoCancelled || state === LEAD_STATE.awaiting) && 'Nobody answered within the one-minute window, so this request was cancelled automatically. It is not a rejection.'}
+          </p>
+          <button onClick={() => navigate('bookingRequests')}><RefreshCw size={15} /> All booking requests</button>
+        </div>
+      )}
+
+      {canAnswer && (
+        <div className="request-actions">
+          <div>
+            <Button variant="success" loading={actionLoading === 'ACCEPT'} onClick={() => action('ACCEPT')}>Accept <Check size={17} /></Button>
+            <Button variant="danger" loading={actionLoading === 'REJECT'} onClick={() => action('REJECT')}>Reject <X size={17} /></Button>
+          </div>
+          <Button variant="warning" loading={actionLoading === 'DELAY'} onClick={() => setDelayOpen(true)}>Update time <Clock3 size={17} /></Button>
+        </div>
+      )}
+
+      <Modal open={delayOpen && canAnswer} onClose={() => setDelayOpen(false)} title="Update time & notify customer">
+        <p className="modal-lede">If you are running a little late, choose a delay. My Naai will send the customer a delay request so they can accept or decline the updated time.</p>
+        <div className="delay-options">
+          {[20, 40, 60].map(minutes => (
+            <button key={minutes} onClick={() => action('DELAY', minutes)} disabled={Boolean(actionLoading)}>
+              <Clock3 size={17} />
+              <span><strong>+{minutes} minutes</strong><small>Send delay request to customer</small></span>
+              <ChevronRight size={16} />
+            </button>
+          ))}
+        </div>
+      </Modal>
+    </div>
+  );
 }

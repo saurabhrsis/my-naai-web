@@ -1,38 +1,89 @@
-// Subscription plan catalog and helpers for showing the active plan.
-// Ids, titles, prices and durations mirror the mobile app's
-// SubscriptionsPlan / RenewalSubscriptionsPlan screens so the web portal uses
-// the same names and labels partners already know.
+// Subscription plan helpers: the active-plan card, and the ONE catalog the
+// picker renders.
+//
+// The prices, durations and the free-trial length are DATA now — the admin panel
+// owns them (`src/lib/planCatalog.js` reads `POST /api/salons/plans/list` and
+// falls back to the seed). This module keeps its two jobs: look a plan up by the
+// id a subscription row stores, and work out whether that plan is still live.
+//
+// `PLAN_PRICES`, `PARTNER_PLANS`, `RENEWAL_PLANS` and `FREE_ONBOARDING_PLAN` are
+// still exported — every existing caller keeps working — but they are now
+// DERIVED from the catalog, so a price the admin changes is the price shown here
+// without a redeploy.
+import {
+  DEFAULT_FREE_TRIAL,
+  DEFAULT_PLAN_CATALOG,
+  DEFAULT_PARTNER_PLANS,
+  activePlans,
+  describeDuration,
+  freeTrialPlan,
+  planById,
+  renewalPlans,
+} from './planCatalog';
+
+export const PARTNER_PLANS = DEFAULT_PARTNER_PLANS.map(plan => ({
+  id: plan.id,
+  title: plan.title,
+  price: plan.price,
+  duration: describeDuration(plan.days),
+  note: plan.note,
+  ...(plan.best ? { best: true } : {}),
+}));
+
 // One price list for the whole portal. A renewal costs the same as a new
-// purchase, so the price lives here once and both lists read it — the two
-// arrays previously drifted (renewals were still on the old ₹99/₹179/₹249
-// ladder), which showed a partner one price on the plan card and charged
-// another on the next screen.
-export const PLAN_PRICES = {
-  monthly: 199,
-  trial_2_months: 299,
-  quarterly: 499,
-};
+// purchase, so the price lives in one place and both lists read it.
+export const PLAN_PRICES = PARTNER_PLANS.reduce((prices, plan) => ({ ...prices, [plan.id]: plan.price }), {});
 
-export const PARTNER_PLANS = [
-  { id: 'monthly', title: 'Monthly Plan', price: PLAN_PRICES.monthly, duration: '1 Month (30 Days)', note: 'Flexible month-to-month growth' },
-  { id: 'trial_2_months', title: 'Introductory', price: PLAN_PRICES.trial_2_months, duration: '2 Months (60 Days)', note: 'A gentle start for new partners' },
-  { id: 'quarterly', title: 'Quarterly Plan', price: PLAN_PRICES.quarterly, duration: '3 Months (90 Days)', note: 'Best value for busy salons', best: true },
-];
-// Same ids, durations and prices as above; only the supporting line changes so
-// the copy reads as a renewal rather than a first purchase.
-const RENEWAL_NOTES = {
-  monthly: 'Flexible month-to-month growth',
-  trial_2_months: 'Restart with a simple plan',
-  quarterly: 'Best value for busy salons',
-};
-export const RENEWAL_PLANS = PARTNER_PLANS.map(plan => ({ ...plan, note: RENEWAL_NOTES[plan.id] || plan.note }));
-export const FREE_ONBOARDING_PLAN = { id: 'Free', title: 'Free trial', displayPrice: '₹ 00', price: 0, duration: '20 days', note: 'Start your salon journey at no cost', best: true };
+export const RENEWAL_PLANS = renewalPlans(DEFAULT_PLAN_CATALOG).map(plan => ({
+  ...plan,
+  duration: describeDuration(plan.days),
+}));
 
+export const FREE_ONBOARDING_PLAN = freeTrialPlan(DEFAULT_PLAN_CATALOG);
+
+// The plans a screen should render right now, from the server's catalog when it
+// has answered and from the seed until then. `isUpgrade` only changes the
+// supporting line, never the price.
+export function plansForScreen(catalog = DEFAULT_PLAN_CATALOG, { isUpgrade = false } = {}) {
+  const list = isUpgrade ? renewalPlans(catalog) : activePlans(catalog);
+  // `duration` is always re-derived from `days`, so a stored string can never
+  // disagree with what the salon actually gets.
+  return list.map(plan => ({ ...plan, duration: describeDuration(plan.days) }));
+}
+
+export function freePlanForScreen(catalog = DEFAULT_PLAN_CATALOG) {
+  return freeTrialPlan(catalog);
+}
+
+export const SEED_FREE_TRIAL_DAYS = DEFAULT_FREE_TRIAL.days;
+
+// The seed catalog, used when nothing has been fetched yet. `planById` reads the
+// live one when a caller has it: an admin rename must reach the active-plan card.
 const PLAN_CATALOG = {};
-// First occurrence wins, so the partner (new-purchase) list price is the
-// catalog price; renewal variants only differ in price, not identity.
 for (const plan of [...PARTNER_PLANS, ...RENEWAL_PLANS, FREE_ONBOARDING_PLAN]) {
   if (!PLAN_CATALOG[plan.id]) PLAN_CATALOG[plan.id] = plan;
+}
+let liveCatalog = DEFAULT_PLAN_CATALOG;
+
+// The subscription screen hands the fetched catalog here once, so an active-plan
+// card rendered elsewhere (the account tab, the renewal gate) shows the admin's
+// title and price for the same plan id.
+export function setLivePlanCatalog(catalog) {
+  // `null` explicitly resets to the seed (sign-out, tests); an answer with no
+  // plans is ignored rather than emptying every plan label on the portal.
+  if (catalog === null) liveCatalog = DEFAULT_PLAN_CATALOG;
+  else if (catalog?.plans?.length) liveCatalog = catalog;
+  return liveCatalog;
+}
+
+export function getLivePlanCatalog() {
+  return liveCatalog;
+}
+
+function catalogEntry(planId) {
+  const live = planById(liveCatalog, planId);
+  if (live) return { ...live, duration: describeDuration(live.days) };
+  return PLAN_CATALOG[planId] || null;
 }
 
 function prettifyPlanId(value) {
@@ -155,7 +206,7 @@ export function normalizePlanDetails(profile = {}) {
   const planType = readString(['planType', 'planId', 'subscriptionPlan', 'subscriptionType', 'planName'])
     || (typeof profile.plan === 'string' && profile.plan.trim() ? profile.plan.trim() : '');
   if (!planType) return null;
-  const catalog = PLAN_CATALOG[planType] || {};
+  const catalog = catalogEntry(planType) || {};
   const rawPrice = readString(['price', 'amount', 'planPrice', 'totalAmount']);
   const price = rawPrice !== '' ? Number(rawPrice) : catalog.price;
   // The subscription record's own window (planStartDate / planEndDate) is what

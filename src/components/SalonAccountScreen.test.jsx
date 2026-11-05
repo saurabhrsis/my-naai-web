@@ -127,3 +127,58 @@ describe('SalonAccountScreen loading', () => {
     await act(async () => { root.unmount(); });
   });
 });
+
+// "Just like we have Edit profile, we have to give the Edit Services button."
+// The menu editor is a separate screen on purpose: the profile editor saves the
+// address, photos, hours and barbers along with the services, so changing one
+// price there means re-sending everything.
+describe('SalonAccountScreen → Edit services', () => {
+  beforeEach(() => { salonProfile.mockReset(); });
+  afterEach(() => { document.body.innerHTML = ''; });
+
+  it('puts an Edit services button beside Edit, and it opens the menu editor', async () => {
+    salonProfile.mockResolvedValue({ status: 'SUCCESS', data: { salon: completeProfile } });
+    const go = vi.fn();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <SalonAccountScreen
+          session={session}
+          navigate={go}
+          notify={notify}
+          onSessionUpdate={() => {}}
+          onLogout={() => {}}
+        />,
+      );
+    });
+    await flush();
+    await flush();
+
+    const buttons = Array.from(container.querySelectorAll('button'));
+    const servicesButton = buttons.find(node => node.textContent.includes('Edit services'));
+    expect(servicesButton).toBeTruthy();
+    // Both entries sit in the same hero, side by side.
+    expect(servicesButton.parentElement.className).toContain('salon-profile-actions');
+    expect(servicesButton.parentElement.textContent).toContain('Edit');
+
+    await act(async () => { servicesButton.click(); });
+    expect(go).toHaveBeenCalledWith('editServices');
+
+    // The partner menu offers the same door in plain words, and so does the
+    // Services tile in the profile stats.
+    const menuRow = buttons.find(node => node.textContent.includes('Prices and timing only'));
+    expect(menuRow).toBeTruthy();
+    await act(async () => { menuRow.click(); });
+    expect(go.mock.calls.filter(([name]) => name === 'editServices')).toHaveLength(2);
+
+    const statTile = container.querySelector('.salon-profile-stats button');
+    expect(statTile.getAttribute('aria-label')).toBe('Edit your services');
+    await act(async () => { statTile.click(); });
+    expect(go.mock.calls.filter(([name]) => name === 'editServices')).toHaveLength(3);
+
+    await act(async () => { root.unmount(); });
+  });
+});

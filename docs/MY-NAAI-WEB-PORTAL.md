@@ -8,7 +8,7 @@ The portal is a Vite/React single-page PWA for the two roles already present in 
 
 - **Customer**: discover salons, view services and specialists, choose a slot, create booking requests, view bookings, respond to a salon delay request, browse products, **shop the admin's Naai Shop catalog and track those orders**, update the profile and read notifications. The shop is also browsable **and fillable without an account** at `/shop` on the public website: a visitor can add to the cart and keep it on the device, and the account is asked for at the moment of purchase (`/shopCheckout`), where one OTP sign-in also carries that cart onto the account.
 - **Visitor (no account)**: the whole storefront (`/shop`, `/shopProduct?productId=…`), the home page's *Shop now* band, the navbar's **Shop** link and the footer's **Shop grooming products** link.
-- **Salon partner**: view the live customer queue, open a booking request, accept or reject it, ask the customer to accept a small time delay, mark a service complete, review history, manage products, edit salon details, manage open/closed status, manage a subscription and sign out from the account screen.
+- **Salon partner**: view every booking REQUEST as a lead (received / accepted / rejected / auto-cancelled, with the answer rate) in the **Booking requests** tab, view the live customer queue, open a booking request, accept or reject it, ask the customer to accept a small time delay, mark a service complete, review history, manage products, edit salon details, manage open/closed status, manage a subscription and sign out from the account screen.
 
 The UI uses the same REST endpoint names and payload conventions as `rightserveinfotechsystems/my_naai_app`. The production API default is `https://backend.mynaai.in`. In Vite development, `/api`, `/getFiles` and `/socket.io` use the configured proxy. The image path deliberately keeps the mobile app’s case-sensitive spelling: `/getFiles/<path>`.
 
@@ -107,6 +107,48 @@ The queue payload is unchanged — this is layout, not data. `queueNumber` is st
 
 Queue token numbers are not shown in the portal. The queue now focuses on the customer name, appointment date/time, services, specialist and phone action. The summary card shows the next appointment time and customer instead of a token number. The API may still return `queueNumber`; it is simply not rendered by the web UI.
 
+### Customer history shows the customer's mobile
+
+The **Customer history** tab (`SalonHistoryScreen`) used to show the customer's
+name, the date, the services, the specialist and the time — everything except the
+one thing a salon actually needs to act on an old visit: the customer's number, to
+call them back or to answer "who was that?" about yesterday's queue.
+
+Each row now carries the mobile beside the barber and the time, as a **tap-to-call
+link**:
+
+```
+Amit Jichkar                        04 Nov 2026
+Haircut, Beard trim
+[Ravi] [11:30 am] [📞 +91 98765 43210]
+```
+
+- **No backend change was needed.** `GET /api/booking/get-completed-bookings`
+  already returns `userPhone` — the registered customer's number, or the number
+  typed in for a walk-in (`salonOwnerCompletedBookings` in the API repo).
+- **The site sends it as `tel:+919876543210`**, i.e. with the country code, so a
+  tap dials from any phone. Ten-digit mobiles are printed the way they are read
+  aloud (`+91 98765 43210`); anything that is not a ten-digit mobile is shown as its
+  own digits rather than guessed at.
+- **`0000000000` is never printed.** The API sends that literal placeholder when a
+  walk-in left no number; a fake number on a row both reads as a bug and dials
+  nothing, so the chip is simply absent and the rest of the row stays.
+- **The number is read from whichever key the row carries** —
+  `userPhone` (what the API sends today), `userPhoneNumber`, `customerPhone`,
+  `mobileNumber`, `phoneNumber`, `walkinPhone`, or a nested
+  `user.phoneNumber` / `customer.phoneNumber`. `src/lib/customerPhone.js` owns that
+  contract, and the same helper formats and validates. The queue card keeps its own
+  bigger **Call customer** block (with its own "Not provided" state), unchanged.
+
+Tests: `src/components/SalonHistory.test.jsx` (7) — the row prints the number as a
+`tel:` link and leaves the rest of the row alone, a walk-in's `0000000000` prints
+nothing at all, and the helpers normalise `+91 98765 43210` / `919876543210` /
+`098765 43210`, format ten-digit mobiles, and refuse to build a link out of an empty
+or all-zero number. The dev preview
+(`MYNAAI_DEV_MOCK_API=1 npm run dev`) now answers that endpoint with three rows — a
+registered customer, a walk-in with a number, and one with the placeholder — so the
+behaviour is visible without a backend.
+
 ## 5. Salon profile update contract
 
 The web editor mirrors the mobile app's `EditSalonProfileScreen`: the same collapsible groups (**Owner Information**, **Salon Information**, **Address & Location**, **Salon Images**, **Business Hours**, **Salon Services**, **Barbers**) and the same field labels (Salon Owner Name, Mobile Number, Email Address, Salon Name, Salon Type, Agent Code, Complete Address, Landmark / Address Line 2, City, State, Pincode, Opening Time, Closing Time, Weekly Off, Service Name, Price, Duration, Description, Barber Name, Availability). **Every group is collapsed by default** (including during onboarding) and each collapsed card still carries three readable lines: the group title, the mobile app's sub heading (for example *Name, phone number and email*) and a live summary of what is inside it, plus a red `N required` chip when something mandatory is missing. Required fields are marked with a red `*` exactly like the mobile `FieldLabel`, inputs use a larger 15px body size with a lighter border and placeholder, and a status bar above the form counts the outstanding required details with an **Expand all / Collapse all** control. A failed save opens the offending group, scrolls it into view and focuses its first input. Individual service and barber cards expand exactly like the mobile editor, and an incomplete service or barber is flagged while collapsed. The web editor sends the same complete body shape used by the mobile salon editor to `POST /api/salons/edit-salon-profile`. It includes profile/contact/address fields, numeric `latitude` and `longitude`, `imageUrl`, `imagesArray`, a detailed `businessHours` array, `isActive`, `profileCompleted`, and separate service/specialist collections:
@@ -145,7 +187,7 @@ Coordinates that already exist on the profile are kept as-is; the browser locati
 
 | Profile state when the editor opened | Active plan | After a successful save |
 | --- | --- | --- |
-| New salon / profile not completed | none or expired | **Payment screen** (`#/subscription`) — free 20-day onboarding plan first, then the paid plans |
+| New salon / profile not completed | none or expired | **Payment screen** (`#/subscription`) — free onboarding trial first (90 days unless the admin changed it), then the paid plans |
 | New salon / profile not completed | already active | **Salon account** (`#/account`) — never a second payment for the same save |
 | Complete profile (routine edit) | any | **Salon account** (`#/account`) |
 
@@ -157,7 +199,12 @@ Both realtime screens (salon **Customer queue** and customer **My bookings**) sh
 
 ### Plan prices
 
-One price list serves the whole portal (`PLAN_PRICES` in `src/lib/planDetails.js`): **₹199 / 1 month**, **₹299 / 2 months**, **₹499 / 3 months**. `RENEWAL_PLANS` is derived from `PARTNER_PLANS` and only overrides the supporting note, so a renewal costs exactly what a new purchase costs. The two arrays previously carried independent prices and had drifted (renewals were still on an old ₹99 / ₹179 / ₹249 ladder), which showed a partner one price on the plan card and charged another on the next screen.
+One price list serves the whole portal, and it is no longer compiled into the bundle: `src/lib/planCatalog.js` reads it from the backend (`POST /api/salons/plans/list`, no token) and falls back to the seed values only when that call fails. The admin panel owns the rows — prices, durations, notes, ribbons, order and the free-trial length — so a price change reaches the website and the app on their next load instead of needing a release. The seed is **₹199 / 1 month**, **₹299 / 2 months**, **₹499 / 3 months**, with the free trial at **90 days**. `RENEWAL_PLANS` and `PARTNER_PLANS` are both derived from the same catalog entries and only override the supporting note, so a renewal costs exactly what a new purchase costs and a plan cannot be advertised at one length and granted another. The catalog response is cached under `mynaai:plan-catalog:v2` for offline use, and durations are always re-derived from the day count (a backend row carrying only `days: 90` still renders as "3 Months (90 Days)").
+
+- Backend contract (table, endpoints, amount guard, migration):
+  [`docs/BACKEND-SALON-PLANS-API.md`](BACKEND-SALON-PLANS-API.md).
+- The tab that edits it: [`docs/ADMIN-PANEL-SALON-PLANS.md`](ADMIN-PANEL-SALON-PLANS.md).
+- The app reading the same list: [`docs/APP-SALON-PLANS.md`](APP-SALON-PLANS.md).
 
 ### Active plan display
 
@@ -167,7 +214,7 @@ One price list serves the whole portal (`PLAN_PRICES` in `src/lib/planDetails.js
 
 The subscription route follows the mobile `SubscriptionsPlan` contract:
 
-- An incomplete, already-created salon is sent to the profile editor first. After a successful profile save, the partner sees the default **20-day free trial** choice and can start it without opening Razorpay. The editor clears the incomplete-session flag while keeping the partner on the subscription route; the free-plan action then refreshes the authenticated hash route into the salon queue.
+- An incomplete, already-created salon is sent to the profile editor first. After a successful profile save, the partner sees the free trial as the backend defines it — **90 days** by default, whatever the admin panel has set — and can start it without opening Razorpay. The editor clears the incomplete-session flag while keeping the partner on the subscription route; the free-plan action then refreshes the authenticated hash route into the salon queue.
 - A new salon reaches the same route after registration OTP, with the temporary token returned by `verify-otp-register`. Paid plans first call `POST /api/salons/create-payment-order` with the plan amount in INR, open Razorpay Checkout with the returned order ID, and send the payment ID, order ID and signature to `POST /api/salons/create-salon-with-plan` with the temporary bearer authorization. The response must contain both a salon ID and a permanent session token; otherwise the portal does not mark registration as complete.
 - A logged-in partner can choose a renewal plan from the account subscription entry. The browser creates the Razorpay order and sends `{ planType, paymentId, totalAmount }` to `POST /api/salons/renew-salon-plan` with the persisted salon session. A successful renewal returns to the partner account without replacing the session with a temporary token.
 - An expired salon subscription is a hard partner-side paywall. On restore/login the portal revalidates the salon plan before mounting queue, history, products or account; an expiry date/status or a backend `PLAN_EXPIRED` response replaces the entire salon shell with the renewal payment screen. Every path into the forced screen (`mode=RENEW&forceRenewal=true`) re-checks the subscription record first — `isPlanActive` / `planStartDate` / `planEndDate` — so a stale `PLAN_EXPIRED` signal or a bookmarked paywall URL cannot lock a partner whose plan is active; the renewal screen itself does the same check and drops its "expired" copy when the record is live. `src/lib/api.js` performs the same global response-interceptor check as the mobile Axios client on every API call, including failed HTTP responses, with a one-time redirect guard. The forced screen has no back/navigation path and remains in place until renewal succeeds — but it is never a dead end: both of its sign-out controls (the expired-plan notice and the footer of the renewal card) ask for the standard in-app confirmation and then land on the **login page** with the salon role preselected (`logoutToLogin` in `src/App.jsx`), where the partner can sign back in with one OTP or take the page's own **Browse salons** link to the public website. Signing out clears exactly what a normal logout clears (token, session mirrors, device-token sync, live-updates socket). Customer sessions never enter this payment flow.
@@ -300,6 +347,319 @@ The **booking-request** delay proposal is the one flow that still asks the custo
 3. The response calls `POST /api/bookingRequest/customer-delay-response/{bookingRequestId}/` with `{ "action": "ACCEPT" }` or `{ "action": "REJECT" }`.
 4. The customer is returned to `#/bookings`.
 
+## 8.0 Website chrome stays on the website
+
+The review carousel and the multi-column footer are how the **marketing site**
+closes a page (`SurfaceProvider` in `src/components/Shared.jsx`). The panel is the
+app: it ends at its own bottom navigation, and on a phone the footer sat under
+that fixed bar where it could not even be reached. Reported from the device as
+"the website footer and testimonial are showing in the Discover tab after login".
+
+Three locks, so it cannot come back:
+
+1. `SiteFooter` returns `null` and `TestimonialSection` renders nothing when
+   `useIsAppSurface()` is true — the shell sets `SurfaceProvider value="app"`.
+2. The screens themselves ask for a guest: `HomeScreen` renders both behind
+   `isGuest`, and `SalonDetailScreen` renders its footer behind
+   `!session?.userId`, so a signed-in customer never sees them even if the shell
+   around them changes. Both blocks stay exactly as they are on the public site.
+3. A stylesheet lock — `.app-shell .site-footer, .app-shell .testimonial-section
+   { display: none !important; }` — covering any future screen that mounts them by
+   accident.
+
+Tests: `src/App.test.jsx` mounts the real app and asserts the panel's Discover tab
+has neither block (and no "What customers & salon owners say" text), that the
+guest site still does, and that an info page inside the panel has none either.
+
+## 8.1 Booking checkout — Pay at Salon
+
+The last step of the customer booking flow (`ScheduleScreen` in
+`src/components/UserScreens.jsx`) is a checkout: barber (optional), date, time,
+**Payment**, then the sticky **Review & confirm** bar with the estimated total.
+Payment used to be invisible until the salon counter; it is now a stated part of
+the checkout.
+
+**A review card stands between the bar and the API call** — `Review your booking`,
+built on `Modal` with `.booking-review*` styles. Nothing is sent until the button
+inside it is tapped, so the last thing read before the request leaves is a
+line-by-line statement of what is being asked for:
+
+| Line | What it says |
+| --- | --- |
+| Salon | name, plus the address/city the customer scrolled past earlier |
+| Services | one row each, with its own price |
+| Estimated total | the sum of those rows, the same number the sticky bar quoted |
+| When | date, time, duration (the sum of the service durations) |
+| Barber | the specialist chosen, or **Any available barber** |
+| **Pay at Salon after Service** | `Pay ₹ N at the salon after your service — cash, UPI or card, whichever the salon accepts. Nothing is charged now.` |
+
+The footer is `Back` (closes the card, sends nothing, and the bar opens it again)
+and `Send booking request` (the only path to `createBookingRequest`, with its own
+sending state). The bar itself no longer calls the API: it validates the slot and
+services first — an empty time or an empty service list is refused with the same
+message as before — then opens the card. Closing the card leaves nothing behind;
+submitting closes it and lands on the *Request sent* screen.
+
+- **One method, preselected: "Pay at Salon".** My Naai takes no payment for a
+  booking (Terms §4; Privacy §2 says no card, UPI, wallet or bank details are
+  collected), so the option is the only one and it is checked. It is rendered as
+  a real `radio` inside `.schedule-pay-options` — the same shape as the shop's
+  payment options — so an online method, if one is ever offered, drops into the
+  same group instead of needing a new design.
+- **The amount is named before you confirm.** The card says
+  `Pay ₹ N at the salon after your service — cash, UPI or card, whichever the
+  salon accepts. Nothing is charged now.` The sticky bar repeats
+  **Pay at salon** under the total, so the last thing read before confirming is
+  how the money is paid.
+- **No payment form.** The only `<input>` on the checkout is that radio: no card
+  number, expiry, CVV, UPI id or bank field exists, and a test fails if one is
+  added without a deliberate decision.
+- **Nothing payment-related is sent to the API.** `createBookingRequest` keeps its
+  contract (`salonId`, `barberId`, `bookingDate`, `bookingTime`, `services`) — the
+  backend stores no payment mode, so the method is a statement of fact to the
+  customer rather than a record. A booking record that should carry
+  `payment_mode: PAY_AT_SALON` is a backend change, not a web one.
+- **The confirmation repeats it.** The *Request sent* screen adds
+  `Pay ₹ N at the salon after your service — nothing was charged now.` beside the
+  existing "your slot is held" and "we will alert you" points.
+
+Styles: `.schedule-pay-options`, `.schedule-pay-option`, `.schedule-pay-icon`,
+`.schedule-pay-copy`, `.schedule-pay-tick`, `.schedule-pay-note`,
+`.schedule-total-pay` for the method; `.booking-review`, `.booking-review-salon`,
+`.booking-review-services`, `.booking-review-total`, `.booking-review-facts`,
+`.booking-review-pay`, `.booking-review-actions` for the review card — all in
+`src/styles.css`, in the booking gold palette (the shop's `.shop-pay-*` is the
+green equivalent).
+
+Tests: `src/components/BookingFlow.test.jsx` — preselected option with the summed
+amount, no card/UPI fields, the method repeated after the request is sent, and the
+review card: it shows salon, services with prices, timing, barber and total; it
+names the chosen barber instead of "any"; it carries the *Pay at Salon after
+Service* note with the amount; `Back` sends nothing and can be reopened; and
+`createBookingRequest` is called exactly once, from the card's own button, with
+no `paymentMode` in the payload.
+
+## 8.2 Salon → Booking requests (leads)
+
+Requests and bookings are different things and different tables: a **request** is
+a lead a customer sends, with a one-minute window to answer; a **booking** is the
+chair that exists once the salon accepts (the queue and History read those). The
+salon's new **Booking requests** tab (`SalonLeadsScreen` in
+`src/components/SalonLeads.jsx`, route `/booking-requests`) is built on the
+request side only.
+
+- **The counters first**: Received · Accepted · Rejected · **Auto-cancelled**,
+  plus an answer rate. Auto-cancelled is deliberately its own number — a request
+  nobody answered is not a rejection, and folding the two together hides exactly
+  the problem the tab exists to expose. A customer's own cancellation is a third
+  bucket.
+- **A live request is answered ON the card** (`Accept` / `Reject`, one tap, the
+  same `owner-action` contract the notifications screen and the mobile app use).
+  Opening anything first would be a step the salon does not have time for: the
+  window is one minute. An answer shows on the card immediately (a local override
+  applied over every refresh) because the list API can answer a beat behind the
+  action.
+- **`Details` is read-only** (`src/components/LeadDetailSheet.jsx`): customer
+  name, mobile (tappable), date, time slot, barber (or "any available
+  specialist"), the services with prices and the requested value, plus what
+  became of the request. No countdown, no Accept / Reject, no `Update time` — a
+  request from last month cannot be answered, and the sheet never pretends
+  otherwise. It is a sheet on the list, so closing it returns to the list (it used
+  to navigate to the live-answer screen, whose back button dropped the salon in
+  the Queue tab).
+- **Only an answerable request has an answer.** The card and the sheet read the
+  same rule (`leadView`): the server's status must still be open *and* the
+  one-minute window must still be running. Accepted, rejected, cancelled,
+  auto-cancelled and month-old pending requests render with their outcome and no
+  buttons at all, so the salon is never offered an action the server will refuse.
+- **It works on today's backend.** `POST /api/bookingRequest/salon/list` is the
+  preferred source (`src/lib/api.js` → `salonBookingRequestList`); where that
+  endpoint is not deployed yet the screen falls back to the notifications feed,
+  keeps only `BOOKING_REQUEST` rows, and says so in one quiet line. Accept and
+  Reject already work there, so the tab is useful before the backend ships.
+- **It refreshes itself** (20 s poll, plus a 1 s tick so a countdown and the
+  window's expiry are honest while the salon watches).
+- States, filters and the status vocabulary live in `src/lib/bookingLeads.js`
+  (`leadStateFromStatus`, `leadView`, `summarizeLeads`, `filterLeads`) — the same
+  helpers the tests use, so the words on the card cannot drift from the numbers.
+- **The live-request screen** (`BookingRequestScreen`, route `/bookingRequest`,
+  opened by a booking-request push or from a notification) applies the same rule:
+  while the window runs it shows the countdown and Accept / Reject / Update time;
+  once the request is answered or the minute has passed it shows the outcome and
+  the request's facts with **no actions**, and its back button goes to
+  **Booking requests**. Accepting from it still ends in the Queue — an accepted
+  request *is* a booking, so that is the one place the queue is right.
+- Backend contract: [`docs/BACKEND-BOOKING-REQUESTS-API.md`](BACKEND-BOOKING-REQUESTS-API.md)
+  (list, summary, admin doors, the auto-cancel sweeper).
+  Admin panel tab: [`docs/ADMIN-PANEL-BOOKING-REQUESTS.md`](ADMIN-PANEL-BOOKING-REQUESTS.md).
+
+## 8.3 One product-category list (admin → website → app)
+
+The shop's **Category** filter is the admin panel's list, not the website's
+opinion. `src/lib/shopCategories.js` is the reader: it fetches
+`POST /api/shop-categories/list` (public twin for visitors), caches the answer in
+`localStorage`, and renders the select from it. Before the first answer — or on a
+deployment without the endpoint — the seed list is used, which is the same seven
+ids, labels and order the backend patch inserts, so the two never disagree.
+
+- A category added in the admin panel appears in the filter on the next load, with
+  no front-end deploy.
+- A product filed under a category the list no longer has still gets its own
+  filter entry (the storefront appends those itself), so nothing silently lands
+  in "All".
+- Backend contract (table, endpoints, slug rule, delete/reassign rules):
+  [`docs/BACKEND-SHOP-CATEGORIES-API.md`](BACKEND-SHOP-CATEGORIES-API.md).
+
+## 8.4 Booking steps that survive Back, and the scroll that went away
+
+Two customer reports, both from the salon booking flow.
+
+**"I go back to change the service but the services are not showing."** The
+booking steps only knew about the salon because the previous screen handed the
+whole record over in memory (`navigate('services', { salon, salonId })`). The
+router never puts objects in a URL, so anything that made the browser re-read the
+address — Back, forward, a refresh, a shared link — landed on `/services` or
+`/schedule` with no record and therefore an empty page.
+
+Both steps are now addressable on their own terms, and the record is re-derivable:
+
+| URL | What it carries |
+| --- | --- |
+| `/services?salonId=salon-42` | which salon's menu to show |
+| `/schedule?salonId=salon-42&services=svc-1,svc-2` | the salon and the services ticked so far |
+
+- `src/lib/routes.js` knows `SALON_BOOKING_SCREENS`; `parseRoutePath` turns
+  `?services=a,b` into `params.serviceIds` and `routeToPath` writes the list back
+  as a plain comma-separated string (not `a%2Cb`). Only ids travel in the URL —
+  the salon record never does.
+- `useBookingSalon(params)` resolves the salon in three steps: the in-session
+  record, then the module-level `bookingSalonCache` (so Back is instant and needs
+  no request), then `api.salonByIdInfo({ salonId })`. Only the third shows a
+  loading state — a `Spinner` with *Loading services* / *Loading the salon* — and
+  a failure shows an `EmptyState` with *Back to salons*, never an empty list.
+- `bookingSelectionCache` remembers the ticked services, so stepping back from the
+  schedule re-ticks exactly what was chosen; it is cleared once the request is
+  sent.
+- On `/schedule`, `serviceIds` from the URL are resolved against the salon's own
+  menu (`useMemo`), so names, prices and durations after a reload are the salon's,
+  not remembered ones. `createBookingRequest` also falls back to the URL's
+  `salonId` when the record was fetched rather than handed over.
+
+**"The time slot and the booking checkout modal show unnecessary scroll."** Two
+separate boxes were scrolling inside a page that was already scrolling:
+
+- `.time-grid` had `max-height: 330px` (and `380px` under 760px) with
+  `overflow-y: auto`, so the slot buttons got their own scrollbar. The cap is
+  gone, in both places; the page scrolls and the grid grows. The phone override
+  keeps only its six-column layout.
+- `.modal-card` became a flex column with `overflow: hidden`; `.modal-header` and
+  `.modal-footer` are `flex: none`, and only `.modal-body` scrolls
+  (`overflow-y: auto`, `overscroll-behavior: contain`). The title and the
+  *Back* / *Send booking request* buttons stay put while a long review scrolls —
+  the same `Modal` used elsewhere, so the shop's cart dialog benefits too. No
+  global footer rule was added; the change is containment, not styling.
+
+Tests: `src/components/BookingSteps.test.jsx` (10) — the salon loads from the id
+in the URL (the exact case that used to render nothing), a loading state instead
+of a flash of "no services", the in-session record is used without a second API
+call, the id and the chosen services are written into the schedule URL, the picks
+are re-ticked after going back, the services are resolved from their ids with the
+salon's names and prices, the request still carries the salon id, and the two
+stylesheet guarantees (no `max-height`/`overflow` on `.time-grid` in any media
+query; a pinned header and footer with only `.modal-body` scrolling). It gives
+every test its own salon id because the cache is module-level. `src/App.test.jsx`
+adds the URL round-trip: `routeToPath` → `parseRoutePath` keeps the salon and the
+service list.
+
+## 8.5 The menu, edited on its own (`/edit-services`)
+
+The salon account already had one **Edit** button, and it opens the whole profile
+editor: seven collapsed cards, one of which is the menu — and that editor saves
+everything at once, so changing "Haircut ₹250 → ₹300" also re-sends the address,
+the photos, the business hours and the barbers.
+
+The account screen now has a second button, **Edit services**, beside Edit, plus a
+row in the partner menu and a tappable **Services** tile. All three open
+`/edit-services` (`EditSalonServicesScreen`, `src/components/EditSalonServices.jsx`),
+which edits services and nothing else.
+
+**Every service is open, all the way down.** That is the whole design: the reported
+need was *"open all services input so they can fill fast"*, and an accordion is the
+opposite of that. Each row shows the four fields as real inputs from the first
+paint — no tap to open, no tap to close:
+
+| Field | Entry |
+| --- | --- |
+| **Service** | text, with the salon type's default names offered as you type |
+| **Price (₹)** | number, `inputMode="decimal"` on a phone |
+| **Duration** | select of the lengths salons use (10…120 min), plus the row's own value if it is unusual, so `45` can never become `450` |
+| **Description** | optional, one line |
+
+What makes a whole menu fast to type:
+
+- **Enter walks the row** — Service → Price → Duration → Description — and Enter in
+  the last field of the **last** row adds a new row and puts the cursor in it. A
+  menu can be typed end to end without touching the mouse. (The hint under the
+  header says so; it is hidden on a phone, where there is no Enter key.)
+- **Add service** sits in the header, at the end of the list and in the sticky bar;
+  a new row is marked **New** until it is saved.
+- **↑ / ↓** re-order a row, and the order is what the customers see — it is sent as
+  `displayOrder`, not sorted on the client.
+- Rows are validated as you type (`Add the price`, `Name is too short`,
+  `Two services have this name`); **Save services** stays off until something
+  actually differs from what the server has, so an accidental double-save is not
+  possible.
+- A **Removed** strip lists what will go when you save, each name an **Undo**
+  button that restores the whole row — price and duration included.
+- **Back sits in the sticky bar**, beside **Add** and **Save services** — not only
+  in the header. A salon with thirty services scrolls the header (and its back
+  arrow) off a phone screen, and the reported problem was exactly that: no way back
+  from the bottom of the list. Both back buttons go through the same guard, so
+  unsaved edits ask first (`Discard your changes?`, with *Keep editing* as the safe
+  answer).
+- The header carries **no subtitle**: the summary card already says how many
+  services are on the menu and what they total, so a second caption above it only
+  pushed the first service further down a phone screen.
+- An empty menu offers **Add your first service** and **Load defaults** (the same
+  per-type default menu the profile editor uses).
+- The sticky bar shows the count and the total of the menu, so a mistyped price is
+  visible before saving.
+
+**One request, and only about services.** `POST /api/salons/services/save`
+(`api.salonServicesSave`) carries `{ services, removedServiceIds }` and nothing
+else — no `salonId`, no address, no photos. The salon comes from the session token
+on the server. The answer is the stored menu, and the screen repaints from it.
+
+Removal is a **soft** removal on the server (`is_active = false`): customers stop
+seeing the service, and past bookings that used it keep their rows. The confirmation
+sheet says exactly that, because "delete" would be a lie.
+
+A deployment that has not shipped
+[`patches/backend-5-salon-services.patch`](../patches/backend-5-salon-services.patch)
+answers 404, and the screen says *"Saving services needs the latest backend update"*
+rather than blaming the partner's input. Contract:
+[`docs/BACKEND-SALON-SERVICES-API.md`](BACKEND-SALON-SERVICES-API.md).
+
+Styles live in `src/styles.css` under *"The menu editor (Edit services)"*:
+`.service-editor-summary`, `.service-editor-list`, `.service-editor-row`,
+`.service-editor-fields` (one row per service on a laptop; name on its own line,
+price and minutes sharing the next one under 720px), `.service-editor-actions` (the
+sticky save bar: count and total on the left, **Back · Add · Save services** on the
+right, the three sharing one row under 720px), `.service-editor-removed`,
+`.service-editor-hint`.
+
+Tests: `src/components/EditSalonServices.test.jsx` (17) — the screen paints every
+service as an input with no profile fields on it; the save carries services and
+removals only and never the salon id; a new row is sent without a `serviceId`;
+removal sends the id and Undo restores the whole row; a missing price blocks the
+save; a 404 is reported as the missing backend; Save is off until something changes;
+an empty menu offers the defaults; Enter walks a row and appends a new one; and the
+helpers (normalising a row, ordering, validation, duplicate names, the payload,
+name suggestions), the sticky **Back** beside Add and Save, and that leaving with
+unsaved edits goes through the confirmation. `src/components/SalonAccountScreen.test.jsx`
+(+1) covers the
+button beside Edit, the partner-menu row and the Services tile.
+
 ## 9. Notification destinations
 
 The notification route mapping is shared by foreground JavaScript and the Firebase messaging service worker:
@@ -381,15 +741,15 @@ A pass over all customer, partner and shared screens at 320 px, 375 px, 768 px,
   different crop on every breakpoint and portrait shots came out squat or
   face-cropped. Salon cards now use a single `aspect-ratio: 16 / 10` frame
   (pixel-height fallback for browsers without `aspect-ratio`), product tiles a
-  capped `4 / 3`, the detail hero `3 / 2` and barber slots `1 / 1`, always with
-  `object-position: center` (top for faces).
+  capped `4 / 3`, the shop detail hero `1 / 1` and barber slots `1 / 1`, always
+  with `object-position: center` (top for faces).
 - **Naai Shop photos are shown whole, never cropped.** Product cards and the
   product-details hero frame the photo with `object-fit: contain` (square on a
-  phone, 25:22 on a laptop for the card; square on a phone and 4:3 on a laptop
-  for the hero) and an inner gutter that keeps the product clear of the card's
-  rounded corners; the card's hover zoom is gone, because scaling a contained
-  photo crops it again. The band a non-square photo does not fill is a
-  **blurred, over-scaled copy of the same photo** (`.shop-card-backdrop` /
+  phone, 25:22 on a laptop for the card; square for the details hero at every
+  width, since from 900 px it sits in its own column) and an inner gutter that
+  keeps the product clear of the card's rounded corners; the card's hover zoom
+  is gone, because scaling a contained photo crops it again. The band a
+  non-square photo does not fill is a **blurred, over-scaled copy of it** (`.shop-card-backdrop` /
   `.shop-detail-hero-backdrop`, `z-index: -1` inside the frame's own stacking
   context), so a white product shot never sits in a black letterbox.
   **Upload spec for the catalogue team: square 1200 × 1200 JPG, white
@@ -398,6 +758,19 @@ A pass over all customer, partner and shared screens at 320 px, 375 px, 768 px,
   (Category / For / Price) share **one line at every width** from 320 px up —
   the phone rules drop the decorative leading icon and tighten the gutters
   instead of wrapping the third filter onto its own row.
+- **The product-details page is two columns on a laptop, one on a phone.**
+  Reported with a screenshot: at ~1440 px the page was a single 1384 px column
+  — a 400 px photo, then metre-wide cards holding one line of 12 px copy — so
+  most of the window was empty and it read as a phone screen stretched
+  sideways. From 900 px the photo takes a left column (`minmax(240px, 440px)`,
+  square, `position: sticky` so it follows a long description) and tags, name,
+  price, quantity, About and Delivery sit in the right one; the rating is
+  grouped with the price at the left instead of being pushed to the far edge;
+  the whole page is capped at 1180 px and centred, because a product page is
+  read. Below 900 px the grid is one column in the same DOM order, so a phone
+  stacks exactly as it did before (the stacked grid carries no `gap`, which
+  would double the 14 px the tag row already has). Same markup for the
+  customer dashboard and the public storefront.
 - The cart's "Proceed to checkout" bar is an **overlay**: the Bill details card
   runs a few pixels underneath it (the phone clearance is set per shell, since
   the app reserves 100 px for its bottom nav and the public website, which has
@@ -471,6 +844,35 @@ request runs a 60-second countdown that a second dialog would eat into.
 `src/components/ConfirmDialog.test.jsx` covers the dialog behaviour and fails if
 `window.confirm`, `window.alert` or `window.prompt` reappears anywhere in `src`.
 
+## 11.1 The 2026 brand mark
+
+`public/assets/brand/` now carries the 2026 logo: the **"m" monogram** on its own
+(the artwork has no lettered wordmark any more), extracted from the supplied
+2048² gold-on-black file and re-cut as **gold on transparent**
+(`mynaai-mark.png`, 512²) with a padded square (`mynaai-logo.png`) for
+compatibility. A single-colour copy (`mynaai-mark-white.png`) is kept for
+surfaces that cannot take the brand gold.
+
+**The tab and app icons keep that gold.** They used to be re-cut as a *white*
+silhouette while being placed on the near-black plate, so every browser tab and
+home-screen icon showed a white "m" while the logo on the page was gold — the
+owner's report: *"don't change the colour of the logo in favicon, we need the same
+as the logo, not white."* `scripts/brand-icons.sh` now trims the supplied artwork
+and composes it on the `#0B0D0D` plate **without touching its colour**; the
+monochrome conversion is kept for exactly one file, `badge-96.png`, because Android
+draws status-bar badges as a silhouette by platform rule. Both service-worker
+caches were bumped (`mynaai-shell-v13` / `v10`), so an installed app does not keep
+serving the cached white icons.
+
+Because the mark no longer contains the name, the `<Brand>` component in
+`src/App.jsx` renders **mark + "My Naai" as text** (`.brand-word`), and drops the
+wordmark below 1024 px — the same breakpoint that decides sidebar vs phone top
+bar — where a 320 px bar has no room for it. The app icon, favicons, maskable
+icon, PWA badge and the social card (`og-cover.png`, 1200×630) were regenerated
+from the supplied app icon, so the tab, the installed app, the share preview and
+the in-app brand are the same shape.
+
+
 ## 12. Important source locations
 
 | File | Responsibility |
@@ -478,17 +880,21 @@ request runs a 60-second countdown that a second dialog would eat into.
 | `src/App.jsx` | Auth, session restoration, logout/expiry state, hash routes and push startup |
 | `src/lib/api.js` | Mobile-compatible REST client, bearer token and JWT cleanup |
 | `src/lib/socket.js` | Shared salon/user live-update socket (room joins, polling→WebSocket) |
-| `src/lib/planDetails.js` | Plan catalog and active-subscription normalization |
+| `src/lib/planCatalog.js` | The plan catalog as the admin panel publishes it: fetch, normalize, cache, `usePlanCatalog()` |
+| `src/lib/planDetails.js` | Plan pricing derived from that catalog, plus active-subscription normalization |
 | `src/lib/devtoolsShield.js` | Swallows the known Chrome DevTools Performance-panel crash (also inlined in `index.html` so it runs before the bundle) |
 | `src/lib/razorpay.js` | Checkout loader, amount rules, payment outcomes, UPI hand-off tracking and pending-payment recovery |
 | `src/lib/bookingTime.js` | Signed-offset time maths for the queue time update: local wall-clock parsing, hour/date rollover, past-time and day-cross detection, exact-time→offset derivation, human offset labels, and the `Due now`/`Overdue by` countdown chips on a queue card |
 | `backend/salonUpdateBookingTime.js` | Drop-in Express + Sequelize controller for the queue time update (`POST /api/booking/salon/queue/update-time/:bookingId`). Copied into the API repo, not built with the web app |
+| `src/lib/customerPhone.js` | The customer's mobile as the partner screens show it: which key it comes from, `+91` formatting and the `0000000000` placeholder |
 | `src/lib/shopBuyer.js` | Who is shopping (salon / customer / visitor), the cart's storage namespace and the role-aware shop wording |
+| `src/components/SalonLeads.jsx`, `src/lib/bookingLeads.js` | The salon's **Booking requests** (leads) tab: states, auto-cancel window, counters and the Accept/Reject actions |
+| `src/lib/shopCategories.js` | The one product-category list, read from the admin's `shop_categories` (seed + cache for a deployment without the endpoint) |
 | `src/lib/api.js` (`shopProductList[Public]`, `shopSettingsGet[Public]`) | The catalog and bill rules, read through the open `/api/shop-public/*` door for a visitor and the partner endpoint for an account, each falling back to the other |
 | `src/components/SubscriptionScreen.jsx` | Plan picker, Razorpay flow, cancellation/failure copy and payment recovery |
 | `src/components/ConfirmDialog.jsx` | Promise-based in-app confirmation sheet that replaces every native browser dialog |
 | `src/lib/push.js` | Firebase initialization, permission/token flow and notification route mapping |
-| `public/assets/brand/mynaai-mark.png` | Official My Naai monogram (white on transparent) — the app icon art, the default image fallback and the phone-size brand mark |
+| `public/assets/brand/mynaai-mark.png` | Official My Naai monogram (**gold on transparent**, the supplied colour) — the app icon art, the default image fallback and the phone-size brand mark |
 | `public/assets/brand/mynaai-logo.png` | Official lockup: the M monogram with **My Naai** lettered underneath — header, sidebar, login and registration |
 | `public/icons/icon-192.png`, `icon-512.png`, `icon-maskable-512.png`, `apple-touch-icon.png` | The app icon at every size the manifest, iOS and Android ask for (maskable padded for Android's mask) |
 | `public/favicon.ico`, `public/icons/favicon-32.png`, `favicon-16.png` | Browser-tab icons |
@@ -498,6 +904,7 @@ request runs a 60-second countdown that a second dialog would eat into.
 | `public/firebase-messaging-sw.js` | Background push display and notification click routing |
 | `src/components/UserScreens.jsx` | Customer screens, bookings and delay response |
 | `src/components/SalonScreens.jsx` | Salon queue, booking request, delay action and partner screens |
+| `src/components/EditSalonServices.jsx` | The menu editor (`/edit-services`): every service an open row, Enter-to-next, soft removal with Undo, one request that touches services only |
 | `src/main.jsx` | Root offline shell worker registration |
 | `src/styles.css` | Responsive mobile-first layout through large desktop widths, with the device safe-area padding for installed PWAs |
 
