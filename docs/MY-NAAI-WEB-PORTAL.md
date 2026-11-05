@@ -8,7 +8,7 @@ The portal is a Vite/React single-page PWA for the two roles already present in 
 
 - **Customer**: discover salons, view services and specialists, choose a slot, create booking requests, view bookings, respond to a salon delay request, browse products, **shop the admin's Naai Shop catalog and track those orders**, update the profile and read notifications. The shop is also browsable **and fillable without an account** at `/shop` on the public website: a visitor can add to the cart and keep it on the device, and the account is asked for at the moment of purchase (`/shopCheckout`), where one OTP sign-in also carries that cart onto the account.
 - **Visitor (no account)**: the whole storefront (`/shop`, `/shopProduct?productId=…`), the home page's *Shop now* band, the navbar's **Shop** link and the footer's **Shop grooming products** link.
-- **Salon partner**: view the live customer queue, open a booking request, accept or reject it, ask the customer to accept a small time delay, mark a service complete, review history, manage products, edit salon details, manage open/closed status, manage a subscription and sign out from the account screen.
+- **Salon partner**: view every booking REQUEST as a lead (received / accepted / rejected / auto-cancelled, with the answer rate) in the **Booking requests** tab, view the live customer queue, open a booking request, accept or reject it, ask the customer to accept a small time delay, mark a service complete, review history, manage products, edit salon details, manage open/closed status, manage a subscription and sign out from the account screen.
 
 The UI uses the same REST endpoint names and payload conventions as `rightserveinfotechsystems/my_naai_app`. The production API default is `https://backend.mynaai.in`. In Vite development, `/api`, `/getFiles` and `/socket.io` use the configured proxy. The image path deliberately keeps the mobile app’s case-sensitive spelling: `/getFiles/<path>`.
 
@@ -338,6 +338,57 @@ Styles: `.schedule-pay-options`, `.schedule-pay-option`, `.schedule-pay-icon`,
 — preselected option with the summed amount, no card/UPI fields, and the method
 repeated after the request is sent.
 
+## 8.2 Salon → Booking requests (leads)
+
+Requests and bookings are different things and different tables: a **request** is
+a lead a customer sends, with a one-minute window to answer; a **booking** is the
+chair that exists once the salon accepts (the queue and History read those). The
+salon's new **Booking requests** tab (`SalonLeadsScreen` in
+`src/components/SalonLeads.jsx`, route `/booking-requests`) is built on the
+request side only.
+
+- **The counters first**: Received · Accepted · Rejected · **Auto-cancelled**,
+  plus an answer rate. Auto-cancelled is deliberately its own number — a request
+  nobody answered is not a rejection, and folding the two together hides exactly
+  the problem the tab exists to expose. A customer's own cancellation is a third
+  bucket.
+- **A live request can be answered in place** (`Accept` / `Reject`, one tap, the
+  same `owner-action` contract the notifications screen and the mobile app use).
+  A `Pending` request whose window has closed renders as auto-cancelled with no
+  buttons at all: the salon is never offered an action the server will refuse.
+  An answer is shown on the card immediately (a local override applied over every
+  refresh) because the list API can answer a beat behind the action.
+- **It works on today's backend.** `POST /api/bookingRequest/salon/list` is the
+  preferred source (`src/lib/api.js` → `salonBookingRequestList`); where that
+  endpoint is not deployed yet the screen falls back to the notifications feed,
+  keeps only `BOOKING_REQUEST` rows, and says so in one quiet line. Accept and
+  Reject already work there, so the tab is useful before the backend ships.
+- **It refreshes itself** (20 s poll, plus a 1 s tick so a countdown and the
+  window's expiry are honest while the salon watches).
+- States, filters and the status vocabulary live in `src/lib/bookingLeads.js`
+  (`leadStateFromStatus`, `leadView`, `summarizeLeads`, `filterLeads`) — the same
+  helpers the tests use, so the words on the card cannot drift from the numbers.
+- Backend contract: [`docs/BACKEND-BOOKING-REQUESTS-API.md`](BACKEND-BOOKING-REQUESTS-API.md)
+  (list, summary, admin doors, the auto-cancel sweeper).
+  Admin panel tab: [`docs/ADMIN-PANEL-BOOKING-REQUESTS.md`](ADMIN-PANEL-BOOKING-REQUESTS.md).
+
+## 8.3 One product-category list (admin → website → app)
+
+The shop's **Category** filter is the admin panel's list, not the website's
+opinion. `src/lib/shopCategories.js` is the reader: it fetches
+`POST /api/shop-categories/list` (public twin for visitors), caches the answer in
+`localStorage`, and renders the select from it. Before the first answer — or on a
+deployment without the endpoint — the seed list is used, which is the same seven
+ids, labels and order the backend patch inserts, so the two never disagree.
+
+- A category added in the admin panel appears in the filter on the next load, with
+  no front-end deploy.
+- A product filed under a category the list no longer has still gets its own
+  filter entry (the storefront appends those itself), so nothing silently lands
+  in "All".
+- Backend contract (table, endpoints, slug rule, delete/reassign rules):
+  [`docs/BACKEND-SHOP-CATEGORIES-API.md`](BACKEND-SHOP-CATEGORIES-API.md).
+
 ## 9. Notification destinations
 
 The notification route mapping is shared by foreground JavaScript and the Firebase messaging service worker:
@@ -509,6 +560,24 @@ request runs a 60-second countdown that a second dialog would eat into.
 `src/components/ConfirmDialog.test.jsx` covers the dialog behaviour and fails if
 `window.confirm`, `window.alert` or `window.prompt` reappears anywhere in `src`.
 
+## 11.1 The 2026 brand mark
+
+`public/assets/brand/` now carries the 2026 logo: the **"m" monogram** on its own
+(the artwork has no lettered wordmark any more), extracted from the supplied
+2048² gold-on-black file and re-cut as **gold on transparent**
+(`mynaai-mark.png`, 512²) with a padded square (`mynaai-logo.png`) for
+compatibility. A single-colour copy (`mynaai-mark-white.png`) is kept for
+surfaces that cannot take the brand gold.
+
+Because the mark no longer contains the name, the `<Brand>` component in
+`src/App.jsx` renders **mark + "My Naai" as text** (`.brand-word`), and drops the
+wordmark below 1024 px — the same breakpoint that decides sidebar vs phone top
+bar — where a 320 px bar has no room for it. The app icon, favicons, maskable
+icon, PWA badge and the social card (`og-cover.png`, 1200×630) were regenerated
+from the supplied app icon, so the tab, the installed app, the share preview and
+the in-app brand are the same shape.
+
+
 ## 12. Important source locations
 
 | File | Responsibility |
@@ -522,6 +591,8 @@ request runs a 60-second countdown that a second dialog would eat into.
 | `src/lib/bookingTime.js` | Signed-offset time maths for the queue time update: local wall-clock parsing, hour/date rollover, past-time and day-cross detection, exact-time→offset derivation, human offset labels, and the `Due now`/`Overdue by` countdown chips on a queue card |
 | `backend/salonUpdateBookingTime.js` | Drop-in Express + Sequelize controller for the queue time update (`POST /api/booking/salon/queue/update-time/:bookingId`). Copied into the API repo, not built with the web app |
 | `src/lib/shopBuyer.js` | Who is shopping (salon / customer / visitor), the cart's storage namespace and the role-aware shop wording |
+| `src/components/SalonLeads.jsx`, `src/lib/bookingLeads.js` | The salon's **Booking requests** (leads) tab: states, auto-cancel window, counters and the Accept/Reject actions |
+| `src/lib/shopCategories.js` | The one product-category list, read from the admin's `shop_categories` (seed + cache for a deployment without the endpoint) |
 | `src/lib/api.js` (`shopProductList[Public]`, `shopSettingsGet[Public]`) | The catalog and bill rules, read through the open `/api/shop-public/*` door for a visitor and the partner endpoint for an account, each falling back to the other |
 | `src/components/SubscriptionScreen.jsx` | Plan picker, Razorpay flow, cancellation/failure copy and payment recovery |
 | `src/components/ConfirmDialog.jsx` | Promise-based in-app confirmation sheet that replaces every native browser dialog |

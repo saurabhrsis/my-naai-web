@@ -169,10 +169,14 @@ img { display: block; max-width: 100%; }
    drawn for the dark chrome every header here already uses; no plate, no ring,
    no CSS wordmark beside it (the name is part of the image). */
 .brand { display: inline-flex; align-items: center; color: var(--white); white-space: nowrap; }
-.brand-lockup { height: 52px; width: auto; flex: none; object-fit: contain; filter: drop-shadow(0 4px 14px rgba(0, 0, 0, .45)); }
-.brand-mark { display: none; width: 46px; height: 46px; flex: none; object-fit: contain; }
+/* Brand: the 2026 "m" monogram + the name as text. The mark is always shown;
+   the wordmark is hidden below 1024px (the sidebar/top-bar breakpoint), where
+   the bar has no room for it. */
+.brand-mark { display: block; width: 46px; height: 46px; flex: none; object-fit: contain; }
+.brand-word { flex: none; color: var(--white); font-size: 21px; font-weight: 800; letter-spacing: -.035em; line-height: 1; }
+.brand { gap: 10px; }
 .brand-light { color: white; }
-.brand-light .brand-lockup { filter: drop-shadow(0 6px 20px rgba(0, 0, 0, .55)); }
+.brand-light .brand-mark { filter: drop-shadow(0 6px 20px rgba(0, 0, 0, .55)); }
 .login-page { display: grid; grid-template-columns: 1fr; }
 .auth-visual { display: none; position: relative; overflow: hidden; }
 .auth-visual-image { position: absolute; inset: 0; background: url('/assets/new_background.jpeg') center / cover; filter: saturate(.8); }
@@ -861,6 +865,66 @@ a.detail-info-row:hover { background: rgba(255, 255, 255, .03); }
 .salon-profile-stats strong { color: var(--gold); font-size: 17px; }
 .salon-profile-stats span { color: var(--muted); font-size: 9px; }
 
+/* ── Salon → Booking requests (leads) ───────────────────────────────────────
+   A request is a lead, not a booking: it arrives with a one-minute answer
+   window, and the tab exists to show what came in and what became of it.
+   Mobile-first: four stat tiles two-up, then one card per request with its
+   answer buttons on the card. */
+.salon-leads-screen { padding-bottom: 24px; }
+.lead-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
+.lead-stat { display: flex; flex-direction: column; gap: 3px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.lead-stat span { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.lead-stat span svg { flex: none; }
+.lead-stat strong { color: var(--white); font-size: 22px; font-weight: 800; line-height: 1; }
+.lead-stat.received strong { color: var(--gold); }
+.lead-stat.accepted span svg { color: var(--green); }
+.lead-stat.rejected span svg { color: var(--red); }
+.lead-stat.cancelled span svg { color: var(--muted); }
+.lead-rate { margin: 0 2px 14px; color: var(--muted-light); font-size: 11px; line-height: 1.5; }
+.lead-rate strong { color: var(--gold); }
+.lead-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.lead-filter { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
+.lead-filter select { appearance: none; -webkit-appearance: none; min-height: 38px; padding: 0 30px 0 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--card) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23889190' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 11px center; color: var(--white); font-size: 12px; font-weight: 700; cursor: pointer; }
+.lead-filter select:focus { border-color: rgba(232, 185, 126, .55); outline: none; }
+.lead-count { color: var(--muted); font-size: 11px; font-weight: 700; }
+.lead-note { margin: 0 0 12px; padding: 9px 11px; border: 1px dashed rgba(232, 185, 126, .35); border-radius: 11px; color: var(--muted-light); font-size: 10.5px; line-height: 1.45; }
+.lead-list { display: flex; flex-direction: column; gap: 11px; }
+.skeleton-card.lead-skeleton { min-height: 148px; }
+.lead-card { display: flex; flex-direction: column; gap: 10px; padding: 13px; border: 1px solid var(--line); border-left: 3px solid rgba(232, 185, 126, .45); border-radius: 16px; background: var(--card); }
+.lead-card.lead-awaiting { border-left-color: var(--gold); }
+.lead-card.lead-accepted { border-left-color: var(--green); }
+.lead-card.lead-rejected { border-left-color: var(--red); }
+.lead-card.lead-autoCancelled, .lead-card.lead-cancelled { border-left-color: #3a4140; opacity: .85; }
+.lead-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.lead-card-who { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.lead-avatar { width: 30px; height: 30px; display: inline-flex; flex: none; align-items: center; justify-content: center; border-radius: 10px; color: var(--gold); background: var(--gold-wash); }
+.lead-card-who > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.lead-card-who strong { overflow: hidden; color: var(--white); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.lead-card-who small { color: var(--muted); font-size: 10.5px; }
+.lead-services { display: flex; flex-wrap: wrap; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.lead-services li { padding: 3px 8px; border-radius: 8px; background: rgba(255, 255, 255, .05); color: var(--muted-light); font-size: 10.5px; font-weight: 600; }
+.lead-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.lead-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.lead-meta strong { color: var(--white); font-size: 13.5px; }
+.lead-countdown { display: inline-flex; align-items: center; gap: 4px; color: var(--gold); font-size: 10.5px; font-weight: 700; }
+.lead-closed-note { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10.5px; }
+.lead-actions { display: flex; align-items: center; gap: 7px; margin-left: auto; }
+.lead-icon-button { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 10px; color: var(--muted-light); background: var(--card-raised); }
+.lead-icon-button:hover { color: var(--white); }
+.lead-answer { display: inline-flex; align-items: center; gap: 5px; min-height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 11.5px; font-weight: 700; background: var(--card-raised); color: var(--white); }
+.lead-answer.accept { border-color: rgba(46, 204, 113, .5); background: rgba(46, 204, 113, .14); color: #b8f5cf; }
+.lead-answer.accept:hover { background: rgba(46, 204, 113, .26); }
+.lead-answer.reject { border-color: rgba(242, 123, 116, .4); background: rgba(242, 123, 116, .1); color: #ffc2bd; }
+.lead-answer.reject:hover { background: rgba(242, 123, 116, .2); }
+.lead-answer:disabled { opacity: .6; }
+.lead-open { display: inline-flex; align-items: center; gap: 4px; min-height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted-light); background: transparent; font-size: 11px; font-weight: 700; }
+.lead-pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 16px; color: var(--muted); font-size: 11px; }
+@media (min-width: 760px) {
+  .lead-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+  .lead-card { padding: 15px 16px; }
+  .lead-card-top { align-items: center; }
+}
+
 /* Notifications, info and requests */
 .notification-card { display: flex; align-items: flex-start; gap: 11px; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
 .notification-icon { width: 32px; height: 32px; display: flex; flex: none; align-items: center; justify-content: center; border-radius: 10px; color: var(--gold); background: var(--gold-wash); }
@@ -1014,8 +1078,8 @@ a.contact-detail-card:hover { border-color: rgba(232, 185, 126, .35); }
 .site-navbar { position: sticky; top: 0; z-index: 40; flex: none; display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; min-width: 0; padding: calc(9px + var(--safe-top)) max(14px, var(--safe-right)) 9px max(14px, var(--safe-left)); background: rgba(15, 17, 17, .9); border-bottom: 1px solid var(--line); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
 .site-navbar-brand { flex: none; display: flex; align-items: center; min-width: 0; padding: 0; border: 0; background: none; }
 .site-navbar .brand { min-width: 0; }
-.site-navbar .brand-lockup { height: 42px; }
-.site-navbar .brand-mark { width: 38px; height: 38px; }
+.site-navbar .brand-mark { width: 34px; height: 34px; }
+.site-navbar .brand-word { font-size: 18px; }
 .site-nav-links { flex: 1 1 auto; min-width: 0; display: flex; justify-content: center; gap: 2px; }
 .site-nav-links button { position: relative; padding: 9px 10px; border: 0; border-radius: 9px; background: none; color: var(--muted-light); font-size: 13px; font-weight: 600; white-space: nowrap; }
 .site-nav-links button:hover { color: var(--white); background: rgba(255,255,255,.04); }
@@ -1034,8 +1098,7 @@ a.contact-detail-card:hover { border-color: rgba(232, 185, 126, .35); }
   /* Phones and tablets: the monogram alone — the lockup's wordmark would be
      illegible beside the pills and the menu toggle, and the pills need the
      room. Same breakpoint as the sidebar/top-bar swap. */
-  .brand-lockup { display: none; }
-  .brand-mark { display: block; }
+  .brand-word { display: none; }
   .site-nav-toggle { display: inline-flex; }
   .site-navbar .install-auth-button { width: 36px; height: 36px; gap: 0; padding: 0; font-size: 0; justify-content: center; }
   .site-navbar .install-auth-button svg { flex: none; }
@@ -1687,8 +1750,10 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .sidebar { position: sticky; top: 0; width: 240px; height: var(--viewport-height); flex: none; display: flex; flex-direction: column; padding: calc(29px + var(--safe-top)) max(18px, var(--safe-right)) calc(21px + var(--safe-bottom)) max(18px, var(--safe-left)); border-right: 1px solid var(--line); background: #0d1010; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
   .sidebar > .brand, .sidebar-role, .sidebar-nav, .sidebar-bottom { flex: none; }
   .sidebar > .brand { padding: 0 8px; margin-bottom: 28px; gap: 12px; }
-  .sidebar > .brand .brand-lockup { height: 58px; }
-  .auth-visual .brand-lockup { height: 62px; }
+  .sidebar > .brand .brand-mark { width: 40px; height: 40px; }
+  .sidebar > .brand .brand-word { font-size: 23px; }
+  .auth-visual .brand-mark { width: 52px; height: 52px; }
+  .auth-visual .brand-word { font-size: 26px; }
   .sidebar-role { display: flex; align-items: center; gap: 10px; padding: 11px; margin-bottom: 18px; border-radius: 13px; background: rgba(255,255,255,.035); }
   .role-mark { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 9px; color: #111; background: var(--gold); }
   .sidebar-role > span:last-child { display: flex; flex-direction: column; gap: 4px; }
@@ -2412,7 +2477,15 @@ img.image-fallback-tile {
 .shop-detail-price-row strong { color: var(--white); font-size: 23px; }
 .shop-detail-price-row s { margin-left: 8px; color: var(--muted); font-size: 13px; }
 .shop-detail-action { margin-bottom: 16px; display: flex; }
-.shop-detail-action > * { flex: 1; }
+.shop-detail-action > * { flex: 1; max-width: 320px; }
+/* On a laptop the details page is a ~1000px column, and the ADD / stepper was
+   `flex: 1` across all of it — a 44px-tall, metre-wide button that read as a
+   banner and made the whole page look unfinished. The control is capped (above)
+   and, from 900px, sized to its content instead of stretching at all. */
+@media (min-width: 900px) {
+  .shop-detail-action > * { flex: 0 0 auto; width: 260px; max-width: 260px; }
+  .shop-detail-hero { max-height: 360px; }
+}
 .shop-detail-card { margin-bottom: 13px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
 .shop-detail-card h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 9px; color: var(--white); font-size: 13px; }
 .shop-detail-card h3 svg { color: var(--shop-green-soft); flex: none; }

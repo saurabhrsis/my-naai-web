@@ -425,10 +425,23 @@ export const api = {
   getBarbersList: payload => get('/api/barbers/get-salon-barbers', { params: payload }),
   walkInBooking: payload => post('/api/booking/create-walk-in', payload),
   salonProductList: payload => post('/api/products/list', payload),
+  // Product categories — ONE list, owned by the admin panel, read by the shop on
+  // both sides (the app/website use the same ids and labels). The public door is
+  // the visitor's, and is the same data.
+  shopCategoriesList: payload => post('/api/shop-categories/list', payload),
+  shopCategoriesListPublic: payload => post('/api/shop-public/categories/list', payload),
   createProductList: payload => post('/api/products/create', payload),
   updateProductList: payload => post('/api/products/update', payload),
   deleteProduct: productId => post('/api/products/delete', { productId }),
   salonNotificationList: payload => post('/api/notifications/get-salon-notification-list', payload),
+  // ── The salon's booking-request (lead) list ────────────────────────────────
+  // Requests, not bookings: a salon owns a list of leads it accepted, rejected
+  // or let expire, and a separate list of bookings it is actually working from
+  // (`customerList`, `salonQueueHistory`). The web portal's Requests tab reads
+  // this endpoint; a deployment that has not shipped the patch yet answers 404
+  // and the tab falls back to the notifications feed (see SalonLeads.jsx).
+  salonBookingRequestList: payload => post('/api/bookingRequest/salon/list', payload),
+  salonBookingRequestSummary: payload => post('/api/bookingRequest/salon/summary', payload),
   salonNotificationCount: payload => get('/api/notifications/get-notification-count', { params: payload }),
 
   // A test alert through the real push path, used by the Alerts & permissions

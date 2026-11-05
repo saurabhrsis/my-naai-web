@@ -10,15 +10,16 @@
 // conservative: an unmatched product lands in the broadest sensible bucket
 // instead of an empty shelf.
 
-export const SHOP_CATEGORIES = [
-  { id: 'hair-care', label: 'Hair care' },
-  { id: 'beard-grooming', label: 'Beard & grooming' },
-  { id: 'skin-face', label: 'Skin & face' },
-  { id: 'fragrance', label: 'Fragrance' },
-  { id: 'hair-colour', label: 'Hair colour' },
-  { id: 'tools-equipment', label: 'Tools & equipment' },
-  { id: 'kits-sets', label: 'Kits & sets' },
-];
+import { DEFAULT_SHOP_CATEGORIES } from './shopCategories';
+
+// The categories are the admin panel's list, not this file's opinion: the
+// canonical source is `shop_categories` on the server (see
+// src/lib/shopCategories.js), and this constant is the SEED the storefront
+// falls back to — the same seven, in the same order, that the backend patch
+// inserts. `ShopScreen` replaces it with the live list at runtime, so a category
+// the admin adds shows up in the shop filter without a deploy. Kept exported
+// under the old name because the salon product editor and the tests read it.
+export const SHOP_CATEGORIES = DEFAULT_SHOP_CATEGORIES.map(({ id, label }) => ({ id, label }));
 
 export const SHOP_GENDERS = [
   { id: 'men', label: 'Men' },
@@ -192,8 +193,13 @@ export function categoryLabel(id) {
 // The fixed chips first, then any category the live catalog uses that is not
 // in the fixed list (a backend-driven category must never disappear from the
 // filter row just because it is new).
-export function categoryChipsFor(products) {
-  const seen = new Set(SHOP_CATEGORIES.map(category => category.id));
+// The live list first (the admin's categories), then any category a product
+// actually carries that the list does not know about — a product filed under a
+// retired category must still be reachable by its own filter instead of
+// disappearing into "All".
+export function categoryChipsFor(products, categories = SHOP_CATEGORIES) {
+  const base = (categories || SHOP_CATEGORIES).map(({ id, label }) => ({ id, label }));
+  const seen = new Set(base.map(category => category.id));
   const extra = [];
   for (const product of products || []) {
     if (product?.category && !seen.has(product.category)) {
@@ -201,7 +207,7 @@ export function categoryChipsFor(products) {
       extra.push({ id: product.category, label: product.category.charAt(0).toUpperCase() + product.category.slice(1).replace(/[-_]/g, ' ') });
     }
   }
-  return [...SHOP_CATEGORIES, ...extra];
+  return [...base, ...extra];
 }
 
 export function matchesPriceRange(price, rangeId) {

@@ -13,7 +13,13 @@
 // Segment aliases keep short stable route names inside the app while the
 // public URL reads properly: `privacy` lives at /privacy-policy, the salon
 // partner landing page at /salon-partner.
-const ROUTE_TO_SEGMENT = { privacy: 'privacy-policy', partner: 'salon-partner', home: '' };
+const ROUTE_TO_SEGMENT = {
+  privacy: 'privacy-policy',
+  partner: 'salon-partner',
+  home: '',
+  // The salon's leads tab (booking REQUESTS, not bookings).
+  bookingRequests: 'booking-requests',
+};
 const SEGMENT_TO_ROUTE = {
   'privacy-policy': 'privacy',
   'salon-partner': 'partner',
@@ -22,6 +28,7 @@ const SEGMENT_TO_ROUTE = {
   // messages, so it is folded onto the shop instead of dead-ending on the home
   // screen. Nothing writes this segment any more — see USER_NAV in App.jsx.
   products: 'shop',
+  'booking-requests': 'bookingRequests',
 };
 
 // Parse `window.location`-style input (a path, optionally with a query) into

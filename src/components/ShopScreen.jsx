@@ -33,6 +33,7 @@ import {
 } from '../lib/shopCatalog';
 import { addToCart, cartTotals, readCart, removeCartLine, saveCart, setCartQty } from '../lib/shopOrders';
 import { buyerName, isShopGuest, shopCopy, shopStorageOwnerId } from '../lib/shopBuyer';
+import { useShopCategories } from '../lib/shopCategories';
 import { useShopSettings } from '../lib/shopSettings';
 import { fetchServerCart, pushCartAdd, pushCartRemove, pushCartSetQty } from '../lib/shopServerSync';
 import {
@@ -408,7 +409,11 @@ export function ShopScreen({ session, navigate, notify }) {
   const { products, loading, loadingMore, error, load, loadMore, pages, serverFiltered } = useShopCatalog(notify, { guest, filters });
   const { cart, add, setQty } = useSyncedCart(ownerId);
   const shopSettings = useShopSettings();
-  const categories = useMemo(() => categoryChipsFor(products), [products]);
+  // The category filter lists the ADMIN's categories (one list, shared with the
+  // app and the admin panel — see src/lib/shopCategories.js), plus any category
+  // a loaded product carries that the list no longer has.
+  const shopCategories = useShopCategories(api, guest);
+  const categories = useMemo(() => categoryChipsFor(products, shopCategories), [products, shopCategories]);
   // The server already applied these filters when it could (and the request
   // carried all of them); the same predicate runs here once more so the grid
   // can never show a product the controls exclude — including on a backend
@@ -524,12 +529,15 @@ export function ShopScreen({ session, navigate, notify }) {
         <EmptyState icon={ShoppingBag} title="The shop is out of reach" message={`${error} Check your connection and try again.`} action={<Button onClick={load}><RefreshCw size={15} /> Retry</Button>} />
       ) : visible.length ? (
         <>
-          <div className="shop-count-line">
-            <span className="shop-count-text"><strong>{visible.length}</strong> {visible.length === 1 ? 'product' : 'products'}</span>
-            {filtersActive && (
+          {/* No "N products" line any more: the shelf speaks for itself, and the
+              count was the first thing the eye landed on under the filters. The
+              row survives only as the home of "Clear filters" — and disappears
+              with it when no filter is on, so nothing empty takes up space. */}
+          {filtersActive && (
+            <div className="shop-count-line">
               <button type="button" className="shop-clear-filters" onClick={resetFilters}>Clear filters</button>
-            )}
-          </div>
+            </div>
+          )}
           <div className="shop-grid">
             {visible.map(product => (
               <ShopProductCard key={product.id} product={product} qty={qtyFor(product.id)} onAdd={handleAdd} onSetQty={handleSetQty} onOpen={openProduct} />

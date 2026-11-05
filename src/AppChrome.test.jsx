@@ -393,7 +393,9 @@ describe('Bottom navigation labels', () => {
     await mount();
 
     const labels = tabLabels();
-    expect(labels).toEqual(['Queue', 'History', 'Shop', 'Account']);
+    // Requests is the leads tab (booking REQUESTS, not the bookings the queue
+    // works from), so it sits beside the queue.
+    expect(labels).toEqual(['Queue', 'Requests', 'History', 'Shop', 'Account']);
     labels.forEach(label => expect(label[0]).toBe(label[0].toUpperCase()));
   });
 
