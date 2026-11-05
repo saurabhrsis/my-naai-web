@@ -7,7 +7,10 @@
  * - Works on Android, iOS (PWA), Chrome, Edge, Firefox, Samsung Internet, Safari
  */
 
-const CACHE_NAME = 'mynaai-shell-v11';
+// v12: the 2026 gold "m" icon set (favicon.ico, icons/*, assets/my_naai.png).
+// Bumping the name is what makes an INSTALLED app fetch the new artwork — the
+// old cache would otherwise keep serving the retired icons from disk forever.
+const CACHE_NAME = 'mynaai-shell-v12';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -16,6 +19,9 @@ const APP_SHELL = [
   '/icons/icon-512.png',
   '/icons/icon-maskable-512.png',
   '/icons/badge-96.png',
+  '/icons/apple-touch-icon.png',
+  '/icons/favicon-16.png',
+  '/icons/favicon-32.png',
   '/favicon.ico',
   '/assets/brand/mynaai-mark.png',
   '/assets/brand/mynaai-logo.png',

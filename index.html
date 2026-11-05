@@ -24,13 +24,26 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:image" content="/assets/brand/og-cover.png" />
     <!-- PWA install prompt - Chrome, Edge, Samsung Internet -->
-    <!-- The 2026 app icon: the white M monogram on the near-black plate. The
-         .ico carries 16/32 for browser tabs, the PNGs cover everything else. -->
+    <!-- The 2026 app icon: the supplied gold "m" monogram, cut to white on the
+         near-black plate (the plate is what makes it readable in a tab strip,
+         which is light in Chrome and dark in Safari). Every size below is cut
+         from the SAME artwork — public/assets/brand/mynaai-mark.png — so the tab,
+         the home-screen icon and the push badge are never different logos. The
+         .ico carries 16/32/48/64, and the two tab sizes are framed a little
+         tighter than the app icon so the mark still reads at 16px. -->
     <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png" />
     <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
     <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png" />
+    <!-- Chrome on Android and Safari on iOS ignore a plain PNG here and need
+         these two names explicitly. -->
+    <link rel="shortcut icon" href="/icons/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+    <!-- No `mask-icon`: Safari's pinned-tab icon is monochrome SVG and there is
+         no vector of the mark — a hand-traced imitation would be a different
+         logo, which is the thing this block exists to prevent. -->
+
     <link rel="manifest" href="/manifest.webmanifest" />
     <!-- Preload critical assets for faster PWA launch -->
     <link rel="preload" href="/icons/icon-192.png" as="image" />

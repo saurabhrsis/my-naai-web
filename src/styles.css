@@ -919,6 +919,19 @@ a.detail-info-row:hover { background: rgba(255, 255, 255, .03); }
 .lead-answer:disabled { opacity: .6; }
 .lead-open { display: inline-flex; align-items: center; gap: 4px; min-height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted-light); background: transparent; font-size: 11px; font-weight: 700; }
 .lead-pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 16px; color: var(--muted); font-size: 11px; }
+/* On a phone the Booking requests tab leads with the numbers that matter —
+   Received / Accepted / Rejected / Auto-cancelled — and nothing else. Reported
+   from the device: the tagline, the "0% of these requests were answered …" line
+   and the "N requests" counter each took a row on a 360px screen and pushed the
+   cards below the fold, for words that explain the screen rather than answer it.
+   They stay on a tablet and a laptop, where there is room to read them. */
+@media (max-width: 639px) {
+  .salon-leads-screen .page-header-leading p,
+  .salon-leads-screen .lead-rate,
+  .salon-leads-screen .lead-count { display: none; }
+  .salon-leads-screen .lead-toolbar { margin-top: 2px; }
+  .salon-leads-screen .lead-summary { margin-bottom: 10px; }
+}
 
 /* The read-only request sheet (Booking requests → Details).
    Deliberately plain: it exists so the salon can read a name, a number, the
