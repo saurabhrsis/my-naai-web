@@ -1,3 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MyNaai Dev <dev@mynaai.in>
+Date: Wed, 5 Nov 2026 10:00:00 +0530
+Subject: [PATCH] App: both subscription screens read the plan list from the backend
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The app carried two price lists, and they had drifted: registration sold
+₹199/₹299/₹499 with a free card reading "20 days", while the renewal screen still
+showed the old ₹99/₹179/₹249 ladder. A partner was quoted one price and charged
+another on the very next screen.
+
+  · `src/services/planCatalog.js` — fetch, normalize, cache, and a
+    `usePlanCatalog()` hook. The seed renders on the first frame and the backend's
+    rows replace it, so a slow network never leaves a partner on a spinner at the
+    moment they are about to pay. Reads `mynaai:plan-catalog:v2` from AsyncStorage
+    when the endpoint is unreachable; only a real remote answer overwrites it.
+  · `communication.listPartnerPlans()` — `POST /api/salons/plans/list`, no token.
+  · Both subscription screens drop their local arrays: cards, ribbon (the row's
+    own `badge`), price label and duration all come from the catalog, and the free
+    card's duration is the backend's trial length instead of `20 days`.
+  · Durations are re-derived from the day count, so a row edited to 100 days reads
+    "100 Days". The pay action sends the numeric price — the backend refuses a
+    mismatch with its stored price, so an app that has not refreshed fails loudly
+    instead of paying an old price.
+  · A plan taken off sale disappears from the list; an already-gone selection
+    says "This plan is no longer on sale" instead of crashing on `undefined.price`.
+
+Verified: every touched file parses; `describeDuration` at 1/30/60/90/100/365/0
+days and `formatPrice` at 0/199/1299.5; the normalizer against a real response
+shape, a legacy `planList` shape and `null`; `loadPlanCatalog` online (cache
+written), offline with a cache (previous rows, not the seed) and offline cold
+(seed).
+---
+ src/screens/RenewalSubscriptionsPlan.js |  39 ++---
+ src/screens/SubscriptionsPlan.js        |  45 ++----
+ src/services/communication.js           |  15 ++
+ src/services/planCatalog.js             | 206 ++++++++++++++++++++++++
+ 4 files changed, 251 insertions(+), 54 deletions(-)
+ create mode 100644 src/services/planCatalog.js
+
 diff --git a/src/screens/RenewalSubscriptionsPlan.js b/src/screens/RenewalSubscriptionsPlan.js
 index 1ff3e2b..4a834ff 100644
 --- a/src/screens/RenewalSubscriptionsPlan.js

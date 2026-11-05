@@ -11,7 +11,7 @@ four endpoints it calls.
 
 ```bash
 cd my-naai-frontend
-git apply /path/to/patches/admin-panel-3-salon-plans.patch
+git am /path/to/patches/admin-panel-3-salon-plans.patch
 npm ci && npm run build
 ```
 

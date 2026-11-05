@@ -1,3 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MyNaai Dev <dev@mynaai.in>
+Date: Wed, 5 Nov 2026 10:00:00 +0530
+Subject: [PATCH] Admin panel: Plans & Trials tab — the price list the website and app read
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+New tab `/plans`, beside Shop Settings. It is the only place the partner price
+list exists now: the website reads the public twin of this list, the app follows,
+and a price change reaches both on their next load instead of needing a release of
+either.
+
+  · Free trial length, at the top, with the phrase it will render as
+    ("3 Months (90 Days)") so what the partner reads is never a guess. Saving it
+    updates the free row's `days`, which is what `salonLogin.js` computes a new
+    salon's window from — the API and the portal cannot disagree again. The
+    90-day default is in the seed; the screen simply shows what is stored.
+  · One card per plan with, in place: name on the pricing screen, price (₹),
+    length in days (derived phrase under it), sort order, optional ribbon, the
+    one-line note, and a Recommended flag. Each card shows N active · M total
+    salons, so the consequence of taking a plan off sale is visible before the
+    click.
+  · Save / Take off sale / Remove. Off sale keeps every salon already on it valid
+    and renewable and hides it from the website's picker. Remove asks first and
+    offers the right answer per plan — "Take off sale instead" when salons are on
+    it, "Delete permanently" when none are — and the backend enforces the same
+    rule, so a partner's subscription cannot be lost even from a bypassed client.
+  · A banner lists salons sitting on a legacy plan id that has no row, with
+    per-id counts, so their renewal never falls back to a 30-day default
+    unnoticed. Nothing is renamed automatically.
+  · Add a plan: name, price, length, note. The id is slugged from the name and
+    never changes afterwards, because every paid subscription stores it.
+
+Client-side validation mirrors the API: a name is required, a price cannot be
+negative, a length must be 1–3650 days, and a paid plan cannot be priced at ₹0.
+The tab is grantable in Role Management (it is in `TabArray`), and the super
+admin — the role-management tab — sees it without granting it first, because
+existing role rows were saved before this tab existed.
+---
+ src/App.jsx                    |   9 +
+ src/components/Layout.jsx      |  13 +-
+ src/pages/PlansAndTrials.jsx   | 970 +++++++++++++++++++++++++++++++++
+ src/services/communication.jsx |  43 +-
+ src/utils/TabArray.js          |   5 +
+ 5 files changed, 1036 insertions(+), 4 deletions(-)
+ create mode 100644 src/pages/PlansAndTrials.jsx
+
 diff --git a/src/App.jsx b/src/App.jsx
 index 1d04456..8ac8b0b 100644
 --- a/src/App.jsx

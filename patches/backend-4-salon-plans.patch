@@ -1,3 +1,85 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MyNaai Dev <dev@mynaai.in>
+Date: Wed, 5 Nov 2026 10:00:00 +0530
+Subject: [PATCH] Backend: partner plans — prices, durations and the free trial as data
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The partner price list was constants in three repositories: the day counts in
+`src/utils/plan.util.js`, the prices in the website bundle, another copy in the
+app — plus a literal `+ 20` for the free trial in `salonLogin.js`. A price change
+meant a release of everything, and the copies had already drifted: the portal sold
+₹199/₹299/₹499 with a 20-day trial, the app's renewal screen still showed the old
+₹99/₹179/₹249 ladder, and this API granted a window neither screen described.
+
+It is one table now, `partner_plans`, owned by the admin panel.
+
+  · `partner_plans` — id (string, immutable: `salons.planType` stores it), label,
+    price, days, note, badge, is_recommended, sort_order, is_active, is_free.
+    Auto-loaded by `models/index.js` like every other model.
+  · `ensurePlanSchema.js` — idempotent CREATE TABLE + `ON CONFLICT (id) DO NOTHING`
+    seed + index, called at boot beside `ensureShopBuyerSchema()`. Re-running it
+    never resets a price an admin has changed.
+  · Seeded exactly what was on sale before: `Free` 0/90 (the client's default
+    trial), `monthly` 199/30, `trial_2_months` 299/60, `quarterly` 499/90.
+  · `partnerPlan.service.js` — listPublic, listAdmin (per-plan salon counts plus
+    the `orphaned` legacy ids), durationDays, defaultTrialDays, priceOf,
+    assertPayableAmount, create, update, remove. Legacy `yearly` (365) and `FREE`
+    (90) stay honoured so old subscriptions keep renewing; an unknown id is refused
+    rather than silently defaulting.
+  · `POST /api/salons/plans/list` — PUBLIC, registered above
+    `salonRouter.use(authenticateAdmin)`: the registration screen shows prices
+    before anyone has an account. Answers
+    `{ data: { plans, freeTrial, currency, source } }`, falling back to the shipped
+    catalog (`source: 'fallback'`) if the table cannot be read.
+  · `POST /api/salons/admin/plans/{list,create,update,delete}` — admin only. Update
+    keeps the id immutable; delete is refused while salons are on the plan unless
+    `deactivate: true`, and the free trial can never be deleted.
+  · Acceptance paths now read the table: `create-salon-with-plan` and
+    `renew-salon-plan` take their duration from `durationDays(planType)` and — when
+    a `totalAmount` is sent — refuse a payment that is not the stored price
+    (±₹0.5) instead of charging it. `salonLogin.js` replaces the hard-coded
+    `+ 20` with `defaultTrialDays()`.
+  · `migrations/2026-11-05-partner-plans.sql` — schema, seed and the one data step
+    this feature implies: a still-running free trial is extended to 90 days. Only
+    free plans, only inside their original window; a paid plan is never touched and
+    an expired trial is not resurrected. The previewing SELECT is in the file.
+
+Verified on a fresh clone: `node --check` clean on all 14 files, the model
+registers as `PartnerPlan → partner_plans` with exactly the migration's columns,
+and — with the router mounted over a stub ORM — `POST /api/salons/plans/list`
+answers 200 SUCCESS with no token while `POST /api/salons/admin/plans/list`
+answers 401. The service was exercised end to end: create, price change, duration
+change, delete refused while salons are on it, deactivate, second free plan
+refused, unknown id refused, duplicate label refused, amount guard at ±₹0.5.
+---
+ index.js                                      |   8 +-
+ migrations/2026-11-05-partner-plans.sql       |  85 ++++
+ .../razorpay/createSalonWithPlan.js           |  24 +-
+ src/controller/razorpay/renewSalonPlan.js     |  18 +-
+ .../salon/plan/adminCreatePartnerPlan.js      |  27 ++
+ .../salon/plan/adminDeletePartnerPlan.js      |  31 ++
+ .../salon/plan/adminListPartnerPlans.js       |  23 +
+ .../salon/plan/adminUpdatePartnerPlan.js      |  27 ++
+ src/controller/salon/plan/listPartnerPlans.js |  26 ++
+ src/controller/salon/salonLogin.js            |   8 +-
+ src/database/config/ensurePlanSchema.js       | 109 +++++
+ src/database/models/partnerPlan.model.js      | 102 +++++
+ src/routes/salon.routes.js                    |  15 +
+ src/services/partnerPlan.service.js           | 420 ++++++++++++++++++
+ src/utils/plan.util.js                        |  33 +-
+ 15 files changed, 944 insertions(+), 12 deletions(-)
+ create mode 100644 migrations/2026-11-05-partner-plans.sql
+ create mode 100644 src/controller/salon/plan/adminCreatePartnerPlan.js
+ create mode 100644 src/controller/salon/plan/adminDeletePartnerPlan.js
+ create mode 100644 src/controller/salon/plan/adminListPartnerPlans.js
+ create mode 100644 src/controller/salon/plan/adminUpdatePartnerPlan.js
+ create mode 100644 src/controller/salon/plan/listPartnerPlans.js
+ create mode 100644 src/database/config/ensurePlanSchema.js
+ create mode 100644 src/database/models/partnerPlan.model.js
+ create mode 100644 src/services/partnerPlan.service.js
+
 diff --git a/index.js b/index.js
 index 0d91ef0..58c0579 100644
 --- a/index.js

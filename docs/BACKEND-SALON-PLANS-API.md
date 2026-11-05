@@ -16,7 +16,7 @@ Delivered as `patches/backend-4-salon-plans.patch`, with
 
 ```bash
 cd my_naai_backend
-git apply /path/to/patches/backend-4-salon-plans.patch
+git am /path/to/patches/backend-4-salon-plans.patch
 npm ci                                     # no new dependency
 psql "$DB_URL" -f migrations/2026-11-05-partner-plans.sql
 # restart the process — index.js now calls ensurePlanSchema() beside

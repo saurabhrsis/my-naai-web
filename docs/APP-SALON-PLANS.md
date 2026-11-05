@@ -18,7 +18,7 @@ in the panel reaches the app on the next call — no app release.
 
 ```bash
 cd my_naai_app
-git apply /path/to/patches/app-1-salon-plans.patch
+git am /path/to/patches/app-1-salon-plans.patch
 # no new dependency: AsyncStorage and axios are already in the app
 ```
 
