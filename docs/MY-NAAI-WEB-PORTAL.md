@@ -853,6 +853,17 @@ request runs a 60-second countdown that a second dialog would eat into.
 compatibility. A single-colour copy (`mynaai-mark-white.png`) is kept for
 surfaces that cannot take the brand gold.
 
+**The tab and app icons keep that gold.** They used to be re-cut as a *white*
+silhouette while being placed on the near-black plate, so every browser tab and
+home-screen icon showed a white "m" while the logo on the page was gold — the
+owner's report: *"don't change the colour of the logo in favicon, we need the same
+as the logo, not white."* `scripts/brand-icons.sh` now trims the supplied artwork
+and composes it on the `#0B0D0D` plate **without touching its colour**; the
+monochrome conversion is kept for exactly one file, `badge-96.png`, because Android
+draws status-bar badges as a silhouette by platform rule. Both service-worker
+caches were bumped (`mynaai-shell-v13` / `v10`), so an installed app does not keep
+serving the cached white icons.
+
 Because the mark no longer contains the name, the `<Brand>` component in
 `src/App.jsx` renders **mark + "My Naai" as text** (`.brand-word`), and drops the
 wordmark below 1024 px — the same breakpoint that decides sidebar vs phone top
@@ -883,7 +894,7 @@ the in-app brand are the same shape.
 | `src/components/SubscriptionScreen.jsx` | Plan picker, Razorpay flow, cancellation/failure copy and payment recovery |
 | `src/components/ConfirmDialog.jsx` | Promise-based in-app confirmation sheet that replaces every native browser dialog |
 | `src/lib/push.js` | Firebase initialization, permission/token flow and notification route mapping |
-| `public/assets/brand/mynaai-mark.png` | Official My Naai monogram (white on transparent) — the app icon art, the default image fallback and the phone-size brand mark |
+| `public/assets/brand/mynaai-mark.png` | Official My Naai monogram (**gold on transparent**, the supplied colour) — the app icon art, the default image fallback and the phone-size brand mark |
 | `public/assets/brand/mynaai-logo.png` | Official lockup: the M monogram with **My Naai** lettered underneath — header, sidebar, login and registration |
 | `public/icons/icon-192.png`, `icon-512.png`, `icon-maskable-512.png`, `apple-touch-icon.png` | The app icon at every size the manifest, iOS and Android ask for (maskable padded for Android's mask) |
 | `public/favicon.ico`, `public/icons/favicon-32.png`, `favicon-16.png` | Browser-tab icons |

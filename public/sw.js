@@ -10,7 +10,7 @@
 // v12: the 2026 gold "m" icon set (favicon.ico, icons/*, assets/my_naai.png).
 // Bumping the name is what makes an INSTALLED app fetch the new artwork — the
 // old cache would otherwise keep serving the retired icons from disk forever.
-const CACHE_NAME = 'mynaai-shell-v12';
+const CACHE_NAME = 'mynaai-shell-v13';
 const APP_SHELL = [
   '/',
   '/index.html',
