@@ -196,6 +196,101 @@ describe('SalonLeadsScreen', () => {
     expect(notify).toHaveBeenCalledWith('success', expect.stringContaining('rejected'));
   });
 
+  // Reported twice, from the salon side:
+  //   1. a request from LAST MONTH, already dead, opened the live-answer screen
+  //      with its 60-second timer and Accept / Reject — actions the server
+  //      refuses and the salon cannot win;
+  //   2. the only way to answer was to open that screen, when they have one
+  //      minute to answer.
+  // Details is now a read-only sheet, and the answer stays on the card.
+  it('opens a read-only details sheet, not the live answer screen', async () => {
+    const navigate = vi.fn();
+    const { container } = await render(<SalonLeadsScreen session={SESSION} navigate={navigate} notify={vi.fn()} />);
+
+    const accepted = container.querySelector('.lead-card.lead-accepted');
+    expect(accepted).not.toBeNull();
+    const details = Array.from(accepted.querySelectorAll('button')).find(button => button.textContent.includes('Details'));
+    await act(async () => { details.click(); });
+    await flush();
+
+    const sheet = document.querySelector('.lead-detail-modal, .modal-card');
+    expect(sheet).not.toBeNull();
+    // Everything the salon needs to read, and nothing else.
+    const text = sheet.textContent;
+    expect(text).toContain('Sana Khan');
+    expect(text).toContain('9876500001');
+    expect(text).toContain('Haircut');
+    expect(text).toContain('Any available specialist');
+    expect(sheet.querySelector('a[href="tel:9876500001"]')).not.toBeNull();
+
+    // No action, no countdown — the request is already answered.
+    const buttons = Array.from(sheet.querySelectorAll('button')).map(button => button.textContent.trim());
+    expect(buttons).not.toContain('Accept');
+    expect(buttons).not.toContain('Reject');
+    expect(text).not.toContain('Respond in');
+    expect(text).not.toContain('Update time');
+
+    // …and it closes in place: no route change, so no landing in the Queue tab.
+    expect(navigate).not.toHaveBeenCalled();
+    const close = sheet.querySelector('.modal-header button');
+    await act(async () => { close.click(); });
+    await flush();
+    expect(document.querySelector('.modal-card')).toBeNull();
+    // Still on the list.
+    expect(container.querySelector('.lead-card.lead-accepted')).not.toBeNull();
+  });
+
+  it('offers no answer on a request from last month, whichever way it died', async () => {
+    const lastMonth = new Date(Date.now() - 40 * 24 * 60 * 60000).toISOString();
+    salonBookingRequestList.mockResolvedValue({
+      status: 'SUCCESS',
+      data: {
+        requests: [
+          awaiting({ bookingRequestId: 'old-pending', customerName: 'Old Pending', status: 'PENDING', createdAt: lastMonth }),
+          awaiting({ bookingRequestId: 'old-accepted', customerName: 'Old Accepted', status: 'ACCEPTED', createdAt: lastMonth }),
+          awaiting({ bookingRequestId: 'old-rejected', customerName: 'Old Rejected', status: 'REJECTED', createdAt: lastMonth }),
+          awaiting({ bookingRequestId: 'old-expired', customerName: 'Old Expired', status: 'EXPIRED', createdAt: lastMonth }),
+        ],
+        pagination: { page: 1, totalPages: 1 },
+      },
+    });
+    const { container } = await render(<SalonLeadsScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+
+    // Not one card offers an answer, and no card shows a countdown.
+    expect(container.querySelector('.lead-answer')).toBeNull();
+    expect(container.querySelector('.lead-countdown')).toBeNull();
+    expect(container.querySelectorAll('.lead-card')).toHaveLength(4);
+    // The one that is still PENDING on the server is auto-cancelled by the
+    // clock, not re-opened: a month-old window cannot be answered.
+    const pendingCard = Array.from(container.querySelectorAll('.lead-card'))
+      .find(card => card.textContent.includes('Old Pending'));
+    expect(pendingCard.className).toContain('lead-autoCancelled');
+    expect(pendingCard.textContent).toContain('cancelled automatically');
+
+    // Every one of them still opens the read-only sheet.
+    const details = pendingCard.querySelector('.lead-open');
+    await act(async () => { details.click(); });
+    await flush();
+    const sheet = document.querySelector('.modal-card');
+    expect(sheet).not.toBeNull();
+    expect(sheet.textContent).toContain('Old Pending');
+    expect(Array.from(sheet.querySelectorAll('button')).map(button => button.textContent.trim())).not.toContain('Accept');
+  });
+
+  it('answers from the card without opening anything', async () => {
+    const { container } = await render(<SalonLeadsScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    const live = container.querySelector('.lead-card.lead-awaiting');
+    // Both the answer and the details are on the card: one tap to answer
+    // inside the minute, without a screen in between.
+    expect(live.querySelector('.lead-answer.accept')).not.toBeNull();
+    expect(live.querySelector('.lead-answer.reject')).not.toBeNull();
+    expect(live.querySelector('.lead-open')).not.toBeNull();
+
+    await act(async () => { live.querySelector('.lead-answer.accept').click(); });
+    await flush();
+    expect(bookingRequestOwnerAction).toHaveBeenCalledWith('live-1', { action: 'ACCEPT' });
+  });
+
   it('falls back to the notification feed until the request endpoint ships', async () => {
     salonBookingRequestList.mockRejectedValue(new Error('Not Found'));
     salonNotificationList.mockResolvedValue({

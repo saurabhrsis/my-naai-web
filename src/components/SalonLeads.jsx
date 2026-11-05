@@ -16,6 +16,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { LeadDetailSheet } from './LeadDetailSheet';
 import {
   LEAD_FILTERS,
   LEAD_FILTER_STATUS,
@@ -120,12 +121,20 @@ function LeadCard({ lead, now, busy, onAnswer, onOpen }) {
           )}
         </div>
         <div className="lead-actions">
+          {/* Details is always here and is always READ-ONLY: it opens the
+              request's facts, never the live-answer screen. The answer lives
+              beside it, on the card, because the salon has one minute. */}
+          <button type="button" className="lead-open" onClick={() => onOpen(lead)}>Details <ArrowRight size={13} /></button>
           {lead.customerPhone && (
             <a className="lead-icon-button" href={`tel:${lead.customerPhone}`} aria-label={`Call ${lead.customerName}`}>
               <Phone size={14} />
             </a>
           )}
-          {view.canAnswer ? (
+          {/* Accept / Reject exist only while the request can still be
+              answered. A request from last month — accepted, rejected or
+              auto-cancelled — gets no actions at all, so the salon can never
+              be offered a button the server will refuse. */}
+          {view.canAnswer && (
             <>
               <button type="button" className="lead-answer reject" disabled={Boolean(busy)} onClick={() => onAnswer(lead, 'REJECT')}>
                 {busy === 'REJECT' ? <RefreshCw size={14} className="spin" /> : <X size={14} />} Reject
@@ -134,8 +143,6 @@ function LeadCard({ lead, now, busy, onAnswer, onOpen }) {
                 {busy === 'ACCEPT' ? <RefreshCw size={14} className="spin" /> : <Check size={14} />} Accept
               </button>
             </>
-          ) : (
-            <button type="button" className="lead-open" onClick={() => onOpen(lead)}>Details <ArrowRight size={13} /></button>
           )}
         </div>
       </footer>
@@ -151,7 +158,7 @@ function LeadCard({ lead, now, busy, onAnswer, onOpen }) {
  * request here (Accept / Reject), see the auto-cancelled ones it missed, and
  * read the answer rate the numbers add up to.
  */
-export function SalonLeadsScreen({ session, notify, navigate }) {
+export function SalonLeadsScreen({ session, notify }) {
   const salonId = session?.userId || session?.user?.salon?.salonId || '';
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -167,6 +174,11 @@ export function SalonLeadsScreen({ session, notify, navigate }) {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [now, setNow] = useState(Date.now());
+  // The request whose details are open. A sheet ON this screen, not a route:
+  // the salon opened it to read a name or a number, so closing it must land
+  // back on the list (and not on the Queue tab, which is what navigating to
+  // the live-answer screen used to do).
+  const [selected, setSelected] = useState(null);
 
   const load = useCallback(async ({ quiet = false } = {}) => {
     if (!quiet) setLoading(true);
@@ -331,7 +343,7 @@ export function SalonLeadsScreen({ session, notify, navigate }) {
               now={now}
               busy={busy.startsWith(lead.id) ? busy.slice(lead.id.length + 1) : ''}
               onAnswer={answer}
-              onOpen={item => navigate('bookingRequest', { bookingRequestId: item.id })}
+              onOpen={setSelected}
             />
           ))}
         </div>
@@ -345,6 +357,13 @@ export function SalonLeadsScreen({ session, notify, navigate }) {
           action={filter === 'all' ? undefined : <Button variant="secondary" onClick={() => setFilter('all')}>Show all requests</Button>}
         />
       )}
+
+      <LeadDetailSheet
+        lead={selected ? (leads.find(item => item.id === selected.id) || selected) : null}
+        now={now}
+        open={Boolean(selected)}
+        onClose={() => setSelected(null)}
+      />
 
       {totalPages > 1 && (
         <div className="lead-pager">

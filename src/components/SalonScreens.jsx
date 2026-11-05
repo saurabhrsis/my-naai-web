@@ -36,6 +36,7 @@ import { api } from '../lib/api';
 import { closeNotification } from '../lib/push';
 import { DEFAULT_SERVICES } from '../lib/defaultServices';
 import { normalizePlanDetails } from '../lib/planDetails';
+import { LEAD_STATE, LEAD_STATE_LABEL, leadView, normalizeLead } from '../lib/bookingLeads';
 import {
   EARLIER_OFFSETS,
   LATER_OFFSETS,
@@ -1296,19 +1297,22 @@ export function EditSalonProfileScreen({ params, session, navigate, notify, onSe
   </form></div>;
 }
 
+// The screen a live booking-request notification opens — the only reason it
+// exists. It is NOT the details view: "Booking requests" → Details opens a
+// read-only sheet, because a request from last month must not offer Accept.
+//
+// It also answers the same question the leads list does, from the same rule
+// (`leadView` in lib/bookingLeads): can this request still be answered right
+// now? A request whose minute is up, or that the server has already accepted,
+// rejected or cancelled, shows its outcome and no buttons at all — the salon is
+// never offered an action that cannot succeed.
 export function BookingRequestScreen({ params, navigate, notify }) {
   const [details, setDetails] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState('');
   const [delayOpen, setDelayOpen] = useState(params?.openDelayModal === true || params?.openDelayModal === 'true');
-  const [deadline, setDeadline] = useState(0);
   const [now, setNow] = useState(Date.now());
-  const [expired, setExpired] = useState(false);
   const bookingRequestId = params?.bookingRequestId || '';
-  // The mobile app shows a 60-second countdown on a booking-request notification
-  // and auto-cancels it after 70s. Mirror that timer here (the web Notification
-  // API cannot render a live chronometer).
-  const DURATION_MS = 60000;
 
   const loadRequest = useCallback(() => {
     if (!bookingRequestId) {
@@ -1317,44 +1321,39 @@ export function BookingRequestScreen({ params, navigate, notify }) {
     }
     setLoading(true);
     return api.getBookingRequestById(bookingRequestId)
-      .then(response => {
-        setDetails(response?.data);
-        const created = response?.data?.createdAt || response?.data?.bookingRequestTime || response?.data?.createdAtTimestamp;
-        const createdMs = created ? new Date(created).getTime() : Date.now();
-        const base = Number.isFinite(createdMs) && createdMs > 0 ? createdMs : Date.now();
-        setDeadline(base + DURATION_MS);
-      })
+      .then(response => { setDetails(response?.data || null); })
       .catch(error => notify?.('error', getErrorMessage(error, 'Unable to load booking request.')))
       .finally(() => setLoading(false));
   }, [bookingRequestId, notify]);
 
   useEffect(() => { loadRequest(); }, [loadRequest]);
 
-  // Countdown ticking + expiry handling. Expiry is a one-time transition: it
-  // closes the browser notification (mobile auto-cancels after 70s) and flips
-  // the card to expired; the user taps Refresh to re-check the server state.
+  // The one-minute window ends while the screen is open, so the clock has to
+  // keep ticking: the countdown, and the moment the buttons retire, both come
+  // from this.
   useEffect(() => {
-    if (!deadline) return undefined;
-    const tick = () => {
-      const remaining = deadline - Date.now();
-      setNow(Date.now());
-      if (remaining <= 0) {
-        setExpired(true);
-        if (bookingRequestId) closeNotification(bookingRequestId);
-      }
-    };
-    const timer = window.setInterval(tick, 1000);
-    tick();
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [bookingRequestId, deadline]);
+  }, []);
 
-  const remaining = deadline ? Math.max(0, deadline - now) : 0;
-  const remainingSeconds = Math.ceil(remaining / 1000);
-  const minutes = Math.floor(remainingSeconds / 60);
-  const seconds = remainingSeconds % 60;
-  const countdownLabel = `${minutes}:${String(seconds).padStart(2, '0')}`;
-  const timerActive = deadline && !expired && remaining > 0;
-  const timerWarning = timerActive && remaining <= 15000;
+  const lead = useMemo(() => {
+    if (!details) return null;
+    // The single-request endpoint names the slot `startTime`; the shared
+    // normaliser (which the leads list also uses) reads `bookingTime`.
+    return normalizeLead({ ...details, bookingTime: details.bookingTime || details.startTime || '' });
+  }, [details]);
+  const view = lead ? leadView(lead, now) : null;
+  const canAnswer = Boolean(view?.canAnswer);
+  const state = view?.state || LEAD_STATE.awaiting;
+  const services = lead?.services?.length ? lead.services : [];
+  const closedLabel = LEAD_STATE_LABEL[state] || 'Closed';
+
+  // A window that closes on screen also closes the browser notification the
+  // salon was handed, so the two cannot disagree.
+  useEffect(() => {
+    if (!details || canAnswer) return;
+    if (state === LEAD_STATE.autoCancelled && bookingRequestId) closeNotification(bookingRequestId);
+  }, [bookingRequestId, canAnswer, details, state]);
 
   const action = async (value, delayMinutes) => {
     setActionLoading(value);
@@ -1369,13 +1368,104 @@ export function BookingRequestScreen({ params, navigate, notify }) {
       navigate('queue');
     } catch (error) {
       notify?.('error', getErrorMessage(error, 'Could not update booking request.'));
+      // "Already answered" / "expired" is a real answer: re-read the request so
+      // the screen stops offering the action that just failed.
+      if (/already|expired|cannot be action|no longer/i.test(String(error?.message || ''))) loadRequest();
     } finally {
       setActionLoading('');
     }
   };
 
-  const refresh = () => { setExpired(false); setDeadline(0); loadRequest(); };
+  // Back goes to the tab this request belongs to — not the Queue, which is
+  // where a booking lives and where an unanswered request does not.
+  const back = () => navigate('bookingRequests');
 
-  if (loading) return <div className="screen"><PageHeader title="Booking request" onBack={() => navigate(-1)} /><div className="account-loading"><Spinner label="Loading request…" /></div></div>;
-  return <div className="screen booking-request-screen"><PageHeader title="New booking request" subtitle="A customer is waiting for your response." onBack={() => navigate('queue')} /><div className="request-card"><div className="request-card-top"><div className="request-avatar">{getInitials(details?.customerName || 'Guest')}</div><div><span className="eyebrow">CUSTOMER</span><h2>{details?.customerName || 'Guest'}</h2><span className="request-status"><i /> {expired ? 'Response window closed' : 'Needs your response'}</span></div><div className={cx('request-timer', timerWarning && 'timer-warning')}><small>{expired ? 'Expired' : timerActive ? `Respond in` : '—'}</small>{timerActive && <strong>{countdownLabel}</strong>}</div></div><div className="request-detail-grid"><div><CalendarDays size={17} /><span><small>Selected date</small><strong>{formatDate(details?.bookingDate)}</strong></span></div><div><Clock3 size={17} /><span><small>Time slot</small><strong>{details?.startTime || '—'} – {details?.endTime || '—'}</strong></span></div><div><Scissors size={17} /><span><small>Services</small><strong>{details?.services || 'Salon service'}</strong></span></div></div></div>{expired && <div className="request-expired-note"><Info size={16} /><p>The 60-second response window has closed. This request may have been released to another customer — refresh to check its current status.</p><button onClick={refresh}><RefreshCw size={15} /> Refresh</button></div>}<div className="request-actions">{!expired && <div><Button variant="success" loading={actionLoading === 'ACCEPT'} onClick={() => action('ACCEPT')}>Accept <Check size={17} /></Button><Button variant="danger" loading={actionLoading === 'REJECT'} onClick={() => action('REJECT')}>Reject <X size={17} /></Button></div>}{!expired && <Button variant="warning" loading={actionLoading === 'DELAY'} onClick={() => setDelayOpen(true)}>Update time <Clock3 size={17} /></Button>}</div><Modal open={delayOpen} onClose={() => setDelayOpen(false)} title="Update time & notify customer"><p className="modal-lede">If you are running a little late, choose a delay. My Naai will send the customer a delay request so they can accept or decline the updated time.</p><div className="delay-options">{[20, 40, 60].map(minutes => <button key={minutes} onClick={() => action('DELAY', minutes)} disabled={Boolean(actionLoading)}><Clock3 size={17} /><span><strong>+{minutes} minutes</strong><small>Send delay request to customer</small></span><ChevronRight size={16} /></button>)}</div></Modal></div>;
+  if (loading) {
+    return <div className="screen"><PageHeader title="Booking request" onBack={back} /><div className="account-loading"><Spinner label="Loading request…" /></div></div>;
+  }
+  if (!details) {
+    return (
+      <div className="screen">
+        <PageHeader title="Booking request" onBack={back} />
+        <EmptyState
+          icon={Info}
+          title="This request is not available"
+          message="It may have been removed, or it belongs to another salon. Your booking requests tab has the full list."
+          action={<Button onClick={() => navigate('bookingRequests')}>Open booking requests <ChevronRight size={16} /></Button>}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="screen booking-request-screen">
+      <PageHeader
+        title={canAnswer ? 'New booking request' : 'Booking request'}
+        subtitle={canAnswer ? 'A customer is waiting for your response.' : 'This request is closed — there is nothing to action.'}
+        onBack={back}
+      />
+      <div className="request-card">
+        <div className="request-card-top">
+          <div className="request-avatar">{getInitials(lead.customerName)}</div>
+          <div>
+            <span className="eyebrow">CUSTOMER</span>
+            <h2>{lead.customerName}</h2>
+            <span className="request-status"><i /> {canAnswer ? 'Needs your response' : closedLabel}</span>
+          </div>
+          {/* The countdown exists only while there is something to answer. */}
+          {canAnswer && (
+            <div className={cx('request-timer', view.remainingMs <= 15000 && 'timer-warning')}>
+              <small>Respond in</small>
+              <strong>{view.countdown}</strong>
+            </div>
+          )}
+        </div>
+        <div className="request-detail-grid">
+          <div><CalendarDays size={17} /><span><small>Selected date</small><strong>{lead.bookingDate ? formatDate(lead.bookingDate) : '—'}</strong></span></div>
+          <div><Clock3 size={17} /><span><small>Time slot</small><strong>{lead.bookingTime ? formatTime(lead.bookingTime) : '—'}</strong></span></div>
+          <div><Scissors size={17} /><span><small>Services</small><strong>{services.length ? services.map(service => service.name).join(', ') : (details.services || 'Salon service')}</strong></span></div>
+          <div><UserRound size={17} /><span><small>Barber</small><strong>{lead.barberName || 'Any available specialist'}</strong></span></div>
+          <div><Phone size={17} /><span><small>Mobile</small><strong>{lead.customerPhone ? <a href={`tel:${lead.customerPhone}`}>{lead.customerPhone}</a> : 'Not provided'}</strong></span></div>
+        </div>
+      </div>
+
+      {/* Closed: what happened, and where the rest is. Never an action. */}
+      {!canAnswer && (
+        <div className="request-expired-note">
+          <Info size={16} />
+          <p>
+            {state === LEAD_STATE.accepted && 'You accepted this request — it is in your customer queue as a booking.'}
+            {state === LEAD_STATE.rejected && 'You rejected this request. The customer was told.'}
+            {state === LEAD_STATE.cancelled && 'The customer withdrew this request.'}
+            {state === LEAD_STATE.delayed && 'You proposed a new time and the request is waiting on the customer.'}
+            {(state === LEAD_STATE.autoCancelled || state === LEAD_STATE.awaiting) && 'Nobody answered within the one-minute window, so this request was cancelled automatically. It is not a rejection.'}
+          </p>
+          <button onClick={() => navigate('bookingRequests')}><RefreshCw size={15} /> All booking requests</button>
+        </div>
+      )}
+
+      {canAnswer && (
+        <div className="request-actions">
+          <div>
+            <Button variant="success" loading={actionLoading === 'ACCEPT'} onClick={() => action('ACCEPT')}>Accept <Check size={17} /></Button>
+            <Button variant="danger" loading={actionLoading === 'REJECT'} onClick={() => action('REJECT')}>Reject <X size={17} /></Button>
+          </div>
+          <Button variant="warning" loading={actionLoading === 'DELAY'} onClick={() => setDelayOpen(true)}>Update time <Clock3 size={17} /></Button>
+        </div>
+      )}
+
+      <Modal open={delayOpen && canAnswer} onClose={() => setDelayOpen(false)} title="Update time & notify customer">
+        <p className="modal-lede">If you are running a little late, choose a delay. My Naai will send the customer a delay request so they can accept or decline the updated time.</p>
+        <div className="delay-options">
+          {[20, 40, 60].map(minutes => (
+            <button key={minutes} onClick={() => action('DELAY', minutes)} disabled={Boolean(actionLoading)}>
+              <Clock3 size={17} />
+              <span><strong>+{minutes} minutes</strong><small>Send delay request to customer</small></span>
+              <ChevronRight size={16} />
+            </button>
+          ))}
+        </div>
+      </Modal>
+    </div>
+  );
 }

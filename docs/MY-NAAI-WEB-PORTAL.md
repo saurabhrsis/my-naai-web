@@ -352,12 +352,25 @@ request side only.
   nobody answered is not a rejection, and folding the two together hides exactly
   the problem the tab exists to expose. A customer's own cancellation is a third
   bucket.
-- **A live request can be answered in place** (`Accept` / `Reject`, one tap, the
+- **A live request is answered ON the card** (`Accept` / `Reject`, one tap, the
   same `owner-action` contract the notifications screen and the mobile app use).
-  A `Pending` request whose window has closed renders as auto-cancelled with no
-  buttons at all: the salon is never offered an action the server will refuse.
-  An answer is shown on the card immediately (a local override applied over every
-  refresh) because the list API can answer a beat behind the action.
+  Opening anything first would be a step the salon does not have time for: the
+  window is one minute. An answer shows on the card immediately (a local override
+  applied over every refresh) because the list API can answer a beat behind the
+  action.
+- **`Details` is read-only** (`src/components/LeadDetailSheet.jsx`): customer
+  name, mobile (tappable), date, time slot, barber (or "any available
+  specialist"), the services with prices and the requested value, plus what
+  became of the request. No countdown, no Accept / Reject, no `Update time` — a
+  request from last month cannot be answered, and the sheet never pretends
+  otherwise. It is a sheet on the list, so closing it returns to the list (it used
+  to navigate to the live-answer screen, whose back button dropped the salon in
+  the Queue tab).
+- **Only an answerable request has an answer.** The card and the sheet read the
+  same rule (`leadView`): the server's status must still be open *and* the
+  one-minute window must still be running. Accepted, rejected, cancelled,
+  auto-cancelled and month-old pending requests render with their outcome and no
+  buttons at all, so the salon is never offered an action the server will refuse.
 - **It works on today's backend.** `POST /api/bookingRequest/salon/list` is the
   preferred source (`src/lib/api.js` → `salonBookingRequestList`); where that
   endpoint is not deployed yet the screen falls back to the notifications feed,
@@ -368,6 +381,13 @@ request side only.
 - States, filters and the status vocabulary live in `src/lib/bookingLeads.js`
   (`leadStateFromStatus`, `leadView`, `summarizeLeads`, `filterLeads`) — the same
   helpers the tests use, so the words on the card cannot drift from the numbers.
+- **The live-request screen** (`BookingRequestScreen`, route `/bookingRequest`,
+  opened by a booking-request push or from a notification) applies the same rule:
+  while the window runs it shows the countdown and Accept / Reject / Update time;
+  once the request is answered or the minute has passed it shows the outcome and
+  the request's facts with **no actions**, and its back button goes to
+  **Booking requests**. Accepting from it still ends in the Queue — an accepted
+  request *is* a booking, so that is the one place the queue is right.
 - Backend contract: [`docs/BACKEND-BOOKING-REQUESTS-API.md`](BACKEND-BOOKING-REQUESTS-API.md)
   (list, summary, admin doors, the auto-cancel sweeper).
   Admin panel tab: [`docs/ADMIN-PANEL-BOOKING-REQUESTS.md`](ADMIN-PANEL-BOOKING-REQUESTS.md).
