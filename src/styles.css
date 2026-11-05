@@ -758,6 +758,42 @@ a.detail-info-row:hover { background: rgba(255, 255, 255, .03); }
 /* The sticky confirm bar repeats the method under the amount, so the last thing
    the customer reads before confirming is how they will pay. */
 .schedule-total-pay { display: inline-flex; align-items: center; gap: 4px; color: var(--green); font-size: 9.5px; font-style: normal; font-weight: 700; }
+/* ── The booking checkout ─────────────────────────────────────────────────────
+   The card that stands between "Review & confirm" and the API call: salon,
+   services with prices, date, time, duration, barber, the amount and how it is
+   paid. It reads top-to-bottom in the order a customer checks a counter bill,
+   and the payment note sits last so it is the line beside the button. */
+.booking-review { display: flex; flex-direction: column; gap: 14px; }
+.booking-review-salon { display: flex; align-items: flex-start; gap: 11px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.booking-review-mark { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border-radius: 11px; background: var(--gold-wash); color: var(--gold); }
+.booking-review-salon > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.booking-review-salon small { color: var(--muted); font-size: 9.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.booking-review-salon strong { color: var(--white); font-size: 15px; line-height: 1.3; overflow-wrap: anywhere; }
+.booking-review-place { display: inline-flex; align-items: center; gap: 4px; color: var(--muted-light); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.booking-review-block { display: flex; flex-direction: column; gap: 8px; }
+.booking-review-block h3 { margin: 0; color: var(--muted-light); font-size: 9.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.booking-review-services { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.booking-review-services li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 11px; background: #101514; }
+.booking-review-services span { min-width: 0; color: var(--white); font-size: 12.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.booking-review-services strong { flex: none; color: var(--gold); font-size: 12.5px; }
+.booking-review-total { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 2px 0 0; padding: 10px 11px 0; border-top: 1px solid var(--line); }
+.booking-review-total span { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.booking-review-total strong { color: var(--gold); font-size: 17px; letter-spacing: -.02em; }
+.booking-review-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; margin: 0; }
+.booking-review-facts > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.booking-review-facts dt { color: var(--muted); font-size: 9.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+.booking-review-facts dd { margin: 0; color: var(--white); font-size: 12.5px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.booking-review-pay { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1.5px solid var(--gold); border-radius: 14px; background: var(--gold-wash); }
+.booking-review-pay > svg { flex: none; margin-top: 1px; color: var(--gold); }
+.booking-review-pay strong { display: block; color: var(--gold); font-size: 13px; letter-spacing: -.01em; }
+.booking-review-pay p { margin: 3px 0 0; color: var(--muted-light); font-size: 11.5px; line-height: 1.5; }
+.booking-review-fineprint { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
+.booking-review-fineprint svg { flex: none; margin-top: 1px; color: var(--green); }
+.booking-review-actions { display: flex; gap: 8px; width: 100%; }
+.booking-review-actions .btn { flex: 1; }
+@media (max-width: 380px) {
+  .booking-review-facts { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* Partner dashboard */
 .queue-group { display: grid; gap: 10px; }
@@ -1270,6 +1306,15 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
    with arrow controls, dots and gentle auto-advance — any number of reviews
    works, and the loop is circular (see TestimonialSection). ── */
 .testimonial-section { margin: 34px 0 0; }
+/* The testimonial wall and the site footer are the WEBSITE's closing blocks.
+   The signed-in panel (`.app-shell`) is the app: it ends at its own bottom
+   navigation, so neither block belongs in it — and on a phone the footer sat
+   under the fixed bottom bar where it could not even be reached. Both
+   components already refuse the app surface (useIsAppSurface) and their screens
+   ask for a guest; this rule is the third lock, so an accidental mount in a
+   future screen cannot bring the marketing chrome back into the panel. */
+.app-shell .site-footer,
+.app-shell .testimonial-section { display: none !important; }
 .testimonial-nav { display: flex; gap: 6px; }
 .testimonial-nav button { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; background: var(--card); border: 1px solid var(--line); border-radius: 50%; color: var(--muted-light); }
 .testimonial-nav button:hover { color: var(--gold); border-color: rgba(232, 185, 126, .4); }

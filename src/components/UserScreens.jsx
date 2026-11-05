@@ -806,8 +806,15 @@ export function HomeScreen({ session, navigate, notify }) {
         <Button onClick={() => navigate('shop')}>Shop now <ChevronRight size={16} /></Button>
       </section>
       <div className="home-trust-row"><ShieldCheck size={16} /><span>Verified listings</span><i /><Clock3 size={16} /><span>Book in minutes</span><i /><Heart size={16} /><span>Made for your time</span></div>
-      <TestimonialSection />
-      <SiteFooter />
+      {/* Website chrome, website only. The review wall and the multi-column
+          footer are how the marketing site closes a page; inside the panel the
+          Discovery tab ends at the salon list, and a second navigation block
+          under a bottom bar is noise. Both components also refuse the app
+          surface themselves (useIsAppSurface) — the rule is stated here as
+          well, where the decision is made, so a signed-in customer never
+          renders either one even if the shell around them changes. */}
+      {isGuest && <TestimonialSection />}
+      {isGuest && <SiteFooter />}
       <PermissionSheet
         open={locationSheetOpen}
         kind="location"
@@ -1223,7 +1230,8 @@ export function SalonDetailScreen({ session, params, navigate, notify }) {
         ) : <p className="detail-empty-note">No specialists added yet — any available barber will take care of you.</p>}
       </section>
 
-      <SiteFooter />
+      {/* Website only — the same rule as the Discovery tab. */}
+      {isGuest && <SiteFooter />}
       <div className="sticky-continue">
         <div><span>Ready when you are?</span><small>{isGuest ? 'Login is required to book this salon' : 'Pick services, a specialist and a time slot'}</small></div>
         <Button onClick={continueToBooking}>{isGuest ? 'Login to book' : 'Book salon'} <ArrowRight size={17} /></Button>
@@ -1283,6 +1291,13 @@ export function ScheduleScreen({ params, navigate, notify }) {
   // It is a real control, not a label, so the day an online option exists this
   // is where it goes, and the checkout already reads like a payment step.
   const [paymentMode, setPaymentMode] = useState('payAtSalon');
+  // The checkout: everything the customer chose, on one card, BEFORE the
+  // request leaves. Until this existed the sticky bar went from "Confirm
+  // booking" straight to the API call — the salon, the services, the slot and
+  // the amount were only ever shown across four sections the customer had to
+  // remember scrolling past. The request is sent from inside this card, so the
+  // last thing read before it leaves is what is actually being asked for.
+  const [reviewOpen, setReviewOpen] = useState(false);
   const schedule = {
     openingTime: '09:00:00',
     closingTime: '21:00:00',
@@ -1325,7 +1340,15 @@ export function ScheduleScreen({ params, navigate, notify }) {
     });
   }, [booked, isBooked, isPast, schedule.closingTime, schedule.openingTime, serviceDuration, slots]);
   useEffect(() => { setTime(availableSlots[0]?.value || ''); }, [availableSlots]);
-  const confirm = async () => {
+  // Step 1 — the bar opens the checkout, it does not send anything.
+  const openReview = () => {
+    if (!time) return notify?.('error', holiday ? `This salon is closed on ${weekday}.` : 'Please choose an available time.');
+    if (!services.length) return notify?.('error', 'Please select at least one service.');
+    setReviewOpen(true);
+  };
+  // Step 2 — the checkout's own button. This is the only place a booking
+  // request is created now, and it cannot run while the review is closed.
+  const submitRequest = async () => {
     if (!time) return notify?.('error', holiday ? `This salon is closed on ${weekday}.` : 'Please choose an available time.');
     if (!services.length) return notify?.('error', 'Please select at least one service.');
     setLoading(true);
@@ -1340,6 +1363,7 @@ export function ScheduleScreen({ params, navigate, notify }) {
       // the salon confirms (see BookingsScreen), through the same single
       // notification permission push already uses.
       setSent({ salonName, date: bookingDate, time, services, total, paymentMode });
+      setReviewOpen(false);
     } catch (error) { notify?.('error', getErrorMessage(error, 'Could not send booking request.')); } finally { setLoading(false); }
   };
   if (sent) {
@@ -1458,8 +1482,86 @@ export function ScheduleScreen({ params, navigate, notify }) {
           <strong>{formatCurrency(total)}</strong>
           <em className="schedule-total-pay"><Banknote size={11} aria-hidden="true" /> Pay at salon</em>
         </div>
-        <Button loading={loading} onClick={confirm}>Confirm booking <Check size={17} /></Button>
+        <Button onClick={openReview}>Review &amp; confirm <Check size={17} /></Button>
       </div>
+
+      {/* ── The checkout ─────────────────────────────────────────────────────
+          Everything selected, in the order a customer checks it: who, what,
+          when, who cuts, how much, how it is paid. Nothing is sent until the
+          button in the footer is tapped, and the amount on the payment line is
+          the same number the sticky bar quoted a second earlier. */}
+      <Modal
+        open={reviewOpen}
+        onClose={() => { if (!loading) setReviewOpen(false); }}
+        title="Review your booking"
+        footer={<div className="booking-review-actions">
+          <Button variant="secondary" onClick={() => setReviewOpen(false)} disabled={loading}>Back</Button>
+          <Button loading={loading} onClick={submitRequest} disabled={loading}>
+            {loading ? 'Sending request' : 'Send booking request'} <Send size={16} />
+          </Button>
+        </div>}
+      >
+        <div className="booking-review">
+          <div className="booking-review-salon">
+            <span className="booking-review-mark" aria-hidden="true"><Store size={18} /></span>
+            <div>
+              <small>Salon</small>
+              <strong>{salon.salonName || salon.name || 'The salon'}</strong>
+              {(salon.address || salon.city) && (
+                <span className="booking-review-place"><MapPin size={12} aria-hidden="true" /> {[salon.address, salon.city].filter(Boolean).join(', ')}</span>
+              )}
+            </div>
+          </div>
+
+          <section className="booking-review-block" aria-label="Services">
+            <h3>Services</h3>
+            <ul className="booking-review-services">
+              {services.map((item, index) => (
+                <li key={item.serviceId || item.id || `${item.name || 'service'}-${index}`}>
+                  <span>{item.serviceName || item.name || 'Service'}</span>
+                  <strong>{formatCurrency(Number(item.price || 0))}</strong>
+                </li>
+              ))}
+            </ul>
+            <p className="booking-review-total">
+              <span>Estimated total</span>
+              <strong>{formatCurrency(total)}</strong>
+            </p>
+          </section>
+
+          <section className="booking-review-block" aria-label="When">
+            <h3>When</h3>
+            <dl className="booking-review-facts">
+              <div><dt>Date</dt><dd>{formatDate(bookingDate)}</dd></div>
+              <div><dt>Time</dt><dd>{formatTime(time)}</dd></div>
+              <div><dt>Duration</dt><dd>About {serviceDuration} min</dd></div>
+              <div>
+                <dt>Barber</dt>
+                <dd>{barber ? (barber.fullName || barber.name) : 'Any available barber'}</dd>
+              </div>
+            </dl>
+          </section>
+
+          {/* The note the counter depends on: no money moves in this app, so
+              the amount is owed at the salon, after the service. */}
+          <div className="booking-review-pay" role="note">
+            <Banknote size={18} aria-hidden="true" />
+            <div>
+              <strong>Pay at Salon after Service</strong>
+              <p>
+                Pay {formatCurrency(total)} at the salon after your service — cash, UPI or card,
+                whichever the salon accepts. Nothing is charged now.
+              </p>
+            </div>
+          </div>
+
+          <p className="booking-review-fineprint">
+            <ShieldCheck size={13} aria-hidden="true" />
+            The salon reviews the request and confirms the slot. You can cancel or reschedule from
+            My bookings.
+          </p>
+        </div>
+      </Modal>
     </div>
   );
 }

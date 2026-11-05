@@ -312,6 +312,32 @@ describe('App routing on mount', () => {
     vi.clearAllMocks();
   });
 
+  // The website closes a page with the review wall and the multi-column footer.
+  // The panel is the app: it ends at its own bottom navigation, and on a phone
+  // that footer sat underneath the fixed bar. Reported from the device as "the
+  // website footer and testimonial are showing in the Discover tab after login".
+  it('does not render the website footer or the review wall inside the panel', async () => {
+    signIn('USER', '/');
+    await mount();
+    expect(container.querySelector('.app-shell')).not.toBeNull();
+    expect(container.querySelector('.site-footer')).toBeNull();
+    expect(container.querySelector('.testimonial-section')).toBeNull();
+    expect(container.textContent).not.toContain('What customers & salon owners say');
+  });
+
+  it('keeps them on the public website, which is where they sell', async () => {
+    await mount(); // no session: the guest shell
+    expect(container.querySelector('.guest-shell')).not.toBeNull();
+    expect(container.querySelector('.site-footer')).not.toBeNull();
+    expect(container.querySelector('.testimonial-section')).not.toBeNull();
+  });
+
+  it('keeps them off the salon page and the info pages inside the panel', async () => {
+    signIn('USER', '/about');
+    await mount();
+    expect(container.querySelector('.site-footer')).toBeNull();
+  });
+
   it('renders the screen named in the hash for a customer', async () => {
     signIn('USER', '/bookings');
     await mount();

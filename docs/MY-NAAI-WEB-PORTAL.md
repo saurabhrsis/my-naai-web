@@ -305,13 +305,58 @@ The **booking-request** delay proposal is the one flow that still asks the custo
 3. The response calls `POST /api/bookingRequest/customer-delay-response/{bookingRequestId}/` with `{ "action": "ACCEPT" }` or `{ "action": "REJECT" }`.
 4. The customer is returned to `#/bookings`.
 
+## 8.0 Website chrome stays on the website
+
+The review carousel and the multi-column footer are how the **marketing site**
+closes a page (`SurfaceProvider` in `src/components/Shared.jsx`). The panel is the
+app: it ends at its own bottom navigation, and on a phone the footer sat under
+that fixed bar where it could not even be reached. Reported from the device as
+"the website footer and testimonial are showing in the Discover tab after login".
+
+Three locks, so it cannot come back:
+
+1. `SiteFooter` returns `null` and `TestimonialSection` renders nothing when
+   `useIsAppSurface()` is true — the shell sets `SurfaceProvider value="app"`.
+2. The screens themselves ask for a guest: `HomeScreen` renders both behind
+   `isGuest`, and `SalonDetailScreen` renders its footer behind
+   `!session?.userId`, so a signed-in customer never sees them even if the shell
+   around them changes. Both blocks stay exactly as they are on the public site.
+3. A stylesheet lock — `.app-shell .site-footer, .app-shell .testimonial-section
+   { display: none !important; }` — covering any future screen that mounts them by
+   accident.
+
+Tests: `src/App.test.jsx` mounts the real app and asserts the panel's Discover tab
+has neither block (and no "What customers & salon owners say" text), that the
+guest site still does, and that an info page inside the panel has none either.
+
 ## 8.1 Booking checkout — Pay at Salon
 
 The last step of the customer booking flow (`ScheduleScreen` in
 `src/components/UserScreens.jsx`) is a checkout: barber (optional), date, time,
-**Payment**, then the sticky **Confirm booking** bar with the estimated total.
+**Payment**, then the sticky **Review & confirm** bar with the estimated total.
 Payment used to be invisible until the salon counter; it is now a stated part of
 the checkout.
+
+**A review card stands between the bar and the API call** — `Review your booking`,
+built on `Modal` with `.booking-review*` styles. Nothing is sent until the button
+inside it is tapped, so the last thing read before the request leaves is a
+line-by-line statement of what is being asked for:
+
+| Line | What it says |
+| --- | --- |
+| Salon | name, plus the address/city the customer scrolled past earlier |
+| Services | one row each, with its own price |
+| Estimated total | the sum of those rows, the same number the sticky bar quoted |
+| When | date, time, duration (the sum of the service durations) |
+| Barber | the specialist chosen, or **Any available barber** |
+| **Pay at Salon after Service** | `Pay ₹ N at the salon after your service — cash, UPI or card, whichever the salon accepts. Nothing is charged now.` |
+
+The footer is `Back` (closes the card, sends nothing, and the bar opens it again)
+and `Send booking request` (the only path to `createBookingRequest`, with its own
+sending state). The bar itself no longer calls the API: it validates the slot and
+services first — an empty time or an empty service list is refused with the same
+message as before — then opens the card. Closing the card leaves nothing behind;
+submitting closes it and lands on the *Request sent* screen.
 
 - **One method, preselected: "Pay at Salon".** My Naai takes no payment for a
   booking (Terms §4; Privacy §2 says no card, UPI, wallet or bank details are
@@ -338,10 +383,19 @@ the checkout.
 
 Styles: `.schedule-pay-options`, `.schedule-pay-option`, `.schedule-pay-icon`,
 `.schedule-pay-copy`, `.schedule-pay-tick`, `.schedule-pay-note`,
-`.schedule-total-pay` in `src/styles.css` (booking gold palette; the shop's
-`.shop-pay-*` is the green equivalent). Tests: `src/components/BookingFlow.test.jsx`
-— preselected option with the summed amount, no card/UPI fields, and the method
-repeated after the request is sent.
+`.schedule-total-pay` for the method; `.booking-review`, `.booking-review-salon`,
+`.booking-review-services`, `.booking-review-total`, `.booking-review-facts`,
+`.booking-review-pay`, `.booking-review-actions` for the review card — all in
+`src/styles.css`, in the booking gold palette (the shop's `.shop-pay-*` is the
+green equivalent).
+
+Tests: `src/components/BookingFlow.test.jsx` — preselected option with the summed
+amount, no card/UPI fields, the method repeated after the request is sent, and the
+review card: it shows salon, services with prices, timing, barber and total; it
+names the chosen barber instead of "any"; it carries the *Pay at Salon after
+Service* note with the amount; `Back` sends nothing and can be reopened; and
+`createBookingRequest` is called exactly once, from the card's own button, with
+no `paymentMode` in the payload.
 
 ## 8.2 Salon → Booking requests (leads)
 

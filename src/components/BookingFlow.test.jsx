@@ -118,7 +118,11 @@ describe('paying for a booking', () => {
 
   it('repeats the method on the confirmation, so the counter is no surprise', async () => {
     const { container } = await openCheckout();
-    await act(async () => { byText('Confirm booking', container).click(); });
+    await act(async () => { byText('Review & confirm', container).click(); });
+    await flush();
+    // The bar opens the checkout; the request leaves from inside it.
+    expect(createBookingRequest).not.toHaveBeenCalled();
+    await act(async () => { byText('Send booking request', container).click(); });
     await flush();
 
     expect(createBookingRequest).toHaveBeenCalledTimes(1);
@@ -126,6 +130,109 @@ describe('paying for a booking', () => {
     expect(createBookingRequest.mock.calls[0][0]).not.toHaveProperty('paymentMode');
     expect(container.textContent).toContain('Booking sent to the salon');
     expect(container.textContent).toContain('Pay ₹ 450 at the salon after your service — nothing was charged now.');
+  });
+});
+
+// The checkout that stands between the last choice and the API call: reported
+// as "before calling api, make checkout modal and show all the details selected
+// by customer — salon, services, timing, barber, total amount" plus the payment
+// note. So the request must not leave until that card has been read and its own
+// button tapped.
+describe('the checkout before a request leaves', () => {
+  const SERVICES = [
+    { serviceId: 'svc-1', name: 'Haircut', price: 300 },
+    { serviceId: 'svc-2', name: 'Beard trim', price: 150 },
+  ];
+
+  const openSchedule = async (barbers = []) => {
+    const result = await render(
+      <ScheduleScreen
+        params={{ salon: { ...SALON, barbers }, selectedServices: SERVICES }}
+        navigate={vi.fn()}
+        notify={vi.fn()}
+      />,
+    );
+    await act(async () => { byText('Tomorrow', result.container).click(); });
+    await flush();
+    return result;
+  };
+
+  const openReview = async container => {
+    await act(async () => { byText('Review & confirm', container).click(); });
+    await flush();
+    return container.querySelector('.booking-review');
+  };
+
+  it('shows what was chosen — salon, services, timing, barber, total — before the call', async () => {
+    const { container } = await openSchedule();
+    const review = await openReview(container);
+
+    expect(review).not.toBeNull();
+    expect(createBookingRequest).not.toHaveBeenCalled();
+
+    // Who, and where.
+    expect(review.textContent).toContain('Glow Studio');
+    // What, with each price and the sum.
+    expect(review.textContent).toContain('Haircut');
+    expect(review.textContent).toContain('Beard trim');
+    expect(review.textContent).toContain('₹ 300');
+    expect(review.textContent).toContain('₹ 150');
+    expect(review.querySelector('.booking-review-total').textContent).toContain('₹ 450');
+    // When — a real date and a real slot, not "the chosen time".
+    expect(review.textContent).toContain('Date');
+    expect(review.textContent).toContain('Time');
+    expect(review.textContent).toContain('Duration');
+    // Who cuts: no specialist chosen means any available one, said plainly.
+    expect(review.textContent).toContain('Any available barber');
+  });
+
+  it('names the chosen barber instead of "any"', async () => {
+    const { container } = await openSchedule([{ barberId: 'br-1', fullName: 'Amit Jichkar', isAvailable: true }]);
+    await act(async () => { byText('Amit Jichkar', container).click(); });
+    await flush();
+    const review = await openReview(container);
+    expect(review.textContent).toContain('Amit Jichkar');
+    expect(review.textContent).not.toContain('Any available barber');
+  });
+
+  it('carries the "Pay at Salon after Service" note, with the amount', async () => {
+    const { container } = await openSchedule();
+    const review = await openReview(container);
+    const pay = review.querySelector('.booking-review-pay');
+    expect(pay).not.toBeNull();
+    expect(pay.textContent).toContain('Pay at Salon after Service');
+    expect(pay.textContent).toContain('Pay ₹ 450 at the salon after your service');
+    expect(pay.textContent).toContain('Nothing is charged now.');
+    // Still not a payment form: the card asks for nothing but a decision.
+    expect(review.querySelectorAll('input')).toHaveLength(0);
+  });
+
+  it('sends nothing when the customer backs out of the checkout', async () => {
+    const { container } = await openSchedule();
+    await openReview(container);
+    await act(async () => { byText('Back', container).click(); });
+    await flush();
+    expect(createBookingRequest).not.toHaveBeenCalled();
+    expect(container.querySelector('.booking-review')).toBeNull();
+    // …and the bar still opens it again, so backing out is not a dead end.
+    expect(await openReview(container)).not.toBeNull();
+  });
+
+  it('creates the request only from the checkout button, then shows the sent screen', async () => {
+    const { container } = await openSchedule();
+    await openReview(container);
+    await act(async () => { byText('Send booking request', container).click(); });
+    await flush();
+
+    expect(createBookingRequest).toHaveBeenCalledTimes(1);
+    const payload = createBookingRequest.mock.calls[0][0];
+    expect(payload.salonId).toBe('salon-1');
+    expect(payload.services).toEqual(['svc-1', 'svc-2']);
+    expect(payload.bookingDate).toBe(futureDate());
+    expect(payload.bookingTime).toBeTruthy();
+    expect(payload).not.toHaveProperty('paymentMode');
+    expect(container.querySelector('.booking-review')).toBeNull();
+    expect(container.textContent).toContain('Booking sent to the salon');
   });
 });
 
@@ -147,7 +254,9 @@ describe('a booking request the salon has not answered yet', () => {
     await act(async () => { byText('Tomorrow', container).click(); });
     await flush();
 
-    await act(async () => { byText('Confirm booking', container).click(); });
+    await act(async () => { byText('Review & confirm', container).click(); });
+    await flush();
+    await act(async () => { byText('Send booking request', container).click(); });
     await flush();
 
     expect(createBookingRequest).toHaveBeenCalledTimes(1);
