@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Check, Plus, RefreshCw, Scissors, Trash2, Undo2 } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowUp, Check, Plus, RefreshCw, Scissors, Trash2, Undo2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { DEFAULT_SERVICES } from '../lib/defaultServices';
 import { salonProfileFromResponse } from '../lib/salonProfile';
@@ -389,9 +389,11 @@ export function EditSalonServicesScreen({ session, navigate, notify }) {
 
   return (
     <div className="screen services-editor-screen">
+      {/* No subtitle: the summary card underneath already says how many services
+          are on the menu and what they total, so a second line of caption above it
+          was only pushing the first service further down the phone screen. */}
       <PageHeader
         title="Your services"
-        subtitle="Prices and timing only — the rest of your profile is untouched."
         onBack={attemptLeave}
         action={addButton}
       />
@@ -521,7 +523,14 @@ export function EditSalonServicesScreen({ session, navigate, notify }) {
           <strong>{rows.length} {rows.length === 1 ? 'service' : 'services'}</strong>
           <small>{rows.length ? `${formatCurrency(total)} in total` : 'Nothing on the menu yet'}</small>
         </div>
+        {/* Back lives here, beside Add and Save, because a salon with thirty
+            services scrolls the header (and its back arrow) out of reach on a
+            phone. The same guard as the header: unsaved edits ask before they
+            are thrown away. */}
         <div className="service-editor-buttons">
+          <Button size="small" variant="secondary" className="service-editor-back" onClick={attemptLeave}>
+            <ArrowLeft size={15} /> Back
+          </Button>
           {rows.length > 0 && <Button size="small" variant="secondary" onClick={() => addRow()}><Plus size={15} /> Add</Button>}
           <Button size="small" onClick={save} loading={saving} disabled={!dirty || saving}>
             Save services

@@ -100,6 +100,9 @@ describe('the menu editor opens every service at once', () => {
     // …and no profile fields are on it at all.
     expect(container.textContent).not.toContain('Salon name');
     expect(container.textContent).not.toContain('Opening Time');
+    // No subtitle above the first service either: the summary card says the same
+    // thing in less height, and on a phone that was one more line before the work.
+    expect(container.textContent).not.toContain('Prices and timing only');
   });
 
   it('saves only the services, in order, and nothing else about the salon', async () => {
@@ -219,6 +222,52 @@ describe('the menu editor opens every service at once', () => {
     expect(rows).toHaveLength(3);
     expect(rows[2].classList.contains('is-new')).toBe(true);
     expect(focused).toBe(rows[2].querySelector('input'));
+  });
+
+  // "We have a lot of services and the user scrolls; on a phone there is no way
+  // back." The back arrow in the header scrolls away with the list, so the sticky
+  // bar carries one — beside Add and Save, the buttons the partner already reaches
+  // for at the bottom of a long menu.
+  it('puts Back beside Add and Save, so a long menu can still be left', async () => {
+    const { container, mount } = render();
+    await act(async () => { mount(); });
+    await flush();
+
+    const bar = container.querySelector('.service-editor-actions');
+    const labels = Array.from(bar.querySelectorAll('button')).map(node => node.textContent.trim());
+    expect(labels).toEqual(['Back', 'Add', 'Save services']);
+
+    await act(async () => { bar.querySelector('.service-editor-back').click(); });
+    await flush();
+    expect(navigate).toHaveBeenCalledWith(-1);
+  });
+
+  it('asks before the sticky Back throws away unsaved edits', async () => {
+    const { container, mount } = render();
+    await act(async () => { mount(); });
+    await flush();
+
+    const [firstRow] = rowInputs(container);
+    await act(async () => { type(firstRow.querySelector('input[type="number"]'), '275'); });
+    await flush();
+
+    const back = container.querySelector('.service-editor-back');
+    await act(async () => { back.click(); });
+    await flush();
+    expect(navigate).not.toHaveBeenCalled();
+
+    // The safe answer keeps the partner on the screen, with the edit intact.
+    await act(async () => { buttonByText(document.body, 'Keep editing').click(); });
+    await flush();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(rowInputs(container)[0].querySelector('input[type="number"]').value).toBe('275');
+
+    // Saying Discard does leave.
+    await act(async () => { back.click(); });
+    await flush();
+    await act(async () => { buttonByText(document.body, 'Discard').click(); });
+    await flush();
+    expect(navigate).toHaveBeenCalledWith(-1);
   });
 
   it('refuses to save a row with no price, and says which field', async () => {

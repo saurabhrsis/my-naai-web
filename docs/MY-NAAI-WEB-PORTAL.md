@@ -569,8 +569,15 @@ What makes a whole menu fast to type:
   possible.
 - A **Removed** strip lists what will go when you save, each name an **Undo**
   button that restores the whole row — price and duration included.
-- Back with unsaved edits asks first (`Discard your changes?`), and "keep editing"
-  is the safe default.
+- **Back sits in the sticky bar**, beside **Add** and **Save services** — not only
+  in the header. A salon with thirty services scrolls the header (and its back
+  arrow) off a phone screen, and the reported problem was exactly that: no way back
+  from the bottom of the list. Both back buttons go through the same guard, so
+  unsaved edits ask first (`Discard your changes?`, with *Keep editing* as the safe
+  answer).
+- The header carries **no subtitle**: the summary card already says how many
+  services are on the menu and what they total, so a second caption above it only
+  pushed the first service further down a phone screen.
 - An empty menu offers **Add your first service** and **Load defaults** (the same
   per-type default menu the profile editor uses).
 - The sticky bar shows the count and the total of the menu, so a mistyped price is
@@ -595,16 +602,20 @@ Styles live in `src/styles.css` under *"The menu editor (Edit services)"*:
 `.service-editor-summary`, `.service-editor-list`, `.service-editor-row`,
 `.service-editor-fields` (one row per service on a laptop; name on its own line,
 price and minutes sharing the next one under 720px), `.service-editor-actions` (the
-sticky save bar), `.service-editor-removed`, `.service-editor-hint`.
+sticky save bar: count and total on the left, **Back · Add · Save services** on the
+right, the three sharing one row under 720px), `.service-editor-removed`,
+`.service-editor-hint`.
 
-Tests: `src/components/EditSalonServices.test.jsx` (15) — the screen paints every
+Tests: `src/components/EditSalonServices.test.jsx` (17) — the screen paints every
 service as an input with no profile fields on it; the save carries services and
 removals only and never the salon id; a new row is sent without a `serviceId`;
 removal sends the id and Undo restores the whole row; a missing price blocks the
 save; a 404 is reported as the missing backend; Save is off until something changes;
 an empty menu offers the defaults; Enter walks a row and appends a new one; and the
 helpers (normalising a row, ordering, validation, duplicate names, the payload,
-name suggestions). `src/components/SalonAccountScreen.test.jsx` (+1) covers the
+name suggestions), the sticky **Back** beside Add and Save, and that leaving with
+unsaved edits goes through the confirmation. `src/components/SalonAccountScreen.test.jsx`
+(+1) covers the
 button beside Edit, the partner-menu row and the Services tile.
 
 ## 9. Notification destinations

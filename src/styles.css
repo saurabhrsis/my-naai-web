@@ -967,8 +967,12 @@ a.detail-info-row:hover { background: rgba(255, 255, 255, .03); }
      next one, and the note sits underneath — no horizontal squeeze at 360px. */
   .service-editor-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "name name" "price duration" "note note"; }
   .service-editor-actions { flex-wrap: wrap; }
-  .service-editor-buttons { width: 100%; }
-  .service-editor-buttons .btn { flex: 1; }
+  .service-editor-buttons { width: 100%; gap: 6px; }
+  .service-editor-buttons .btn { flex: 1 1 0; min-width: 0; padding: 0 10px; font-size: 10.5px; gap: 5px; }
+  /* Back, Add and Save share one row on a phone. Back is the shortest label, so it
+     keeps its natural width and the other two share what is left — three equal
+     thirds squeeze "Save services" at 320px. */
+  .service-editor-buttons .service-editor-back { flex: 0 0 auto; }
   .service-editor-hint { display: none; }
 }
 
