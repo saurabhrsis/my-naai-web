@@ -148,6 +148,23 @@ const DEV_MOCK_ENDPOINTS = {
     const filtered = wanted === 'ALL' ? requests : requests.filter(item => item.status === wanted);
     return { status: 'SUCCESS', data: { requests: filtered, pagination: { page: 1, limit: 20, totalPages: 1, totalRequests: filtered.length } } };
   },
+  // The partner price list, exactly the shape `POST /api/salons/plans/list`
+  // answers with once the backend patch is deployed — including a free trial of
+  // 90 days and a plan taken off sale, so the subscription screen can be reviewed
+  // against a backend that owns the numbers instead of against the seed.
+  '/api/salons/plans/list': {
+    status: 'SUCCESS',
+    data: {
+      plans: [
+        { id: 'monthly', title: 'Monthly Plan', label: 'Monthly Plan', price: 199, days: 30, duration: '1 Month (30 Days)', note: 'Flexible month-to-month growth', badge: '', sortOrder: 0, isActive: true, isFree: false },
+        { id: 'trial_2_months', title: 'Introductory', label: 'Introductory', price: 299, days: 60, duration: '2 Months (60 Days)', note: 'A gentle start for new partners', badge: '', sortOrder: 1, isActive: true, isFree: false },
+        { id: 'quarterly', title: 'Quarterly Plan', label: 'Quarterly Plan', price: 499, days: 90, duration: '3 Months (90 Days)', note: 'Best value for busy salons', badge: 'BEST VALUE', best: true, isRecommended: true, sortOrder: 2, isActive: true, isFree: false },
+      ],
+      freeTrial: { id: 'Free', title: 'Free trial', label: 'Free trial', price: 0, days: 90, duration: '3 Months (90 Days)', note: 'Start your salon journey at no cost', badge: 'DEFAULT', isFree: true },
+      currency: 'INR',
+      source: 'fixture',
+    },
+  },
   '/api/bookingRequest/owner-action': { status: 'SUCCESS' },
   '/api/notifications/register-device': { status: 'SUCCESS' },
   '/api/notifications/test-push': { status: 'SUCCESS' },
