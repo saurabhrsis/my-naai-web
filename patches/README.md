@@ -5,6 +5,8 @@ and verified with `git apply --check` on a clean checkout:
 
 | Patch | Repo | What it does |
 | --- | --- | --- |
+| [`backend-6-booking-request-admin-actions.patch`](backend-6-booking-request-admin-actions.patch) | `rightserveinfotechsystems/my_naai_backend` | **Booking requests open on today, the filters filter, and an admin can answer for a salon** — one IST range helper, the status/search `OR` split, per-status counts in SQL, and `POST /api/bookingRequest/admin/action/:id` through the salon's own locked accept path ([docs](../docs/BACKEND-BOOKING-REQUESTS-API.md) §§4–6) |
+| [`admin-panel-2-booking-requests.patch`](admin-panel-2-booking-requests.patch) | `rightserveinfotechsystems/my-naai-frontend` | the panel side of the same: today by default, status chips with the server's counts, page reset on every filter, a table that ellipsises instead of widening past the sidebar, and **Accept / Decline for salon** ([docs](../docs/ADMIN-PANEL-BOOKING-REQUESTS.md)) |
 | [`backend-shop-category-filter.patch`](backend-shop-category-filter.patch) | `rightserveinfotechsystems/my_naai_backend` | **the "Load more 88" fix** — the shop's category and gender filters become exact SQL, so the count, the pages and the grid are one list ([docs](../docs/BACKEND-SHOP-CATEGORY-FILTER.md)) |
 | [`backend-5-salon-services.patch`](backend-5-salon-services.patch) | `rightserveinfotechsystems/my_naai_backend` | `POST /api/salons/services/save` — the whole menu in one transaction, for the portal's Edit services screen ([docs](../docs/BACKEND-SALON-SERVICES-API.md)) |
 | [`backend-shop-customers.patch`](backend-shop-customers.patch) | `rightserveinfotechsystems/my_naai_backend` | customers as a second buyer + the website's no-token API |
@@ -52,11 +54,27 @@ git am /path/to/patches/backend-shop-category-filter.patch
 npm run shop:test-categories        # the classification table, both sides
 npm run shop:backfill-categories    # dry run; then re-run with -- --apply
 
+# backend — booking requests: today by default, filters, admin answers
+# (independent of the shop patches: it touches no shop file, so it can be taken
+# before or after them)
+git am /path/to/patches/backend-6-booking-request-admin-actions.patch
+# schema: the API adds the audit columns and the two indexes at boot. The SQL of
+# record is migrations/2026-11-05-booking-request-admin-actions.sql (in the patch).
+
 # admin panel
 git clone https://github.com/rightserveinfotechsystems/my-naai-frontend.git
 cd my-naai-frontend
 git am /path/to/patches/admin-panel-shop-customers.patch
+git am /path/to/patches/admin-panel-2-booking-requests.patch   # Booking requests tab
 ```
+
+### If "Show more products (88)" is still on screen
+
+That number is the **backend** still counting the whole catalogue for a filtered
+query. The website withholds it when it cannot be trusted
+(`src/components/ShopScreen.jsx`, pinned by `ShopScreen.test.jsx`), but the
+honest count only exists once `backend-shop-category-filter.patch` is applied and
+the API restarted. Nothing else is needed on the web side.
 
 Both are ordinary `git format-patch` output, so `git am` preserves the commit
 message; `git apply` works too if you prefer to commit yourself.

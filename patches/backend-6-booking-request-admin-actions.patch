@@ -1,0 +1,1602 @@
+From c987e9ff2b1e7688e17713955e018e63700643cc Mon Sep 17 00:00:00 2001
+From: Arena Agent <agent@arena.ai>
+Date: Thu, 5 Nov 2026 16:49:34 +0000
+Subject: [PATCH] Admin booking requests: today by default, working filters,
+ answer on a salon's behalf
+
+The admin panel's Booking requests tab opened on "Today" and listed every
+request the platform had ever taken: the list endpoint ignored the range
+unless an explicit from/to came with it, and its default was all time. Two
+controllers carried their own copy of the IST maths, and the service applied
+the result by slicing ten characters off an ISO string and calling it UTC
+midnight - a 5h30m shift that hid early-morning requests from "today".
+
+- utils/istRange.js is now the single place a range becomes a pair of instants
+  (TODAY by default, IST midnight to midnight, explicit bounds respected).
+- The status filter and the search box were flattened into one OR, so either
+  of them stopped filtering. They are separate AND groups now.
+- The list returns per-status counts for the selected window, derived in SQL
+  so auto-cancelled means the same thing to the chip as to the row.
+- Ordering is stable (created_at DESC, id DESC) and the applied filters are
+  echoed back, so the panel can print the window it is actually showing.
+  Indexes added for the default view.
+
+An admin may now answer a request on a salon's behalf. The old read-only rule
+existed because a second accept path would create two bookings for one
+request; that is answered here by not having a second path. Both
+/owner-action and the new /admin/action call applyRequestAction, which locks
+the row FOR UPDATE, refuses an already-answered or expired request, checks the
+booking pointer before creating one, and records acted_by_role /
+acted_by_admin_id / acted_at / on_behalf_of_salon. The salon is notified
+either way.
+---
+ ...26-11-05-booking-request-admin-actions.sql |  47 ++
+ .../adminBookingRequestAction.js              |  48 ++
+ .../adminBookingRequestSummary.js             |  62 +--
+ .../adminListBookingRequests.js               |  84 ++--
+ src/controller/bookingRequest/ownerAction.js  | 316 ++-----------
+ src/database/config/ensureShopSchema.js       |  14 +
+ src/database/models/bookingRequest.model.js   |  44 ++
+ src/routes/bookingRequest.routes.js           |  16 +-
+ src/services/bookingRequestAction.service.js  | 426 ++++++++++++++++++
+ src/services/bookingRequestLead.service.js    | 171 ++++---
+ src/utils/istRange.js                         | 112 +++++
+ 11 files changed, 896 insertions(+), 444 deletions(-)
+ create mode 100644 migrations/2026-11-05-booking-request-admin-actions.sql
+ create mode 100644 src/controller/bookingRequest/adminBookingRequestAction.js
+ create mode 100644 src/services/bookingRequestAction.service.js
+ create mode 100644 src/utils/istRange.js
+
+diff --git a/migrations/2026-11-05-booking-request-admin-actions.sql b/migrations/2026-11-05-booking-request-admin-actions.sql
+new file mode 100644
+index 0000000..c0e2d46
+--- /dev/null
++++ b/migrations/2026-11-05-booking-request-admin-actions.sql
+@@ -0,0 +1,47 @@
++-- 2026-11-05-booking-request-admin-actions.sql
++--
++-- Admins can answer a booking request on a salon's behalf.
++--
++-- The API never needed a second table for this: a request is a lead, and
++-- answering it writes the queue entry + booking exactly as the salon's own
++-- answer does (services/bookingRequestAction.service.js). What it needs is a
++-- record of WHO answered, and an index for the admin tab's "today, newest
++-- first, every salon" page.
++--
++-- Every statement is idempotent, and the same DDL is run at boot by
++-- src/database/config/ensureShopSchema.js — so a deploy that forgets to run
++-- this file still works, and running it twice changes nothing.
++
++BEGIN;
++
++-- ── Who answered ────────────────────────────────────────────────────────────
++-- Null on every existing row. That is not missing data: before this release a
++-- request could only be answered by its own salon, so a null reads as "SALON".
++ALTER TABLE IF EXISTS booking_requests
++    ADD COLUMN IF NOT EXISTS acted_by_role       VARCHAR(16);
++
++ALTER TABLE IF EXISTS booking_requests
++    ADD COLUMN IF NOT EXISTS acted_by_admin_id   VARCHAR(64);
++
++ALTER TABLE IF EXISTS booking_requests
++    ADD COLUMN IF NOT EXISTS acted_at            TIMESTAMPTZ;
++
++ALTER TABLE IF EXISTS booking_requests
++    ADD COLUMN IF NOT EXISTS on_behalf_of_salon  BOOLEAN NOT NULL DEFAULT FALSE;
++
++-- The admin's short note (why it was accepted/rejected on the salon's behalf).
++-- Shown to the salon, never to the customer.
++ALTER TABLE IF EXISTS booking_requests
++    ADD COLUMN IF NOT EXISTS admin_note          TEXT;
++
++-- ── The page the admin tab opens on ────────────────────────────────────────
++-- Default window is TODAY (IST), ordered created_at DESC, filtered by salon /
++-- status / search. The existing (salon_id, status, created_at) index cannot
++-- serve "every salon, today", which is the default view.
++CREATE INDEX IF NOT EXISTS idx_booking_requests_created_at
++    ON booking_requests (created_at DESC);
++
++CREATE INDEX IF NOT EXISTS idx_booking_requests_status_created
++    ON booking_requests (status, created_at DESC);
++
++COMMIT;
+diff --git a/src/controller/bookingRequest/adminBookingRequestAction.js b/src/controller/bookingRequest/adminBookingRequestAction.js
+new file mode 100644
+index 0000000..613c6b1
+--- /dev/null
++++ b/src/controller/bookingRequest/adminBookingRequestAction.js
+@@ -0,0 +1,48 @@
++const { applyRequestAction } = require('../../services/bookingRequestAction.service');
++
++/**
++ * An admin answering a lead on a salon's behalf.
++ *
++ * Body: `{ action: 'ACCEPT' | 'REJECT' | 'DELAY', delayMinutes?, reason? }`
++ *
++ * Why this exists: the Booking requests tab used to be read-only on purpose
++ * ("an admin does not accept on a salon's behalf"). That is no longer the
++ * operating rule — when a salon's phone is dead and the customer is standing at
++ * the counter, somebody has to take the chair. What has NOT changed is the
++ * reason the old rule existed: two answers to one request must never create two
++ * bookings. So this endpoint does not implement an accept; it calls
++ * `applyRequestAction` with `actor.role = 'ADMIN'`, which
++ *
++ *   · locks the request row for the whole transaction,
++ *   · refuses a request that already has a booking or an answer,
++ *   · refuses one past its 60 second window,
++ *   · records `acted_by_role / acted_by_admin_id / acted_at / on_behalf_of_salon`,
++ *   · tells the salon (in-app + socket) that My Naai answered for it.
++ *
++ * The salon id is the request's OWN salon — taken from the row after it is
++ * loaded, never from the body. `reason` is optional for an accept and expected
++ * for a reject; it is stored (500 chars) and shown to the salon.
++ */
++const adminBookingRequestAction = async (request, response) => {
++    const { action, delayMinutes = null, reason = null } = request.body || {};
++    const { bookingRequestId } = request.params;
++
++    // authenticateAdmin puts the Admin row on `request.admin`; its primary key
++    // is `id` (the token calls it adminId).
++    if (!request.admin?.id) {
++        return response.status(401).json({ status: 'FAILED', message: 'Not authorized' });
++    }
++
++    const result = await applyRequestAction({
++        bookingRequestId,
++        action,
++        delayMinutes,
++        reason,
++        actor: { role: 'ADMIN', adminId: request.admin.id },
++        io: request.io
++    });
++
++    return response.status(result.httpStatus).json(result.payload);
++};
++
++module.exports = adminBookingRequestAction;
+diff --git a/src/controller/bookingRequest/adminBookingRequestSummary.js b/src/controller/bookingRequest/adminBookingRequestSummary.js
+index 13440d7..1571112 100644
+--- a/src/controller/bookingRequest/adminBookingRequestSummary.js
++++ b/src/controller/bookingRequest/adminBookingRequestSummary.js
+@@ -1,50 +1,22 @@
+ const bookingRequestLeadService = require('../../services/bookingRequestLead.service');
+-
+-const getDateRange = (range = "ALL") => {
+-    const now = new Date();
+-
+-    // Current date in IST
+-    const istDate = new Date(
+-        now.getTime() + 5.5 * 60 * 60 * 1000
+-    );
+-
+-    // IST midnight represented as UTC timestamp
+-    const todayStart = Date.UTC(
+-        istDate.getUTCFullYear(),
+-        istDate.getUTCMonth(),
+-        istDate.getUTCDate()
+-    ) - (5.5 * 60 * 60 * 1000);
+-
+-    let fromDate = null;
+-    let toDate = null;
+-
+-    switch (range) {
+-        case "TODAY":
+-            fromDate = new Date(todayStart);
+-            toDate = new Date(todayStart + 86400000);
+-            break;
+-
+-        case "WEEK":
+-            fromDate = new Date(todayStart - 6 * 86400000);
+-            toDate = new Date(todayStart + 86400000);
+-            break;
+-
+-        case "MONTH":
+-            fromDate = new Date(todayStart - 29 * 86400000);
+-            toDate = new Date(todayStart + 86400000);
+-            break;
+-
+-        case "ALL":
+-        default:
+-            break;
+-    }
+-
+-    return { fromDate, toDate };
+-};
++const { resolveRange } = require('../../utils/istRange');
++
++/**
++ * The admin panel's counters and per-salon report.
++ *
++ * Body: `{ range?, fromDate?, toDate?, salonId? }`
++ *
++ * The window comes from the same helper the list uses (`utils/istRange`), and
++ * defaults to TODAY like the list does. That is the whole point: the tiles and
++ * the table below them answer for the same window, always. They used to have a
++ * copy of this maths each, and they disagreed with the service that applied the
++ * bounds — the tiles said "today" while the table showed all time.
++ */
+ const adminBookingRequestSummary = async (request, response) => {
+     try {
+-        const { range = 'ALL', salonId } = request.body || {};
+-        const { fromDate, toDate } = getDateRange(range);
++        const body = request.body || {};
++        const { range, fromDate, toDate } = resolveRange(body);
++        const { salonId } = body;
+ 
+         const data = await bookingRequestLeadService.adminSummary({
+             range,
+@@ -56,7 +28,7 @@ const adminBookingRequestSummary = async (request, response) => {
+         return response.status(200).json({
+             status: 'SUCCESS',
+             message: 'Booking request summary fetched successfully',
+-            data
++            data: { ...data, filters: { range, fromDate, toDate, salonId: salonId || null } }
+         });
+     } catch (error) {
+         console.error('ADMIN BOOKING REQUEST SUMMARY ERROR:', error);
+diff --git a/src/controller/bookingRequest/adminListBookingRequests.js b/src/controller/bookingRequest/adminListBookingRequests.js
+index ae6d8fe..9c559f2 100644
+--- a/src/controller/bookingRequest/adminListBookingRequests.js
++++ b/src/controller/bookingRequest/adminListBookingRequests.js
+@@ -1,52 +1,34 @@
+ const bookingRequestLeadService = require('../../services/bookingRequestLead.service');
++const { resolveRange } = require('../../utils/istRange');
+ 
+-const getDateRange = (range = "ALL") => {
+-    const now = new Date();
+-
+-    // Current date in IST
+-    const istDate = new Date(
+-        now.getTime() + 5.5 * 60 * 60 * 1000
+-    );
+-
+-    // IST midnight represented as UTC timestamp
+-    const todayStart = Date.UTC(
+-        istDate.getUTCFullYear(),
+-        istDate.getUTCMonth(),
+-        istDate.getUTCDate()
+-    ) - (5.5 * 60 * 60 * 1000);
+-
+-    let fromDate = null;
+-    let toDate = null;
+-
+-    switch (range) {
+-        case "TODAY":
+-            fromDate = new Date(todayStart);
+-            toDate = new Date(todayStart + 86400000);
+-            break;
+-
+-        case "WEEK":
+-            fromDate = new Date(todayStart - 6 * 86400000);
+-            toDate = new Date(todayStart + 86400000);
+-            break;
+-
+-        case "MONTH":
+-            fromDate = new Date(todayStart - 29 * 86400000);
+-            toDate = new Date(todayStart + 86400000);
+-            break;
+-
+-        case "ALL":
+-        default:
+-            break;
+-    }
+-
+-    return { fromDate, toDate };
+-};
+-
++/**
++ * The admin panel's Booking requests table.
++ *
++ * Body: `{ range?, fromDate?, toDate?, status?, salonId?, search?, page?, limit? }`
++ *
++ * ── What was wrong with it ───────────────────────────────────────────────
++ * The panel sent `range: 'TODAY'` and this endpoint ignored it unless the
++ * caller ALSO sent `fromDate`/`toDate`, so the default was `ALL`: the tiles said
++ * "today" and the table underneath listed every request the platform had ever
++ * taken. Both are now resolved here, from one helper, for the list and the
++ * summary alike — a tab can no longer show two different windows at once.
++ *
++ * `range` is echoed back in `filters` so the panel can print the window it is
++ * actually looking at instead of assuming the one it asked for.
++ *
++ * ── Volume ───────────────────────────────────────────────────────────────
++ * Every filter is applied in SQL before LIMIT/OFFSET, the order is stable
++ * (`created_at DESC, booking_request_id DESC`, so paging cannot repeat or skip a
++ * row), and `statusCounts` gives the chip row its numbers from the same window
++ * — so a platform with tens of thousands of leads is a page of 25 plus one
++ * GROUP BY, not a download.
++ */
+ const adminListBookingRequests = async (request, response) => {
+     try {
+-        const { salonId, status, search, page, limit, range } = request.body || {};
+-        const { fromDate, toDate } = getDateRange(range);
+-        console.log("range", range, fromDate, toDate)
++        const body = request.body || {};
++        const { range, fromDate, toDate } = resolveRange(body);
++        const { salonId, status, search, page, limit } = body;
++
+         const data = await bookingRequestLeadService.listAdminLeads({
+             salonId: salonId || undefined,
+             status: status || 'ALL',
+@@ -60,7 +42,17 @@ const adminListBookingRequests = async (request, response) => {
+         return response.status(200).json({
+             status: 'SUCCESS',
+             message: 'Booking requests fetched successfully',
+-            data
++            data: {
++                ...data,
++                filters: {
++                    range,
++                    fromDate,
++                    toDate,
++                    status: status || 'ALL',
++                    salonId: salonId || null,
++                    search: String(search || '').trim()
++                }
++            }
+         });
+     } catch (error) {
+         console.error('ADMIN LIST BOOKING REQUESTS ERROR:', error);
+diff --git a/src/controller/bookingRequest/ownerAction.js b/src/controller/bookingRequest/ownerAction.js
+index 17c58e4..e00a745 100644
+--- a/src/controller/bookingRequest/ownerAction.js
++++ b/src/controller/bookingRequest/ownerAction.js
+@@ -1,294 +1,30 @@
+-const db = require('../../database/models');
+-const { Op } = require('sequelize');
+-const sendNotificationToDevice = require('../../firebase/sendNotification');
+-const { formatTo12Hour } = require('../../utils/timeFormat');
+-const { scheduleAutoCancelTask, deleteBookingAutoCancelTask } = require('../../tasks/autoCancelTask');
+-const { createBookingReminderTask } = require('../../tasks/bookingReminderTask');
+-
++const { applyRequestAction } = require('../../services/bookingRequestAction.service');
++
++/**
++ * The salon's answer to a lead — the web tab, the mobile app's alert card and
++ * everything else that speaks this endpoint.
++ *
++ * The rules (the 60 second window, "already actioned", one booking per request,
++ * the queue entry and the reminders) live in
++ * `services/bookingRequestAction.service.js`, because an admin may now answer on
++ * a salon's behalf through a second endpoint and the two must not be able to
++ * disagree — or to create two bookings for one request.
++ *
++ * The salon id comes from the token. A body never names the salon.
++ */
+ const ownerActionBooking = async (req, res) => {
+-    const t = await db.sequelize.transaction();
+-    try {
+-        const { action, delayMinutes = null } = req.body; // 'ACCEPT' | 'REJECT' | 'DELAY'
+-        const { bookingRequestId } = req.params;
+-        const ownerId = req.salon.salonId;
+-
+-        const bookingRequest = await db.BookingRequest.findByPk(bookingRequestId, { transaction: t });
+-        if (!bookingRequest) {
+-            await t.rollback();
+-            return res.status(404).json({ status: 'FAILED', message: 'Booking request not found.' });
+-        }
+-
+-        if (bookingRequest.status === 'CANCELLED' || bookingRequest.status === 'AUTO_CANCELLED') {
+-            await t.rollback();
+-            return res.status(200).json({ status: 'FAILED', message: 'Booking request already cancelled' });
+-        }
+-
+-        // The 60 second window. A request past it is auto-cancelled whether or
+-        // not the sweeper has written that down yet, so the answer is a plain
+-        // sentence instead of an accept that cannot succeed. `responded_at` is
+-        // stamped with the deadline (not "now") so the lead's response time
+-        // stays honest.
+-        const expiresAt = bookingRequest.expiresAt ? new Date(bookingRequest.expiresAt).getTime() : null;
+-        if (bookingRequest.status === 'PENDING' && expiresAt && expiresAt <= Date.now()) {
+-            bookingRequest.status = 'AUTO_CANCELLED';
+-            bookingRequest.respondedAt = bookingRequest.respondedAt || bookingRequest.expiresAt;
+-            await bookingRequest.save({ transaction: t });
+-            await t.commit();
+-            return res.status(200).json({
+-                status: 'FAILED',
+-                message: 'This request has expired and was cancelled automatically'
+-            });
+-        }
+-
+-        if (['ACCEPTED', 'REJECTED', 'DELAY_PROPOSED'].includes(bookingRequest?.status)) {
+-            await t.rollback();
+-            return res.status(200).json({ status: 'FAILED', message: 'This request was already actioned' });
+-        }
+-
+-        const user = await db.User.findByPk(bookingRequest.customerId, { attributes: ['userId', 'fullName', 'deviceToken'] });
+-        if (!user?.deviceToken) {
+-            console.log('❌ No device token found for customer');
+-        }
+-        const userName = user ? user.fullName : 'Customer';
+-        const deviceTokens = user && user.deviceToken ? [user.deviceToken] : [];
+-        const uniqueTokens = [...new Set(deviceTokens.map(dt => dt))];
+-        //cancel the auto cancel task if owner took action
+-        if (bookingRequest?.autoCancelTaskName) {
+-            // await deleteBookingAutoCancelTask(bookingRequest.autoCancelTaskName);
+-        }
+-
+-        // --------------------------
+-        // 1️⃣ REJECT
+-        // --------------------------
+-        if (action === 'REJECT') {
+-            bookingRequest.status = 'REJECTED';
+-            // An answer, with a time — the leads tab reports the response time
+-            // and the admin report takes its median from it.
+-            bookingRequest.respondedAt = new Date();
+-            await bookingRequest.save({ transaction: t });
+-
+-            // Notify customer
+-
+-            for (const deviceToken of uniqueTokens) {
+-                await sendNotificationToDevice(deviceToken, 'Booking Rejected', `Your booking request has been rejected by the salon.`,
+-                    {
+-                        bookingRequestId: bookingRequest.bookingRequestId,
+-                        type: 'BOOKING_REJECTED'
+-                    },
+-                );
+-            }
+-
+-            await db.Notification.create({
+-                receiverType: 'USER',
+-                receiverId: bookingRequest.customerId,
+-                title: 'Booking Rejected',
+-                message: 'Your booking request has been rejected by the salon.'
+-            }, { transaction: t });
+-
+-            req.io.to(`user_${bookingRequest?.customerId}`).emit("booking_status_updated", {
+-                title: "Booking Rejected",
+-                message: "Your booking request has been rejected by the salon.",
+-                bookingId: bookingRequest.bookingRequestId
+-            });
+-
+-            await t.commit();
+-            return res.status(200).json({ status: 'SUCCESS', message: 'Booking request rejected' });
+-        }
+-
+-        // --------------------------
+-        // 2️⃣ DELAY
+-        // --------------------------
+-        if (action === 'DELAY') {
+-            if (!delayMinutes) {
+-                await t.rollback();
+-                return res.status(400).json({ status: 'FAILED', message: 'Delay minutes required' });
+-            }
+-
+-            const originalTime = new Date(`${bookingRequest.bookingDate}T${bookingRequest.startTime}`);
+-            const proposedTime = new Date(originalTime.getTime() + delayMinutes * 60 * 1000);
+-
+-            // Format HH:MM
+-            const hours = proposedTime.getHours().toString().padStart(2, '0');
+-            const minutes = proposedTime.getMinutes().toString().padStart(2, '0');
+-            const proposedTimeStr = formatTo12Hour(proposedTime.toTimeString().slice(0, 5));
+-
+-            bookingRequest.status = 'DELAY_PROPOSED';
+-            bookingRequest.delayMinutes = delayMinutes;
+-            await bookingRequest.save({ transaction: t });
+-
+-            // Notify customer
+-
+-
+-
+-            for (const deviceToken of uniqueTokens) {
+-                await sendNotificationToDevice(deviceToken, 'Booking Delay Proposed',
+-                    `Salon proposed to delay your booking to ${proposedTimeStr}. Accept or Reject?`,
+-                    {
+-                        bookingRequestId: bookingRequest.bookingRequestId,
+-                        type: 'DELAY_TIME_PROPOSAL',
+-                        delayMinutes: delayMinutes,
+-                        proposedTime: proposedTimeStr
+-                    },
+-
+-                );
+-            }
+-
+-            await db.Notification.create({
+-                receiverType: 'USER',
+-                receiverId: bookingRequest.customerId,
+-                title: 'Booking Delay Proposed',
+-                message: `Salon proposed to delay your booking to ${proposedTimeStr}. Accept or Reject?`
+-            }, { transaction: t });
+-
+-            await t.commit();
+-
+-            // ⏱️ CUSTOMER RESPONSE → 1 MIN AUTO-CANCEL
+-            try {
+-                await scheduleAutoCancelTask({
+-                    bookingRequestId: bookingRequest.bookingRequestId,
+-                    delayInSeconds: 60, // 1 minute
+-                });
+-            } catch (err) {
+-                console.error('Error scheduling auto-cancel for delayed booking:', err);
+-            }
+-
+-            req.io.to(`user_${bookingRequest?.customerId}`).emit("booking_status_updated", {
+-                title: "Booking Delay Proposed",
+-                message: `Salon proposed to delay your booking to ${proposedTimeStr}. Accept or Reject?`,
+-                bookingId: bookingRequest.bookingRequestId,
+-            });
+-            return res.status(200).json({ status: 'SUCCESS', message: 'Delay proposed to customer' });
+-        }
+-
+-
+-        // --------------------------
+-        // 3️⃣ ACCEPT
+-        // --------------------------
+-        if (action === 'ACCEPT') {
+-            bookingRequest.status = 'ACCEPTED';
+-            bookingRequest.respondedAt = new Date();
+-            await bookingRequest.save({ transaction: t });
+-
+-            // ✅ Create Queue
+-            const services = await db.Service.findAll({ where: { serviceId: { [Op.in]: bookingRequest.serviceIds.map(s => s.serviceId) } } });
+-            const totalDuration = services.reduce((sum, s) => sum + s.durationMinutes, 0);
+-
+-            const bookingStartTime = new Date(`${bookingRequest.bookingDate}T${bookingRequest.startTime}`);
+-            const bookingEndTime = new Date(bookingStartTime.getTime() + totalDuration * 60 * 1000);
+-
+-
+-            const bookingTime12hr = formatTo12Hour(bookingRequest.startTime);
+-            // Queue number
+-            const lastQueue = await db.Queue.findOne({
+-                where: { salonId: bookingRequest.salonId, bookingDate: bookingRequest.bookingDate },
+-                order: [['queueNumber', 'DESC']],
+-                transaction: t
+-            });
+-            const queueNumber = lastQueue ? lastQueue.queueNumber + 1 : 1;
+-
+-            const queue = await db.Queue.create({
+-                salonId: bookingRequest.salonId,
+-                userId: bookingRequest.customerId,
+-                barberId: bookingRequest.barberId,
+-                bookingDate: bookingRequest.bookingDate,
+-                bookingTime: bookingRequest.startTime,
+-                queueNumber,
+-                estimatedWaitTime: totalDuration,
+-            }, { transaction: t });
+-
+-            // ✅ Create Booking
+-            const booking = await db.Booking.create({
+-                queueId: queue.queueId,
+-                salonId: bookingRequest.salonId,
+-                userId: bookingRequest.customerId,
+-                barberId: bookingRequest.barberId,
+-                bookingDate: bookingRequest.bookingDate,
+-                bookingTime: bookingRequest.startTime,
+-                bookingEndTime: bookingEndTime.toTimeString().slice(0, 8),
+-                bookingStatus: 'confirmed',
+-                services: bookingRequest.serviceIds,
+-                serviceDuration: totalDuration,
+-                bookingRequestId: bookingRequest.bookingRequestId
+-            }, { transaction: t });
+-
+-
+-            // Set reminder time for booking
+-            const bookingDateTime = new Date(
+-                `${booking.bookingDate}T${booking.bookingTime}+05:30` //  salon is in IST timezone, adjust as needed    
+-            );
+-
+-            // Set reminder 20 minute before booking time
+-            booking.reminderTime = new Date(
+-                // bookingDateTime.getTime() - 20 * 60 * 1000
+-                bookingDateTime.getTime() - 10 * 60 * 1000
+-            );
+-
+-            booking.reminderSent = false;
+-
+-
+-            await booking.save({ transaction: t });
+-
+-            // The request keeps a POINTER to the booking, not a copy of it: the
+-            // two stay separate tables (a request is a lead, a booking is a
+-            // chair), and this id is the only link between them.
+-            bookingRequest.bookingId = booking.bookingId;
+-            bookingRequest.routedBarberId = bookingRequest.routedBarberId || bookingRequest.barberId || null;
+-            await bookingRequest.save({ transaction: t });
+-
+-
+-            // Notify customer
+-
+-            for (const deviceToken of uniqueTokens) {
+-                await sendNotificationToDevice(deviceToken, 'Booking Confirmed', `Your booking at salon is confirmed for ${bookingTime12hr}`,
+-                    {
+-                        bookingRequestId: bookingRequest.bookingRequestId,
+-                        type: 'BOOKING_CONFIRMED'
+-                    },
+-
+-                );
+-            }
+-
+-            await db.Notification.create({
+-                receiverType: 'USER',
+-                receiverId: bookingRequest.customerId,
+-                title: 'Booking Confirmed',
+-                message: `Your booking at salon is confirmed for ${bookingTime12hr}`
+-            }, { transaction: t });
+-
+-            await t.commit();
+-            try {
+-                await createBookingReminderTask(booking);
+-            } catch (reminderError) {
+-                console.error('Error creating booking reminder task:', reminderError);
+-            }
+-            req.io.to(`user_${bookingRequest?.customerId}`).emit("booking_status_updated", {
+-                title: "Booking Accepted",
+-                message: "Your booking request has been accepted by the salon.",
+-                bookingId: bookingRequest.bookingRequestId
+-            });
+-
+-            req.io.to(`salon_${ownerId}`).emit("queue_updated", {
+-                title: "Booking Confirmed",
+-                message: `Your booking at salon is confirmed for ${bookingTime12hr}`,
+-                bookingId: bookingRequest.bookingRequestId
+-            });
+-            return res.status(200).json({
+-                status: 'SUCCESS',
+-                message: 'Booking request accepted and confirmed',
+-                data: booking
+-            });
+-        }
+-
+-
+-
+-        await t.rollback();
+-        return res.status(400).json({ status: 'FAILED', message: 'Invalid action. Allowed values: ACCEPT, REJECT, DELAY' });
+-
+-    } catch (error) {
+-        await t.rollback();
+-        console.error('OWNER ACTION ERROR:', error);
+-        return res.status(500).json({ status: 'FAILED', message: error.message });
+-    }
++    const { action, delayMinutes = null } = req.body || {};
++    const { bookingRequestId } = req.params;
++
++    const result = await applyRequestAction({
++        bookingRequestId,
++        action,
++        delayMinutes,
++        actor: { role: 'SALON', salonId: req.salon?.salonId },
++        io: req.io
++    });
++
++    return res.status(result.httpStatus).json(result.payload);
+ };
+ 
+ module.exports = { ownerActionBooking };
+diff --git a/src/database/config/ensureShopSchema.js b/src/database/config/ensureShopSchema.js
+index 06905ad..ed18e77 100644
+--- a/src/database/config/ensureShopSchema.js
++++ b/src/database/config/ensureShopSchema.js
+@@ -74,6 +74,20 @@ const STATEMENTS = [
+     `CREATE INDEX IF NOT EXISTS idx_booking_requests_salon_status ON booking_requests (salon_id, status, created_at DESC);`,
+     `CREATE INDEX IF NOT EXISTS idx_booking_requests_pending_expiry ON booking_requests (expires_at) WHERE status = 'PENDING';`,
+ 
++    // ── Who answered, and the index the admin tab pages through ──────────
++    // An admin may answer on a salon's behalf, so the row records the actor.
++    // Nullable on purpose: every existing row was answered by its salon, and
++    // the panel reads a null as exactly that.
++    `ALTER TABLE IF EXISTS booking_requests ADD COLUMN IF NOT EXISTS acted_by_role VARCHAR(16);`,
++    `ALTER TABLE IF EXISTS booking_requests ADD COLUMN IF NOT EXISTS acted_by_admin_id VARCHAR(64);`,
++    `ALTER TABLE IF EXISTS booking_requests ADD COLUMN IF NOT EXISTS acted_at TIMESTAMPTZ;`,
++    `ALTER TABLE IF EXISTS booking_requests ADD COLUMN IF NOT EXISTS on_behalf_of_salon BOOLEAN NOT NULL DEFAULT FALSE;`,
++    `ALTER TABLE IF EXISTS booking_requests ADD COLUMN IF NOT EXISTS admin_note TEXT;`,
++    // The admin tab opens on TODAY and pages newest-first across every salon;
++    // without this it is a sequential scan of the whole lead table per page.
++    `CREATE INDEX IF NOT EXISTS idx_booking_requests_created_at ON booking_requests (created_at DESC);`,
++    `CREATE INDEX IF NOT EXISTS idx_booking_requests_status_created ON booking_requests (status, created_at DESC);`,
++
+     // ── Bulk upload ──────────────────────────────────────────────────────
+     `CREATE TABLE IF NOT EXISTS shop_product_imports (
+         id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+diff --git a/src/database/models/bookingRequest.model.js b/src/database/models/bookingRequest.model.js
+index bd5b48e..ed71ba1 100644
+--- a/src/database/models/bookingRequest.model.js
++++ b/src/database/models/bookingRequest.model.js
+@@ -126,6 +126,50 @@ module.exports = (sequelize) => {
+         allowNull: true,
+         field: 'routed_barber_id',
+       },
++
++      // ── Who answered ─────────────────────────────────────────────────────
++      // A booking request is normally answered by its own salon. An admin may
++      // answer on the salon's behalf (a dead phone, a customer at the counter),
++      // and when that happens the row has to say so: the salon's tab shows
++      // "accepted by My Naai on your behalf", and a support conversation can be
++      // settled from the record instead of from memory.
++      //
++      // Null on rows written before this column existed, which read as the
++      // salon's own answer — that is what they were.
++      actedByRole: {
++        type: DataTypes.STRING(16),
++        allowNull: true,
++        field: 'acted_by_role',
++        comment: "'SALON' | 'ADMIN'",
++      },
++
++      actedByAdminId: {
++        type: DataTypes.STRING(64),
++        allowNull: true,
++        field: 'acted_by_admin_id',
++      },
++
++      actedAt: {
++        type: DataTypes.DATE,
++        allowNull: true,
++        field: 'acted_at',
++      },
++
++      onBehalfOfSalon: {
++        type: DataTypes.BOOLEAN,
++        allowNull: true,
++        defaultValue: false,
++        field: 'on_behalf_of_salon',
++      },
++
++      // Why the platform team answered this way. Kept short (the controller
++      // caps it at 500 characters) and shown to the salon, never to the
++      // customer.
++      adminNote: {
++        type: DataTypes.TEXT,
++        allowNull: true,
++        field: 'admin_note',
++      },
+     },
+     {
+       sequelize,
+diff --git a/src/routes/bookingRequest.routes.js b/src/routes/bookingRequest.routes.js
+index 48c4707..f6ef329 100644
+--- a/src/routes/bookingRequest.routes.js
++++ b/src/routes/bookingRequest.routes.js
+@@ -10,6 +10,7 @@ const listSalonBookingRequests = require('../controller/bookingRequest/listSalon
+ const salonBookingRequestSummary = require('../controller/bookingRequest/salonBookingRequestSummary');
+ const adminListBookingRequests = require('../controller/bookingRequest/adminListBookingRequests');
+ const adminBookingRequestSummary = require('../controller/bookingRequest/adminBookingRequestSummary');
++const adminBookingRequestAction = require('../controller/bookingRequest/adminBookingRequestAction');
+ const { authenticateAdmin } = require('../utils/middleware/auth.middleware');
+ const bookingRequestRouter = express.Router();
+ 
+@@ -28,14 +29,23 @@ bookingRequestRouter.post('/auto-cancel', autoCancelBooking);
+ //   admin/list      the admin panel's Booking requests tab
+ //   admin/summary   platform counters + the per-salon answered/missed report
+ //
+-// Accept / reject still goes through `/owner-action/:bookingRequestId` above,
+-// so the web tab, the mobile app and the alert card cannot disagree about what
+-// an accept does.
++// A salon's accept / reject goes through `/owner-action/:bookingRequestId` and
++// an admin's through `/admin/action/:bookingRequestId`; both are thin wrappers
++// over `services/bookingRequestAction.service.js`, so the web tab, the mobile
++// app and the alert card cannot disagree about what an accept does.
+ bookingRequestRouter.post('/salon/list', authenticateSalon, listSalonBookingRequests);
+ bookingRequestRouter.post('/salon/summary', authenticateSalon, salonBookingRequestSummary);
+ bookingRequestRouter.post('/admin/list', authenticateAdmin, adminListBookingRequests);
+ bookingRequestRouter.post('/admin/summary', authenticateAdmin, adminBookingRequestSummary);
+ 
++// An admin answering on a salon's behalf. It is NOT a second accept
++// implementation: it calls the same `applyRequestAction` as `/owner-action`
++// above, with an ADMIN actor, so the answer window, the "already actioned"
++// guard, the row lock and the one-booking-per-request rule are the same code.
++// `acted_by_role` / `acted_by_admin_id` / `on_behalf_of_salon` record who
++// answered, and the salon is notified.
++bookingRequestRouter.post('/admin/action/:bookingRequestId', authenticateAdmin, adminBookingRequestAction);
++
+ 
+ 
+ 
+diff --git a/src/services/bookingRequestAction.service.js b/src/services/bookingRequestAction.service.js
+new file mode 100644
+index 0000000..ba2dad7
+--- /dev/null
++++ b/src/services/bookingRequestAction.service.js
+@@ -0,0 +1,426 @@
++// services/bookingRequestAction.service.js
++//
++// Answering a booking request — ACCEPT / REJECT / DELAY — in ONE place.
++//
++// There are two doors onto this: the salon owner's tab (`POST
++// /api/bookingRequest/owner-action/:id`, and the same endpoint from the mobile
++// app) and, since admins may answer on a salon's behalf, the admin panel
++// (`POST /api/bookingRequest/admin/action/:id`). Both call this function.
++//
++// They have to call the SAME function, not a copy each, for the reason the
++// original implementation was careful about: an accept creates a queue entry
++// and a booking, so a second path would put two customers in one chair for one
++// request. The rules below are therefore shared, not re-implemented:
++//
++//   1. The row is locked (`SELECT … FOR UPDATE`) for the whole transaction.
++//      Before this, two answers arriving in the same second both read
++//      `status = PENDING`, both passed the guard, and both created a booking.
++//      The lock makes the second one wait, then read ACCEPTED.
++//   2. A request that already carries a `booking_id` never creates another one.
++//   3. Past its window, a request is AUTO_CANCELLED — written down here and
++//      refused, so an accept can never succeed after the deadline.
++//   4. Only the roles in `ACTOR_ROLES` may answer, and an admin answer is
++//      recorded as such: `acted_by_role`, `acted_by_admin_id`, `acted_at`,
++//      `on_behalf_of_salon`. The salon's tab shows "accepted by My Naai on your
++//      behalf" from those columns, so nobody has to guess who moved the chair.
++
++const db = require('../database/models');
++const { Op } = require('sequelize');
++const sendNotificationToDevice = require('../firebase/sendNotification');
++const { formatTo12Hour } = require('../utils/timeFormat');
++const { scheduleAutoCancelTask } = require('../tasks/autoCancelTask');
++const { createBookingReminderTask } = require('../tasks/bookingReminderTask');
++
++const ACTOR_ROLES = ['SALON', 'ADMIN'];
++
++const ACTIONS = ['ACCEPT', 'REJECT', 'DELAY'];
++
++// The salon-facing sentence for an answer given by the platform team. The
++// customer is never told who answered: from their side "the salon" is the
++// service, and an internal routing detail is not their business.
++const adminAnswered = (label) => `An admin ${label} this request on behalf of the salon`;
++
++const fail = (httpStatus, message) => ({ httpStatus, payload: { status: 'FAILED', message } });
++
++/**
++ * Answer one request.
++ *
++ * @param {object}  input
++ * @param {string}  input.bookingRequestId
++ * @param {'ACCEPT'|'REJECT'|'DELAY'} input.action
++ * @param {number}  [input.delayMinutes]  DELAY only
++ * @param {string}  [input.reason]        admin only, optional; shown to the salon
++ * @param {object}  input.actor           `{ role: 'SALON', salonId }` or `{ role: 'ADMIN', adminId }`
++ * @param {object}  [input.io]            socket server (`req.io`)
++ * @returns {Promise<{ httpStatus: number, payload: object }>}
++ */
++const applyRequestAction = async ({
++    bookingRequestId,
++    action,
++    delayMinutes = null,
++    reason = null,
++    actor,
++    io
++} = {}) => {
++    if (!actor || !ACTOR_ROLES.includes(actor.role)) {
++        return fail(401, 'Not authorized');
++    }
++    if (!ACTIONS.includes(action)) {
++        return fail(400, 'Invalid action. Allowed values: ACCEPT, REJECT, DELAY');
++    }
++    if (actor.role === 'SALON' && !actor.salonId) {
++        return fail(401, 'Not authorized');
++    }
++
++    const transaction = await db.sequelize.transaction();
++    try {
++        // 1. Lock the row. `FOR UPDATE` inside the transaction is what makes two
++        //    simultaneous answers (salon + admin, or two of either) serialise.
++        let bookingRequest = await db.BookingRequest.findByPk(bookingRequestId, {
++            transaction,
++            lock: transaction.LOCK.UPDATE
++        });
++
++        if (!bookingRequest) {
++            await transaction.rollback();
++            return fail(404, 'Booking request not found.');
++        }
++
++        // 2. An admin may answer for any salon; a salon may answer only its own.
++        //    The salon id comes from the token, never from the body.
++        if (actor.role === 'SALON' && String(bookingRequest.salonId) !== String(actor.salonId)) {
++            await transaction.rollback();
++            return fail(403, 'This request does not belong to your salon');
++        }
++
++        // 3. Already answered: refuse, and say so with the booking it produced so
++        //    the panel can point at the chair that exists.
++        if (bookingRequest.bookingId) {
++            await transaction.rollback();
++            return {
++                httpStatus: 200,
++                payload: {
++                    status: 'FAILED',
++                    message: 'This request was already actioned',
++                    data: { bookingId: bookingRequest.bookingId, status: bookingRequest.status }
++                }
++            };
++        }
++
++        if (bookingRequest.status === 'CANCELLED' || bookingRequest.status === 'AUTO_CANCELLED') {
++            await transaction.rollback();
++            return fail(200, 'Booking request already cancelled');
++        }
++
++        // 4. The 60 second window. A request past it is auto-cancelled whether or
++        //    not the sweeper has written that down yet, so the answer is a plain
++        //    sentence instead of an accept that cannot succeed. `responded_at` is
++        //    stamped with the deadline (not \"now\") so the lead's response time
++        //    stays honest.
++        const expiresAt = bookingRequest.expiresAt ? new Date(bookingRequest.expiresAt).getTime() : null;
++        if (bookingRequest.status === 'PENDING' && expiresAt && expiresAt <= Date.now()) {
++            bookingRequest.status = 'AUTO_CANCELLED';
++            bookingRequest.respondedAt = bookingRequest.respondedAt || bookingRequest.expiresAt;
++            await bookingRequest.save({ transaction });
++            await transaction.commit();
++            return fail(200, 'This request has expired and was cancelled automatically');
++        }
++
++        if (['ACCEPTED', 'REJECTED', 'DELAY_PROPOSED'].includes(bookingRequest.status)) {
++            await transaction.rollback();
++            return fail(200, 'This request was already actioned');
++        }
++
++        const user = await db.User.findByPk(bookingRequest.customerId, {
++            attributes: ['userId', 'fullName', 'deviceToken']
++        });
++        const deviceTokens = user && user.deviceToken ? [user.deviceToken] : [];
++        const uniqueTokens = [...new Set(deviceTokens)];
++
++        // The audit stamp, written with the answer rather than after it.
++        const stampAnswer = () => {
++            bookingRequest.actedByRole = actor.role;
++            bookingRequest.actedByAdminId = actor.role === 'ADMIN' ? String(actor.adminId || '') : null;
++            bookingRequest.actedAt = new Date();
++            bookingRequest.onBehalfOfSalon = actor.role === 'ADMIN';
++            if (actor.role === 'ADMIN' && reason) bookingRequest.adminNote = String(reason).slice(0, 500);
++        };
++
++        // Tell the salon when somebody answered for it. Their tab, their phone
++        // and their inbox all say the same thing.
++        const tellSalon = async (message) => {
++            if (actor.role !== 'ADMIN') return;
++            try {
++                await db.Notification.create({
++                    receiverType: 'SALON',
++                    receiverId: bookingRequest.salonId,
++                    title: 'Booking request answered by My Naai',
++                    message
++                }, { transaction });
++            } catch (notificationError) {
++                console.error('[booking-request] salon notification skipped:', notificationError.message);
++            }
++            if (io) {
++                io.to(`salon_${bookingRequest.salonId}`).emit('booking_request_answered_by_admin', {
++                    title: 'Booking request answered by My Naai',
++                    message,
++                    bookingRequestId: bookingRequest.bookingRequestId,
++                    action
++                });
++            }
++        };
++
++        // ------------------------------------------------------------ REJECT
++        if (action === 'REJECT') {
++            bookingRequest.status = 'REJECTED';
++            bookingRequest.respondedAt = new Date();
++            stampAnswer();
++            await bookingRequest.save({ transaction });
++
++            for (const deviceToken of uniqueTokens) {
++                await sendNotificationToDevice(deviceToken, 'Booking Rejected', 'Your booking request has been rejected by the salon.',
++                    {
++                        bookingRequestId: bookingRequest.bookingRequestId,
++                        type: 'BOOKING_REJECTED'
++                    });
++            }
++
++            await db.Notification.create({
++                receiverType: 'USER',
++                receiverId: bookingRequest.customerId,
++                title: 'Booking Rejected',
++                message: 'Your booking request has been rejected by the salon.'
++            }, { transaction });
++
++            await tellSalon(adminAnswered('rejected'));
++
++            if (io) {
++                io.to(`user_${bookingRequest.customerId}`).emit('booking_status_updated', {
++                    title: 'Booking Rejected',
++                    message: 'Your booking request has been rejected by the salon.',
++                    bookingId: bookingRequest.bookingRequestId
++                });
++            }
++
++            await transaction.commit();
++            return {
++                httpStatus: 200,
++                payload: {
++                    status: 'SUCCESS',
++                    message: 'Booking request rejected',
++                    data: { status: 'REJECTED', actedByRole: actor.role }
++                }
++            };
++        }
++
++        // ------------------------------------------------------------- DELAY
++        if (action === 'DELAY') {
++            if (!delayMinutes) {
++                await transaction.rollback();
++                return fail(400, 'Delay minutes required');
++            }
++
++            const originalTime = new Date(`${bookingRequest.bookingDate}T${bookingRequest.startTime}`);
++            const proposedTime = new Date(originalTime.getTime() + delayMinutes * 60 * 1000);
++            const proposedTimeStr = formatTo12Hour(proposedTime.toTimeString().slice(0, 5));
++
++            bookingRequest.status = 'DELAY_PROPOSED';
++            bookingRequest.delayMinutes = delayMinutes;
++            stampAnswer();
++            await bookingRequest.save({ transaction });
++
++            for (const deviceToken of uniqueTokens) {
++                await sendNotificationToDevice(deviceToken, 'Booking Delay Proposed',
++                    `Salon proposed to delay your booking to ${proposedTimeStr}. Accept or Reject?`,
++                    {
++                        bookingRequestId: bookingRequest.bookingRequestId,
++                        type: 'DELAY_TIME_PROPOSAL',
++                        delayMinutes: delayMinutes,
++                        proposedTime: proposedTimeStr
++                    });
++            }
++
++            await db.Notification.create({
++                receiverType: 'USER',
++                receiverId: bookingRequest.customerId,
++                title: 'Booking Delay Proposed',
++                message: `Salon proposed to delay your booking to ${proposedTimeStr}. Accept or Reject?`
++            }, { transaction });
++
++            await tellSalon(adminAnswered('proposed a delay on'));
++
++            await transaction.commit();
++
++            // The customer has one minute to answer the proposal.
++            try {
++                await scheduleAutoCancelTask({
++                    bookingRequestId: bookingRequest.bookingRequestId,
++                    delayInSeconds: 60
++                });
++            } catch (error) {
++                console.error('Error scheduling auto-cancel for delayed booking:', error);
++            }
++
++            if (io) {
++                io.to(`user_${bookingRequest.customerId}`).emit('booking_status_updated', {
++                    title: 'Booking Delay Proposed',
++                    message: `Salon proposed to delay your booking to ${proposedTimeStr}. Accept or Reject?`,
++                    bookingId: bookingRequest.bookingRequestId
++                });
++            }
++
++            return {
++                httpStatus: 200,
++                payload: {
++                    status: 'SUCCESS',
++                    message: 'Delay proposed to customer',
++                    data: { status: 'DELAY_PROPOSED', delayMinutes }
++                }
++            };
++        }
++
++        // ------------------------------------------------------------ ACCEPT
++        const requested = Array.isArray(bookingRequest.serviceIds) ? bookingRequest.serviceIds : [];
++        const serviceIds = requested.map((item) => item?.serviceId || item?.id).filter(Boolean);
++
++        const services = serviceIds.length
++            ? await db.Service.findAll({ where: { serviceId: { [Op.in]: serviceIds } }, transaction })
++            : [];
++        const totalDuration = services.reduce((sum, service) => sum + (Number(service.durationMinutes) || 0), 0);
++
++        const bookingStartTime = new Date(`${bookingRequest.bookingDate}T${bookingRequest.startTime}`);
++        const bookingEndTime = new Date(bookingStartTime.getTime() + totalDuration * 60 * 1000);
++        const bookingTime12hr = formatTo12Hour(bookingRequest.startTime);
++
++        // Queue position: the last chair taken at this salon on that day.
++        const lastQueue = await db.Queue.findOne({
++            where: { salonId: bookingRequest.salonId, bookingDate: bookingRequest.bookingDate },
++            order: [['queueNumber', 'DESC']],
++            transaction,
++            lock: transaction.LOCK.UPDATE
++        });
++        const queueNumber = lastQueue ? lastQueue.queueNumber + 1 : 1;
++
++        const queue = await db.Queue.create({
++            salonId: bookingRequest.salonId,
++            userId: bookingRequest.customerId,
++            barberId: bookingRequest.barberId,
++            bookingDate: bookingRequest.bookingDate,
++            bookingTime: bookingRequest.startTime,
++            queueNumber,
++            estimatedWaitTime: totalDuration
++        }, { transaction });
++
++        const booking = await db.Booking.create({
++            queueId: queue.queueId,
++            salonId: bookingRequest.salonId,
++            userId: bookingRequest.customerId,
++            barberId: bookingRequest.barberId,
++            bookingDate: bookingRequest.bookingDate,
++            bookingTime: bookingRequest.startTime,
++            bookingEndTime: bookingEndTime.toTimeString().slice(0, 8),
++            bookingStatus: 'confirmed',
++            services: bookingRequest.serviceIds,
++            serviceDuration: totalDuration,
++            bookingRequestId: bookingRequest.bookingRequestId
++        }, { transaction });
++
++        // Reminder ten minutes before the chair, in the salon's timezone.
++        const bookingDateTime = new Date(`${booking.bookingDate}T${booking.bookingTime}+05:30`);
++        booking.reminderTime = new Date(bookingDateTime.getTime() - 10 * 60 * 1000);
++        booking.reminderSent = false;
++        await booking.save({ transaction });
++
++        // The request keeps a POINTER to the booking, not a copy of it: the two
++        // stay separate tables (a request is a lead, a booking is a chair), and
++        // this id is the only link between them.
++        bookingRequest.status = 'ACCEPTED';
++        bookingRequest.respondedAt = new Date();
++        bookingRequest.bookingId = booking.bookingId;
++        bookingRequest.routedBarberId = bookingRequest.routedBarberId || bookingRequest.barberId || null;
++        stampAnswer();
++        await bookingRequest.save({ transaction });
++
++        for (const deviceToken of uniqueTokens) {
++            await sendNotificationToDevice(deviceToken, 'Booking Confirmed', `Your booking at salon is confirmed for ${bookingTime12hr}`,
++                {
++                    bookingRequestId: bookingRequest.bookingRequestId,
++                    type: 'BOOKING_CONFIRMED'
++                });
++        }
++
++        await db.Notification.create({
++            receiverType: 'USER',
++            receiverId: bookingRequest.customerId,
++            title: 'Booking Confirmed',
++            message: `Your booking at salon is confirmed for ${bookingTime12hr}`
++        }, { transaction });
++
++        await tellSalon(`An admin accepted this request on your behalf: ${bookingTime12hr}, queue #${queueNumber}`);
++
++        await transaction.commit();
++
++        try {
++            await createBookingReminderTask(booking);
++        } catch (reminderError) {
++            console.error('Error creating booking reminder task:', reminderError);
++        }
++
++        if (io) {
++            io.to(`user_${bookingRequest.customerId}`).emit('booking_status_updated', {
++                title: 'Booking Accepted',
++                message: 'Your booking request has been accepted by the salon.',
++                bookingId: bookingRequest.bookingRequestId
++            });
++
++            io.to(`salon_${bookingRequest.salonId}`).emit('queue_updated', {
++                title: 'Booking Confirmed',
++                message: `A booking was confirmed for ${bookingTime12hr}`,
++                bookingId: bookingRequest.bookingRequestId
++            });
++        }
++
++        return {
++            httpStatus: 200,
++            payload: {
++                status: 'SUCCESS',
++                message: 'Booking request accepted and confirmed',
++                data: {
++                    // The booking as created, so the app can open the chair it
++                    // just made. Plus who answered, which the admin panel shows.
++                    ...(typeof booking.toJSON === 'function' ? booking.toJSON() : booking),
++                    actedByRole: actor.role,
++                    onBehalfOfSalon: actor.role === 'ADMIN'
++                }
++            }
++        };
++    } catch (error) {
++        await transaction.rollback();
++        console.error('BOOKING REQUEST ACTION ERROR:', error);
++        return fail(500, error.message);
++    }
++};
++
++/**
++ * The row an admin tab shows after an answer: who answered, when, and whether it
++ * was done for the salon. Read straight off the columns so the panel never
++ * infers it from a status.
++ */
++const actorSummary = (row) => {
++    if (!row) return null;
++    const role = row.actedByRole || 'SALON';
++    return {
++        role,
++        onBehalfOfSalon: Boolean(row.onBehalfOfSalon),
++        adminId: row.actedByAdminId || null,
++        actedAt: row.actedAt || row.respondedAt || null,
++        note: row.adminNote || null
++    };
++};
++
++module.exports = {
++    ACTOR_ROLES,
++    ACTIONS,
++    applyRequestAction,
++    actorSummary
++};
+diff --git a/src/services/bookingRequestLead.service.js b/src/services/bookingRequestLead.service.js
+index 1275663..e0da1fb 100644
+--- a/src/services/bookingRequestLead.service.js
++++ b/src/services/bookingRequestLead.service.js
+@@ -1,6 +1,7 @@
+-const { Op, fn, col, QueryTypes } = require('sequelize');
++const { Op, fn, col, literal, QueryTypes } = require('sequelize');
+ const db = require('../database/models');
+ const { ensureShopSchema } = require('../database/config/ensureShopSchema');
++const { addDays, parseBound, resolveRange, startOfIstDay } = require('../utils/istRange');
+ 
+ /**
+  * Booking REQUESTS — the leads API behind the salon's Booking requests tab and
+@@ -27,10 +28,6 @@ const WINDOW_MS = WINDOW_SECONDS * 1000;
+ const DEFAULT_LIMIT = parseInt(process.env.PAGE_LIMIT) || 20;
+ const MAX_LIMIT = 100;
+ 
+-// Delhi is UTC+05:30 with no daylight saving, so a fixed offset is exact and
+-// avoids pulling a timezone database into a query path.
+-const IST_OFFSET_MS = 330 * 60 * 1000;
+-
+ // Status the client may ask for -> the statuses stored for it.
+ //   · 'DELAYED' is the client's word (a new time was proposed); the column
+ //     stores 'DELAY_PROPOSED'.
+@@ -54,46 +51,22 @@ const statusFilterOf = (value) => {
+ };
+ 
+ // ---------------------------------------------------------------- time helpers
++//
++// The maths lives in utils/istRange.js, because the two admin controllers used
++// to carry their own copy and the three disagreed. `rangeStart` stays exported
++// for callers that only need the lower bound.
+ 
+-const startOfIstDay = (date = new Date()) => {
+-    const shifted = new Date(date.getTime() + IST_OFFSET_MS);
+-    shifted.setUTCHours(0, 0, 0, 0);
+-    return new Date(shifted.getTime() - IST_OFFSET_MS);
++const rangeStart = (range) => {
++    const { fromDate } = resolveRange({ range });
++    return fromDate ? new Date(fromDate) : null;
+ };
+ 
+-const addDays = (date, days) => new Date(date.getTime() + days * 86400000);
+-
+ /**
+- * The `range` a tab asks for -> a `createdAt` lower bound (null = everything).
+- * The panel and the salon tab both speak TODAY / WEEK / MONTH / ALL, and "today"
+- * means today in IST for every viewer, wherever they are sitting.
++ * The window for a range, as the ISO pair `resolveRange` returns. Summaries take
++ * `range`; a list takes the instants the controller resolved, so the tiles and
++ * the table below them can never describe different windows.
+  */
+-const rangeStart = (range) => {
+-    const startOfToday = startOfIstDay();
+-    switch (String(range || 'ALL').trim().toUpperCase()) {
+-        case 'TODAY':
+-            return startOfToday;
+-        case 'WEEK':
+-        case '7D':
+-            return addDays(startOfToday, -6);
+-        case 'MONTH':
+-        case '30D':
+-            return addDays(startOfToday, -29);
+-        default:
+-            return null;
+-    }
+-};
+-
+-const parseDate = (value) => {
+-    if (!value) return null;
+-    const parsed = new Date(`${String(value).slice(0, 10)}T00:00:00.000Z`);
+-    return Number.isNaN(parsed.getTime()) ? null : parsed;
+-};
+-
+-const endOfDay = (value) => {
+-    const start = parseDate(value);
+-    return start ? new Date(start.getTime() + 86400000) : null;
+-};
++const windowOf = ({ range, fromDate, toDate } = {}) => resolveRange({ range, fromDate, toDate });
+ 
+ const clampLimit = (value) => {
+     const parsed = parseInt(value, 10);
+@@ -180,6 +153,12 @@ const toRow = (row, { now = Date.now(), admin = false } = {}) => {
+         salonName: row.salon?.salonName || '',
+         salonPhone: row.salon?.phoneNumber || '',
+         city: row.salon?.city || '',
++        // Who answered. Null means the salon did (every row written before the
++        // admin-on-behalf feature existed), which the panel prints as such.
++        answeredByRole: row.actedByRole || 'SALON',
++        onBehalfOfSalon: Boolean(row.onBehalfOfSalon),
++        actedAt: row.actedAt || respondedAt,
++        adminNote: row.adminNote || null,
+         responseSeconds: minutesBetween(row.createdAt, respondedAt),
+         outcome: status === 'ACCEPTED' || status === 'REJECTED'
+             ? 'answered'
+@@ -226,6 +205,13 @@ const buildWhere = ({ salonId, status, search, fromDate, toDate } = {}) => {
+     const where = {};
+     if (salonId) where.salonId = salonId;
+ 
++    // Filters that need an OR of their own are collected here and ANDed
++    // together at the end. They used to be written straight into `where[Op.or]`,
++    // so a status filter plus a search term became ONE flat OR — "auto-cancelled
++    // OR any customer whose name matches" — and either filter stopped
++    // filtering. Two groups, one AND: every filter now narrows the last.
++    const groups = [];
++
+     const wanted = statusFilterOf(status);
+     const now = new Date();
+     if (wanted) {
+@@ -236,17 +222,24 @@ const buildWhere = ({ salonId, status, search, fromDate, toDate } = {}) => {
+             where.status = 'PENDING';
+             where.expiresAt = { [Op.gt]: now };
+         } else if (wanted.length === 1 && wanted[0] === 'AUTO_CANCELLED') {
+-            where[Op.or] = [
+-                { status: 'AUTO_CANCELLED' },
+-                { status: 'PENDING', expiresAt: { [Op.lte]: now } }
+-            ];
++            groups.push({
++                [Op.or]: [
++                    { status: 'AUTO_CANCELLED' },
++                    { status: 'PENDING', expiresAt: { [Op.lte]: now } }
++                ]
++            });
+         } else {
+             where.status = { [Op.in]: wanted };
+         }
+     }
+ 
+-    const from = parseDate(fromDate);
+-    const to = endOfDay(toDate);
++    // `parseBound` reads a bare `YYYY-MM-DD` as that day in IST and a timestamp
++    // as the instant it names. The old code sliced ten characters off whatever
++    // it was given and called it UTC midnight, which shifted every window by
++    // 5h30m — requests sent between midnight and 05:30 IST were missing from
++    // "Today".
++    const from = parseBound(fromDate);
++    const to = parseBound(toDate, { end: true });
+     if (from || to) {
+         where.createdAt = {
+             ...(from ? { [Op.gte]: from } : {}),
+@@ -258,14 +251,17 @@ const buildWhere = ({ salonId, status, search, fromDate, toDate } = {}) => {
+     if (term) {
+         // Customer name, customer phone, or the salon's name — the three things
+         // somebody on the phone actually knows.
+-        where[Op.or] = [
+-            ...(where[Op.or] || []),
+-            { '$customer.full_name$': { [Op.iLike]: `%${term}%` } },
+-            { '$customer.phone_number$': { [Op.iLike]: `%${term}%` } },
+-            { '$salon.salon_name$': { [Op.iLike]: `%${term}%` } }
+-        ];
++        groups.push({
++            [Op.or]: [
++                { '$customer.full_name$': { [Op.iLike]: `%${term}%` } },
++                { '$customer.phone_number$': { [Op.iLike]: `%${term}%` } },
++                { '$salon.salon_name$': { [Op.iLike]: `%${term}%` } }
++            ]
++        });
+     }
+ 
++    if (groups.length) where[Op.and] = groups;
++
+     return where;
+ };
+ 
+@@ -345,11 +341,25 @@ const sweepQuietly = async () => {
+ 
+ // ------------------------------------------------------------------ counting
+ 
++// A request past its window IS auto-cancelled, whether or not the sweeper has
++// written that down yet. Counting the raw column would put those rows in
++// "awaiting" and make the tab's chips disagree with the rows it returns for the
++// same filter, so the count derives the state exactly as `effectiveStatus` does
++// — in SQL, so a month of leads never has to be shipped to be counted.
++const DERIVED_STATUS_SQL = `CASE
++            WHEN status = 'PENDING' AND expires_at IS NOT NULL AND expires_at <= NOW()
++                THEN 'AUTO_CANCELLED'
++            ELSE status
++        END`;
++
+ const countByStatus = async (where) => {
+     const rows = await db.BookingRequest.findAll({
+         where,
+-        attributes: ['status', [fn('COUNT', col('booking_request_id')), 'total']],
+-        group: ['status'],
++        attributes: [
++            [literal(DERIVED_STATUS_SQL), 'status'],
++            [fn('COUNT', col('booking_request_id')), 'total']
++        ],
++        group: [literal(DERIVED_STATUS_SQL)],
+         raw: true
+     });
+     return rows.reduce((acc, row) => {
+@@ -358,6 +368,34 @@ const countByStatus = async (where) => {
+     }, {});
+ };
+ 
++/**
++ * The chip row above the admin table: how many requests the CURRENT window
++ * holds, per status, before the status filter is applied.
++ *
++ * Deliberately range + salon only. Counting through the search join would mean
++ * a GROUP BY over `booking_requests` joined to two tables on every keystroke,
++ * and the chips would then shuffle under the cursor while somebody types. The
++ * panel labels them "in this range" and prints the search's own total next to
++ * the table, so nothing on the screen claims two different numbers are the same
++ * thing.
++ *
++ * A failure here must not take the list down with it — the caller drops the
++ * chips and the table still renders.
++ */
++const statusCounts = async ({ salonId, fromDate, toDate } = {}) => {
++    const counts = await countByStatus(buildWhere({ salonId, fromDate, toDate }));
++    const pick = (key) => counts[key] || 0;
++    return {
++        ALL: Object.values(counts).reduce((sum, value) => sum + value, 0),
++        PENDING: pick('PENDING'),
++        ACCEPTED: pick('ACCEPTED'),
++        REJECTED: pick('REJECTED'),
++        AUTO_CANCELLED: pick('AUTO_CANCELLED'),
++        CANCELLED: pick('CANCELLED'),
++        DELAYED: pick('DELAY_PROPOSED')
++    };
++};
++
+ /**
+  * The counters a tab leads with. Both tabs get the same shape; the admin's adds
+  * the per-salon report.
+@@ -416,12 +454,23 @@ const salonSummary = async ({ salonId, range = 'ALL', fromDate, toDate } = {}) =
+ const listAdminLeads = async ({ salonId, status = 'ALL', search, page, limit, fromDate, toDate } = {}) => {
+     await ensureShopSchema();
+     await sweepQuietly();
+-    return pagedQuery({
+-        where: buildWhere({ salonId, status, search, fromDate, toDate }),
+-        page,
+-        limit,
+-        admin: true
+-    });
++
++    const [result, chips] = await Promise.all([
++        pagedQuery({
++            where: buildWhere({ salonId, status, search, fromDate, toDate }),
++            page,
++            limit,
++            admin: true
++        }),
++        statusCounts({ salonId, fromDate, toDate }).catch((error) => {
++            console.error('[booking-request] status counts skipped:', error.message);
++            return null;
++        })
++    ]);
++
++    // The chips describe the window; the table describes the window + filters.
++    // Both numbers are on the screen, each labelled, and neither is guessed.
++    return chips ? { ...result, statusCounts: chips } : result;
+ };
+ 
+ /**
+@@ -568,6 +617,8 @@ module.exports = {
+     STATUS_FILTERS,
+     statusFilterOf,
+     rangeStart,
++    windowOf,
++    statusCounts,
+     effectiveStatus,
+     servicesOf,
+     toRow,
+diff --git a/src/utils/istRange.js b/src/utils/istRange.js
+new file mode 100644
+index 0000000..0947b00
+--- /dev/null
++++ b/src/utils/istRange.js
+@@ -0,0 +1,112 @@
++// utils/istRange.js
++//
++// The ONE place an admin tab's "Today / Last 7 days / Last 30 days / All time"
++// becomes a pair of instants.
++//
++// Why this file exists: `adminListBookingRequests` and
++// `adminBookingRequestSummary` each used to carry their own copy of this maths,
++// and they disagreed with each other and with the service that applied the
++// bounds:
++//
++//   · the list controller defaulted to `ALL` when the panel forgot to send a
++//     range — so "Today" on the tiles and "everything ever" on the table;
++//   · the service then re-read the two instants by slicing the first ten
++//     characters off an ISO string and treating that as UTC midnight. An IST
++//     midnight is 18:30 UTC the day before, so the window it actually applied
++//     ran 00:00→05:30 of the WRONG day: early-morning requests vanished from
++//     "Today", and the previous evening's leaked in.
++//
++// Delhi is UTC+05:30 all year (no daylight saving), so the offset is exact and
++// no timezone database is needed.
++//
++// Everything returned here is an ISO instant. A bare `YYYY-MM-DD` is read as
++// that DAY in IST — a date input says "5th November", not "5th November UTC".
++
++const IST_OFFSET_MS = 330 * 60 * 1000;
++
++const DAY_MS = 86400000;
++
++// How many days each range covers, counting today. ALL is deliberately absent:
++// it is the "no bounds" case.
++const RANGE_DAYS = {
++    TODAY: 1,
++    WEEK: 7,
++    '7D': 7,
++    MONTH: 30,
++    '30D': 30
++};
++
++// A client asking for something unknown gets today, never the whole table: an
++// admin tab that silently widens to "everything" is how a busy platform ends up
++// paging through months of leads.
++const DEFAULT_RANGE = 'TODAY';
++
++const startOfIstDay = (date = new Date()) => {
++    const shifted = new Date(date.getTime() + IST_OFFSET_MS);
++    shifted.setUTCHours(0, 0, 0, 0);
++    return new Date(shifted.getTime() - IST_OFFSET_MS);
++};
++
++const addDays = (date, days) => new Date(date.getTime() + days * DAY_MS);
++
++const normalizeRange = (value) => {
++    const key = String(value || DEFAULT_RANGE).trim().toUpperCase();
++    if (key === 'ALL') return 'ALL';
++    return RANGE_DAYS[key] ? key : DEFAULT_RANGE;
++};
++
++/**
++ * Parse one end of a window.
++ *
++ * - `YYYY-MM-DD` -> that day in IST (`end: true` gives the next midnight, so the
++ *   bound stays exclusive and "5th November" includes the whole 5th).
++ * - anything else -> an instant, used as given.
++ */
++const parseBound = (value, { end = false } = {}) => {
++    if (!value || value === 'null' || value === 'undefined') return null;
++    const raw = String(value).trim();
++    const dayOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
++    const at = dayOnly ? new Date(`${raw}T00:00:00.000+05:30`) : new Date(raw);
++    if (Number.isNaN(at.getTime())) return null;
++    return dayOnly && end ? addDays(at, 1) : at;
++};
++
++/**
++ * `{ range, fromDate, toDate }` (as a body sends them) -> the window the query
++ * must use, plus the range key that was actually applied.
++ *
++ * An explicit `fromDate` / `toDate` wins over the range for that end — the
++ * older contract let the panel send a hand-picked window, and it still does.
++ */
++const resolveRange = ({ range, fromDate, toDate } = {}) => {
++    const key = normalizeRange(range);
++
++    let windowFrom = null;
++    let windowTo = null;
++    if (RANGE_DAYS[key]) {
++        const startOfToday = startOfIstDay();
++        windowFrom = addDays(startOfToday, -(RANGE_DAYS[key] - 1));
++        windowTo = addDays(startOfToday, 1);
++    }
++
++    const from = parseBound(fromDate) || windowFrom;
++    const to = parseBound(toDate, { end: true }) || windowTo;
++
++    return {
++        range: key,
++        fromDate: from ? from.toISOString() : null,
++        toDate: to ? to.toISOString() : null
++    };
++};
++
++module.exports = {
++    IST_OFFSET_MS,
++    DAY_MS,
++    RANGE_DAYS,
++    DEFAULT_RANGE,
++    startOfIstDay,
++    addDays,
++    normalizeRange,
++    parseBound,
++    resolveRange
++};
+-- 
+2.39.5
+

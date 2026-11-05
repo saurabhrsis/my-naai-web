@@ -489,9 +489,19 @@ request side only.
   the request's facts with **no actions**, and its back button goes to
   **Booking requests**. Accepting from it still ends in the Queue — an accepted
   request *is* a booking, so that is the one place the queue is right.
+- **My Naai can answer for a salon.** When a salon's phone is unreachable and the
+  customer is at the counter, an admin answers the request from the panel
+  (`POST /api/bookingRequest/admin/action/:id`). It runs the *same* locked
+  transaction the salon's own Accept runs, so one request still becomes exactly
+  one booking, and the request row records who answered
+  (`acted_by_role = ADMIN`, `on_behalf_of_salon`, `admin_note`). The salon is
+  notified and its own tab reads **"Accepted by My Naai"** — the customer's
+  notification keeps the salon-facing wording. The admin's answer is not a second
+  write path, it is a second door onto the first.
 - Backend contract: [`docs/BACKEND-BOOKING-REQUESTS-API.md`](BACKEND-BOOKING-REQUESTS-API.md)
-  (list, summary, admin doors, the auto-cancel sweeper).
-  Admin panel tab: [`docs/ADMIN-PANEL-BOOKING-REQUESTS.md`](ADMIN-PANEL-BOOKING-REQUESTS.md).
+  (list, summary, admin doors, the admin-answer endpoint, the auto-cancel
+  sweeper). Admin panel tab:
+  [`docs/ADMIN-PANEL-BOOKING-REQUESTS.md`](ADMIN-PANEL-BOOKING-REQUESTS.md).
 
 ## 8.3 One product-category list (admin → website → app)
 
@@ -942,6 +952,7 @@ Then test on an HTTPS deployment with a real customer and salon account:
 - Check the header wordmark: the M and the N are the same size on the login page, the mobile header and the desktop sidebar.
 - Open a salon page and a salon card: **no** "Current wait" and no minutes anywhere, with the salon's opening hours in their place ([§13.1](#131-no-waiting-time-is-promised-while-booking)).
 - In the shop, pick a category and read the load-more button: the number is that shelf's own size and reaches zero at the end — never "88" under a filter showing two products ([`docs/BACKEND-SHOP-CATEGORY-FILTER.md`](BACKEND-SHOP-CATEGORY-FILTER.md)).
+- **Admin panel → Booking requests** opens on **Today (IST)**, not on all time; switching range/status/salon/search returns to page 1 and narrows the table; the chip counts add up to the total on the results line; a 120-character salon name ellipsises without moving the sidebar; and **Accept for salon** on an open request creates one booking, records `acted_by_role = ADMIN`, and tells the salon ([`docs/ADMIN-PANEL-BOOKING-REQUESTS.md`](ADMIN-PANEL-BOOKING-REQUESTS.md)).
 
 ## 13.1 No waiting time is promised while booking
 

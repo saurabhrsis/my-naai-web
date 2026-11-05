@@ -1,7 +1,10 @@
 # Backend — booking-request (lead) API + admin/salon reporting
 
-> **Implemented by** `patches/backend-2-booking-request-leads.patch` (real code:
-> service, four controllers, routes, the sweeper cron and the model changes).
+> **Implemented by** `patches/backend-2-booking-request-leads.patch` (the leads
+> API, the four doors, the sweeper and the model changes) and
+> **`patches/backend-6-booking-request-admin-actions.patch`** (today-by-default
+> ranges, filters that filter, per-status counts, and answering on a salon's
+> behalf — §§4–5 below).
 > Apply instructions: `patches/APPLY-2026-11-05.md`.
 
 Target repo: `rightserveinfotechsystems/my_naai_backend`
@@ -107,40 +110,78 @@ The tiles the tab leads with. Cheap: one query over the view
 - A customer's own cancellation (`CANCELLED_BY_CUSTOMER`) is a third bucket. It
   must never be counted as an auto-cancel.
 
-## 3. Answering a request — unchanged
+## 3. Answering a request
 
-Accept / Reject still goes through the existing endpoint the notifications
-screen uses, so the mobile app, the web tab and the alert card cannot disagree:
+Accept / Reject goes through the existing endpoint the notifications screen
+uses, so the mobile app, the web tab and the alert card cannot disagree:
 
 ```
-POST /api/bookingRequest/owner-action/{bookingRequestId}/
-{ "action": "ACCEPT" | "REJECT" | "DELAY", "delayMinutes": "20" }
+POST /api/bookingRequest/owner-action/{bookingRequestId}
+{ "action": "ACCEPT" | "REJECT" | "DELAY", "delayMinutes": 20 }
 ```
 
-Behaviour that matters to the new tab:
+Behaviour that matters to the tabs:
 
-- On `ACCEPT`: create the booking, write `booking_id` on the request, set
-  `responded_at`, and answer `SUCCESS` **once** (a second Accept must fail with
-  a clear "already actioned" message — the client turns that into a closed
-  card).
+- On `ACCEPT`: create the queue entry and the booking, write `booking_id` on the
+  request, set `responded_at`, and answer `SUCCESS` **once** (a second Accept
+  fails with a clear "already actioned" message — the client turns that into a
+  closed card).
 - On `REJECT`: `status = REJECTED`, `responded_at = NOW()`.
-- A request past `expires_at` must refuse with
+- A request past `expires_at` refuses with
   `"This request has expired and was cancelled automatically"` — the client
   matches `expired` and marks the card auto-cancelled.
 - Notify the customer on every outcome (accept / reject / auto-cancel).
+
+**One implementation, two doors.** `owner-action` and the admin door (§5) both
+call `services/bookingRequestAction.service.js`, which is where the whole answer
+lives: the row is locked (`SELECT … FOR UPDATE`) for the transaction, an
+already-answered request is refused, a request that carries a `booking_id` never
+produces a second booking, and the answer is stamped with its actor. Copying the
+accept into a second controller is the one thing that would put two customers in
+one chair, so don't.
 
 ## 4. `POST /api/bookingRequest/admin/list` — the admin panel's tab
 
 Same shape as §1 with admin scope, plus the filters the panel needs:
 
 ```json
-{ "salonId": "", "status": "ALL", "search": "rohit", "page": 1, "limit": 25,
-  "fromDate": "", "toDate": "" }
+{ "range": "TODAY | WEEK | MONTH | ALL", "salonId": "", "status": "ALL",
+  "search": "rohit", "page": 1, "limit": 25, "fromDate": "", "toDate": "" }
 ```
+
+**`range` defaults to `TODAY`** and means today in IST (midnight to midnight),
+for every viewer. An explicit `fromDate` / `toDate` wins for that end. This is
+the fix for the tab that opened on "Today" and listed every request the platform
+had ever taken: the endpoint used to ignore `range` unless a from/to came with
+it, and its default was all time. `range` and the dates it resolved to are
+echoed back so the panel prints the window it is actually showing:
+
+```json
+{ "requests": [ … ], "pagination": { "page": 1, "limit": 25, "totalPages": 2,
+    "totalRequests": 38 },
+  "statusCounts": { "ALL": 38, "PENDING": 3, "ACCEPTED": 21, "REJECTED": 4,
+                    "AUTO_CANCELLED": 8, "CANCELLED": 1, "DELAYED": 1 },
+  "filters": { "range": "TODAY", "fromDate": "2026-11-04T18:30:00.000Z",
+               "toDate": "2026-11-05T18:30:00.000Z", "status": "ALL",
+               "salonId": null, "search": "" } }
+```
+
+`statusCounts` is the chip row: counts **for the selected range and salon,
+before the status filter**, derived in SQL (`PENDING` past its window counts as
+`AUTO_CANCELLED`, exactly as the row does), so the chips add up to `ALL` and
+clicking one shows that many rows. It is deliberately not filtered by `search`
+— a chip row that shuffles on every keystroke is not a filter.
+
+Filters combine: `status` and `search` are separate `AND` groups. They used to be
+flattened into one `OR`, so `AUTO_CANCELLED` + a customer name returned every
+auto-cancelled request *or* anybody with that name — i.e. neither filter
+filtered.
 
 Extra per-row fields for the panel: `salonName`, `salonPhone`, `city`,
 `responseSeconds` (time from `created_at` to `responded_at`, null while
-pending), `bookingId`, and `outcome` (`answered | missed | withdrawn`).
+pending), `bookingId`, `outcome` (`answered | missed | withdrawn | open`), and
+the audit fields `answeredByRole` (`SALON | ADMIN`), `onBehalfOfSalon`,
+`actedAt`, `adminNote`.
 
 `POST /api/bookingRequest/admin/summary` returns §2's counters **plus**:
 
@@ -155,7 +196,60 @@ pending), `bookingId`, and `outcome` (`answered | missed | withdrawn`).
 That is the report the admin team actually asked for: **which salons get leads
 and which of them let them die.**
 
-## 5. The auto-cancel sweeper
+## 5. `POST /api/bookingRequest/admin/action/:bookingRequestId` — answering for a salon
+
+Admin token. The panel's **Accept for salon** / **Decline for salon**.
+
+```json
+{ "action": "ACCEPT | REJECT | DELAY", "delayMinutes": 15, "reason": "Salon phone unreachable" }
+```
+
+```json
+{ "status": "SUCCESS", "message": "Booking request accepted and confirmed",
+  "data": { "bookingId": "…", "queueId": "…", "bookingDate": "2026-11-05",
+            "bookingTime": "14:30:00", "actedByRole": "ADMIN",
+            "onBehalfOfSalon": true } }
+```
+
+`reason` is optional for an accept and expected for a reject (max 500 chars). It
+is stored on the request and shown to the salon; the **customer is never told an
+admin answered** — from their side "the salon" is the service.
+
+The salon the request belongs to is read from the row, never from the body. The
+call runs `applyRequestAction` with `actorRole = ADMIN`, so it is the same
+transaction as §3 and inherits every guard: row lock, "already actioned", the
+60 second window, one booking per request. Failures are answers, not 5xx:
+
+| Case | Answer |
+| --- | --- |
+| Request already has a booking / an answer | `FAILED`, `"This request was already actioned"`, `data.bookingId` set |
+| Past `expires_at` | `FAILED`, `"This request has expired and was cancelled automatically"` (row marked `AUTO_CANCELLED`) |
+| Cancelled by the customer | `FAILED`, `"Booking request already cancelled"` |
+| Unknown request | 404 `"Booking request not found."` |
+| Bad action | 400 `"Invalid action. Allowed values: ACCEPT, REJECT, DELAY"` |
+
+On an accept, the request gains `booking_id` **and** the audit stamp below, the
+queue entry is created exactly as a salon accept creates it, and the **salon** is
+notified (in-app notification + `booking_request_answered_by_admin` on
+`salon_<id>`) so nobody has to guess who moved the chair.
+
+## 6. Who answered — schema
+
+```sql
+ALTER TABLE booking_requests
+    ADD COLUMN IF NOT EXISTS acted_by_role      VARCHAR(16),   -- 'SALON' | 'ADMIN'
+    ADD COLUMN IF NOT EXISTS acted_by_admin_id  VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS acted_at           TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS on_behalf_of_salon BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS admin_note         TEXT;
+```
+
+Null reads as **the salon answered**, which is what every pre-existing row was.
+`migrations/2026-11-05-booking-request-admin-actions.sql` has the same DDL, and
+`src/database/config/ensureShopSchema.js` runs it at boot, so a deploy that
+forgets the file still works.
+
+## 7. The auto-cancel sweeper
 
 ```
 UPDATE booking_requests
@@ -171,14 +265,23 @@ RETURNING booking_request_id, salon_id, customer_id;
   second run finds nothing.
 - `expires_at` is written on insert. Do not let a client send it.
 
-## 6. Indexes and the view
+## 8. Indexes and the view
 
 ```sql
 CREATE INDEX idx_booking_requests_salon_status
     ON booking_requests (salon_id, status, created_at DESC);
 CREATE INDEX idx_booking_requests_pending_expiry
     ON booking_requests (expires_at) WHERE status = 'PENDING';
+-- The admin tab's default view: every salon, today, newest first. The two
+-- above cannot serve it because they both lead with salon_id.
+CREATE INDEX idx_booking_requests_created_at
+    ON booking_requests (created_at DESC);
+CREATE INDEX idx_booking_requests_status_created
+    ON booking_requests (status, created_at DESC);
 ```
+
+Paging is `ORDER BY created_at DESC, booking_request_id DESC` — the id is the
+tie-break that keeps a page boundary stable when two requests share a timestamp.
 
 ```sql
 CREATE OR REPLACE VIEW salon_lead_counts AS
@@ -195,7 +298,7 @@ SELECT salon_id,
  GROUP BY salon_id;
 ```
 
-## 7. What the web client does until this ships
+## 9. What the web client does until this ships
 
 `SalonLeadsScreen` calls §1 first. A 404 / "unexpected" answer makes it fall
 back to `POST /api/notifications/get-salon-notification-list` and keep only
@@ -203,7 +306,7 @@ back to `POST /api/notifications/get-salon-notification-list` and keep only
 tab is useful on today's backend — accept/reject already work there — and why
 the fallback disappears by itself the day §1 is deployed.
 
-## 8. Acceptance checks
+## 10. Acceptance checks
 
 1. `POST /api/bookingRequest/salon/list` with `status: "ALL"` answers the last
    20 requests for the salon, newest first, with `pagination.totalPages`.
@@ -213,4 +316,13 @@ the fallback disappears by itself the day §1 is deployed.
    Accept with `already actioned`.
 4. `summarize` numbers add up: `accepted + rejected + autoCancelled +
    cancelledByCustomer + awaiting + delayed === received`.
+5. `admin/list` with no `range` lists **today's** requests (IST). With
+   `range: "ALL"` it lists everything. The two differ on any real database.
+6. `admin/list` with `status: "AUTO_CANCELLED"` and `search: "<a name that lives
+   on an accepted request>"` returns nothing — the filters AND, they do not OR.
+7. `statusCounts` sums to `ALL`, and `ALL` equals `pagination.totalRequests` when
+   `status` is `ALL` and `search` is empty.
+8. Two accepts racing (admin and salon, same request): exactly one booking row
+   exists, the loser gets `already actioned`, and `booking_requests.acted_by_role`
+   is not null on the winner.
 5. A salon cannot read another salon's requests (403 on a mismatched `salonId`).
