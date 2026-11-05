@@ -414,6 +414,10 @@ export const api = {
   SalonLogin: payload => post('/api/salons/send-otp', payload, { auth: false }),
   verifySalonLogin: payload => post('/api/salons/login', payload, { auth: false }),
   customerList: payload => post('/api/booking/get-booking-list', payload),
+  // The partner plan list — prices, durations and the free-trial length are the
+  // admin panel's data now, not this bundle's constants. Public: the
+  // registration screen must show the prices BEFORE anyone has an account.
+  salonPlanList: () => post('/api/salons/plans/list', {}, { auth: false }),
   salonProfile: ({ salonId }) => post('/api/salons/get-salon', { salonId }),
   deleteSalonService: serviceId => post('/api/salons/delete-service', { serviceId }),
   deleteSalonBarber: barberId => del('/api/barbers/delete-barber', { body: { barberId } }),

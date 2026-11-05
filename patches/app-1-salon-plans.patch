@@ -1,0 +1,406 @@
+diff --git a/src/screens/RenewalSubscriptionsPlan.js b/src/screens/RenewalSubscriptionsPlan.js
+index 1ff3e2b..4a834ff 100644
+--- a/src/screens/RenewalSubscriptionsPlan.js
++++ b/src/screens/RenewalSubscriptionsPlan.js
+@@ -15,28 +15,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
+ import AsyncStorage from "@react-native-async-storage/async-storage";
+ import { communication, setCookie } from "../services/communication";
+ import { useFocusEffect } from "@react-navigation/native";
+-
+-const plans = [
+-  {
+-    id: "trial_2_months",
+-    title: "Introductory",
+-    price: "₹179",
+-    duration: "2 Months (60 Days)",
+-  },
+-  {
+-    id: "monthly",
+-    title: "Monthly Plan",
+-    price: "₹99",
+-    duration: "Per Month",
+-  },
+-  {
+-    id: "quarterly",
+-    title: "Quarterly Plan",
+-    price: "₹249",
+-    duration: "3 Months (90 Days)",
+-    best: true,
+-  },
+-];
++import { usePlanCatalog } from "../services/planCatalog";
+ 
+ const RenewalSubscriptionsPlan = ({ navigation, route, onLoginSuccess }) => {
+   // const { userData } = route.params;
+@@ -45,6 +24,10 @@ const RenewalSubscriptionsPlan = ({ navigation, route, onLoginSuccess }) => {
+   const insets = useSafeAreaInsets();
+   const [selectedPlan, setSelectedPlan] = useState(null);
+   const [loading, setLoading] = useState(false);
++  // Renewal reads the SAME catalog as registration. The two screens used to
++  // carry separate literals and had drifted — a partner was shown ₹99 here and
++  // charged ₹199 on the next screen.
++  const { plans } = usePlanCatalog();
+   useFocusEffect(
+     useCallback(() => {
+       const subscription = BackHandler.addEventListener(
+@@ -78,7 +61,11 @@ const RenewalSubscriptionsPlan = ({ navigation, route, onLoginSuccess }) => {
+     }
+ 
+     const selected = plans.find(p => p.id === selectedPlan);
+-    const amount = Number(selected.price.replace("₹", ""));
++    if (!selected) {
++      Alert.alert("Plan unavailable", "This plan is no longer on sale. Please pick another one.");
++      return;
++    }
++    const amount = Number(selected.price);
+ 
+     setLoading(true);
+ 
+@@ -168,15 +155,15 @@ const RenewalSubscriptionsPlan = ({ navigation, route, onLoginSuccess }) => {
+           onPress={() => setSelectedPlan(plan.id)}
+         >
+ 
+-          {plan.best && (
++          {(plan.best || !!plan.badge) && (
+             <View style={styles.bestBadge}>
+-              <Text allowFontScaling={false}style={styles.bestText}>BEST VALUE</Text>
++              <Text allowFontScaling={false}style={styles.bestText}>{plan.badge || "BEST VALUE"}</Text>
+             </View>
+           )}
+ 
+           <Text allowFontScaling={false}style={styles.planTitle}>{plan.title}</Text>
+ 
+-          <Text allowFontScaling={false}style={styles.price}>{plan.price}</Text>
++          <Text allowFontScaling={false}style={styles.price}>{plan.priceLabel}</Text>
+ 
+           <Text allowFontScaling={false}style={styles.duration}>{plan.duration}</Text>
+         </TouchableOpacity>
+diff --git a/src/screens/SubscriptionsPlan.js b/src/screens/SubscriptionsPlan.js
+index bf04fb6..1ecdd51 100644
+--- a/src/screens/SubscriptionsPlan.js
++++ b/src/screens/SubscriptionsPlan.js
+@@ -13,28 +13,7 @@ import { paymentForMembership } from "../utilities/paymentForMembership";
+ import Ionicons from 'react-native-vector-icons/Ionicons';
+ import AsyncStorage from "@react-native-async-storage/async-storage";
+ import { communication, setCookie } from "../services/communication";
+-
+-const plans = [
+-  {
+-    id: "trial_2_months",
+-    title: "Introductory",
+-    price: "₹299",
+-    duration: "2 Months (60 Days)",
+-  },
+-  {
+-    id: "monthly",
+-    title: "Monthly Plan",
+-    price: "₹199",
+-    duration: "Per Month",
+-  },
+-  {
+-    id: "quarterly",
+-    title: "Quarterly Plan",
+-    price: "₹499",
+-    duration: "3 Months (90 Days)",
+-    best: true,
+-  },
+-];
++import { usePlanCatalog } from "../services/planCatalog";
+ 
+ const SubscriptionsPlan = ({ navigation, route, onLoginSuccess }) => {
+   // const { userData } = route.params;
+@@ -43,6 +22,10 @@ const SubscriptionsPlan = ({ navigation, route, onLoginSuccess }) => {
+   const insets = useSafeAreaInsets();
+   const [selectedPlan, setSelectedPlan] = useState(userData?.isOnboarding=== true ? "Free" : null);
+   const [loading, setLoading] = useState(false);
++  // Prices, durations and the trial length as the admin panel publishes them
++  // (`partner_plans`). The seed renders on the first frame, the backend's rows
++  // replace it as soon as they arrive — see src/services/planCatalog.js.
++  const { plans, freeTrial } = usePlanCatalog();
+ 
+   const createPaymentOrder = async (amount) => {
+     try {
+@@ -73,7 +56,13 @@ const SubscriptionsPlan = ({ navigation, route, onLoginSuccess }) => {
+     }
+ 
+     const selected = plans.find(p => p.id === selectedPlan);
+-    const amount = Number(selected.price.replace("₹", ""));
++    if (!selected) {
++      Alert.alert("Plan unavailable", "This plan is no longer on sale. Please pick another one.");
++      return;
++    }
++    // The catalog's price is a number; the backend refuses a payment that does
++    // not match the price stored for the plan, so a stale screen cannot pay less.
++    const amount = Number(selected.price);
+ 
+     setLoading(true);
+ 
+@@ -205,9 +194,9 @@ const SubscriptionsPlan = ({ navigation, route, onLoginSuccess }) => {
+ 
+           <Text allowFontScaling={false}style={styles.planTitle}>Free Trial</Text>
+ 
+-          <Text allowFontScaling={false}style={styles.price}>₹ 00</Text>
++          <Text allowFontScaling={false}style={styles.price}>{freeTrial.priceLabel || "₹ 00"}</Text>
+ 
+-          <Text allowFontScaling={false}style={styles.duration}>{`20 days`}</Text>
++          <Text allowFontScaling={false}style={styles.duration}>{freeTrial.duration}</Text>
+         </TouchableOpacity>
+       )}
+       {plans.map(plan => (
+@@ -222,15 +211,15 @@ const SubscriptionsPlan = ({ navigation, route, onLoginSuccess }) => {
+           onPress={() => setSelectedPlan(plan.id)}
+         >
+ 
+-          {plan.best && (
++          {(plan.best || !!plan.badge) && (
+             <View style={styles.bestBadge}>
+-              <Text allowFontScaling={false}style={styles.bestText}>BEST VALUE</Text>
++              <Text allowFontScaling={false}style={styles.bestText}>{plan.badge || "BEST VALUE"}</Text>
+             </View>
+           )}
+ 
+           <Text allowFontScaling={false}style={styles.planTitle}>{plan.title}</Text>
+ 
+-          <Text allowFontScaling={false}style={styles.price}>{plan.price}</Text>
++          <Text allowFontScaling={false}style={styles.price}>{plan.priceLabel}</Text>
+ 
+           <Text allowFontScaling={false}style={styles.duration}>{plan.duration}</Text>
+         </TouchableOpacity>
+diff --git a/src/services/communication.js b/src/services/communication.js
+index f28f0c6..69af114 100644
+--- a/src/services/communication.js
++++ b/src/services/communication.js
+@@ -389,6 +389,21 @@ export const communication = {
+             throw error;
+         }
+     },
++    // The partner price list (prices, durations, the free trial length) as the
++    // admin panel publishes it. Public: no token, so the registration screen can
++    // show prices before an account exists. The fallback lives in planCatalog.js.
++    listPartnerPlans: async () => {
++        try {
++            const response = await api.post(`/api/salons/plans/list`, {}, {
++                headers: {
++                    "Content-Type": "application/json",
++                },
++            });
++            return response.data;
++        } catch (error) {
++            throw error;
++        }
++    },
+     createPaymentOrder: async (payload) => {
+         try {
+             const response = await api.post(`/api/salons/create-payment-order`, payload, {
+diff --git a/src/services/planCatalog.js b/src/services/planCatalog.js
+new file mode 100644
+index 0000000..b7df553
+--- /dev/null
++++ b/src/services/planCatalog.js
+@@ -0,0 +1,206 @@
++import { useEffect, useState } from "react";
++import AsyncStorage from "@react-native-async-storage/async-storage";
++import { communication } from "./communication";
++
++// The partner price list comes from the backend, not from this bundle.
++//
++// It used to be two literal arrays inside the two subscription screens — and
++// they had drifted: registration sold ₹199 / ₹299 / ₹499 while renewal still
++// showed the old ₹99 / ₹179 / ₹249 ladder, and the free trial card said
++// "20 days" while the backend granted whatever `salonLogin.js` had hard-coded.
++// The admin panel now owns those numbers (`partner_plans`), the website reads
++// the same public endpoint, and so does this file: changing a price in the panel
++// reaches the app on the next call, with no app release.
++//
++// The seed below is only what the app shows before the first response, or when
++// the device is offline — never a second price list.
++
++export const PLAN_CACHE_KEY = "mynaai:plan-catalog:v2";
++
++export const SEED_FREE_TRIAL = {
++  id: "Free",
++  title: "Free Trial",
++  price: 0,
++  priceLabel: "₹ 00",
++  days: 90,
++  duration: "3 Months (90 Days)",
++  note: "",
++  badge: "Default",
++  best: false,
++  sortOrder: -1,
++  isActive: true,
++  isFree: true,
++};
++
++export const SEED_PLANS = [
++  {
++    id: "monthly",
++    title: "Monthly Plan",
++    price: 199,
++    priceLabel: "₹199",
++    days: 30,
++    duration: "1 Month (30 Days)",
++    note: "Flexible month-to-month growth",
++    badge: "",
++    best: false,
++    sortOrder: 0,
++    isActive: true,
++    isFree: false,
++  },
++  {
++    id: "trial_2_months",
++    title: "Introductory",
++    price: 299,
++    priceLabel: "₹299",
++    days: 60,
++    duration: "2 Months (60 Days)",
++    note: "A gentle start for new partners",
++    badge: "",
++    best: false,
++    sortOrder: 1,
++    isActive: true,
++    isFree: false,
++  },
++  {
++    id: "quarterly",
++    title: "Quarterly Plan",
++    price: 499,
++    priceLabel: "₹499",
++    days: 90,
++    duration: "3 Months (90 Days)",
++    note: "Best value for busy salons",
++    badge: "BEST VALUE",
++    best: true,
++    sortOrder: 2,
++    isActive: true,
++    isFree: false,
++  },
++];
++
++/** "3 Months (90 Days)" — always derived from the day count, never stored. */
++export const describeDuration = (days) => {
++  const n = Math.round(Number(days));
++  if (!Number.isFinite(n) || n <= 0) return "";
++  if (n % 365 === 0) return n === 365 ? "1 Year (365 Days)" : `${n / 365} Years (${n} Days)`;
++  if (n % 30 === 0) return n === 30 ? "1 Month (30 Days)" : `${n / 30} Months (${n} Days)`;
++  return `${n} Day${n === 1 ? "" : "s"}`;
++};
++
++/** "₹199" — the panel stores rupees; the screens print them. */
++export const formatPrice = (value) => {
++  const n = Number(value);
++  if (!Number.isFinite(n) || n <= 0) return "₹ 00";
++  return `₹${Number.isInteger(n) ? n : n.toFixed(2)}`;
++};
++
++const pick = (...values) => values.find((value) => value !== undefined && value !== null && value !== "");
++
++/** One row, from a shape-or-two — the backend and the cache agree, but be lenient. */
++export const normalizePlan = (row, index = 0) => {
++  if (!row || typeof row !== "object") return null;
++  const id = pick(row.id, row.planType, row.plan_type, row.key);
++  if (!id) return null;
++  const days = Number(
++    pick(row.days, row.durationDays, row.duration_days, row.validityDays, row.validity_days, row.validity)
++  );
++  const price = Number(pick(row.price, row.amount, row.value, 0));
++  const badge = String(pick(row.badge, row.tag, row.ribbon, "") || "");
++  const isFree = Boolean(pick(row.isFree, row.is_free, id === "Free"));
++  return {
++    id: String(id),
++    title: String(pick(row.title, row.label, row.name, id)),
++    price: Number.isFinite(price) ? price : 0,
++    priceLabel: formatPrice(price),
++    days: Number.isFinite(days) && days > 0 ? days : 30,
++    duration: describeDuration(days),
++    note: String(pick(row.note, row.description, "") || ""),
++    badge,
++    best: Boolean(pick(row.best, row.isRecommended, row.is_recommended, /best/i.test(badge))) || /best/i.test(badge),
++    sortOrder: Number(pick(row.sortOrder, row.sort_order, index)) || 0,
++    isActive: row.isActive === undefined && row.is_active === undefined
++      ? true
++      : Boolean(pick(row.isActive, row.is_active)),
++    isFree,
++  };
++};
++
++/**
++ * Accepts `{ data: { plans, freeTrial } }`, a bare array, `{ planList }` or the
++ * cached copy. Never throws: a catalog we cannot read is the seed.
++ */
++export const normalizeCatalog = (payload) => {
++  const root = payload?.data && typeof payload.data === "object" ? payload.data : payload;
++  const rawPlans = Array.isArray(root)
++    ? root
++    : pick(root?.plans, root?.planList, root?.plan_list, root?.data) || [];
++  const rows = (Array.isArray(rawPlans) ? rawPlans : []).map(normalizePlan).filter(Boolean);
++
++  const freeRow =
++    normalizePlan(pick(root?.freeTrial, root?.free_trial, root?.trial) || null) ||
++    rows.find((plan) => plan.isFree) ||
++    null;
++
++  const paid = rows.filter((plan) => plan.id !== freeRow?.id && !plan.isFree).sort((a, b) => a.sortOrder - b.sortOrder);
++
++  const freeDays = Number(
++    pick(root?.freeTrialDays, root?.free_trial_days, freeRow?.days, SEED_FREE_TRIAL.days)
++  );
++
++  return {
++    plans: paid.length ? paid : SEED_PLANS,
++    freeTrial: {
++      ...SEED_FREE_TRIAL,
++      ...(freeRow || {}),
++      days: Number.isFinite(freeDays) && freeDays > 0 ? freeDays : SEED_FREE_TRIAL.days,
++      duration: describeDuration(freeDays),
++      priceLabel: "₹ 00",
++    },
++    source: paid.length ? "remote" : "seed",
++  };
++};
++
++/** Fetch, then write the cache. Falls back to the cache, then the seed. */
++export const loadPlanCatalog = async () => {
++  try {
++    const response = await communication.listPartnerPlans();
++    const catalog = normalizeCatalog(response);
++    if (catalog.source === "remote") {
++      AsyncStorage.setItem(PLAN_CACHE_KEY, JSON.stringify(catalog)).catch(() => {});
++      return catalog;
++    }
++  } catch {
++    // offline, 5xx, a proxy in the way — read the cache instead
++  }
++  try {
++    const cached = await AsyncStorage.getItem(PLAN_CACHE_KEY);
++    if (cached) return normalizeCatalog(JSON.parse(cached));
++  } catch {
++    // unreadable cache: the seed is still a valid catalog
++  }
++  return normalizeCatalog(null);
++};
++
++/**
++ * The catalog, immediately usable and quietly refreshed.
++ *
++ * Both subscription screens render the seed on the first frame and repaint when
++ * the backend answers, so a slow network never leaves a partner staring at a
++ * spinner on the screen where they are about to pay.
++ */
++export const usePlanCatalog = () => {
++  const [catalog, setCatalog] = useState(() => normalizeCatalog(null));
++
++  useEffect(() => {
++    let alive = true;
++    loadPlanCatalog().then((next) => {
++      if (alive) setCatalog(next);
++    });
++    return () => {
++      alive = false;
++    };
++  }, []);
++
++  return catalog;
++};
++
++export default usePlanCatalog;

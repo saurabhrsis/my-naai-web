@@ -1,0 +1,1107 @@
+diff --git a/src/App.jsx b/src/App.jsx
+index 1d04456..8ac8b0b 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -26,6 +26,7 @@ import ShopProducts from "./pages/ShopProducts.jsx";
+ import Distributors from "./pages/Distributors.jsx";
+ import ShopOrders from "./pages/ShopOrders.jsx";
+ import ShopSettings from "./pages/ShopSettings.jsx";
++import PlansAndTrials from "./pages/PlansAndTrials.jsx";
+ import DistributorPortal from "./pages/DistributorPortal.jsx";
+ 
+ const ProtectedRoute = ({ children }) => {
+@@ -192,6 +193,14 @@ const router = createBrowserRouter(
+         </ProtectedRoute>
+       ),
+     },
++    {
++      path: "/plans",
++      element: (
++        <ProtectedRoute>
++          <PlansAndTrials />
++        </ProtectedRoute>
++      ),
++    },
+     {
+       path: "/distributor",
+       element: (
+diff --git a/src/components/Layout.jsx b/src/components/Layout.jsx
+index f289a3f..1e5b979 100644
+--- a/src/components/Layout.jsx
++++ b/src/components/Layout.jsx
+@@ -3,7 +3,7 @@ import { NavLink, Link, useNavigate } from "react-router-dom";
+ import ProfileDropdown from "./ProfileDropdown.jsx";
+ import ChangePasswordModal from "./ChangePasswordModal.jsx";
+ import { useUser } from "../contexts/UserContext.jsx";
+-import { ClipboardList, Store, CalendarCheck, User, Users, Package, Truck, ShoppingBag, SlidersHorizontal, Menu, X } from "lucide-react";
++import { ClipboardList, Store, CalendarCheck, User, Users, Package, Truck, ShoppingBag, SlidersHorizontal, Menu, X, Sparkles } from "lucide-react";
+ import { salonRequestAPI } from "../services/communication.jsx";
+ 
+ const Icons = {
+@@ -51,6 +51,7 @@ const navItems = [
+   { path: "/distributors", key: "distributors", label: "Distributors", icon: <Truck size={18} /> },
+   { path: "/shop-orders", key: "shopOrders", label: "Shop Orders", icon: <ShoppingBag size={18} /> },
+   { path: "/shop-settings", key: "shopSettings", label: "Shop Settings", icon: <SlidersHorizontal size={18} /> },
++  { path: "/plans", key: "plans", label: "Plans & Trials", icon: <Sparkles size={18} /> },
+ ];
+ 
+ const Layout = ({ children }) => {
+@@ -65,8 +66,14 @@ const Layout = ({ children }) => {
+   const accessTab = JSON.parse(localStorage.getItem("accessTab")) || [];
+   
+   const hasAnyShopTab = ["shopProducts", "distributors", "shopOrders"].some((key) => accessTab?.includes(key));
+-  const filteredTabs = navItems.filter((navDetails) =>
+-    accessTab?.includes(navDetails.key) || (navDetails.key === "shopSettings" && hasAnyShopTab)
++  const filteredTabs = navItems.filter(
++    (navDetails) =>
++      accessTab?.includes(navDetails.key) ||
++      // Shop Settings rides along with any shop tab; Plans & Trials with the
++      // role-management tab, so the super admin can set prices without first
++      // granting themselves the new tab.
++      (navDetails.key === "shopSettings" && hasAnyShopTab) ||
++      (navDetails.key === "plans" && accessTab?.includes("user"))
+   );
+ 
+   const primaryMobileTabs = filteredTabs.slice(0, 4);
+diff --git a/src/pages/PlansAndTrials.jsx b/src/pages/PlansAndTrials.jsx
+new file mode 100644
+index 0000000..7856fae
+--- /dev/null
++++ b/src/pages/PlansAndTrials.jsx
+@@ -0,0 +1,970 @@
++import { useState, useEffect, useMemo } from "react";
++import { partnerPlanAPI } from "../services/communication";
++import Layout from "../components/Layout.jsx";
++import Loader from "../components/Loader.jsx";
++import { toast } from "react-toastify";
++import { useNavigate } from "react-router-dom";
++import {
++  CalendarClock,
++  IndianRupee,
++  Save,
++  Plus,
++  Trash2,
++  Power,
++  Star,
++  RefreshCw,
++  Info,
++  Users,
++  Sparkles,
++} from "lucide-react";
++
++// Plans & Trials — the single source of truth for what a salon pays and for how
++// long a brand-new salon gets free. Until this screen existed those numbers were
++// compiled into three repositories (`plan.util.js` in the backend, `PARTNER_PLANS`
++// in the website, a constant in the app), so a price change was a release of all
++// three — and the free trial was a literal `+ 20` in `salonLogin.js` while the
++// portal advertised 20 days and the pricing screen said 60.
++//
++// Editing a row here changes the website and the app on the next read: both call
++// the public twin of this list (`POST /api/salons/plans/list`), which reads the
++// same table. A plan id is created here and never re-slugged, because
++// `salons.planType` and every paid subscription store it.
++const DURATION = (days) => {
++  const n = Number(days);
++  if (!Number.isFinite(n) || n <= 0) return "—";
++  if (n % 365 === 0) return n === 365 ? "1 Year (365 Days)" : `${n / 365} Years (${n} Days)`;
++  if (n % 30 === 0) return n === 30 ? "1 Month (30 Days)" : `${n / 30} Months (${n} Days)`;
++  return `${n} Day${n === 1 ? "" : "s"}`;
++};
++
++const ROW_STYLE = {
++  background: "#ffffff",
++  borderRadius: "16px",
++  boxShadow: "0 0.125rem 0.25rem rgba(0, 0, 0, 0.075)",
++};
++
++const INPUT = {
++  width: "100%",
++  boxSizing: "border-box",
++  padding: "9px 12px",
++  fontSize: "0.95rem",
++  color: "#212529",
++  background: "#ffffff",
++  border: "1px solid #ced4da",
++  borderRadius: "8px",
++  outline: "none",
++};
++
++const FIELD_LABEL = {
++  display: "block",
++  marginBottom: "6px",
++  fontSize: "0.75rem",
++  fontWeight: "700",
++  letterSpacing: "0.03em",
++  textTransform: "uppercase",
++  color: "#6c757d",
++};
++
++const draftFrom = (plan) => ({
++  id: plan.id,
++  label: plan.label || plan.title || "",
++  price: plan.price ?? 0,
++  days: plan.days ?? 30,
++  note: plan.note || "",
++  badge: plan.badge || "",
++  sortOrder: plan.sortOrder ?? 0,
++  isRecommended: Boolean(plan.isRecommended),
++  isActive: plan.isActive !== false,
++  isFree: Boolean(plan.isFree),
++  totalSalons: plan.totalSalons ?? 0,
++  activeSalons: plan.activeSalons ?? 0,
++});
++
++const PlansAndTrials = () => {
++  const navigate = useNavigate();
++  const [isLoading, setIsLoading] = useState(true);
++  const [plans, setPlans] = useState([]);
++  const [drafts, setDrafts] = useState({});
++  const [trial, setTrial] = useState({ id: "Free", days: 90, label: "Free trial" });
++  const [trialDirty, setTrialDirty] = useState(false);
++  const [orphaned, setOrphaned] = useState([]);
++  const [savingId, setSavingId] = useState("");
++  const [savingTrial, setSavingTrial] = useState(false);
++  const [creating, setCreating] = useState(false);
++  const [newPlan, setNewPlan] = useState({ label: "", price: "", days: "", note: "" });
++  const [confirming, setConfirming] = useState(""); // plan id awaiting a delete decision
++
++  useEffect(() => {
++    if (localStorage.getItem("role") === "distributor") {
++      navigate("/distributor", { replace: true });
++      return;
++    }
++    const tab = JSON.parse(localStorage.getItem("accessTab") || "null");
++    // `plans` is grantable on its own; role management (`user`) implies the super
++    // admin, who must be able to set prices without granting themselves the tab.
++    const hasAccess = tab === null || tab.includes("plans") || tab.includes("user");
++    if (!hasAccess) navigate("/login", { replace: true });
++  }, [navigate]);
++
++  const load = async () => {
++    try {
++      setIsLoading(true);
++      const result = await partnerPlanAPI.list();
++      if (!result.success) {
++        toast.error(result.message || "Failed to load the plans");
++        return;
++      }
++      const data = result.data || {};
++      const rows = Array.isArray(data.plans) ? data.plans.map(draftFrom) : [];
++      // The free trial is the row that carries `isFree`; the backend also sends
++      // `freeTrialDays` so this screen still shows the right number if the row
++      // is somehow missing.
++      const free = rows.find((row) => row.isFree) || null;
++      setPlans(rows.filter((row) => !row.isFree));
++      setDrafts(Object.fromEntries(rows.filter((row) => !row.isFree).map((row) => [row.id, row])));
++      setTrial({
++        id: free?.id || "Free",
++        label: free?.label || "Free trial",
++        days: free?.days ?? data.freeTrialDays ?? 90,
++        note: free?.note || "",
++      });
++      setTrialDirty(false);
++      setOrphaned(Array.isArray(data.orphaned) ? data.orphaned : []);
++    } catch {
++      toast.error("Failed to load the plans");
++    } finally {
++      setIsLoading(false);
++    }
++  };
++
++  useEffect(() => {
++    load();
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, []);
++
++  const patch = (id, changes) =>
++    setDrafts((prev) => ({ ...prev, [id]: { ...prev[id], ...changes } }));
++
++  const savePlan = async (id) => {
++    const draft = drafts[id];
++    if (!draft) return;
++    if (!draft.label.trim()) {
++      toast.error("Give the plan a name — that is what salons see on the pricing screen.");
++      return;
++    }
++    const price = Number(draft.price);
++    const days = Number(draft.days);
++    if (!Number.isFinite(price) || price < 0) {
++      toast.error("The price must be 0 or more.");
++      return;
++    }
++    if (!Number.isFinite(days) || days < 1 || days > 3650) {
++      toast.error("The length must be between 1 and 3650 days.");
++      return;
++    }
++    if (price === 0 && !draft.isFree) {
++      toast.error("A paid plan must cost more than ₹0 — take it off sale instead.");
++      return;
++    }
++    try {
++      setSavingId(id);
++      const result = await partnerPlanAPI.update({
++        id,
++        label: draft.label.trim(),
++        price,
++        days: Math.round(days),
++        note: draft.note.trim(),
++        badge: draft.badge.trim(),
++        sortOrder: Number(draft.sortOrder) || 0,
++        isRecommended: Boolean(draft.isRecommended),
++        isActive: Boolean(draft.isActive),
++      });
++      if (result.success) {
++        toast.success(`${draft.label} saved — the website and app show it on their next load.`);
++        await load();
++      } else {
++        toast.error(result.message || "Failed to save the plan");
++      }
++    } catch {
++      toast.error("Failed to save the plan");
++    } finally {
++      setSavingId("");
++    }
++  };
++
++  const saveTrial = async () => {
++    const days = Number(trial.days);
++    if (!Number.isFinite(days) || days < 1 || days > 3650) {
++      toast.error("The trial must be between 1 and 3650 days.");
++      return;
++    }
++    try {
++      setSavingTrial(true);
++      const result = await partnerPlanAPI.update({
++        id: trial.id,
++        label: trial.label,
++        price: 0,
++        days: Math.round(days),
++        isActive: true,
++      });
++      if (result.success) {
++        toast.success(`New salons now get ${DURATION(days)} free.`);
++        await load();
++      } else {
++        toast.error(result.message || "Failed to save the trial length");
++      }
++    } catch {
++      toast.error("Failed to save the trial length");
++    } finally {
++      setSavingTrial(false);
++    }
++  };
++
++  const setActive = async (id, isActive) => {
++    const draft = drafts[id];
++    if (!draft) return;
++    try {
++      setSavingId(id);
++      const result = await partnerPlanAPI.update({ id, isActive });
++      if (result.success) {
++        toast.success(
++          isActive
++            ? `${draft.label} is on sale again.`
++            : `${draft.label} is off sale. Salons already on it keep their subscription.`
++        );
++        await load();
++      } else {
++        toast.error(result.message || "Failed to change the plan");
++      }
++    } catch {
++      toast.error("Failed to change the plan");
++    } finally {
++      setSavingId("");
++    }
++  };
++
++  const removePlan = async (id, deactivate) => {
++    const draft = drafts[id];
++    try {
++      setSavingId(id);
++      const result = await partnerPlanAPI.remove({ id, deactivate: Boolean(deactivate) });
++      if (result.success) {
++        toast.success(deactivate ? `${draft.label} taken off sale.` : `${draft.label} deleted.`);
++        setConfirming("");
++        await load();
++      } else {
++        toast.error(result.message || "Failed to remove the plan");
++      }
++    } catch {
++      toast.error("Failed to remove the plan");
++    } finally {
++      setSavingId("");
++    }
++  };
++
++  const createPlan = async () => {
++    if (!newPlan.label.trim()) {
++      toast.error("Give the new plan a name.");
++      return;
++    }
++    const price = Number(newPlan.price);
++    const days = Number(newPlan.days);
++    if (!Number.isFinite(price) || price <= 0) {
++      toast.error("A paid plan must cost more than ₹0.");
++      return;
++    }
++    if (!Number.isFinite(days) || days < 1 || days > 3650) {
++      toast.error("The length must be between 1 and 3650 days.");
++      return;
++    }
++    try {
++      setCreating(true);
++      const result = await partnerPlanAPI.create({
++        label: newPlan.label.trim(),
++        price,
++        days: Math.round(days),
++        note: newPlan.note.trim(),
++      });
++      if (result.success) {
++        toast.success(`${newPlan.label.trim()} created — it is on sale on the website and app now.`);
++        setNewPlan({ label: "", price: "", days: "", note: "" });
++        await load();
++      } else {
++        toast.error(result.message || "Failed to create the plan");
++      }
++    } catch {
++      toast.error("Failed to create the plan");
++    } finally {
++      setCreating(false);
++    }
++  };
++
++  const onSale = useMemo(() => plans.filter((plan) => plan.isActive !== false).length, [plans]);
++
++  return (
++    <Layout>
++      <div style={{ padding: "16px", maxWidth: "1400px", margin: "0 auto", boxSizing: "border-box" }}>
++        {/* Header */}
++        <div style={{ ...ROW_STYLE, marginBottom: "20px", padding: "20px" }}>
++          <div style={{ display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>
++            <div
++              style={{
++                display: "flex",
++                alignItems: "center",
++                justifyContent: "center",
++                background: "rgba(13, 110, 253, 0.1)",
++                color: "#0d6efd",
++                borderRadius: "12px",
++                width: "48px",
++                height: "48px",
++                flexShrink: 0,
++              }}
++            >
++              <Sparkles size={24} />
++            </div>
++            <div style={{ flex: "1 1 250px", minWidth: 0 }}>
++              <h4 style={{ margin: "0 0 4px 0", fontWeight: "700", color: "#212529", fontSize: "1.2rem" }}>
++                Plans &amp; Trials
++              </h4>
++              <p style={{ margin: 0, color: "#6c757d", fontSize: "0.85rem", lineHeight: "1.4" }}>
++                What a salon pays, how long each plan runs and how long a new salon is free. The
++                website and the app read this list — a change here reaches both without an app release.
++              </p>
++            </div>
++            <button
++              type="button"
++              onClick={load}
++              disabled={isLoading}
++              style={{
++                display: "inline-flex",
++                alignItems: "center",
++                gap: "8px",
++                padding: "9px 14px",
++                borderRadius: "8px",
++                border: "1px solid #ced4da",
++                background: "#ffffff",
++                color: "#495057",
++                fontSize: "0.875rem",
++                fontWeight: "600",
++                cursor: isLoading ? "not-allowed" : "pointer",
++              }}
++            >
++              <RefreshCw size={16} /> Reload
++            </button>
++          </div>
++        </div>
++
++        {isLoading ? (
++          <div style={{ ...ROW_STYLE, padding: "60px 0", textAlign: "center" }}>
++            <Loader size="md" />
++            <p style={{ color: "#6c757d", marginTop: "12px", fontSize: "0.875rem" }}>Loading the price list...</p>
++          </div>
++        ) : (
++          <>
++            {/* The free trial — the number the client asked to be 90 days */}
++            <div style={{ ...ROW_STYLE, padding: "20px", marginBottom: "20px", border: "1px solid #dbeafe" }}>
++              <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "6px" }}>
++                <span
++                  style={{
++                    display: "flex",
++                    alignItems: "center",
++                    justifyContent: "center",
++                    background: "#eff6ff",
++                    color: "#0d6efd",
++                    borderRadius: "8px",
++                    width: "32px",
++                    height: "32px",
++                    flexShrink: 0,
++                  }}
++                >
++                  <CalendarClock size={18} />
++                </span>
++                <h5 style={{ margin: 0, fontWeight: "700", color: "#212529", fontSize: "1rem" }}>
++                  Free trial length
++                </h5>
++              </div>
++              <p style={{ margin: "0 0 14px 0", color: "#6c757d", fontSize: "0.82rem", lineHeight: "1.45", maxWidth: "720px" }}>
++                Every salon that registers starts on this window, automatically, without paying. A
++                salon that never subscribes simply expires when it ends. Salons already on a paid
++                plan are not affected.
++              </p>
++              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: "12px" }}>
++                <div style={{ flex: "1 1 200px", maxWidth: "260px" }}>
++                  <label style={FIELD_LABEL} htmlFor="trial-days">
++                    Trial length (days)
++                  </label>
++                  <input
++                    id="trial-days"
++                    type="number"
++                    min="1"
++                    max="3650"
++                    style={INPUT}
++                    value={trial.days}
++                    onChange={(e) => {
++                      setTrial((prev) => ({ ...prev, days: e.target.value }));
++                      setTrialDirty(true);
++                    }}
++                  />
++                </div>
++                <div style={{ flex: "1 1 220px", paddingBottom: "9px" }}>
++                  <span style={{ fontSize: "0.85rem", color: "#495057", fontWeight: "600" }}>
++                    {DURATION(trial.days)} free
++                  </span>
++                  <span style={{ display: "block", fontSize: "0.78rem", color: "#6c757d", marginTop: "2px" }}>
++                    The portal shows this as “{DURATION(trial.days)} free trial”.
++                  </span>
++                </div>
++                <button
++                  type="button"
++                  onClick={saveTrial}
++                  disabled={savingTrial || !trialDirty}
++                  style={{
++                    display: "inline-flex",
++                    alignItems: "center",
++                    gap: "8px",
++                    padding: "10px 18px",
++                    borderRadius: "8px",
++                    border: "none",
++                    background: savingTrial || !trialDirty ? "#9ec5fe" : "#0d6efd",
++                    color: "#ffffff",
++                    fontSize: "0.9rem",
++                    fontWeight: "700",
++                    cursor: savingTrial || !trialDirty ? "not-allowed" : "pointer",
++                  }}
++                >
++                  <Save size={16} /> {savingTrial ? "Saving..." : "Save trial"}
++                </button>
++              </div>
++            </div>
++
++            {/* Legacy plans that no row covers */}
++            {orphaned.length > 0 && (
++              <div
++                style={{
++                  ...ROW_STYLE,
++                  padding: "16px 18px",
++                  marginBottom: "20px",
++                  border: "1px solid #fde68a",
++                  background: "#fffbeb",
++                  display: "flex",
++                  gap: "12px",
++                  alignItems: "flex-start",
++                }}
++              >
++                <Info size={18} style={{ color: "#b45309", flexShrink: 0, marginTop: "2px" }} />
++                <div style={{ fontSize: "0.85rem", color: "#92400e", lineHeight: "1.5" }}>
++                  <strong>
++                    {orphaned.reduce((sum, item) => sum + (item.totalSalons || 0), 0)} salon
++                    {orphaned.reduce((sum, item) => sum + (item.totalSalons || 0), 0) === 1 ? "" : "s"} are
++                    on a plan that is not in this list.
++                  </strong>{" "}
++                  They renew on the legacy duration (
++                  {orphaned.map((item) => `${item.id}: ${item.totalSalons}`).join(", ")}). Create a plan
++                  with that id if you want to control their price — existing ids are never changed
++                  automatically.
++                </div>
++              </div>
++            )}
++
++            {/* The price list */}
++            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "12px", marginBottom: "12px", flexWrap: "wrap" }}>
++              <h5 style={{ margin: 0, fontWeight: "700", color: "#212529", fontSize: "1rem" }}>
++                Subscription plans
++              </h5>
++              <span style={{ fontSize: "0.8rem", color: "#6c757d" }}>
++                {onSale} of {plans.length} on sale
++              </span>
++            </div>
++
++            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
++              {plans.length === 0 && (
++                <div style={{ ...ROW_STYLE, padding: "28px", textAlign: "center", color: "#6c757d", fontSize: "0.9rem" }}>
++                  No paid plans yet. Add the first one below — until then only the free trial is
++                  offered on the website.
++                </div>
++              )}
++
++              {plans.map((plan) => {
++                const draft = drafts[plan.id] || draftFrom(plan);
++                const busy = savingId === plan.id;
++                const dirty =
++                  draft.label !== plan.label ||
++                  Number(draft.price) !== Number(plan.price) ||
++                  Number(draft.days) !== Number(plan.days) ||
++                  draft.note !== (plan.note || "") ||
++                  draft.badge !== (plan.badge || "") ||
++                  Number(draft.sortOrder) !== Number(plan.sortOrder) ||
++                  Boolean(draft.isRecommended) !== Boolean(plan.isRecommended);
++
++                return (
++                  <div
++                    key={plan.id}
++                    style={{
++                      ...ROW_STYLE,
++                      padding: "18px",
++                      border: draft.isActive ? "1px solid #e2e8f0" : "1px solid #f1f3f5",
++                      opacity: draft.isActive ? 1 : 0.72,
++                    }}
++                  >
++                    <div
++                      style={{
++                        display: "flex",
++                        alignItems: "center",
++                        gap: "10px",
++                        flexWrap: "wrap",
++                        marginBottom: "14px",
++                      }}
++                    >
++                      <span style={{ fontWeight: "700", color: "#212529", fontSize: "1rem" }}>
++                        {draft.label || plan.id}
++                      </span>
++                      <code
++                        style={{
++                          fontSize: "0.72rem",
++                          color: "#6c757d",
++                          background: "#f8f9fa",
++                          border: "1px solid #e9ecef",
++                          borderRadius: "6px",
++                          padding: "2px 8px",
++                        }}
++                        title="Stored on every salon's planType — it never changes"
++                      >
++                        {plan.id}
++                      </code>
++                      {draft.isRecommended && (
++                        <span
++                          style={{
++                            display: "inline-flex",
++                            alignItems: "center",
++                            gap: "4px",
++                            fontSize: "0.7rem",
++                            fontWeight: "800",
++                            letterSpacing: "0.04em",
++                            textTransform: "uppercase",
++                            color: "#0d6efd",
++                            background: "#eff6ff",
++                            border: "1px solid #dbeafe",
++                            borderRadius: "999px",
++                            padding: "2px 10px",
++                          }}
++                        >
++                          <Star size={12} /> Recommended
++                        </span>
++                      )}
++                      {!draft.isActive && (
++                        <span
++                          style={{
++                            fontSize: "0.7rem",
++                            fontWeight: "800",
++                            letterSpacing: "0.04em",
++                            textTransform: "uppercase",
++                            color: "#6c757d",
++                            background: "#f1f3f5",
++                            borderRadius: "999px",
++                            padding: "2px 10px",
++                          }}
++                        >
++                          Off sale
++                        </span>
++                      )}
++                      <span
++                        style={{
++                          marginLeft: "auto",
++                          display: "inline-flex",
++                          alignItems: "center",
++                          gap: "6px",
++                          fontSize: "0.8rem",
++                          color: "#6c757d",
++                        }}
++                      >
++                        <Users size={14} /> {plan.activeSalons} active · {plan.totalSalons} total
++                      </span>
++                    </div>
++
++                    <div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
++                      <div style={{ flex: "1 1 200px", minWidth: "160px" }}>
++                        <label style={FIELD_LABEL} htmlFor={`label-${plan.id}`}>
++                          Name on the pricing screen
++                        </label>
++                        <input
++                          id={`label-${plan.id}`}
++                          style={INPUT}
++                          value={draft.label}
++                          onChange={(e) => patch(plan.id, { label: e.target.value })}
++                        />
++                      </div>
++                      <div style={{ flex: "0 1 130px", minWidth: "110px" }}>
++                        <label style={FIELD_LABEL} htmlFor={`price-${plan.id}`}>
++                          Price (₹)
++                        </label>
++                        <input
++                          id={`price-${plan.id}`}
++                          type="number"
++                          min="1"
++                          step="1"
++                          style={INPUT}
++                          value={draft.price}
++                          onChange={(e) => patch(plan.id, { price: e.target.value })}
++                        />
++                      </div>
++                      <div style={{ flex: "0 1 130px", minWidth: "110px" }}>
++                        <label style={FIELD_LABEL} htmlFor={`days-${plan.id}`}>
++                          Length (days)
++                        </label>
++                        <input
++                          id={`days-${plan.id}`}
++                          type="number"
++                          min="1"
++                          max="3650"
++                          step="1"
++                          style={INPUT}
++                          value={draft.days}
++                          onChange={(e) => patch(plan.id, { days: e.target.value })}
++                        />
++                        <span style={{ display: "block", marginTop: "4px", fontSize: "0.72rem", color: "#6c757d" }}>
++                          {DURATION(draft.days)}
++                        </span>
++                      </div>
++                      <div style={{ flex: "0 1 110px", minWidth: "90px" }}>
++                        <label style={FIELD_LABEL} htmlFor={`order-${plan.id}`}>
++                          Order
++                        </label>
++                        <input
++                          id={`order-${plan.id}`}
++                          type="number"
++                          step="1"
++                          style={INPUT}
++                          value={draft.sortOrder}
++                          onChange={(e) => patch(plan.id, { sortOrder: e.target.value })}
++                          title="Lower numbers appear first on the pricing screen"
++                        />
++                      </div>
++                      <div style={{ flex: "1 1 160px", minWidth: "140px" }}>
++                        <label style={FIELD_LABEL} htmlFor={`badge-${plan.id}`}>
++                          Ribbon (optional)
++                        </label>
++                        <input
++                          id={`badge-${plan.id}`}
++                          style={INPUT}
++                          value={draft.badge}
++                          placeholder="BEST VALUE"
++                          onChange={(e) => patch(plan.id, { badge: e.target.value })}
++                        />
++                      </div>
++                    </div>
++
++                    <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", marginTop: "12px" }}>
++                      <div style={{ flex: "1 1 320px", minWidth: "220px" }}>
++                        <label style={FIELD_LABEL} htmlFor={`note-${plan.id}`}>
++                          One-line note under the price
++                        </label>
++                        <input
++                          id={`note-${plan.id}`}
++                          style={INPUT}
++                          value={draft.note}
++                          placeholder="Best value for busy salons"
++                          onChange={(e) => patch(plan.id, { note: e.target.value })}
++                        />
++                      </div>
++                      <label
++                        style={{
++                          display: "inline-flex",
++                          alignItems: "center",
++                          gap: "8px",
++                          fontSize: "0.85rem",
++                          color: "#495057",
++                          fontWeight: "600",
++                          paddingBottom: "9px",
++                          cursor: "pointer",
++                        }}
++                      >
++                        <input
++                          type="checkbox"
++                          checked={draft.isRecommended}
++                          onChange={(e) => patch(plan.id, { isRecommended: e.target.checked })}
++                        />
++                        Recommended
++                      </label>
++                    </div>
++
++                    <div
++                      style={{
++                        display: "flex",
++                        flexWrap: "wrap",
++                        gap: "10px",
++                        marginTop: "16px",
++                        paddingTop: "14px",
++                        borderTop: "1px solid #f1f3f5",
++                      }}
++                    >
++                      <button
++                        type="button"
++                        onClick={() => savePlan(plan.id)}
++                        disabled={busy || !dirty}
++                        style={{
++                          display: "inline-flex",
++                          alignItems: "center",
++                          gap: "8px",
++                          padding: "9px 16px",
++                          borderRadius: "8px",
++                          border: "none",
++                          background: busy || !dirty ? "#9ec5fe" : "#0d6efd",
++                          color: "#ffffff",
++                          fontSize: "0.875rem",
++                          fontWeight: "700",
++                          cursor: busy || !dirty ? "not-allowed" : "pointer",
++                        }}
++                      >
++                        <Save size={15} /> {busy ? "Saving..." : dirty ? "Save changes" : "Saved"}
++                      </button>
++
++                      <button
++                        type="button"
++                        onClick={() => setActive(plan.id, plan.isActive === false)}
++                        disabled={busy}
++                        style={{
++                          display: "inline-flex",
++                          alignItems: "center",
++                          gap: "8px",
++                          padding: "9px 16px",
++                          borderRadius: "8px",
++                          border: "1px solid #ced4da",
++                          background: "#ffffff",
++                          color: plan.isActive === false ? "#0d6efd" : "#495057",
++                          fontSize: "0.875rem",
++                          fontWeight: "600",
++                          cursor: busy ? "not-allowed" : "pointer",
++                        }}
++                        title={
++                          plan.isActive === false
++                            ? "Put it back on sale"
++                            : "Take it off sale — salons already on it keep their subscription"
++                        }
++                      >
++                        <Power size={15} /> {plan.isActive === false ? "Put on sale" : "Take off sale"}
++                      </button>
++
++                      {confirming === plan.id ? (
++                        <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
++                          <span style={{ fontSize: "0.82rem", color: "#495057", fontWeight: "600" }}>
++                            {plan.totalSalons > 0
++                              ? `${plan.totalSalons} salon${plan.totalSalons === 1 ? " is" : "s are"} on this plan.`
++                              : "This plan has no salons."}
++                          </span>
++                          {plan.totalSalons > 0 ? (
++                            <button
++                              type="button"
++                              onClick={() => removePlan(plan.id, true)}
++                              disabled={busy}
++                              style={{
++                                padding: "8px 14px",
++                                borderRadius: "8px",
++                                border: "1px solid #f5c2c7",
++                                background: "#f8d7da",
++                                color: "#842029",
++                                fontSize: "0.82rem",
++                                fontWeight: "700",
++                                cursor: busy ? "not-allowed" : "pointer",
++                              }}
++                            >
++                              Take off sale instead
++                            </button>
++                          ) : (
++                            <button
++                              type="button"
++                              onClick={() => removePlan(plan.id, false)}
++                              disabled={busy}
++                              style={{
++                                padding: "8px 14px",
++                                borderRadius: "8px",
++                                border: "1px solid #dc3545",
++                                background: "#dc3545",
++                                color: "#ffffff",
++                                fontSize: "0.82rem",
++                                fontWeight: "700",
++                                cursor: busy ? "not-allowed" : "pointer",
++                              }}
++                            >
++                              Delete permanently
++                            </button>
++                          )}
++                          <button
++                            type="button"
++                            onClick={() => setConfirming("")}
++                            style={{
++                              padding: "8px 12px",
++                              borderRadius: "8px",
++                              border: "1px solid #ced4da",
++                              background: "#ffffff",
++                              color: "#495057",
++                              fontSize: "0.82rem",
++                              fontWeight: "600",
++                              cursor: "pointer",
++                            }}
++                          >
++                            Cancel
++                          </button>
++                        </div>
++                      ) : (
++                        <button
++                          type="button"
++                          onClick={() => setConfirming(plan.id)}
++                          disabled={busy}
++                          style={{
++                            display: "inline-flex",
++                            alignItems: "center",
++                            gap: "8px",
++                            padding: "9px 16px",
++                            borderRadius: "8px",
++                            border: "1px solid transparent",
++                            background: "transparent",
++                            color: "#dc3545",
++                            fontSize: "0.875rem",
++                            fontWeight: "600",
++                            cursor: busy ? "not-allowed" : "pointer",
++                          }}
++                        >
++                          <Trash2 size={15} /> Remove
++                        </button>
++                      )}
++                    </div>
++                  </div>
++                );
++              })}
++            </div>
++
++            {/* New plan */}
++            <div style={{ ...ROW_STYLE, padding: "20px", marginTop: "20px" }}>
++              <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "14px" }}>
++                <span
++                  style={{
++                    display: "flex",
++                    alignItems: "center",
++                    justifyContent: "center",
++                    background: "#eff6ff",
++                    color: "#0d6efd",
++                    borderRadius: "8px",
++                    width: "32px",
++                    height: "32px",
++                    flexShrink: 0,
++                  }}
++                >
++                  <Plus size={18} />
++                </span>
++                <h5 style={{ margin: 0, fontWeight: "700", color: "#212529", fontSize: "1rem" }}>Add a plan</h5>
++              </div>
++              <p style={{ margin: "0 0 14px 0", color: "#6c757d", fontSize: "0.82rem", lineHeight: "1.45", maxWidth: "720px" }}>
++                The internal id is created from the name (e.g. “Salon Growth” → <code>salon-growth</code>)
++                and never changes afterwards, because every paid subscription stores it.
++              </p>
++              <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "flex-start" }}>
++                <div style={{ flex: "2 1 220px", minWidth: "180px" }}>
++                  <label style={FIELD_LABEL} htmlFor="new-label">
++                    Name
++                  </label>
++                  <input
++                    id="new-label"
++                    style={INPUT}
++                    value={newPlan.label}
++                    placeholder="Salon Growth"
++                    onChange={(e) => setNewPlan((prev) => ({ ...prev, label: e.target.value }))}
++                  />
++                </div>
++                <div style={{ flex: "1 1 120px", minWidth: "100px" }}>
++                  <label style={FIELD_LABEL} htmlFor="new-price">
++                    Price (₹)
++                  </label>
++                  <input
++                    id="new-price"
++                    type="number"
++                    min="1"
++                    step="1"
++                    style={INPUT}
++                    value={newPlan.price}
++                    placeholder="899"
++                    onChange={(e) => setNewPlan((prev) => ({ ...prev, price: e.target.value }))}
++                  />
++                </div>
++                <div style={{ flex: "1 1 120px", minWidth: "100px" }}>
++                  <label style={FIELD_LABEL} htmlFor="new-days">
++                    Length (days)
++                  </label>
++                  <input
++                    id="new-days"
++                    type="number"
++                    min="1"
++                    max="3650"
++                    step="1"
++                    style={INPUT}
++                    value={newPlan.days}
++                    placeholder="120"
++                    onChange={(e) => setNewPlan((prev) => ({ ...prev, days: e.target.value }))}
++                  />
++                </div>
++                <div style={{ flex: "2 1 220px", minWidth: "180px" }}>
++                  <label style={FIELD_LABEL} htmlFor="new-note">
++                    Note (optional)
++                  </label>
++                  <input
++                    id="new-note"
++                    style={INPUT}
++                    value={newPlan.note}
++                    placeholder="For salons growing fast"
++                    onChange={(e) => setNewPlan((prev) => ({ ...prev, note: e.target.value }))}
++                  />
++                </div>
++                <div style={{ paddingTop: "22px" }}>
++                  <button
++                    type="button"
++                    onClick={createPlan}
++                    disabled={creating}
++                    style={{
++                      display: "inline-flex",
++                      alignItems: "center",
++                      gap: "8px",
++                      padding: "10px 18px",
++                      borderRadius: "8px",
++                      border: "none",
++                      background: creating ? "#9ec5fe" : "#0d6efd",
++                      color: "#ffffff",
++                      fontSize: "0.9rem",
++                      fontWeight: "700",
++                      cursor: creating ? "not-allowed" : "pointer",
++                    }}
++                  >
++                    <Plus size={16} /> {creating ? "Creating..." : "Create plan"}
++                  </button>
++                </div>
++              </div>
++            </div>
++
++            <div
++              style={{
++                display: "flex",
++                gap: "10px",
++                alignItems: "flex-start",
++                marginTop: "18px",
++                padding: "14px 16px",
++                borderRadius: "12px",
++                background: "#f8f9fa",
++                border: "1px solid #e9ecef",
++                color: "#6c757d",
++                fontSize: "0.82rem",
++                lineHeight: "1.5",
++              }}
++            >
++              <IndianRupee size={16} style={{ flexShrink: 0, marginTop: "2px" }} />
++              <span>
++                The payment step checks the amount a client sends against the price here: a mismatch
++                is refused instead of charged, so a stale app can never pay an old price. Taking a plan
++                off sale keeps every salon already on it valid and renewable.
++              </span>
++            </div>
++          </>
++        )}
++      </div>
++    </Layout>
++  );
++};
++
++export default PlansAndTrials;
+diff --git a/src/services/communication.jsx b/src/services/communication.jsx
+index fcd9d13..c5d7a95 100644
+--- a/src/services/communication.jsx
++++ b/src/services/communication.jsx
+@@ -1573,4 +1573,45 @@ export const shopSettingsAPI = {
+       return { success: false, message: error.response?.data?.message || "Failed to save shop settings", error: error.response?.data };
+     }
+   }
+-};
+\ No newline at end of file
++};
++
++
++// Partner plans — the ONE price list (admin panel → website → app).
++// The website reads the public twin `POST /api/salons/plans/list`; these four
++// are the admin's own, and every one of them is behind an admin token.
++export const partnerPlanAPI = {
++  list: async () => {
++    try {
++      const response = await api.post('/api/salons/admin/plans/list', {});
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to load the plans", error: error.response?.data };
++    }
++  },
++  create: async (payload) => {
++    try {
++      const response = await api.post('/api/salons/admin/plans/create', payload);
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to create the plan", error: error.response?.data };
++    }
++  },
++  update: async (payload) => {
++    try {
++      const response = await api.post('/api/salons/admin/plans/update', payload);
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to update the plan", error: error.response?.data };
++    }
++  },
++  // `{ id, deactivate }` — refused while salons are on the plan unless
++  // `deactivate: true` takes it off sale and keeps their subscription valid.
++  remove: async (payload) => {
++    try {
++      const response = await api.post('/api/salons/admin/plans/delete', payload);
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to remove the plan", error: error.response?.data };
++    }
++  },
++};
+diff --git a/src/utils/TabArray.js b/src/utils/TabArray.js
+index 8289817..a60e002 100644
+--- a/src/utils/TabArray.js
++++ b/src/utils/TabArray.js
+@@ -54,4 +54,9 @@ export const TabArray = [
+     label: "Shop Settings",
+     route: "/shop-settings",
+   },
++  {
++    key: "plans",
++    label: "Plans & Trials",
++    route: "/plans",
++  },
+ ];

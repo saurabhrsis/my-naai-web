@@ -145,7 +145,7 @@ Coordinates that already exist on the profile are kept as-is; the browser locati
 
 | Profile state when the editor opened | Active plan | After a successful save |
 | --- | --- | --- |
-| New salon / profile not completed | none or expired | **Payment screen** (`#/subscription`) — free 20-day onboarding plan first, then the paid plans |
+| New salon / profile not completed | none or expired | **Payment screen** (`#/subscription`) — free onboarding trial first (90 days unless the admin changed it), then the paid plans |
 | New salon / profile not completed | already active | **Salon account** (`#/account`) — never a second payment for the same save |
 | Complete profile (routine edit) | any | **Salon account** (`#/account`) |
 
@@ -157,7 +157,12 @@ Both realtime screens (salon **Customer queue** and customer **My bookings**) sh
 
 ### Plan prices
 
-One price list serves the whole portal (`PLAN_PRICES` in `src/lib/planDetails.js`): **₹199 / 1 month**, **₹299 / 2 months**, **₹499 / 3 months**. `RENEWAL_PLANS` is derived from `PARTNER_PLANS` and only overrides the supporting note, so a renewal costs exactly what a new purchase costs. The two arrays previously carried independent prices and had drifted (renewals were still on an old ₹99 / ₹179 / ₹249 ladder), which showed a partner one price on the plan card and charged another on the next screen.
+One price list serves the whole portal, and it is no longer compiled into the bundle: `src/lib/planCatalog.js` reads it from the backend (`POST /api/salons/plans/list`, no token) and falls back to the seed values only when that call fails. The admin panel owns the rows — prices, durations, notes, ribbons, order and the free-trial length — so a price change reaches the website and the app on their next load instead of needing a release. The seed is **₹199 / 1 month**, **₹299 / 2 months**, **₹499 / 3 months**, with the free trial at **90 days**. `RENEWAL_PLANS` and `PARTNER_PLANS` are both derived from the same catalog entries and only override the supporting note, so a renewal costs exactly what a new purchase costs and a plan cannot be advertised at one length and granted another. The catalog response is cached under `mynaai:plan-catalog:v2` for offline use, and durations are always re-derived from the day count (a backend row carrying only `days: 90` still renders as "3 Months (90 Days)").
+
+- Backend contract (table, endpoints, amount guard, migration):
+  [`docs/BACKEND-SALON-PLANS-API.md`](BACKEND-SALON-PLANS-API.md).
+- The tab that edits it: [`docs/ADMIN-PANEL-SALON-PLANS.md`](ADMIN-PANEL-SALON-PLANS.md).
+- The app reading the same list: [`docs/APP-SALON-PLANS.md`](APP-SALON-PLANS.md).
 
 ### Active plan display
 
@@ -167,7 +172,7 @@ One price list serves the whole portal (`PLAN_PRICES` in `src/lib/planDetails.js
 
 The subscription route follows the mobile `SubscriptionsPlan` contract:
 
-- An incomplete, already-created salon is sent to the profile editor first. After a successful profile save, the partner sees the default **20-day free trial** choice and can start it without opening Razorpay. The editor clears the incomplete-session flag while keeping the partner on the subscription route; the free-plan action then refreshes the authenticated hash route into the salon queue.
+- An incomplete, already-created salon is sent to the profile editor first. After a successful profile save, the partner sees the free trial as the backend defines it — **90 days** by default, whatever the admin panel has set — and can start it without opening Razorpay. The editor clears the incomplete-session flag while keeping the partner on the subscription route; the free-plan action then refreshes the authenticated hash route into the salon queue.
 - A new salon reaches the same route after registration OTP, with the temporary token returned by `verify-otp-register`. Paid plans first call `POST /api/salons/create-payment-order` with the plan amount in INR, open Razorpay Checkout with the returned order ID, and send the payment ID, order ID and signature to `POST /api/salons/create-salon-with-plan` with the temporary bearer authorization. The response must contain both a salon ID and a permanent session token; otherwise the portal does not mark registration as complete.
 - A logged-in partner can choose a renewal plan from the account subscription entry. The browser creates the Razorpay order and sends `{ planType, paymentId, totalAmount }` to `POST /api/salons/renew-salon-plan` with the persisted salon session. A successful renewal returns to the partner account without replacing the session with a temporary token.
 - An expired salon subscription is a hard partner-side paywall. On restore/login the portal revalidates the salon plan before mounting queue, history, products or account; an expiry date/status or a backend `PLAN_EXPIRED` response replaces the entire salon shell with the renewal payment screen. Every path into the forced screen (`mode=RENEW&forceRenewal=true`) re-checks the subscription record first — `isPlanActive` / `planStartDate` / `planEndDate` — so a stale `PLAN_EXPIRED` signal or a bookmarked paywall URL cannot lock a partner whose plan is active; the renewal screen itself does the same check and drops its "expired" copy when the record is live. `src/lib/api.js` performs the same global response-interceptor check as the mobile Axios client on every API call, including failed HTTP responses, with a one-time redirect guard. The forced screen has no back/navigation path and remains in place until renewal succeeds — but it is never a dead end: both of its sign-out controls (the expired-plan notice and the footer of the renewal card) ask for the standard in-app confirmation and then land on the **login page** with the salon role preselected (`logoutToLogin` in `src/App.jsx`), where the partner can sign back in with one OTP or take the page's own **Browse salons** link to the public website. Signing out clears exactly what a normal logout clears (token, session mirrors, device-token sync, live-updates socket). Customer sessions never enter this payment flow.
@@ -618,7 +623,8 @@ the in-app brand are the same shape.
 | `src/App.jsx` | Auth, session restoration, logout/expiry state, hash routes and push startup |
 | `src/lib/api.js` | Mobile-compatible REST client, bearer token and JWT cleanup |
 | `src/lib/socket.js` | Shared salon/user live-update socket (room joins, polling→WebSocket) |
-| `src/lib/planDetails.js` | Plan catalog and active-subscription normalization |
+| `src/lib/planCatalog.js` | The plan catalog as the admin panel publishes it: fetch, normalize, cache, `usePlanCatalog()` |
+| `src/lib/planDetails.js` | Plan pricing derived from that catalog, plus active-subscription normalization |
 | `src/lib/devtoolsShield.js` | Swallows the known Chrome DevTools Performance-panel crash (also inlined in `index.html` so it runs before the bundle) |
 | `src/lib/razorpay.js` | Checkout loader, amount rules, payment outcomes, UPI hand-off tracking and pending-payment recovery |
 | `src/lib/bookingTime.js` | Signed-offset time maths for the queue time update: local wall-clock parsing, hour/date rollover, past-time and day-cross detection, exact-time→offset derivation, human offset labels, and the `Due now`/`Overdue by` countdown chips on a queue card |
