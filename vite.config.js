@@ -126,7 +126,20 @@ const DEV_MOCK_ENDPOINTS = {
   '/api/users/update': { status: 'SUCCESS' },
   '/api/booking/get-booking-list': { status: 'SUCCESS', data: { bookings: [] } },
   '/api/booking/get-list': { status: 'SUCCESS', data: { bookings: [] } },
-  '/api/booking/get-completed-bookings': { status: 'SUCCESS', data: { bookings: [] } },
+  // Customer history, with the three shapes the row has to cope with: a
+  // registered customer with a number, a walk-in whose number was typed in, and a
+  // walk-in with the `0000000000` placeholder the API sends when there is none —
+  // which the screen must not print.
+  '/api/booking/get-completed-bookings': {
+    status: 'SUCCESS',
+    data: {
+      bookings: [
+        { bookingId: 'dev-history-1', bookingDate: new Date().toISOString(), bookingTime: '11:30:00', userName: 'Amit Jichkar', userPhone: '9876543210', barberName: 'Amit Jichkar', services: 'Haircut, Beard trim', totalAmount: 450 },
+        { bookingId: 'dev-history-2', bookingDate: new Date(Date.now() - 86400000).toISOString(), bookingTime: '18:00:00', userName: 'Neha Deshmukh', userPhone: '9123456780', barberName: 'Rahul Wankhede', services: 'Hair spa', totalAmount: 900 },
+        { bookingId: 'dev-history-3', bookingDate: new Date(Date.now() - 2 * 86400000).toISOString(), bookingTime: '10:00:00', userName: 'Walk-in guest', userPhone: '0000000000', barberName: 'Amit Jichkar', services: 'Shaving', totalAmount: 40 },
+      ],
+    },
+  },
   '/api/products/list': { status: 'SUCCESS', data: { products: SHOP_PRODUCT_FIXTURES.slice(0, 4) } },
   // The bill rules the shop quotes from, on both doors (the website reads the
   // public one). Without this a preview shows the built-in defaults instead.

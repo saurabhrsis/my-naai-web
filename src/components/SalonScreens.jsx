@@ -37,6 +37,7 @@ import { closeNotification } from '../lib/push';
 import { DEFAULT_SERVICES } from '../lib/defaultServices';
 import { normalizePlanDetails } from '../lib/planDetails';
 import { LEAD_STATE, LEAD_STATE_LABEL, leadView, normalizeLead } from '../lib/bookingLeads';
+import { customerMobileFrom } from '../lib/customerPhone';
 import {
   EARLIER_OFFSETS,
   LATER_OFFSETS,
@@ -413,12 +414,20 @@ export function SalonQueueScreen({ session, navigate, notify }) {
   </div>;
 }
 
+// One finished visit. The customer's mobile is on the row because the salon uses
+// this screen to call people back ("your usual cut is due") and to answer "who was
+// that?" about yesterday's queue — the name alone is not enough to dial.
+function HistoryCardItem({ item = {} }) {
+  const mobile = customerMobileFrom(item);
+  return <article className="history-card"><div className="history-avatar">{getInitials(item.userName || 'Guest')}</div><div className="history-copy"><div className="history-heading"><h3>{item.userName || 'Guest'}</h3><span>{formatDate(item.bookingDate)}</span></div><p>{item.services || item.serviceNames || 'Salon service'}</p><div><span><UserRound size={13} /> {item.barberName || 'Any specialist'}</span><span><Clock3 size={13} /> {formatTime(item.bookingTime)}</span>{mobile && <a className="history-phone" href={mobile.tel} aria-label={`Call ${item.userName || 'the customer'} on ${mobile.display}`}><Phone size={13} /> {mobile.display}</a>}</div></div><CheckCircle2 className="history-check" size={19} /></article>;
+}
+
 export function SalonHistoryScreen({ notify }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const load = useCallback(async () => { setLoading(true); try { const response = await api.salonQueueHistory(); setItems(response?.bookings || getList(response, ['bookings'])); } catch (error) { notify?.('error', getErrorMessage(error, 'Unable to load booking history.')); } finally { setLoading(false); } }, [notify]);
   useEffect(() => { load(); }, [load]);
-  return <div className="screen history-screen"><PageHeader title="Customer history" subtitle="A record of the work you have completed." action={<button className="refresh-text-button" onClick={load}><History size={15} /> Refresh</button>} />{loading ? <div className="list-stack">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} className="history-skeleton" />)}</div> : items.length ? <div className="history-list">{items.map((item, index) => <article className="history-card" key={item.bookingId || index}><div className="history-avatar">{getInitials(item.userName || 'Guest')}</div><div className="history-copy"><div className="history-heading"><h3>{item.userName || 'Guest'}</h3><span>{formatDate(item.bookingDate)}</span></div><p>{item.services || item.serviceNames || 'Salon service'}</p><div><span><UserRound size={13} /> {item.barberName || 'Any specialist'}</span><span><Clock3 size={13} /> {formatTime(item.bookingTime)}</span></div></div><CheckCircle2 className="history-check" size={19} /></article>)}</div> : <EmptyState icon={History} title="No completed bookings" message="Your completed services will be listed here." />}</div>;
+  return <div className="screen history-screen"><PageHeader title="Customer history" subtitle="A record of the work you have completed." action={<button className="refresh-text-button" onClick={load}><History size={15} /> Refresh</button>} />{loading ? <div className="list-stack">{[1, 2, 3, 4].map(item => <SkeletonCard key={item} className="history-skeleton" />)}</div> : items.length ? <div className="history-list">{items.map((item, index) => <HistoryCardItem item={item} key={item.bookingId || index} />)}</div> : <EmptyState icon={History} title="No completed bookings" message="Your completed services will be listed here." />}</div>;
 }
 
 function normalizeProduct(item = {}) { const images = parseProductImages(item); return { ...item, id: item.productId || item.id, name: item.productName || item.name || 'Unnamed product', price: item.price || 0, rating: Number(item.rating || 0), available: item.isAvailable ?? item.available ?? true, image: images[0] || '', images }; }

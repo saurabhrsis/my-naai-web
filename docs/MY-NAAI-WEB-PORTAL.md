@@ -107,6 +107,48 @@ The queue payload is unchanged — this is layout, not data. `queueNumber` is st
 
 Queue token numbers are not shown in the portal. The queue now focuses on the customer name, appointment date/time, services, specialist and phone action. The summary card shows the next appointment time and customer instead of a token number. The API may still return `queueNumber`; it is simply not rendered by the web UI.
 
+### Customer history shows the customer's mobile
+
+The **Customer history** tab (`SalonHistoryScreen`) used to show the customer's
+name, the date, the services, the specialist and the time — everything except the
+one thing a salon actually needs to act on an old visit: the customer's number, to
+call them back or to answer "who was that?" about yesterday's queue.
+
+Each row now carries the mobile beside the barber and the time, as a **tap-to-call
+link**:
+
+```
+Amit Jichkar                        04 Nov 2026
+Haircut, Beard trim
+[Ravi] [11:30 am] [📞 +91 98765 43210]
+```
+
+- **No backend change was needed.** `GET /api/booking/get-completed-bookings`
+  already returns `userPhone` — the registered customer's number, or the number
+  typed in for a walk-in (`salonOwnerCompletedBookings` in the API repo).
+- **The site sends it as `tel:+919876543210`**, i.e. with the country code, so a
+  tap dials from any phone. Ten-digit mobiles are printed the way they are read
+  aloud (`+91 98765 43210`); anything that is not a ten-digit mobile is shown as its
+  own digits rather than guessed at.
+- **`0000000000` is never printed.** The API sends that literal placeholder when a
+  walk-in left no number; a fake number on a row both reads as a bug and dials
+  nothing, so the chip is simply absent and the rest of the row stays.
+- **The number is read from whichever key the row carries** —
+  `userPhone` (what the API sends today), `userPhoneNumber`, `customerPhone`,
+  `mobileNumber`, `phoneNumber`, `walkinPhone`, or a nested
+  `user.phoneNumber` / `customer.phoneNumber`. `src/lib/customerPhone.js` owns that
+  contract, and the same helper formats and validates. The queue card keeps its own
+  bigger **Call customer** block (with its own "Not provided" state), unchanged.
+
+Tests: `src/components/SalonHistory.test.jsx` (7) — the row prints the number as a
+`tel:` link and leaves the rest of the row alone, a walk-in's `0000000000` prints
+nothing at all, and the helpers normalise `+91 98765 43210` / `919876543210` /
+`098765 43210`, format ten-digit mobiles, and refuse to build a link out of an empty
+or all-zero number. The dev preview
+(`MYNAAI_DEV_MOCK_API=1 npm run dev`) now answers that endpoint with three rows — a
+registered customer, a walk-in with a number, and one with the placeholder — so the
+behaviour is visible without a backend.
+
 ## 5. Salon profile update contract
 
 The web editor mirrors the mobile app's `EditSalonProfileScreen`: the same collapsible groups (**Owner Information**, **Salon Information**, **Address & Location**, **Salon Images**, **Business Hours**, **Salon Services**, **Barbers**) and the same field labels (Salon Owner Name, Mobile Number, Email Address, Salon Name, Salon Type, Agent Code, Complete Address, Landmark / Address Line 2, City, State, Pincode, Opening Time, Closing Time, Weekly Off, Service Name, Price, Duration, Description, Barber Name, Availability). **Every group is collapsed by default** (including during onboarding) and each collapsed card still carries three readable lines: the group title, the mobile app's sub heading (for example *Name, phone number and email*) and a live summary of what is inside it, plus a red `N required` chip when something mandatory is missing. Required fields are marked with a red `*` exactly like the mobile `FieldLabel`, inputs use a larger 15px body size with a lighter border and placeholder, and a status bar above the form counts the outstanding required details with an **Expand all / Collapse all** control. A failed save opens the offending group, scrolls it into view and focuses its first input. Individual service and barber cards expand exactly like the mobile editor, and an incomplete service or barber is flagged while collapsed. The web editor sends the same complete body shape used by the mobile salon editor to `POST /api/salons/edit-salon-profile`. It includes profile/contact/address fields, numeric `latitude` and `longitude`, `imageUrl`, `imagesArray`, a detailed `businessHours` array, `isActive`, `profileCompleted`, and separate service/specialist collections:
@@ -833,6 +875,7 @@ the in-app brand are the same shape.
 | `src/lib/razorpay.js` | Checkout loader, amount rules, payment outcomes, UPI hand-off tracking and pending-payment recovery |
 | `src/lib/bookingTime.js` | Signed-offset time maths for the queue time update: local wall-clock parsing, hour/date rollover, past-time and day-cross detection, exact-time→offset derivation, human offset labels, and the `Due now`/`Overdue by` countdown chips on a queue card |
 | `backend/salonUpdateBookingTime.js` | Drop-in Express + Sequelize controller for the queue time update (`POST /api/booking/salon/queue/update-time/:bookingId`). Copied into the API repo, not built with the web app |
+| `src/lib/customerPhone.js` | The customer's mobile as the partner screens show it: which key it comes from, `+91` formatting and the `0000000000` placeholder |
 | `src/lib/shopBuyer.js` | Who is shopping (salon / customer / visitor), the cart's storage namespace and the role-aware shop wording |
 | `src/components/SalonLeads.jsx`, `src/lib/bookingLeads.js` | The salon's **Booking requests** (leads) tab: states, auto-cancel window, counters and the Accept/Reject actions |
 | `src/lib/shopCategories.js` | The one product-category list, read from the admin's `shop_categories` (seed + cache for a deployment without the endpoint) |

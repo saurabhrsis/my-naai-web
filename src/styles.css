@@ -885,6 +885,12 @@ a.detail-info-row:hover { background: rgba(255, 255, 255, .03); }
 .history-copy > div:last-child span { display: inline-flex; align-items: center; gap: 4px; }
 .history-copy svg { color: var(--gold); }
 .history-check { flex: none; color: var(--green); }
+/* The customer's mobile on a history row: a real `tel:` link, so the salon can
+   tap it on a phone, in the gold the partner screens use for "this does
+   something". It sits in the meta row and wraps with the barber and the time. */
+.history-phone { display: inline-flex; align-items: center; gap: 4px; color: var(--gold); font-size: 9px; font-weight: 700; text-decoration: none; white-space: nowrap; }
+.history-phone:hover { text-decoration: underline; text-underline-offset: 2px; }
+.history-phone svg { color: var(--gold); }
 .salon-profile-hero { align-items: flex-start; }
 .salon-profile-photo { width: 64px; height: 70px; flex: none; overflow: hidden; border-radius: 15px; background: #252a2a; }
 .salon-profile-photo img { width: 100%; height: 100%; object-fit: cover; }
