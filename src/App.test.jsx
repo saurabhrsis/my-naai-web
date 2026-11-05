@@ -232,6 +232,28 @@ describe('getRouteFromPath', () => {
     expect(routeToPath('bookings', {})).toBe('/bookings');
   });
 
+  // "I go back from Schedule appointment to change a service and the services
+  // are not showing." The booking steps used to keep the salon record only in
+  // memory, so the browser's Back re-parsed a URL that carried nothing and the
+  // services screen rendered an empty list. Both steps are URLs now.
+  it('keeps the salon and the chosen services in the booking URLs', () => {
+    expect(routeToPath('services', { salonId: 'salon-42', salon: { salonName: 'X' } })).toBe('/services?salonId=salon-42');
+    expect(routeToPath('schedule', {
+      salonId: 'salon-42',
+      salon: { salonName: 'X' },
+      selectedServices: [{ serviceId: 'svc-1' }, { serviceId: 'svc-2' }],
+    })).toBe('/schedule?salonId=salon-42&services=svc-1,svc-2');
+    // …and back again, which is what a Back/Forward or a reload actually does.
+    expect(parseRoutePath('/services?salonId=salon-42')).toEqual({ name: 'services', params: { salonId: 'salon-42' } });
+    expect(parseRoutePath('/schedule?salonId=salon-42&services=svc-1,svc-2')).toEqual({
+      name: 'schedule',
+      params: { salonId: 'salon-42', serviceIds: ['svc-1', 'svc-2'] },
+    });
+    // A schedule opened with no services still parses — the screen shows its own
+    // empty state rather than crashing on a missing list.
+    expect(parseRoutePath('/schedule?salonId=salon-42').params).toEqual({ salonId: 'salon-42' });
+  });
+
   it('opens salon links for guests but keeps account screens gated', () => {
     // No role = browsing before login: home and the salon page are public.
     setPath('/salon/salon-42');

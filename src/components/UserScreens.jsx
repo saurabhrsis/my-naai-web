@@ -1074,7 +1074,9 @@ export function SalonDetailScreen({ session, params, navigate, notify }) {
   const [active, setActive] = useState(0);
   const [imageOpen, setImageOpen] = useState(false);
   const load = useCallback(async () => {
-    try { const response = await api.salonByIdInfo({ salonId: params?.salonId }); if (response?.status === 'SUCCESS') setSalon(response.data); else throw new Error(response?.message || 'Salon not found'); } catch (error) { notify?.('error', getErrorMessage(error, 'Unable to load salon details.')); } finally { setLoading(false); }
+    // The freshest read also refreshes the booking cache, so stepping on to
+    // services/schedule uses this record rather than a stale copy.
+    try { const response = await api.salonByIdInfo({ salonId: params?.salonId }); if (response?.status === 'SUCCESS') { cacheSalon(response.data); setSalon(response.data); } else throw new Error(response?.message || 'Salon not found'); } catch (error) { notify?.('error', getErrorMessage(error, 'Unable to load salon details.')); } finally { setLoading(false); }
   }, [notify, params?.salonId]);
   useEffect(() => { load(); }, [load]);
   // The salon card the user tapped is handed over in route params, so the
@@ -1241,13 +1243,77 @@ export function SalonDetailScreen({ session, params, navigate, notify }) {
   );
 }
 
+// The salon being booked, kept in memory between the booking steps.
+//
+// The screens used to receive the whole salon record as an in-memory route param
+// and nothing else, so a browser Back re-parsed the URL with no salon at all:
+// "I go back from the schedule to change a service and the services are gone".
+// They now take the id from the URL (see routeToPath) and fall back to this cache
+// — populated the moment the salon is opened — so stepping back paints instantly,
+// while a reload or a shared link still loads the record from the API.
+const bookingSalonCache = new Map();
+// What was picked on the services screen, by salon. Stepping back from the
+// schedule to change one service should show the others still ticked rather than
+// an empty menu the customer has to rebuild. In-memory, and cleared the moment
+// the request is sent.
+const bookingSelectionCache = new Map();
+
+function cacheSalon(salon) {
+  const id = salon?.salonId || salon?.id;
+  if (id) bookingSalonCache.set(String(id), salon);
+  return salon;
+}
+
+/**
+ * The salon a booking step needs, from the record handed over in-session, the
+ * cache, or the API — in that order. `loading` is true only while the third
+ * option is in flight.
+ */
+function useBookingSalon(params) {
+  const paramSalon = params?.salon || null;
+  const salonId = params?.salonId || paramSalon?.salonId || paramSalon?.id || '';
+  const [salon, setSalon] = useState(() => paramSalon || (salonId ? bookingSalonCache.get(String(salonId)) || null : null));
+  const [loading, setLoading] = useState(() => !paramSalon && Boolean(salonId) && !bookingSalonCache.has(String(salonId)));
+
+  useEffect(() => {
+    if (paramSalon) { setSalon(cacheSalon(paramSalon)); setLoading(false); return undefined; }
+    if (!salonId) { setSalon(null); setLoading(false); return undefined; }
+    const cached = bookingSalonCache.get(String(salonId));
+    if (cached) { setSalon(cached); setLoading(false); return undefined; }
+    let alive = true;
+    setLoading(true);
+    api.salonByIdInfo({ salonId })
+      .then(response => {
+        if (!alive) return;
+        setSalon(response?.status === 'SUCCESS' && response.data ? cacheSalon(response.data) : null);
+      })
+      .catch(() => { if (alive) setSalon(null); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [paramSalon, salonId]);
+
+  return { salon, loading, salonId };
+}
+
 export function ServicesScreen({ params, navigate, notify }) {
-  const salon = params?.salon || {};
+  const { salon: loadedSalon, loading, salonId } = useBookingSalon(params);
+  const salon = loadedSalon || {};
   const services = salon.services || [];
   const [selected, setSelected] = useState([]);
+  // Coming back from the schedule: re-tick what was chosen last time.
+  useEffect(() => {
+    const id = salonId || params?.salonId;
+    if (!id) return;
+    const picks = bookingSelectionCache.get(String(id));
+    if (picks?.length) setSelected(picks);
+  }, [salonId, params?.salonId, loadedSalon]);
   const toggle = item => setSelected(current => current.some(value => (value.serviceId || value.id) === (item.serviceId || item.id)) ? current.filter(value => (value.serviceId || value.id) !== (item.serviceId || item.id)) : [...current, item]);
   const total = selected.reduce((sum, item) => sum + Number(item.price || 0), 0);
-  return <div className="screen services-screen"><PageHeader title="Select services" subtitle={salon.salonName || salon.name} onBack={() => navigate(-1)} /><div className="selection-summary"><span><Scissors size={17} /> Pick one or more</span><strong>{selected.length ? `${selected.length} selected · ${formatCurrency(total)}` : 'Nothing selected yet'}</strong></div>{services.length ? <div className="select-service-grid">{services.map(item => { const itemId = item.serviceId || item.id; const active = selected.some(value => (value.serviceId || value.id) === itemId); return <button key={itemId} className={cx('select-service-card', active && 'active')} onClick={() => toggle(item)}><span className="service-select-icon">{active ? <Check size={17} /> : <Scissors size={17} />}</span><span className="service-card-copy"><strong>{item.serviceName || item.name}</strong><small>{item.durationMinutes || item.duration || 30} min · {item.description || 'Professional salon service'}</small></span><b>{formatCurrency(item.price)}</b></button>; })}</div> : <EmptyState icon={Scissors} title="No services listed" message="Please check back with this salon." />}{selected.length > 0 && <div className="sticky-continue"><div><span>{selected.length} service{selected.length > 1 ? 's' : ''}</span><small>Next, choose a barber and time</small></div><Button onClick={() => navigate('schedule', { salon, selectedServices: selected })}>Choose a time <ArrowRight size={17} /></Button></div>}</div>;
+  // A reload, a Back or a shared link has the salon's id and nothing else: load
+  // it instead of rendering an empty "no services listed" page.
+  if (loading) return <div className="screen services-screen"><PageHeader title="Select services" subtitle={salon.salonName || salon.name} onBack={() => navigate(-1)} /><div className="detail-loading"><Spinner label="Loading services…" /></div></div>;
+  if (!loadedSalon) return <div className="screen services-screen"><PageHeader title="Select services" onBack={() => navigate(-1)} /><EmptyState icon={Scissors} title="Services unavailable" message="We could not load this salon's services. Please open the salon again." action={<Button onClick={() => navigate('home')}>Back to salons</Button>} /></div>;
+  return <div className="screen services-screen"><PageHeader title="Select services" subtitle={salon.salonName || salon.name} onBack={() => navigate(-1)} /><div className="selection-summary"><span><Scissors size={17} /> Pick one or more</span><strong>{selected.length ? `${selected.length} selected · ${formatCurrency(total)}` : 'Nothing selected yet'}</strong></div>{services.length ? <div className="select-service-grid">{services.map(item => { const itemId = item.serviceId || item.id; const active = selected.some(value => (value.serviceId || value.id) === itemId); return <button key={itemId} className={cx('select-service-card', active && 'active')} onClick={() => toggle(item)}><span className="service-select-icon">{active ? <Check size={17} /> : <Scissors size={17} />}</span><span className="service-card-copy"><strong>{item.serviceName || item.name}</strong><small>{item.durationMinutes || item.duration || 30} min · {item.description || 'Professional salon service'}</small></span><b>{formatCurrency(item.price)}</b></button>; })}</div> : <EmptyState icon={Scissors} title="No services listed" message="Please check back with this salon." />}{selected.length > 0 && <div className="sticky-continue"><div><span>{selected.length} service{selected.length > 1 ? 's' : ''}</span><small>Next, choose a barber and time</small></div><Button onClick={() => { const id = salonId || salon.salonId || salon.id; bookingSelectionCache.set(String(id), selected); navigate('schedule', { salon: cacheSalon(salon), salonId: id, selectedServices: selected }); }}>Choose a time <ArrowRight size={17} /></Button></div>}</div>;
 }
 
 function getServiceDurationMinutes(service = {}) {
@@ -1273,8 +1339,20 @@ function createTimeSlots(open = '09:00', close = '21:00') {
 }
 
 export function ScheduleScreen({ params, navigate, notify }) {
-  const salon = params?.salon || {};
-  const services = params?.selectedServices || [];
+  // Same rule as the services list: the record in-session, else the cache, else
+  // the API by the id in the URL — so Back-then-Forward, a reload and a shared
+  // link all show the salon instead of an empty schedule.
+  const { salon: loadedSalon, loading: salonLoading, salonId } = useBookingSalon(params);
+  const salon = loadedSalon || {};
+  // The chosen services come from the in-session hand-over, or — after a reload —
+  // from the ids in the URL, resolved against the salon's own menu so names and
+  // prices are the salon's, not a stale copy.
+  const services = useMemo(() => {
+    if (Array.isArray(params?.selectedServices) && params.selectedServices.length) return params.selectedServices;
+    const ids = Array.isArray(params?.serviceIds) ? params.serviceIds : [];
+    if (!ids.length) return [];
+    return (salon.services || []).filter(item => ids.includes(String(item.serviceId || item.id)));
+  }, [params?.selectedServices, params?.serviceIds, salon.services]);
   // What the visit is expected to cost: the sum of the chosen services. It is
   // the amount the checkout quotes for "Pay at Salon" and the amount the
   // confirmation repeats — always the estimate, since the salon sets the
@@ -1353,7 +1431,7 @@ export function ScheduleScreen({ params, navigate, notify }) {
     if (!services.length) return notify?.('error', 'Please select at least one service.');
     setLoading(true);
     try {
-      const response = await api.createBookingRequest({ salonId: salon.salonId || salon.id, barberId: barber?.barberId || barber?.id || '', bookingDate, bookingTime: time, services: services.map(item => item.serviceId || item.id) });
+      const response = await api.createBookingRequest({ salonId: salon.salonId || salon.id || salonId, barberId: barber?.barberId || barber?.id || '', bookingDate, bookingTime: time, services: services.map(item => item.serviceId || item.id) });
       if (response?.status && response.status !== 'SUCCESS') throw new Error(response.message || 'Booking failed');
       const salonName = salon.salonName || salon.name || 'the salon';
       notify?.('success', `Booking request sent to ${salonName}.`);
@@ -1364,8 +1442,11 @@ export function ScheduleScreen({ params, navigate, notify }) {
       // notification permission push already uses.
       setSent({ salonName, date: bookingDate, time, services, total, paymentMode });
       setReviewOpen(false);
+      bookingSelectionCache.delete(String(salonId || salon.salonId || salon.id));
     } catch (error) { notify?.('error', getErrorMessage(error, 'Could not send booking request.')); } finally { setLoading(false); }
   };
+  if (salonLoading) return <div className="screen schedule-screen"><PageHeader title="Schedule appointment" onBack={() => navigate(-1)} /><div className="detail-loading"><Spinner label="Loading the salon…" /></div></div>;
+  if (!loadedSalon) return <div className="screen schedule-screen"><PageHeader title="Schedule appointment" onBack={() => navigate(-1)} /><EmptyState icon={Scissors} title="Salon unavailable" message="We could not load this salon. Please open it again from the list." action={<Button onClick={() => navigate('home')}>Back to salons</Button>} /></div>;
   if (sent) {
     // What the customer sees the second the request leaves: who has it, what
     // happens next, and that nothing else is expected of them. The reminder is

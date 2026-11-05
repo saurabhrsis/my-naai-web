@@ -468,6 +468,67 @@ ids, labels and order the backend patch inserts, so the two never disagree.
 - Backend contract (table, endpoints, slug rule, delete/reassign rules):
   [`docs/BACKEND-SHOP-CATEGORIES-API.md`](BACKEND-SHOP-CATEGORIES-API.md).
 
+## 8.4 Booking steps that survive Back, and the scroll that went away
+
+Two customer reports, both from the salon booking flow.
+
+**"I go back to change the service but the services are not showing."** The
+booking steps only knew about the salon because the previous screen handed the
+whole record over in memory (`navigate('services', { salon, salonId })`). The
+router never puts objects in a URL, so anything that made the browser re-read the
+address — Back, forward, a refresh, a shared link — landed on `/services` or
+`/schedule` with no record and therefore an empty page.
+
+Both steps are now addressable on their own terms, and the record is re-derivable:
+
+| URL | What it carries |
+| --- | --- |
+| `/services?salonId=salon-42` | which salon's menu to show |
+| `/schedule?salonId=salon-42&services=svc-1,svc-2` | the salon and the services ticked so far |
+
+- `src/lib/routes.js` knows `SALON_BOOKING_SCREENS`; `parseRoutePath` turns
+  `?services=a,b` into `params.serviceIds` and `routeToPath` writes the list back
+  as a plain comma-separated string (not `a%2Cb`). Only ids travel in the URL —
+  the salon record never does.
+- `useBookingSalon(params)` resolves the salon in three steps: the in-session
+  record, then the module-level `bookingSalonCache` (so Back is instant and needs
+  no request), then `api.salonByIdInfo({ salonId })`. Only the third shows a
+  loading state — a `Spinner` with *Loading services* / *Loading the salon* — and
+  a failure shows an `EmptyState` with *Back to salons*, never an empty list.
+- `bookingSelectionCache` remembers the ticked services, so stepping back from the
+  schedule re-ticks exactly what was chosen; it is cleared once the request is
+  sent.
+- On `/schedule`, `serviceIds` from the URL are resolved against the salon's own
+  menu (`useMemo`), so names, prices and durations after a reload are the salon's,
+  not remembered ones. `createBookingRequest` also falls back to the URL's
+  `salonId` when the record was fetched rather than handed over.
+
+**"The time slot and the booking checkout modal show unnecessary scroll."** Two
+separate boxes were scrolling inside a page that was already scrolling:
+
+- `.time-grid` had `max-height: 330px` (and `380px` under 760px) with
+  `overflow-y: auto`, so the slot buttons got their own scrollbar. The cap is
+  gone, in both places; the page scrolls and the grid grows. The phone override
+  keeps only its six-column layout.
+- `.modal-card` became a flex column with `overflow: hidden`; `.modal-header` and
+  `.modal-footer` are `flex: none`, and only `.modal-body` scrolls
+  (`overflow-y: auto`, `overscroll-behavior: contain`). The title and the
+  *Back* / *Send booking request* buttons stay put while a long review scrolls —
+  the same `Modal` used elsewhere, so the shop's cart dialog benefits too. No
+  global footer rule was added; the change is containment, not styling.
+
+Tests: `src/components/BookingSteps.test.jsx` (10) — the salon loads from the id
+in the URL (the exact case that used to render nothing), a loading state instead
+of a flash of "no services", the in-session record is used without a second API
+call, the id and the chosen services are written into the schedule URL, the picks
+are re-ticked after going back, the services are resolved from their ids with the
+salon's names and prices, the request still carries the salon id, and the two
+stylesheet guarantees (no `max-height`/`overflow` on `.time-grid` in any media
+query; a pinned header and footer with only `.modal-body` scrolling). It gives
+every test its own salon id because the cache is module-level. `src/App.test.jsx`
+adds the URL round-trip: `routeToPath` → `parseRoutePath` keeps the salon and the
+service list.
+
 ## 9. Notification destinations
 
 The notification route mapping is shared by foreground JavaScript and the Firebase messaging service worker:

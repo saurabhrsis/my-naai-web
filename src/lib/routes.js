@@ -20,6 +20,14 @@ const ROUTE_TO_SEGMENT = {
   // The salon's leads tab (booking REQUESTS, not bookings).
   bookingRequests: 'booking-requests',
 };
+// The two booking steps that need a salon record to render. They take the salon's
+// id in the URL and, for the schedule, the chosen service ids — object params
+// (`salon`, `selectedServices`) can never be written to a URL, and before this
+// they were not written at all: pressing Back from the schedule re-parsed
+// `/schedule` with no params, so "go back and change a service" landed on an empty
+// services list. Reported exactly like that.
+const SALON_BOOKING_SCREENS = ['services', 'schedule'];
+
 const SEGMENT_TO_ROUTE = {
   'privacy-policy': 'privacy',
   'salon-partner': 'partner',
@@ -56,6 +64,12 @@ export function parseRoutePath(value = '') {
   try {
     for (const [key, val] of new URLSearchParams(rawQuery).entries()) params[key] = val;
   } catch { /* a malformed query degrades to no params */ }
+  // `?services=a,b` is the one list-valued param: it becomes the ids the
+  // schedule resolves against the salon record.
+  if (typeof params.services === 'string') {
+    params.serviceIds = params.services.split(',').map(value => value.trim()).filter(Boolean);
+    delete params.services;
+  }
   return { name, params };
 }
 
@@ -64,6 +78,21 @@ export function parseRoutePath(value = '') {
 // never leak into the URL.
 export function routeToPath(name, params = {}) {
   const serializable = Object.fromEntries(Object.entries(params || {}).filter(([, val]) => val !== null && val !== undefined && typeof val !== 'object'));
+  // `/services?salonId=…` and `/schedule?salonId=…&services=a,b`: enough to
+  // rebuild both steps from the URL alone, which is what makes Back, Forward and
+  // a reload work instead of rendering an empty screen.
+  if (SALON_BOOKING_SCREENS.includes(name)) {
+    const ids = (Array.isArray(params.serviceIds) ? params.serviceIds : (Array.isArray(params.selectedServices) ? params.selectedServices : []))
+      .map(item => (typeof item === 'object' && item ? (item.serviceId || item.id) : item))
+      .filter(Boolean)
+      .map(String);
+    // Built by hand so the list stays human-readable (`services=a,b`, not
+    // `services=a%2Cb`); parseRoutePath splits it back into ids.
+    const parts = [new URLSearchParams(serializable).toString()];
+    if (ids.length) parts.push(`services=${ids.map(id => encodeURIComponent(id)).join(',')}`);
+    const search = parts.filter(Boolean).join('&');
+    return search ? `/${name}?${search}` : `/${name}`;
+  }
   if (name === 'salon' && serializable.salonId) {
     const { salonId, ...rest } = serializable;
     const query = new URLSearchParams(rest).toString();
