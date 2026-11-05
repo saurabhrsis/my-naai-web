@@ -470,15 +470,15 @@ A pass over all customer, partner and shared screens at 320 px, 375 px, 768 px,
   different crop on every breakpoint and portrait shots came out squat or
   face-cropped. Salon cards now use a single `aspect-ratio: 16 / 10` frame
   (pixel-height fallback for browsers without `aspect-ratio`), product tiles a
-  capped `4 / 3`, the detail hero `3 / 2` and barber slots `1 / 1`, always with
-  `object-position: center` (top for faces).
+  capped `4 / 3`, the shop detail hero `1 / 1` and barber slots `1 / 1`, always
+  with `object-position: center` (top for faces).
 - **Naai Shop photos are shown whole, never cropped.** Product cards and the
   product-details hero frame the photo with `object-fit: contain` (square on a
-  phone, 25:22 on a laptop for the card; square on a phone and 4:3 on a laptop
-  for the hero) and an inner gutter that keeps the product clear of the card's
-  rounded corners; the card's hover zoom is gone, because scaling a contained
-  photo crops it again. The band a non-square photo does not fill is a
-  **blurred, over-scaled copy of the same photo** (`.shop-card-backdrop` /
+  phone, 25:22 on a laptop for the card; square for the details hero at every
+  width, since from 900 px it sits in its own column) and an inner gutter that
+  keeps the product clear of the card's rounded corners; the card's hover zoom
+  is gone, because scaling a contained photo crops it again. The band a
+  non-square photo does not fill is a **blurred, over-scaled copy of it** (`.shop-card-backdrop` /
   `.shop-detail-hero-backdrop`, `z-index: -1` inside the frame's own stacking
   context), so a white product shot never sits in a black letterbox.
   **Upload spec for the catalogue team: square 1200 × 1200 JPG, white
@@ -487,6 +487,19 @@ A pass over all customer, partner and shared screens at 320 px, 375 px, 768 px,
   (Category / For / Price) share **one line at every width** from 320 px up —
   the phone rules drop the decorative leading icon and tighten the gutters
   instead of wrapping the third filter onto its own row.
+- **The product-details page is two columns on a laptop, one on a phone.**
+  Reported with a screenshot: at ~1440 px the page was a single 1384 px column
+  — a 400 px photo, then metre-wide cards holding one line of 12 px copy — so
+  most of the window was empty and it read as a phone screen stretched
+  sideways. From 900 px the photo takes a left column (`minmax(240px, 440px)`,
+  square, `position: sticky` so it follows a long description) and tags, name,
+  price, quantity, About and Delivery sit in the right one; the rating is
+  grouped with the price at the left instead of being pushed to the far edge;
+  the whole page is capped at 1180 px and centred, because a product page is
+  read. Below 900 px the grid is one column in the same DOM order, so a phone
+  stacks exactly as it did before (the stacked grid carries no `gap`, which
+  would double the 14 px the tag row already has). Same markup for the
+  customer dashboard and the public storefront.
 - The cart's "Proceed to checkout" bar is an **overlay**: the Bill details card
   runs a few pixels underneath it (the phone clearance is set per shell, since
   the app reserves 100 px for its bottom nav and the public website, which has

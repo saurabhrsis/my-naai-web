@@ -2492,6 +2492,47 @@ img.image-fallback-tile {
 .shop-detail-card p { display: flex; align-items: flex-start; gap: 8px; margin: 5px 0 0; color: var(--muted-light); font-size: 12px; line-height: 1.5; }
 .shop-detail-card p svg { color: var(--shop-green-soft); flex: none; margin-top: 2px; }
 .shop-detail-similar-title { margin: 22px 0 12px; color: var(--white); font-size: 15.5px; }
+
+/* ── The reading width, and the two-column laptop layout ──
+   Reported with a ~1440px screenshot: the details page was ONE column
+   1384px wide — a 400px photo, then full-bleed cards holding a single line of
+   12px copy — so most of the window was empty and the page read as a phone
+   screen stretched sideways. From 900px the photo takes a fixed left column
+   (sticky, so it stays beside the copy while a long description scrolls) and
+   everything you act on — tags, name, price, quantity, About, Delivery — sits
+   in the right one. The page is capped at 1180px and centred: a product page
+   is read, and 1384px of 12px text is a line nobody can follow.
+   Below 900px the grid is one column in DOM order, i.e. the old layout, so a
+   phone is untouched (and no `gap`, which would double the 14px margin the
+   tags already carry). */
+.shop-detail-layout { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; }
+.shop-detail-gallery, .shop-detail-info { min-width: 0; }
+@media (min-width: 900px) {
+  .shop-detail-page { width: 100%; max-width: 1180px; margin: 0 auto; }
+  .shop-detail-layout { grid-template-columns: clamp(280px, 34%, 440px) minmax(0, 1fr); gap: 32px; }
+  /* The photo follows the copy down the page instead of leaving a 400px hole
+     beside the cards. */
+  .shop-detail-gallery { position: sticky; top: 8px; }
+  /* Square in its own column: the catalog's uploads are square, so the 4:3
+     frame letterboxed every one of them behind a blurred band. The column is
+     `clamp(280px, 34%, 440px)`, so a 1024px laptop gets a 330px photo and the
+     copy beside it, not a photo that owns the screen. */
+  .shop-detail-hero { aspect-ratio: 1 / 1; max-height: 440px; }
+  /* The tags start level with the top of the photo — no stray step. */
+  .shop-detail-tags { margin-top: 0; }
+  .shop-detail-name { font-size: 26px; }
+  .shop-detail-seller { margin-bottom: 16px; }
+  /* Price and its rating are one group at the left. `space-between` pushed the
+     rating to the far end of a 1384px row, which is what made a two-word line
+     look like two unrelated things. */
+  .shop-detail-price-row { justify-content: flex-start; gap: 14px; margin-bottom: 16px; }
+  .shop-detail-price-row strong { font-size: 26px; }
+  .shop-detail-card { padding: 16px 18px; }
+  .shop-detail-card p { font-size: 12.5px; }
+  /* Suggestions keep the full page width, under both columns. */
+  .shop-detail-similar-title { margin-top: 30px; font-size: 17px; }
+  .skeleton-card.shop-detail-skeleton { min-height: 380px; }
+}
 /* Large quantity control for the details page (Blinkit's in-page ADD is bigger). */
 .shop-add-button.large { min-height: 44px; min-width: 128px; font-size: 13px; }
 .shop-stepper.large { min-height: 44px; }

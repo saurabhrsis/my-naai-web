@@ -614,8 +614,14 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
     return (
       <div className="screen shop-detail-page">
         <PageHeader title="Product details" onBack={() => navigate('shop')} />
-        <SkeletonCard className="shop-detail-skeleton" />
-        <div className="shop-grid">{[1, 2].map(item => <SkeletonCard key={item} className="shop-skeleton" />)}</div>
+        {/* The placeholder takes the shape of the real page (photo left, copy
+            right on a laptop) so nothing jumps when the product arrives. */}
+        <div className="shop-detail-layout">
+          <div className="shop-detail-gallery"><SkeletonCard className="shop-detail-skeleton" /></div>
+          <div className="shop-detail-info">
+            <SkeletonCard className="shop-detail-skeleton" />
+          </div>
+        </div>
       </div>
     );
   }
@@ -646,58 +652,70 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
   return (
     <div className="screen shop-detail-page">
       <PageHeader title="Product details" onBack={() => navigate('shop')} />
-      <div className="shop-detail-hero">
-        {heroImage && <span className="shop-detail-hero-backdrop" style={{ backgroundImage: `url("${heroImage}")` }} aria-hidden="true" />}
-        <ImageWithFallback src={heroImage} fallback={PRODUCT_PLACEHOLDER} alt={product.name} className="shop-detail-hero-image" />
-        {!product.available && <span className="shop-stock-veil">Out of stock</span>}
-        {off > 0 && <span className="shop-off-badge shop-off-badge-hero">{off}% off</span>}
-      </div>
-      {images.length > 1 && (
-        <div className="shop-detail-thumbs" role="group" aria-label="Product images">
-          {images.map((image, index) => (
-            <button key={image} type="button" className={cx('shop-detail-thumb', index === Math.min(activeImage, images.length - 1) && 'active')} onClick={() => setActiveImage(index)} aria-label={`Show image ${index + 1} of ${images.length}`}>
-              <ImageWithFallback src={getFileUrl(image)} fallback={PRODUCT_PLACEHOLDER} alt="" />
-            </button>
-          ))}
+      {/* A laptop shows the photo and the buying copy SIDE BY SIDE. The page
+          used to be one column of ~1384px: a 400px photo, then metre-wide
+          cards holding a single 12px line, with the right half of the screen
+          empty (see the screenshot in the report). The layout is mobile-
+          first — one column below 900px, exactly as it was — and splits into
+          gallery + info above it. */}
+      <div className="shop-detail-layout">
+        <div className="shop-detail-gallery">
+          <div className="shop-detail-hero">
+            {heroImage && <span className="shop-detail-hero-backdrop" style={{ backgroundImage: `url("${heroImage}")` }} aria-hidden="true" />}
+            <ImageWithFallback src={heroImage} fallback={PRODUCT_PLACEHOLDER} alt={product.name} className="shop-detail-hero-image" />
+            {!product.available && <span className="shop-stock-veil">Out of stock</span>}
+            {off > 0 && <span className="shop-off-badge shop-off-badge-hero">{off}% off</span>}
+          </div>
+          {images.length > 1 && (
+            <div className="shop-detail-thumbs" role="group" aria-label="Product images">
+              {images.map((image, index) => (
+                <button key={image} type="button" className={cx('shop-detail-thumb', index === Math.min(activeImage, images.length - 1) && 'active')} onClick={() => setActiveImage(index)} aria-label={`Show image ${index + 1} of ${images.length}`}>
+                  <ImageWithFallback src={getFileUrl(image)} fallback={PRODUCT_PLACEHOLDER} alt="" />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      )}
 
-      <div className="shop-detail-tags">
-        <span className="shop-detail-tag">{categoryLabel(product.category)}</span>
-        <span className="shop-detail-tag">{genderLabel}</span>
-        {product.available ? <span className="shop-detail-tag in-stock">In stock</span> : <span className="shop-detail-tag out-stock">Out of stock</span>}
-      </div>
-      <h2 className="shop-detail-name">{product.name}</h2>
-      <p className="shop-detail-seller">{product.salonName ? `Sold by ${product.salonName}` : copy.sellerFallback}</p>
+        <div className="shop-detail-info">
+          <div className="shop-detail-tags">
+            <span className="shop-detail-tag">{categoryLabel(product.category)}</span>
+            <span className="shop-detail-tag">{genderLabel}</span>
+            {product.available ? <span className="shop-detail-tag in-stock">In stock</span> : <span className="shop-detail-tag out-stock">Out of stock</span>}
+          </div>
+          <h2 className="shop-detail-name">{product.name}</h2>
+          <p className="shop-detail-seller">{product.salonName ? `Sold by ${product.salonName}` : copy.sellerFallback}</p>
 
-      <div className="shop-detail-price-row">
-        <div>
-          <strong>{formatCurrency(product.price)}</strong>
-          {product.mrp > 0 && <s>{formatCurrency(product.mrp)}</s>}
+          <div className="shop-detail-price-row">
+            <div>
+              <strong>{formatCurrency(product.price)}</strong>
+              {product.mrp > 0 && <s>{formatCurrency(product.mrp)}</s>}
+            </div>
+            {product.rating > 0 && <span className="shop-rating"><Star size={13} /> {Number(product.rating).toFixed(1)}</span>}
+          </div>
+          <div className="shop-detail-action">
+            <ShopQuantityControl qty={qtyFor(product.id)} onAdd={() => handleAdd(product)} onSet={next => handleSetQty(product, next)} disabled={!product.available} large />
+          </div>
+
+          <section className="shop-detail-card">
+            <h3>About this product</h3>
+            <p>{product.description || `${categoryLabel(product.category)} pick${product.salonName ? ` from ${product.salonName}` : ' from the Naai Shop catalog'} — ${copy.deliveryLine}.`}</p>
+          </section>
+
+          {/* Delivery facts sit AFTER the description so the terms are read with
+              the product they belong to (never a surprise at checkout). Every
+              line is driven by the admin-managed shop settings, so the page can
+              not promise what the bill will not honour. */}
+          <section className="shop-detail-card" aria-label="Delivery information">
+            <h3><Truck size={15} /> Delivery</h3>
+            <p><Zap size={13} /> Next-day delivery{city ? ` to ${city}` : ` to ${copy.deliveryTarget}`}{product.price >= shopSettings.freeDeliveryAbove ? ' · FREE on this item' : ` · free above ${formatCurrency(shopSettings.freeDeliveryAbove)}`}</p>
+            <p><Banknote size={13} /> {shopSettings.codThreshold > 0 && product.price > shopSettings.codThreshold
+              ? 'Online payment via UPI, cards & netbanking'
+              : 'Cash on delivery available · online payment via UPI, cards & netbanking'}</p>
+            <p><ShieldCheck size={13} /> Free cancellation until the order goes out for delivery</p>
+          </section>
         </div>
-        {product.rating > 0 && <span className="shop-rating"><Star size={13} /> {Number(product.rating).toFixed(1)}</span>}
       </div>
-      <div className="shop-detail-action">
-        <ShopQuantityControl qty={qtyFor(product.id)} onAdd={() => handleAdd(product)} onSet={next => handleSetQty(product, next)} disabled={!product.available} large />
-      </div>
-
-      <section className="shop-detail-card">
-        <h3>About this product</h3>
-        <p>{product.description || `${categoryLabel(product.category)} pick${product.salonName ? ` from ${product.salonName}` : ' from the Naai Shop catalog'} — ${copy.deliveryLine}.`}</p>
-      </section>
-
-      {/* Delivery facts sit AFTER the description so the terms are read with
-          the product they belong to (never a surprise at checkout). Every
-          line is driven by the admin-managed shop settings, so the page can
-          not promise what the bill will not honour. */}
-      <section className="shop-detail-card" aria-label="Delivery information">
-        <h3><Truck size={15} /> Delivery</h3>
-        <p><Zap size={13} /> Next-day delivery{city ? ` to ${city}` : ` to ${copy.deliveryTarget}`}{product.price >= shopSettings.freeDeliveryAbove ? ' · FREE on this item' : ` · free above ${formatCurrency(shopSettings.freeDeliveryAbove)}`}</p>
-        <p><Banknote size={13} /> {shopSettings.codThreshold > 0 && product.price > shopSettings.codThreshold
-          ? 'Online payment via UPI, cards & netbanking'
-          : 'Cash on delivery available · online payment via UPI, cards & netbanking'}</p>
-        <p><ShieldCheck size={13} /> Free cancellation until the order goes out for delivery</p>
-      </section>
 
       {similar.length > 0 && (
         <section>
