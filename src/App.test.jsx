@@ -254,6 +254,17 @@ describe('getRouteFromPath', () => {
     expect(parseRoutePath('/schedule?salonId=salon-42').params).toEqual({ salonId: 'salon-42' });
   });
 
+  // The menu editor is its own page, so it gets its own readable address — a
+  // partner can be sent "open /edit-services" and land on the right screen.
+  it('gives the services editor its own readable URL, and keeps it salon-only', () => {
+    expect(routeToPath('editServices')).toBe('/edit-services');
+    expect(parseRoutePath('/edit-services')).toEqual({ name: 'editServices', params: {} });
+    // A customer opening it is not shown a partner screen: it is not one of the
+    // routes a signed-out visitor may resolve.
+    setPath('/edit-services');
+    expect(getRouteFromPath(undefined).name).not.toBe('editServices');
+  });
+
   it('opens salon links for guests but keeps account screens gated', () => {
     // No role = browsing before login: home and the salon page are public.
     setPath('/salon/salon-42');

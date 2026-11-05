@@ -5,6 +5,7 @@ and verified with `git apply --check` on a clean checkout:
 
 | Patch | Repo | What it does |
 | --- | --- | --- |
+| [`backend-5-salon-services.patch`](backend-5-salon-services.patch) | `rightserveinfotechsystems/my_naai_backend` | `POST /api/salons/services/save` — the whole menu in one transaction, for the portal's Edit services screen ([docs](../docs/BACKEND-SALON-SERVICES-API.md)) |
 | [`backend-shop-customers.patch`](backend-shop-customers.patch) | `rightserveinfotechsystems/my_naai_backend` | customers as a second buyer + the website's no-token API |
 | [`admin-panel-shop-customers.patch`](admin-panel-shop-customers.patch) | `rightserveinfotechsystems/my-naai-frontend` | the admin panel shows who bought each shop order |
 | [`backend-shop-catalog-filters.patch`](backend-shop-catalog-filters.patch) | `rightserveinfotechsystems/my_naai_backend` | **apply after the first one** — search, filters, sort and paging on the server |

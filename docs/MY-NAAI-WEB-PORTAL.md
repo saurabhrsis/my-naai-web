@@ -529,6 +529,84 @@ every test its own salon id because the cache is module-level. `src/App.test.jsx
 adds the URL round-trip: `routeToPath` → `parseRoutePath` keeps the salon and the
 service list.
 
+## 8.5 The menu, edited on its own (`/edit-services`)
+
+The salon account already had one **Edit** button, and it opens the whole profile
+editor: seven collapsed cards, one of which is the menu — and that editor saves
+everything at once, so changing "Haircut ₹250 → ₹300" also re-sends the address,
+the photos, the business hours and the barbers.
+
+The account screen now has a second button, **Edit services**, beside Edit, plus a
+row in the partner menu and a tappable **Services** tile. All three open
+`/edit-services` (`EditSalonServicesScreen`, `src/components/EditSalonServices.jsx`),
+which edits services and nothing else.
+
+**Every service is open, all the way down.** That is the whole design: the reported
+need was *"open all services input so they can fill fast"*, and an accordion is the
+opposite of that. Each row shows the four fields as real inputs from the first
+paint — no tap to open, no tap to close:
+
+| Field | Entry |
+| --- | --- |
+| **Service** | text, with the salon type's default names offered as you type |
+| **Price (₹)** | number, `inputMode="decimal"` on a phone |
+| **Duration** | select of the lengths salons use (10…120 min), plus the row's own value if it is unusual, so `45` can never become `450` |
+| **Description** | optional, one line |
+
+What makes a whole menu fast to type:
+
+- **Enter walks the row** — Service → Price → Duration → Description — and Enter in
+  the last field of the **last** row adds a new row and puts the cursor in it. A
+  menu can be typed end to end without touching the mouse. (The hint under the
+  header says so; it is hidden on a phone, where there is no Enter key.)
+- **Add service** sits in the header, at the end of the list and in the sticky bar;
+  a new row is marked **New** until it is saved.
+- **↑ / ↓** re-order a row, and the order is what the customers see — it is sent as
+  `displayOrder`, not sorted on the client.
+- Rows are validated as you type (`Add the price`, `Name is too short`,
+  `Two services have this name`); **Save services** stays off until something
+  actually differs from what the server has, so an accidental double-save is not
+  possible.
+- A **Removed** strip lists what will go when you save, each name an **Undo**
+  button that restores the whole row — price and duration included.
+- Back with unsaved edits asks first (`Discard your changes?`), and "keep editing"
+  is the safe default.
+- An empty menu offers **Add your first service** and **Load defaults** (the same
+  per-type default menu the profile editor uses).
+- The sticky bar shows the count and the total of the menu, so a mistyped price is
+  visible before saving.
+
+**One request, and only about services.** `POST /api/salons/services/save`
+(`api.salonServicesSave`) carries `{ services, removedServiceIds }` and nothing
+else — no `salonId`, no address, no photos. The salon comes from the session token
+on the server. The answer is the stored menu, and the screen repaints from it.
+
+Removal is a **soft** removal on the server (`is_active = false`): customers stop
+seeing the service, and past bookings that used it keep their rows. The confirmation
+sheet says exactly that, because "delete" would be a lie.
+
+A deployment that has not shipped
+[`patches/backend-5-salon-services.patch`](../patches/backend-5-salon-services.patch)
+answers 404, and the screen says *"Saving services needs the latest backend update"*
+rather than blaming the partner's input. Contract:
+[`docs/BACKEND-SALON-SERVICES-API.md`](BACKEND-SALON-SERVICES-API.md).
+
+Styles live in `src/styles.css` under *"The menu editor (Edit services)"*:
+`.service-editor-summary`, `.service-editor-list`, `.service-editor-row`,
+`.service-editor-fields` (one row per service on a laptop; name on its own line,
+price and minutes sharing the next one under 720px), `.service-editor-actions` (the
+sticky save bar), `.service-editor-removed`, `.service-editor-hint`.
+
+Tests: `src/components/EditSalonServices.test.jsx` (15) — the screen paints every
+service as an input with no profile fields on it; the save carries services and
+removals only and never the salon id; a new row is sent without a `serviceId`;
+removal sends the id and Undo restores the whole row; a missing price blocks the
+save; a 404 is reported as the missing backend; Save is off until something changes;
+an empty menu offers the defaults; Enter walks a row and appends a new one; and the
+helpers (normalising a row, ordering, validation, duplicate names, the payload,
+name suggestions). `src/components/SalonAccountScreen.test.jsx` (+1) covers the
+button beside Edit, the partner-menu row and the Services tile.
+
 ## 9. Notification destinations
 
 The notification route mapping is shared by foreground JavaScript and the Firebase messaging service worker:
@@ -761,6 +839,7 @@ the in-app brand are the same shape.
 | `public/firebase-messaging-sw.js` | Background push display and notification click routing |
 | `src/components/UserScreens.jsx` | Customer screens, bookings and delay response |
 | `src/components/SalonScreens.jsx` | Salon queue, booking request, delay action and partner screens |
+| `src/components/EditSalonServices.jsx` | The menu editor (`/edit-services`): every service an open row, Enter-to-next, soft removal with Undo, one request that touches services only |
 | `src/main.jsx` | Root offline shell worker registration |
 | `src/styles.css` | Responsive mobile-first layout through large desktop widths, with the device safe-area padding for installed PWAs |
 

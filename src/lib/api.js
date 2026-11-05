@@ -420,6 +420,12 @@ export const api = {
   salonPlanList: () => post('/api/salons/plans/list', {}, { auth: false }),
   salonProfile: ({ salonId }) => post('/api/salons/get-salon', { salonId }),
   deleteSalonService: serviceId => post('/api/salons/delete-service', { serviceId }),
+  // The whole menu in one request — every service, in order, plus the ids to take
+  // off it. Its own endpoint on purpose: the profile editor's save re-sends the
+  // address, images, hours and barbers with it, so a partner changing one price
+  // had to keep the rest of the profile in sync to change it. The salon is taken
+  // from the session token on the server, so no `salonId` is sent.
+  salonServicesSave: payload => post('/api/salons/services/save', payload),
   deleteSalonBarber: barberId => del('/api/barbers/delete-barber', { body: { barberId } }),
   editSalonProfile: payload => post('/api/salons/edit-salon-profile', payload),
   updateSalonProfile: payload => post('/api/salons/update-salon', payload),

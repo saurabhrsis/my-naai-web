@@ -902,9 +902,75 @@ a.detail-info-row:hover { background: rgba(255, 255, 255, .03); }
 .salon-live-status small { color: var(--muted); font-size: 9px; line-height: 1.3; }
 .salon-live-status .toggle { flex: none; flex-direction: column-reverse; gap: 5px; color: var(--gold); font-weight: 700; }
 .salon-profile-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-bottom: 15px; }
-.salon-profile-stats > div { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 11px 5px; border-radius: 12px; background: var(--card); }
+.salon-profile-stats > div, .salon-profile-stats > button { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 11px 5px; border: 0; border-radius: 12px; color: inherit; background: var(--card); font: inherit; }
+.salon-profile-stats > button { cursor: pointer; }
+.salon-profile-stats > button:hover { background: var(--card-raised); }
 .salon-profile-stats strong { color: var(--gold); font-size: 17px; }
 .salon-profile-stats span { color: var(--muted); font-size: 9px; }
+/* Edit + Edit services sit side by side in the account hero; on a narrow phone
+   they share the width instead of pushing the salon name off the card. */
+.salon-profile-actions { display: flex; flex: none; flex-wrap: wrap; gap: 7px; }
+
+/* ── The menu editor (Edit services) ────────────────────────────────────────
+   The opposite of the profile editor's accordion: every service is an open row
+   of inputs from the first paint, because the job is "run down my list and fix
+   the prices". Laptop = one row per service (name, price, minutes, note on a
+   second line); phone = the same fields stacked, with the row's tools on the
+   heading so the inputs keep the full width. */
+.services-editor-screen { padding-bottom: 96px; }
+.service-editor-summary { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
+.service-editor-summary > div:first-child { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.service-editor-summary strong { color: var(--white); font-size: 15px; letter-spacing: -.02em; }
+.service-editor-summary small { color: var(--muted); font-size: 10px; line-height: 1.4; }
+.service-editor-state { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 5px; font-size: 10px; font-weight: 700; }
+.service-editor-saved { display: inline-flex; align-items: center; gap: 4px; color: var(--green); }
+.service-editor-dirty { padding: 4px 8px; border-radius: 999px; color: var(--gold); background: rgba(232,185,126,.14); }
+.service-editor-removed { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; padding: 11px 13px; border: 1px solid rgba(242,123,116,.34); border-radius: 14px; background: rgba(242,123,116,.08); color: #f4b7b3; font-size: 11px; }
+.service-editor-removed > span { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.service-editor-removed small { color: var(--muted); font-size: 9.5px; }
+.service-editor-undo { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border: 1px solid rgba(255,255,255,.16); border-radius: 999px; color: var(--white); background: transparent; font-size: 10px; font-weight: 700; }
+.service-editor-undo:hover { border-color: var(--gold); color: var(--gold); }
+.service-editor-hint { margin: 0 0 10px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.service-editor-hint kbd { padding: 1px 5px; border: 1px solid rgba(255,255,255,.2); border-radius: 5px; color: var(--white); background: #1b2120; font: inherit; font-weight: 700; }
+.service-editor-list { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.service-editor-row { display: flex; flex-direction: column; gap: 9px; padding: 12px; border: 1px solid rgba(255,255,255,.11); border-radius: 15px; background: #151a19; }
+.service-editor-row.is-new { border-color: rgba(232,185,126,.4); }
+.service-editor-row.has-error { border-color: rgba(242,123,116,.55); }
+.service-editor-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.service-editor-index { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: var(--gold); background: rgba(232,185,126,.14); font-size: 10px; font-weight: 800; }
+.service-editor-row-head strong { min-width: 0; overflow: hidden; color: var(--white); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.service-editor-badge { flex: none; padding: 2px 7px; border-radius: 999px; color: var(--gold); background: rgba(232,185,126,.16); font-size: 9px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.service-editor-tools { flex: none; display: flex; gap: 4px; margin-left: auto; }
+.service-editor-tools .icon-btn { width: 32px; height: 32px; }
+.service-editor-tools .icon-btn.danger { color: #f4b7b3; }
+.service-editor-tools .icon-btn:disabled { opacity: .35; cursor: not-allowed; }
+.service-editor-fields { display: grid; gap: 8px; grid-template-columns: minmax(0, 1.7fr) minmax(76px, .6fr) minmax(92px, .62fr); grid-template-areas: "name price duration" "note note note"; }
+.service-editor-fields > .field:nth-child(1) { grid-area: name; }
+.service-editor-fields > .field:nth-child(2) { grid-area: price; }
+.service-editor-fields > .field:nth-child(3) { grid-area: duration; }
+.service-editor-fields > .field:nth-child(4) { grid-area: note; }
+.service-editor-fields .field { margin: 0; }
+.service-editor-fields input, .service-editor-fields select { width: 100%; min-width: 0; min-height: 42px; padding: 0 11px; border: 1px solid rgba(255,255,255,.13); border-radius: 10px; color: #fbfbf9; background: #1b2120; font-size: 13px; }
+.service-editor-fields input:focus, .service-editor-fields select:focus { border-color: var(--gold); background: #212827; outline: none; }
+.service-editor-fields [aria-invalid="true"] { border-color: rgba(242,123,116,.7); }
+.service-editor-actions { position: sticky; z-index: 10; bottom: max(8px, var(--safe-bottom)); display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 16px; padding: 11px 12px; border: 1px solid rgba(232,185,126,.2); border-radius: 16px; background: rgba(19,23,22,.96); box-shadow: 0 14px 35px rgba(0,0,0,.34); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+.service-editor-actions > div:first-child { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.service-editor-actions strong { color: var(--white); font-size: 12px; }
+.service-editor-actions small { color: var(--muted); font-size: 9.5px; }
+.service-editor-buttons { flex: none; display: flex; gap: 7px; }
+.service-editor-buttons .btn { min-height: 40px; padding: 0 12px; font-size: 11px; }
+.empty-state-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.detail-loading { display: flex; align-items: center; justify-content: center; padding: 44px 16px; }
+
+@media (max-width: 720px) {
+  /* Stacked on a phone: the name gets its own line, price and minutes share the
+     next one, and the note sits underneath — no horizontal squeeze at 360px. */
+  .service-editor-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "name name" "price duration" "note note"; }
+  .service-editor-actions { flex-wrap: wrap; }
+  .service-editor-buttons { width: 100%; }
+  .service-editor-buttons .btn { flex: 1; }
+  .service-editor-hint { display: none; }
+}
 
 /* ── Salon → Booking requests (leads) ───────────────────────────────────────
    A request is a lead, not a booking: it arrives with a one-minute answer

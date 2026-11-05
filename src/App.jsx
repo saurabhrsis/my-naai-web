@@ -83,6 +83,9 @@ import {
   // screen itself is kept in SalonScreens.jsx.
   SalonQueueScreen,
 } from './components/SalonScreens';
+// The menu editor is its own screen and its own file — it shares nothing with
+// the profile editor except the shape of a service row.
+import { EditSalonServicesScreen } from './components/EditSalonServices';
 import { SalonLeadsScreen } from './components/SalonLeads';
 import { ShopProductDetailScreen, ShopScreen } from './components/ShopScreen';
 import { ShopCartScreen, ShopCheckoutScreen } from './components/ShopCartCheckout';
@@ -177,7 +180,7 @@ const SHOP_ROUTE_NAMES = ['shop', 'shopProduct', 'shopCart', 'shopCheckout', 'sh
 // Products tabs pointed at them. A stale /products link is aliased onto the shop
 // in src/lib/routes.js, so it still lands somewhere useful.
 const USER_ROUTE_NAMES = ['home', 'bookings', 'account', 'detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'privacy', 'contact', ...SHOP_ROUTE_NAMES];
-const SALON_ROUTE_NAMES = ['queue', 'history', ...SHOP_ROUTE_NAMES, 'account', 'notifications', 'editProfile', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
+const SALON_ROUTE_NAMES = ['queue', 'history', ...SHOP_ROUTE_NAMES, 'account', 'notifications', 'editProfile', 'editServices', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
 // Every route a visitor may open WITHOUT an account — salons are browsable
 // first, login only appears when they try to book (the client's headline
 // ask). The info pages are public too: the site footer links About/FAQ/Terms/
@@ -1487,6 +1490,10 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     if (route.name === 'account') return <SalonAccountScreen {...props} onLogout={onLogout} />;
     if (route.name === 'notifications') return <NotificationsScreen {...props} />;
     if (route.name === 'editProfile') return <EditSalonProfileScreen {...props} params={route.params} onLogout={onLogout} />;
+    // The menu on its own: the salon account's "Edit services" button opens this
+    // instead of the whole profile editor, so a partner changing a price never
+    // re-saves the address, the photos, the hours or the team.
+    if (route.name === 'editServices') return <EditSalonServicesScreen {...props} />;
     if (route.name === 'bookingRequest') return <BookingRequestScreen {...props} params={route.params} />;
     if (route.name === 'subscription') return <SubscriptionScreen {...props} params={route.params} />;
     if (route.name === 'salonAbout') return <PartnerInfo type="about" navigate={navForScreens} />;

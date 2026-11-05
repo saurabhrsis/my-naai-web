@@ -19,6 +19,9 @@ const ROUTE_TO_SEGMENT = {
   home: '',
   // The salon's leads tab (booking REQUESTS, not bookings).
   bookingRequests: 'booking-requests',
+  // The menu editor. A partner is sent here by name ("edit services"), and the
+  // page is worth a readable, linkable address of its own.
+  editServices: 'edit-services',
 };
 // The two booking steps that need a salon record to render. They take the salon's
 // id in the URL and, for the schedule, the chosen service ids — object params
@@ -37,6 +40,7 @@ const SEGMENT_TO_ROUTE = {
   // screen. Nothing writes this segment any more — see USER_NAV in App.jsx.
   products: 'shop',
   'booking-requests': 'bookingRequests',
+  'edit-services': 'editServices',
 };
 
 // Parse `window.location`-style input (a path, optionally with a query) into
