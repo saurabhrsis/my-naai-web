@@ -300,6 +300,44 @@ The **booking-request** delay proposal is the one flow that still asks the custo
 3. The response calls `POST /api/bookingRequest/customer-delay-response/{bookingRequestId}/` with `{ "action": "ACCEPT" }` or `{ "action": "REJECT" }`.
 4. The customer is returned to `#/bookings`.
 
+## 8.1 Booking checkout — Pay at Salon
+
+The last step of the customer booking flow (`ScheduleScreen` in
+`src/components/UserScreens.jsx`) is a checkout: barber (optional), date, time,
+**Payment**, then the sticky **Confirm booking** bar with the estimated total.
+Payment used to be invisible until the salon counter; it is now a stated part of
+the checkout.
+
+- **One method, preselected: "Pay at Salon".** My Naai takes no payment for a
+  booking (Terms §4; Privacy §2 says no card, UPI, wallet or bank details are
+  collected), so the option is the only one and it is checked. It is rendered as
+  a real `radio` inside `.schedule-pay-options` — the same shape as the shop's
+  payment options — so an online method, if one is ever offered, drops into the
+  same group instead of needing a new design.
+- **The amount is named before you confirm.** The card says
+  `Pay ₹ N at the salon after your service — cash, UPI or card, whichever the
+  salon accepts. Nothing is charged now.` The sticky bar repeats
+  **Pay at salon** under the total, so the last thing read before confirming is
+  how the money is paid.
+- **No payment form.** The only `<input>` on the checkout is that radio: no card
+  number, expiry, CVV, UPI id or bank field exists, and a test fails if one is
+  added without a deliberate decision.
+- **Nothing payment-related is sent to the API.** `createBookingRequest` keeps its
+  contract (`salonId`, `barberId`, `bookingDate`, `bookingTime`, `services`) — the
+  backend stores no payment mode, so the method is a statement of fact to the
+  customer rather than a record. A booking record that should carry
+  `payment_mode: PAY_AT_SALON` is a backend change, not a web one.
+- **The confirmation repeats it.** The *Request sent* screen adds
+  `Pay ₹ N at the salon after your service — nothing was charged now.` beside the
+  existing "your slot is held" and "we will alert you" points.
+
+Styles: `.schedule-pay-options`, `.schedule-pay-option`, `.schedule-pay-icon`,
+`.schedule-pay-copy`, `.schedule-pay-tick`, `.schedule-pay-note`,
+`.schedule-total-pay` in `src/styles.css` (booking gold palette; the shop's
+`.shop-pay-*` is the green equivalent). Tests: `src/components/BookingFlow.test.jsx`
+— preselected option with the summed amount, no card/UPI fields, and the method
+repeated after the request is sent.
+
 ## 9. Notification destinations
 
 The notification route mapping is shared by foreground JavaScript and the Firebase messaging service worker:

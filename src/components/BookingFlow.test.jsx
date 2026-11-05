@@ -69,6 +69,66 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
+describe('paying for a booking', () => {
+  const SERVICES = [
+    { serviceId: 'svc-1', name: 'Haircut', price: 300 },
+    { serviceId: 'svc-2', name: 'Beard trim', price: 150 },
+  ];
+
+  const openCheckout = async () => {
+    const result = await render(
+      <ScheduleScreen params={{ salon: SALON, selectedServices: SERVICES }} navigate={vi.fn()} notify={vi.fn()} />,
+    );
+    // Pick tomorrow: today's slots may already be gone late in the evening.
+    await act(async () => { byText('Tomorrow', result.container).click(); });
+    await flush();
+    return result;
+  };
+
+  it('offers "Pay at Salon" at the last step, preselected and with the amount', async () => {
+    const { container } = await openCheckout();
+    const group = container.querySelector('.schedule-pay-options');
+    expect(group).not.toBeNull();
+    expect(container.textContent).toContain('Pay at Salon');
+    // The amount is the sum of the chosen services, and it is paid at the salon.
+    expect(container.textContent).toContain('Pay ₹ 450 at the salon after your service');
+    expect(container.textContent).toContain('Nothing is charged now.');
+    // Preselected: the one radio in the group is checked.
+    const radio = container.querySelector('input[name="schedule-payment"]');
+    expect(radio).not.toBeNull();
+    expect(radio.checked).toBe(true);
+    expect(radio.value).toBe('payAtSalon');
+    // …and the sticky confirm bar repeats the method under the amount.
+    expect(container.querySelector('.schedule-total').textContent).toContain('Pay at salon');
+    expect(container.querySelector('.schedule-total').textContent).toContain('₹ 450');
+  });
+
+  it('collects no card, UPI or bank details — the booking is not a payment form', async () => {
+    const { container } = await openCheckout();
+    // The only input on the checkout is the payment radio: there is no card
+    // number, expiry, CVV, UPI id or bank field to fill (Terms §4, Privacy §2).
+    const inputs = Array.from(container.querySelectorAll('input'));
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0].type).toBe('radio');
+    expect(container.textContent).toContain('never asks for card, UPI or bank details');
+    for (const word of ['CVV', 'Card number', 'UPI ID', 'Expiry']) {
+      expect(container.textContent).not.toContain(word);
+    }
+  });
+
+  it('repeats the method on the confirmation, so the counter is no surprise', async () => {
+    const { container } = await openCheckout();
+    await act(async () => { byText('Confirm booking', container).click(); });
+    await flush();
+
+    expect(createBookingRequest).toHaveBeenCalledTimes(1);
+    // Nothing payment-related is sent: My Naai does not process the money.
+    expect(createBookingRequest.mock.calls[0][0]).not.toHaveProperty('paymentMode');
+    expect(container.textContent).toContain('Booking sent to the salon');
+    expect(container.textContent).toContain('Pay ₹ 450 at the salon after your service — nothing was charged now.');
+  });
+});
+
 describe('a booking request the salon has not answered yet', () => {
   it('tells the customer it was sent and is waiting, instead of promising a reminder', async () => {
     const notify = vi.fn();

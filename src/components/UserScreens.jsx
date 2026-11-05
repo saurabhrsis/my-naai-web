@@ -5,6 +5,7 @@ import {
   AlarmClock,
   Bell,
   BellRing,
+  Banknote,
   Bookmark,
   BookmarkCheck,
   CalendarCheck2,
@@ -43,6 +44,7 @@ import {
   Timer,
   UserRound,
   UsersRound,
+  Wallet,
   X,
   Zap,
   Clock,
@@ -1265,11 +1267,22 @@ function createTimeSlots(open = '09:00', close = '21:00') {
 export function ScheduleScreen({ params, navigate, notify }) {
   const salon = params?.salon || {};
   const services = params?.selectedServices || [];
+  // What the visit is expected to cost: the sum of the chosen services. It is
+  // the amount the checkout quotes for "Pay at Salon" and the amount the
+  // confirmation repeats — always the estimate, since the salon sets the
+  // final bill (Terms §4).
+  const total = services.reduce((sum, item) => sum + Number(item.price || 0), 0);
   const [dayOffset, setDayOffset] = useState(0);
   const [barber, setBarber] = useState(null);
   const [time, setTime] = useState('');
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(null);
+  // How the customer intends to pay. "Pay at Salon" is the only method the
+  // booking flow offers — My Naai takes no booking payment (Terms §4) — so it
+  // is preselected and the request never asks for card, UPI or bank details.
+  // It is a real control, not a label, so the day an online option exists this
+  // is where it goes, and the checkout already reads like a payment step.
+  const [paymentMode, setPaymentMode] = useState('payAtSalon');
   const schedule = {
     openingTime: '09:00:00',
     closingTime: '21:00:00',
@@ -1326,7 +1339,7 @@ export function ScheduleScreen({ params, navigate, notify }) {
       // reminder for a slot nobody has agreed to yet. The reminder is armed once
       // the salon confirms (see BookingsScreen), through the same single
       // notification permission push already uses.
-      setSent({ salonName, date: bookingDate, time, services });
+      setSent({ salonName, date: bookingDate, time, services, total, paymentMode });
     } catch (error) { notify?.('error', getErrorMessage(error, 'Could not send booking request.')); } finally { setLoading(false); }
   };
   if (sent) {
@@ -1343,6 +1356,7 @@ export function ScheduleScreen({ params, navigate, notify }) {
         <ul className="request-sent-points">
           <li><Check size={15} /> Your slot is held while the salon reviews the request.</li>
           <li><Bell size={15} /> We will alert you when the salon accepts or suggests another time.</li>
+          <li><Banknote size={15} /> Pay {formatCurrency(sent.total)} at the salon after your service — nothing was charged now.</li>
           <li><CalendarDays size={15} /> Nothing to do now — track it any time under My bookings.</li>
         </ul>
         <div className="request-sent-actions">
@@ -1352,7 +1366,102 @@ export function ScheduleScreen({ params, navigate, notify }) {
       </section>
     </div>;
   }
-  return <div className="screen schedule-screen"><PageHeader title="Schedule appointment" subtitle={salon.salonName || salon.name} onBack={() => navigate(-1)} /><section className="schedule-section"><div className="section-label"><UserRound size={17} /><span>Choose a barber <small>Optional</small></span></div><div className="barber-scroll">{(salon.barbers || []).map(item => { const active = (barber?.barberId || barber?.id) === (item.barberId || item.id); return <button key={item.barberId || item.id} className={cx('barber-card', active && 'active')} onClick={() => setBarber(active ? null : item)}><ImageWithFallback src={item.profileImageUrl || item.image} fallback={PERSON_PLACEHOLDER} alt={item.fullName || item.name} className="barber-image" /><strong>{item.fullName || item.name}</strong><span className={item.isAvailable ? 'available' : 'unavailable'}><i />{item.isAvailable ? 'Available' : 'Away'}</span><small><Star size={12} fill="currentColor" /> {item.ratingAverage || item.rating || '0.0'}</small></button>; })}{!(salon.barbers || []).length && <p className="muted-line">Any available barber will take care of you.</p>}</div></section><section className="schedule-section"><div className="section-label"><CalendarDays size={17} /><span>Choose a date</span></div><div className="date-choice-row">{[0, 1, 2].map(offset => { const optionDate = new Date(Date.now() + offset * 86400000); return <button key={offset} className={cx('date-choice', dayOffset === offset && 'active')} onClick={() => setDayOffset(offset)}><small>{offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow' : 'Day after'}</small><strong>{optionDate.getDate()}</strong><span>{optionDate.toLocaleDateString('en-IN', { month: 'short' })}</span></button>; })}</div></section><section className="schedule-section"><div className="section-label"><Clock3 size={17} /><span>Choose a time <small>{holiday ? `Closed on ${weekday}` : 'Available 10 minute slots'}</small></span></div>{holiday ? <div className="holiday-note"><CircleAlert size={18} /><span>Salon is closed on {weekday}. Choose another day.</span></div> : availableSlots.length ? <div className="time-grid">{availableSlots.map(slot => <button key={slot.value} className={cx('time-slot', time === slot.value && 'active')} onClick={() => setTime(slot.value)}>{slot.label}</button>)}</div> : <div className="holiday-note availability-empty"><CircleAlert size={18} /><span>No available time slots for {weekday}. Please choose another day.</span></div>}</section><div className="schedule-total"><div><span>Estimated total</span><strong>{formatCurrency(services.reduce((sum, item) => sum + Number(item.price || 0), 0))}</strong></div><Button loading={loading} onClick={confirm}>Confirm booking <Check size={17} /></Button></div></div>;
+  return (
+    <div className="screen schedule-screen">
+      <PageHeader title="Schedule appointment" subtitle={salon.salonName || salon.name} onBack={() => navigate(-1)} />
+
+      <section className="schedule-section">
+        <div className="section-label">
+          <UserRound size={17} />
+          <span>Choose a barber <small>Optional</small></span>
+        </div>
+        <div className="barber-scroll">
+          {(salon.barbers || []).map(item => {
+            const id = item.barberId || item.id;
+            const active = (barber?.barberId || barber?.id) === id;
+            return (
+              <button key={id} className={cx('barber-card', active && 'active')} onClick={() => setBarber(active ? null : item)}>
+                <ImageWithFallback src={item.profileImageUrl || item.image} fallback={PERSON_PLACEHOLDER} alt={item.fullName || item.name} className="barber-image" />
+                <strong>{item.fullName || item.name}</strong>
+                <span className={item.isAvailable ? 'available' : 'unavailable'}><i />{item.isAvailable ? 'Available' : 'Away'}</span>
+                <small><Star size={12} fill="currentColor" /> {item.ratingAverage || item.rating || '0.0'}</small>
+              </button>
+            );
+          })}
+          {!(salon.barbers || []).length && <p className="muted-line">Any available barber will take care of you.</p>}
+        </div>
+      </section>
+
+      <section className="schedule-section">
+        <div className="section-label"><CalendarDays size={17} /><span>Choose a date</span></div>
+        <div className="date-choice-row">
+          {[0, 1, 2].map(offset => {
+            const optionDate = new Date(Date.now() + offset * 86400000);
+            return (
+              <button key={offset} className={cx('date-choice', dayOffset === offset && 'active')} onClick={() => setDayOffset(offset)}>
+                <small>{offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow' : 'Day after'}</small>
+                <strong>{optionDate.getDate()}</strong>
+                <span>{optionDate.toLocaleDateString('en-IN', { month: 'short' })}</span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="schedule-section">
+        <div className="section-label">
+          <Clock3 size={17} />
+          <span>Choose a time <small>{holiday ? `Closed on ${weekday}` : 'Available 10 minute slots'}</small></span>
+        </div>
+        {holiday
+          ? <div className="holiday-note"><CircleAlert size={18} /><span>Salon is closed on {weekday}. Choose another day.</span></div>
+          : availableSlots.length
+            ? <div className="time-grid">{availableSlots.map(slot => <button key={slot.value} className={cx('time-slot', time === slot.value && 'active')} onClick={() => setTime(slot.value)}>{slot.label}</button>)}</div>
+            : <div className="holiday-note availability-empty"><CircleAlert size={18} /><span>No available time slots for {weekday}. Please choose another day.</span></div>}
+      </section>
+
+      {/* How the customer pays — the last decision of the booking, stated before
+          the confirm button so the amount is never a surprise at the counter.
+          One method, preselected: My Naai takes no payment for a booking, so
+          the app never asks for a card, a UPI id or a bank detail. */}
+      <section className="schedule-section" aria-labelledby="schedule-payment-label">
+        <div className="section-label" id="schedule-payment-label"><Wallet size={17} /><span>Payment</span></div>
+        <div className="schedule-pay-options" role="radiogroup" aria-label="Payment method">
+          <label className={cx('schedule-pay-option', paymentMode === 'payAtSalon' && 'active')}>
+            <input
+              type="radio"
+              name="schedule-payment"
+              value="payAtSalon"
+              checked={paymentMode === 'payAtSalon'}
+              onChange={() => setPaymentMode('payAtSalon')}
+            />
+            <Banknote size={19} className="schedule-pay-icon" aria-hidden="true" />
+            <span className="schedule-pay-copy">
+              <strong>Pay at Salon</strong>
+              <small>
+                Pay {formatCurrency(total)} at the salon after your service — cash, UPI or card,
+                whichever the salon accepts. Nothing is charged now.
+              </small>
+            </span>
+            <span className="schedule-pay-tick" aria-hidden="true"><Check size={18} /></span>
+          </label>
+        </div>
+        <p className="schedule-pay-note">
+          <ShieldCheck size={13} aria-hidden="true" />
+          My Naai never asks for card, UPI or bank details for a booking — you pay at the salon counter.
+        </p>
+      </section>
+
+      <div className="schedule-total">
+        <div>
+          <span>Estimated total</span>
+          <strong>{formatCurrency(total)}</strong>
+          <em className="schedule-total-pay"><Banknote size={11} aria-hidden="true" /> Pay at salon</em>
+        </div>
+        <Button loading={loading} onClick={confirm}>Confirm booking <Check size={17} /></Button>
+      </div>
+    </div>
+  );
 }
 
 export function NotificationsScreen({ session, notify, navigate }) {

@@ -734,6 +734,26 @@ a.detail-info-row:hover { background: rgba(255, 255, 255, .03); }
 .availability-empty { justify-content: center; text-align: center; line-height: 1.4; }
 .schedule-total { position: sticky; bottom: max(7px, var(--safe-bottom)); margin-top: 2px; }
 .schedule-total strong { color: var(--gold); font-size: 15px; }
+/* Pay at Salon — the booking flow's only payment method, stated at checkout.
+   Same shape as the shop's payment options (radio + icon + copy + tick), in the
+   booking palette, because it IS a payment choice: preselected today, and the
+   place an online option would sit if one is ever offered. */
+.schedule-pay-options { display: flex; flex-direction: column; gap: 9px; }
+.schedule-pay-option { position: relative; display: flex; align-items: center; gap: 11px; padding: 13px; border: 1.5px solid var(--line); border-radius: 15px; background: var(--card); cursor: pointer; transition: border-color .15s, background .15s; }
+.schedule-pay-option.active { border-color: var(--gold); background: var(--gold-wash); }
+.schedule-pay-option input { position: absolute; opacity: 0; pointer-events: none; }
+.schedule-pay-option:focus-within { outline: 2px solid var(--gold); outline-offset: 3px; }
+.schedule-pay-icon { flex: none; color: var(--muted-light); }
+.schedule-pay-option.active .schedule-pay-icon { color: var(--gold); }
+.schedule-pay-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.schedule-pay-copy strong { color: var(--white); font-size: 13px; }
+.schedule-pay-copy small { color: var(--muted-light); font-size: 11px; line-height: 1.45; }
+.schedule-pay-tick { flex: none; display: inline-flex; color: var(--gold); }
+.schedule-pay-note { display: flex; align-items: flex-start; gap: 6px; margin: 9px 2px 0; color: var(--muted); font-size: 10.5px; line-height: 1.45; }
+.schedule-pay-note svg { flex: none; margin-top: 1px; color: var(--green); }
+/* The sticky confirm bar repeats the method under the amount, so the last thing
+   the customer reads before confirming is how they will pay. */
+.schedule-total-pay { display: inline-flex; align-items: center; gap: 4px; color: var(--green); font-size: 9.5px; font-style: normal; font-weight: 700; }
 
 /* Partner dashboard */
 .queue-group { display: grid; gap: 10px; }
