@@ -1,5 +1,9 @@
 # Backend — bulk product upload (Excel / CSV)
 
+> **Implemented by** `patches/backend-3-shop-bulk-products.patch` (real code:
+> template generator, xlsx/csv reader, per-row importer, undo, multer middleware and
+> the audit model). Apply instructions: `patches/APPLY-2026-11-05.md`.
+
 Target repo: `rightserveinfotechsystems/my_naai_backend`
 Admin panel spec: `docs/ADMIN-PANEL-BULK-PRODUCTS.md`
 Web upload spec (photo sizes): `docs/SHOP-IMAGE-GUIDE.md`
@@ -85,8 +89,12 @@ ticket:
   header row, more than 1000 rows or more than 5 MB — with a message that says
   which limit was hit.
 - **Images**: `imageUrl1…4` are stored as the product's comma-joined image list
-  (the same field the single-product form writes). A URL that is not reachable is
-  a row error, not a silent blank tile.
+  (the same field the single-product form writes). The cell must be an absolute
+  `http(s)` URL or a path the uploader returned (`/uploads/…`); anything else is a
+  row error naming the cell, not a silent blank tile. Reachability is not probed on
+  import (a HEAD check per photo would make a 120-row dry run unusable); a URL that
+  404s shows as a missing photo in the product list, which the admin fixes by
+  re-uploading it.
 - **Category ids only** from `shop_categories` (see
   `docs/BACKEND-SHOP-CATEGORIES-API.md`); an unknown value fails the row.
 - **Audit**: write `created_by` (admin id) and a `bulk_import_id` on every row so

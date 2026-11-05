@@ -1,0 +1,1011 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MyNaai Dev <dev@mynaai.in>
+Date: Wed, 5 Nov 2026 10:00:00 +0530
+Subject: [PATCH] Admin panel: Booking requests tab (leads, not bookings)
+
+A new tab beside Bookings: the leads a customer sent, and what each salon did
+with them.
+
+Requests are NOT bookings. This tab reads `booking_requests` only — a booking
+(the queue record) exists only after a salon accepts, and mixing the two is what
+produces a conversion rate that adds up to more than 100%. An accepted request
+shows here as Accepted and carries the `bookingId` it created: a pointer between
+two separate records, never a merged row.
+
+What it answers: are the salons getting leads, and are they answering them?
+
+  · Tiles — Received / Accepted / Rejected / Auto-cancelled / Answer rate.
+    Auto-cancelled is its OWN tile and is never folded into Rejected: a salon
+    that misses leads has a staffing problem, a salon that turns them down has a
+    pricing answer, and they are two different conversations. The buckets add up
+    to Received.
+  · Filters — salon (built from the report itself: the salons that actually got
+    leads), status, date range (Today / 7 days / 30 days / All), and a search
+    over customer name, customer phone and salon name.
+  · The list — customer and phone, salon and city, requested day/time and
+    services, estimated value, status, reply time, sent-at. Clicking a row opens
+    the drawer.
+  · The drawer — customer, requested services with prices (the snapshot taken at
+    request time), and the LIFECYCLE: sent → accepted / rejected / auto-cancelled
+    with timestamps and seconds. An auto-cancel reads "No answer within 60
+    seconds — the slot was released automatically", never "rejected". If the
+    request became a booking it links to it; otherwise the drawer says it never
+    did.
+  · The per-salon report — Received / Accepted / Rejected / Missed / Answer rate /
+    Median reply, worst-first by Missed (the list an account manager works
+    down). A salon that never answered shows a dash, not a zero: a zero reads as
+    "instant reply". Sortable by missed / received / answer rate / slowest.
+  · Export CSV — the FILTERED list, not the page on screen, with the API's own
+    columns plus `response_seconds`. Built by walking the same endpoint, so a
+    filter with 300 results exports 300 rows.
+
+Rules honoured:
+
+  · Read-only. An admin does not accept or reject on a salon's behalf; there is
+    no "convert" button, because conversion happens when the salon accepts and a
+    second path would produce two bookings.
+  · A PENDING request past its window is DISPLAYED as auto-cancelled even if the
+    sweeper has not written it yet — a page left open overnight never offers an
+    "Awaiting answer" that nobody can answer.
+  · Times are IST for every viewer, with one formatter.
+  · The summary polls every 20 seconds (one query), so a lead that just arrived
+    appears while somebody is watching.
+
+Files
+
+  new  src/pages/BookingRequests.jsx                  the tab
+  new  src/components/BookingRequestDetailModal.jsx    the drawer + the status map
+  mod  src/services/communication.jsx                  bookingRequestAPI
+                                                       (adminList / adminSummary)
+  mod  src/utils/TabArray.js                           the tab
+  mod  src/App.jsx                                     /booking-requests route
+                                                       behind ProtectedRoute
+
+Backend it talks to: POST /api/bookingRequest/admin/list and /admin/summary
+(patch `backend-2-booking-request-leads.patch`).
+
+Verified: `vite build` passes with the page in the bundle.
+---
+ src/App.jsx                                  |  10 +
+ src/components/BookingRequestDetailModal.jsx | 239 +++++++++++
+ src/pages/BookingRequests.jsx                | 598 +++++++++++++++++++++++++++
+ src/utils/TabArray.js                        |   7 +
+ 4 files changed, 854 insertions(+)
+ src/services/communication.jsx | 29 ++++
+
+
+diff --git a/src/App.jsx b/src/App.jsx
+index 1d04456..77ed60d 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -10,6 +10,7 @@ import Users from "./pages/Users.jsx";
+ import Salons from "./pages/Salons.jsx";
+ import SalonDetail from "./pages/SalonDetail.jsx";
+ import Bookings from "./pages/Bookings.jsx";
++import BookingRequests from "./pages/BookingRequests.jsx";
+ import SalonRequest from "./pages/SalonRequest.jsx";
+ import Advertisement from "./pages/Advertisement.jsx";
+ import NotFound from "./pages/NotFound.jsx";
+@@ -144,6 +145,15 @@ const router = createBrowserRouter(
+     //     </ProtectedRoute>
+     //   ),
+     // },
++    {
++      // Requests are leads; /bookings above is the bookings those leads become.
++      path: "/booking-requests",
++      element: (
++        <ProtectedRoute>
++          <BookingRequests />
++        </ProtectedRoute>
++      ),
++    },
+     {
+       path: "/advertisement",
+       element: (
+diff --git a/src/components/BookingRequestDetailModal.jsx b/src/components/BookingRequestDetailModal.jsx
+new file mode 100644
+index 0000000..6e7e15e
+--- /dev/null
++++ b/src/components/BookingRequestDetailModal.jsx
+@@ -0,0 +1,239 @@
++import { Modal, Button } from "react-bootstrap";
++import { CheckCircle2, XCircle, Clock3, Ban, MapPin, Phone, Store, CalendarClock, Scissors, IndianRupee, Ticket } from "lucide-react";
++
++// Times are IST for every viewer — the panel is operated from India and a
++// support call reads the customer's own clock, not the browser's.
++const istDate = (value) => {
++  if (!value) return "—";
++  const date = new Date(value);
++  if (Number.isNaN(date.getTime())) return "—";
++  return date.toLocaleString("en-IN", {
++    timeZone: "Asia/Kolkata",
++    day: "2-digit",
++    month: "short",
++    year: "numeric",
++    hour: "2-digit",
++    minute: "2-digit"
++  });
++};
++
++const istDay = (value) => {
++  if (!value) return "—";
++  const date = new Date(value);
++  if (Number.isNaN(date.getTime())) return String(value);
++  return date.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", day: "2-digit", month: "short" });
++};
++
++// "18:30:00" -> "6:30 PM" in IST. The API sends a TIME column, so the string is
++// read as-is rather than parsed as a date (a bare time has no date to attach).
++const clock = (value) => {
++  const raw = String(value || "");
++  const match = raw.match(/^(\d{1,2}):(\d{2})/);
++  if (!match) return raw || "—";
++  const hours24 = Number(match[1]);
++  const minutes = match[2];
++  const suffix = hours24 >= 12 ? "PM" : "AM";
++  const hours12 = hours24 % 12 || 12;
++  return `${hours12}:${minutes} ${suffix}`;
++};
++
++const money = (value) => {
++  const num = Number(value);
++  if (!Number.isFinite(num)) return "—";
++  return `₹${num.toLocaleString("en-IN")}`;
++};
++
++const seconds = (value) => {
++  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
++  const total = Math.max(0, Math.round(Number(value)));
++  if (total < 60) return `${total}s`;
++  const minutes = Math.floor(total / 60);
++  const rest = total % 60;
++  return `${minutes}m ${String(rest).padStart(2, "0")}s`;
++};
++
++export const LIFECYCLE = {
++  PENDING: { label: "Awaiting answer", tone: "warning", Icon: Clock3 },
++  ACCEPTED: { label: "Accepted", tone: "success", Icon: CheckCircle2 },
++  REJECTED: { label: "Rejected", tone: "danger", Icon: XCircle },
++  AUTO_CANCELLED: { label: "Auto-cancelled", tone: "secondary", Icon: Clock3 },
++  CANCELLED: { label: "Cancelled by customer", tone: "secondary", Icon: Ban },
++  DELAYED: { label: "Delayed", tone: "info", Icon: CalendarClock }
++};
++
++/**
++ * One booking REQUEST, opened without leaving the tab.
++ *
++ * This drawer is the reason the tab exists: it shows the whole life of a lead —
++ * sent, answered or missed, and how long it took — instead of a status word. An
++ * auto-cancel reads "No answer within 60 seconds — the slot was released
++ * automatically", never "rejected": the two are different failures and the salon
++ * team is asked about them differently.
++ *
++ * Read-only. An admin does not accept a request on a salon's behalf; conversion
++ * happens when the salon accepts, and a second path would produce two bookings.
++ */
++const BookingRequestDetailModal = ({ show, request, onHide }) => {
++  if (!request) return null;
++
++  const meta = LIFECYCLE[request.status] || LIFECYCLE.PENDING;
++  const services = Array.isArray(request.services) ? request.services : [];
++  const total = Number(request.total ?? services.reduce((sum, item) => sum + (Number(item.price) || 0), 0));
++
++  return (
++    <Modal show={show} onHide={onHide} centered size="lg" backdrop="static">
++      <Modal.Header closeButton className="border-0 pb-0">
++        <div>
++          <div className="d-flex align-items-center gap-2 flex-wrap">
++            <Modal.Title className="h5 mb-0">{request.customerName || "Customer"}</Modal.Title>
++            <span className={`badge bg-${meta.tone}-subtle text-${meta.tone}-emphasis`}>{meta.label}</span>
++          </div>
++          <div className="text-muted small mt-1">
++            Request #{String(request.bookingRequestId || "").slice(0, 8).toUpperCase()} · sent {istDate(request.createdAt)}
++          </div>
++        </div>
++      </Modal.Header>
++
++      <Modal.Body className="pt-3">
++        {/* Customer + salon, side by side: the two parties of a lead. */}
++        <div className="row g-3 mb-3">
++          <div className="col-md-6">
++            <div className="border rounded-3 p-3 h-100">
++              <div className="text-uppercase text-muted small fw-semibold mb-2" style={{ letterSpacing: "0.4px" }}>Customer</div>
++              <div className="fw-semibold">{request.customerName || "—"}</div>
++              {request.customerPhone ? (
++                <a href={`tel:${request.customerPhone}`} className="d-inline-flex align-items-center gap-1 small text-decoration-none">
++                  <Phone size={13} /> {request.customerPhone}
++                </a>
++              ) : (
++                <div className="text-muted small">No phone on file</div>
++              )}
++              <div className="text-muted small d-flex align-items-center gap-1 mt-1">
++                <MapPin size={13} /> {request.city || "—"}
++              </div>
++            </div>
++          </div>
++          <div className="col-md-6">
++            <div className="border rounded-3 p-3 h-100">
++              <div className="text-uppercase text-muted small fw-semibold mb-2" style={{ letterSpacing: "0.4px" }}>Salon</div>
++              <div className="fw-semibold d-flex align-items-center gap-1">
++                <Store size={14} /> {request.salonName || "—"}
++              </div>
++              {request.salonPhone ? (
++                <a href={`tel:${request.salonPhone}`} className="d-inline-flex align-items-center gap-1 small text-decoration-none">
++                  <Phone size={13} /> {request.salonPhone}
++                </a>
++              ) : (
++                <div className="text-muted small">No phone on file</div>
++              )}
++            </div>
++          </div>
++        </div>
++
++        {/* What was asked for. Prices are the snapshot taken at request time, so
++            an edited price list does not rewrite history. */}
++        <div className="border rounded-3 p-3 mb-3">
++          <div className="text-uppercase text-muted small fw-semibold mb-2" style={{ letterSpacing: "0.4px" }}>Requested</div>
++          <div className="d-flex flex-wrap gap-2 mb-2">
++            <span className="badge bg-light text-dark border d-inline-flex align-items-center gap-1">
++              <CalendarClock size={12} /> {istDay(request.bookingDate)} · {clock(request.bookingTime)}
++            </span>
++            <span className="badge bg-light text-dark border d-inline-flex align-items-center gap-1">
++              <Scissors size={12} /> {request.barberName || "Any barber"}
++            </span>
++            <span className="badge bg-light text-dark border d-inline-flex align-items-center gap-1">
++              <IndianRupee size={12} /> {money(total)}
++            </span>
++          </div>
++          {services.length ? (
++            <ul className="list-unstyled mb-0 small">
++              {services.map((item, index) => (
++                <li key={`${item.serviceId || index}`} className="d-flex justify-content-between border-bottom py-1">
++                  <span>{item.serviceName}</span>
++                  <span className="text-muted">{money(item.price)}</span>
++                </li>
++              ))}
++            </ul>
++          ) : (
++            <div className="text-muted small">No services recorded on this request.</div>
++          )}
++        </div>
++
++        {/* The lifecycle: the part that makes this tab worth building. */}
++        <div className="border rounded-3 p-3">
++          <div className="text-uppercase text-muted small fw-semibold mb-2" style={{ letterSpacing: "0.4px" }}>Lifecycle</div>
++          <div className="d-flex flex-column gap-2 small">
++            <div className="d-flex justify-content-between">
++              <span className="d-flex align-items-center gap-2"><Clock3 size={14} /> Request sent</span>
++              <span className="text-muted">{istDate(request.createdAt)}</span>
++            </div>
++
++            {request.status === "PENDING" && (
++              <div className="d-flex justify-content-between">
++                <span className="d-flex align-items-center gap-2"><Clock3 size={14} /> Answer window closes</span>
++                <span className="text-muted">{istDate(request.expiresAt)}</span>
++              </div>
++            )}
++
++            {request.status === "AUTO_CANCELLED" && (
++              <div className="d-flex justify-content-between">
++                <span className="d-flex align-items-center gap-2 text-secondary">
++                  <Clock3 size={14} /> No answer within 60 seconds — the slot was released automatically
++                </span>
++                <span className="text-muted">{istDate(request.respondedAt || request.expiresAt)}</span>
++              </div>
++            )}
++
++            {request.status === "REJECTED" && (
++              <div className="d-flex justify-content-between">
++                <span className="d-flex align-items-center gap-2 text-danger"><XCircle size={14} /> Rejected by the salon</span>
++                <span className="text-muted">{istDate(request.respondedAt)}</span>
++              </div>
++            )}
++
++            {request.status === "CANCELLED" && (
++              <div className="d-flex justify-content-between">
++                <span className="d-flex align-items-center gap-2 text-secondary"><Ban size={14} /> Withdrawn by the customer</span>
++                <span className="text-muted">{istDate(request.respondedAt)}</span>
++              </div>
++            )}
++
++            {request.status === "ACCEPTED" && (
++              <div className="d-flex justify-content-between">
++                <span className="d-flex align-items-center gap-2 text-success"><CheckCircle2 size={14} /> Accepted by the salon</span>
++                <span className="text-muted">{istDate(request.respondedAt)}</span>
++              </div>
++            )}
++
++            {request.responseSeconds !== null && request.responseSeconds !== undefined && (
++              <div className="d-flex justify-content-between border-top pt-2">
++                <span>Answered in</span>
++                <span className="fw-semibold">{seconds(request.responseSeconds)}</span>
++              </div>
++            )}
++          </div>
++
++          {/* The request and the booking are different records. This is the only
++              place the panel shows the link, and it is a pointer — never a
++              merged row. */}
++          <div className="mt-3 pt-2 border-top small">
++            {request.bookingId ? (
++              <span className="d-flex align-items-center gap-2 text-success">
++                <Ticket size={14} /> This request became booking #{String(request.bookingId).slice(0, 8).toUpperCase()}
++              </span>
++            ) : (
++              <span className="text-muted">This request never became a booking.</span>
++            )}
++          </div>
++        </div>
++      </Modal.Body>
++
++      <Modal.Footer className="border-0">
++        <div className="text-muted small me-auto">Read-only — the salon answers requests from its own app.</div>
++        <Button variant="secondary" onClick={onHide}>Close</Button>
++      </Modal.Footer>
++    </Modal>
++  );
++};
++
++export default BookingRequestDetailModal;
+diff --git a/src/pages/BookingRequests.jsx b/src/pages/BookingRequests.jsx
+new file mode 100644
+index 0000000..b62dfc4
+--- /dev/null
++++ b/src/pages/BookingRequests.jsx
+@@ -0,0 +1,598 @@
++import { useCallback, useEffect, useMemo, useState } from "react";
++import { useNavigate } from "react-router-dom";
++import { toast } from "react-toastify";
++import {
++  RefreshCw,
++  Inbox,
++  CheckCircle2,
++  XCircle,
++  Clock3,
++  Percent,
++  Phone,
++  Search,
++  Download,
++  Store,
++  Scissors,
++  CalendarClock,
++  ChevronRight
++} from "lucide-react";
++import Layout from "../components/Layout.jsx";
++import PageHeader from "../components/PageHeader.jsx";
++import SearchInput from "../components/SearchInput.jsx";
++import Pagination from "../components/Pagination.jsx";
++import Loader from "../components/Loader.jsx";
++import BookingRequestDetailModal, { LIFECYCLE } from "../components/BookingRequestDetailModal.jsx";
++import { bookingRequestAPI } from "../services/communication.jsx";
++
++/**
++ * Booking requests — the leads a customer sent, and what each salon did with
++ * them.
++ *
++ * Requests are NOT bookings. This tab reads `booking_requests` only: a booking
++ * (`booking` / `booking_list`, the queue record) exists only after a salon
++ * accepts, and mixing the two is what produces a "conversion rate" that adds up
++ * to more than 100%. An accepted request shows here as Accepted and carries the
++ * `bookingId` it created — a pointer between two separate records, never a
++ * merged row.
++ *
++ * The question the tab answers: are the salons getting leads, and are they
++ * answering them? So it leads with counts and answer rates, and the list under
++ * them is filterable by salon, status, date and text.
++ *
++ * Read-only by design — an admin does not answer on a salon's behalf.
++ */
++
++const STATUS_FILTERS = [
++  { key: "ALL", label: "All statuses" },
++  { key: "PENDING", label: "Awaiting answer" },
++  { key: "ACCEPTED", label: "Accepted" },
++  { key: "REJECTED", label: "Rejected" },
++  { key: "AUTO_CANCELLED", label: "Auto-cancelled" },
++  { key: "CANCELLED", label: "Cancelled by customer" },
++  { key: "DELAYED", label: "Delayed" }
++];
++
++const RANGES = [
++  { key: "TODAY", label: "Today" },
++  { key: "WEEK", label: "Last 7 days" },
++  { key: "MONTH", label: "Last 30 days" },
++  { key: "ALL", label: "All time" }
++];
++
++const TILE_META = [
++  { key: "received", label: "Received", Icon: Inbox, tone: "primary" },
++  { key: "accepted", label: "Accepted", Icon: CheckCircle2, tone: "success" },
++  { key: "rejected", label: "Rejected", Icon: XCircle, tone: "danger" },
++  { key: "autoCancelled", label: "Auto-cancelled", Icon: Clock3, tone: "secondary" },
++  { key: "answerRate", label: "Answer rate", Icon: Percent, tone: "warning", suffix: "%" }
++];
++
++// Times are IST for every viewer, with the same formatter the drawer uses.
++const istDateTime = (value) => {
++  if (!value) return "—";
++  const date = new Date(value);
++  if (Number.isNaN(date.getTime())) return "—";
++  return date.toLocaleString("en-IN", {
++    timeZone: "Asia/Kolkata",
++    day: "2-digit",
++    month: "short",
++    hour: "2-digit",
++    minute: "2-digit"
++  });
++};
++
++const istDay = (value) => {
++  if (!value) return "—";
++  const date = new Date(value);
++  if (Number.isNaN(date.getTime())) return String(value);
++  return date.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", day: "2-digit", month: "short" });
++};
++
++const clock = (value) => {
++  const raw = String(value || "");
++  const match = raw.match(/^(\d{1,2}):(\d{2})/);
++  if (!match) return raw || "—";
++  const hours24 = Number(match[1]);
++  const suffix = hours24 >= 12 ? "PM" : "AM";
++  return `${hours24 % 12 || 12}:${match[2]} ${suffix}`;
++};
++
++const money = (value) => {
++  const num = Number(value);
++  if (!Number.isFinite(num)) return "—";
++  return `₹${num.toLocaleString("en-IN")}`;
++};
++
++const shortSeconds = (value) => {
++  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
++  const total = Math.max(0, Math.round(Number(value)));
++  if (total < 60) return `${total}s`;
++  return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, "0")}s`;
++};
++
++/**
++ * A request past its 60 second window is auto-cancelled even if the sweeper has
++ * not written that down yet. The API derives the same state; deriving it again
++ * here means a page left open overnight does not show an "Awaiting answer" that
++ * nobody can answer.
++ */
++const effectiveStatus = (row) => {
++  if (row.status !== "PENDING") return row.status;
++  const expires = row.expiresAt ? new Date(row.expiresAt).getTime() : null;
++  if (!expires) return row.status;
++  return expires <= Date.now() ? "AUTO_CANCELLED" : "PENDING";
++};
++
++const statusOf = (row) => effectiveStatus(row);
++
++const BookingRequests = () => {
++  const navigate = useNavigate();
++
++  const [range, setRange] = useState("TODAY");
++  const [status, setStatus] = useState("ALL");
++  const [salonId, setSalonId] = useState("");
++  const [search, setSearch] = useState("");
++  const [debouncedSearch, setDebouncedSearch] = useState("");
++  const [page, setPage] = useState(1);
++
++  const [rows, setRows] = useState([]);
++  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, totalRequests: 0, limit: 25 });
++  const [summary, setSummary] = useState(null);
++  const [loading, setLoading] = useState(true);
++  const [refreshing, setRefreshing] = useState(false);
++  const [selected, setSelected] = useState(null);
++  const [salonSort, setSalonSort] = useState("missed");
++  const [showMobileFilters, setShowMobileFilters] = useState(false);
++  const [exporting, setExporting] = useState(false);
++
++  useEffect(() => {
++    const timer = setTimeout(() => {
++      setDebouncedSearch(search);
++      setPage(1);
++    }, 450);
++    return () => clearTimeout(timer);
++  }, [search]);
++
++  // Same tab guard the other admin pages use.
++  useEffect(() => {
++    const accessTab = localStorage.getItem("accessTab") ? JSON.parse(localStorage.getItem("accessTab")) : null;
++    if (localStorage.getItem("role") === "distributor" || !(accessTab && accessTab.includes("bookingRequests"))) {
++      navigate("/login", { replace: true });
++    }
++  }, [navigate]);
++
++  const loadList = useCallback(async () => {
++    const result = await bookingRequestAPI.adminList({
++      salonId,
++      status,
++      search: debouncedSearch,
++      page,
++      limit: pagination.limit
++    });
++    if (result.success) {
++      setRows(result.data?.requests || []);
++      setPagination(current => ({ ...current, ...(result.data?.pagination || {}) }));
++    } else {
++      toast.error(result.message || "Failed to load booking requests");
++    }
++    return result.success;
++  }, [salonId, status, debouncedSearch, page, pagination.limit]);
++
++  const loadSummary = useCallback(async () => {
++    const result = await bookingRequestAPI.adminSummary({ range, salonId });
++    if (result.success) setSummary(result.data || null);
++    // A failing summary must not empty the tab — the list is the page.
++    return result.success;
++  }, [range, salonId]);
++
++  useEffect(() => {
++    let cancelled = false;
++    (async () => {
++      setLoading(true);
++      await Promise.all([loadList(), loadSummary()]);
++      if (!cancelled) setLoading(false);
++    })();
++    return () => { cancelled = true; };
++  }, [loadList, loadSummary]);
++
++  // A 20 second poll of the summary is enough for v1 and costs one query — the
++  // point is that a lead that just arrived shows up while somebody is watching.
++  useEffect(() => {
++    const timer = setInterval(() => {
++      loadSummary();
++    }, 20000);
++    return () => clearInterval(timer);
++  }, [loadSummary]);
++
++  const handleRefresh = async () => {
++    setRefreshing(true);
++    await Promise.all([loadList(), loadSummary()]);
++    setRefreshing(false);
++  };
++
++  const resetFilters = () => {
++    setStatus("ALL");
++    setSalonId("");
++    setSearch("");
++    setPage(1);
++  };
++
++  // The salon filter is built from the report itself: exactly the salons that
++  // received a lead in this range, in worst-first order. No second request, no
++  // paging through the whole salon list.
++  const salonOptions = useMemo(() => {
++    const fromReport = (summary?.bySalon || []).map((row) => ({ id: row.salonId, name: row.salonName || "Unnamed salon" }));
++    const fromRows = rows.map((row) => ({ id: row.salonId, name: row.salonName || "Unnamed salon" }));
++    const seen = new Set();
++    return [...fromReport, ...fromRows].filter((item) => {
++      if (!item.id || seen.has(item.id)) return false;
++      seen.add(item.id);
++      return true;
++    });
++  }, [summary, rows]);
++
++  const salonReport = useMemo(() => {
++    const list = [...(summary?.bySalon || [])];
++    return list.sort((a, b) => {
++      if (salonSort === "received") return b.received - a.received;
++      if (salonSort === "answerRate") return a.answerRate - b.answerRate;
++      if (salonSort === "median") {
++        // A salon that never answered sorts last — its median is a dash, and
++        // "never answered" is already visible in Missed.
++        if (a.medianResponseSeconds === null) return 1;
++        if (b.medianResponseSeconds === null) return -1;
++        return b.medianResponseSeconds - a.medianResponseSeconds;
++      }
++      // Missed, worst first: the list an account manager works down.
++      return b.autoCancelled - a.autoCancelled || b.received - a.received;
++    });
++  }, [summary, salonSort]);
++
++  /**
++   * Export the FILTERED list, not the page on screen: operations asks for "all
++   * of yesterday's missed leads", and paging by hand is not an answer. The
++   * export walks the same endpoint with a bigger page until it has everything
++   * (capped, so a runaway filter cannot hammer the API).
++   */
++  const handleExport = async () => {
++    setExporting(true);
++    try {
++      const collected = [];
++      let nextPage = 1;
++      let totalPages = 1;
++      do {
++        const result = await bookingRequestAPI.adminList({
++          salonId,
++          status,
++          search: debouncedSearch,
++          page: nextPage,
++          limit: 100
++        });
++        if (!result.success) {
++          toast.error(result.message || "Could not build the export");
++          break;
++        }
++        collected.push(...(result.data?.requests || []));
++        totalPages = result.data?.pagination?.totalPages || 1;
++        nextPage += 1;
++      } while (nextPage <= totalPages && nextPage <= 20);
++
++      if (!collected.length) {
++        toast.info("Nothing to export with these filters");
++        return;
++      }
++
++      const header = [
++        "Request ID", "Customer", "Phone", "Salon", "City", "Date", "Time",
++        "Services", "Estimated total", "Status", "Sent at (IST)", "Answered at (IST)",
++        "Response seconds", "Booking ID"
++      ];
++      const escape = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
++      const lines = [header.map(escape).join(",")];
++      collected.forEach((row) => {
++        lines.push([
++          row.bookingRequestId,
++          row.customerName,
++          row.customerPhone,
++          row.salonName,
++          row.city,
++          row.bookingDate,
++          row.bookingTime,
++          (row.services || []).map((item) => item.serviceName).join(" + "),
++          row.total ?? "",
++          statusOf(row),
++          istDateTime(row.createdAt),
++          row.respondedAt ? istDateTime(row.respondedAt) : "",
++          row.responseSeconds ?? "",
++          row.bookingId || ""
++        ].map(escape).join(","));
++      });
++
++      const blob = new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
++      const url = URL.createObjectURL(blob);
++      const link = document.createElement("a");
++      const stamp = new Date().toISOString().slice(0, 10);
++      link.href = url;
++      link.download = `booking-requests-${stamp}.csv`;
++      document.body.appendChild(link);
++      link.click();
++      document.body.removeChild(link);
++      URL.revokeObjectURL(url);
++      toast.success(`Exported ${collected.length} request${collected.length === 1 ? "" : "s"}`);
++    } finally {
++      setExporting(false);
++    }
++  };
++
++  const tiles = summary || { received: 0, accepted: 0, rejected: 0, autoCancelled: 0, answerRate: 0, awaiting: 0 };
++
++  return (
++    <Layout>
++      <PageHeader
++        title="Booking requests"
++        description="Every request a customer sent and what the salon did with it. Requests are leads — a booking exists only after a salon accepts."
++        actions={(
++          <>
++            <select
++              className="form-select form-select-sm"
++              value={range}
++              onChange={(event) => { setRange(event.target.value); setPage(1); }}
++              style={{ minWidth: 140 }}
++              aria-label="Date range"
++            >
++              {RANGES.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
++            </select>
++            <button className="button23" type="button" onClick={handleRefresh} disabled={refreshing || loading}>
++              <RefreshCw size={15} className={`me-1 ${refreshing ? "spin" : ""}`} />
++              {refreshing ? "Refreshing…" : "Refresh"}
++            </button>
++          </>
++        )}
++      />
++
++      <div className="page-content d-flex flex-column p-2 p-md-3" style={{ minHeight: "calc(100vh - 70px)", overflowX: "hidden" }}>
++
++        {/* Counters. Auto-cancelled is its own tile — never folded into
++            Rejected: a salon that misses leads and a salon that turns them down
++            are two different conversations. */}
++        <div className="row g-2 g-md-3 mb-3">
++          {TILE_META.map(({ key, label, Icon, tone, suffix }) => (
++            <div className="col-6 col-md-4 col-xl" key={key}>
++              <div className="card border-0 shadow-sm h-100" style={{ borderRadius: 12 }}>
++                <div className="card-body p-3">
++                  <div className="d-flex align-items-center justify-content-between mb-1">
++                    <span className="text-muted small text-uppercase fw-semibold" style={{ letterSpacing: "0.4px" }}>{label}</span>
++                    <Icon size={16} className={`text-${tone}`} />
++                  </div>
++                  <div className="h4 mb-0 fw-bold">
++                    {loading && !summary ? "—" : `${Number(tiles[key] || 0).toLocaleString("en-IN")}${suffix || ""}`}
++                  </div>
++                  {key === "received" && tiles.awaiting > 0 && (
++                    <div className="small text-warning-emphasis">{tiles.awaiting} still waiting</div>
++                  )}
++                  {key === "autoCancelled" && (
++                    <div className="small text-muted">nobody answered in 60s</div>
++                  )}
++                </div>
++              </div>
++            </div>
++          ))}
++        </div>
++
++        {/* Filters */}
++        <div className="card shadow-sm border-0 mb-3" style={{ borderRadius: 12 }}>
++          <div className="card-body p-3">
++            <div className="row g-2 align-items-center">
++              <div className="col-12 col-lg-4">
++                <SearchInput value={search} onChange={setSearch} placeholder="Search customer, phone or salon…" />
++              </div>
++
++              <div className="col-12 col-lg-8">
++                <div className={`d-flex flex-wrap gap-2 justify-content-lg-end ${showMobileFilters ? "" : "d-none d-lg-flex"}`}>
++                  <select
++                    className="form-select form-select-sm"
++                    value={salonId}
++                    onChange={(event) => { setSalonId(event.target.value); setPage(1); }}
++                    style={{ minWidth: 180, maxWidth: 260 }}
++                    aria-label="Salon"
++                  >
++                    <option value="">All salons</option>
++                    {salonOptions.map((item) => (
++                      <option key={item.id} value={item.id}>{item.name}</option>
++                    ))}
++                  </select>
++
++                  <select
++                    className="form-select form-select-sm"
++                    value={status}
++                    onChange={(event) => { setStatus(event.target.value); setPage(1); }}
++                    style={{ minWidth: 170, maxWidth: 220 }}
++                    aria-label="Status"
++                  >
++                    {STATUS_FILTERS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
++                  </select>
++
++                  <button className="btn btn-sm btn-outline-secondary" type="button" onClick={resetFilters}>
++                    Clear
++                  </button>
++                  <button className="btn btn-sm btn-outline-dark" type="button" onClick={handleExport} disabled={exporting}>
++                    <Download size={14} className="me-1" />
++                    {exporting ? "Exporting…" : "Export CSV"}
++                  </button>
++                </div>
++
++                <div className="d-flex d-lg-none justify-content-end mt-2">
++                  <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => setShowMobileFilters((value) => !value)}>
++                    <Search size={14} className="me-1" /> {showMobileFilters ? "Hide filters" : "Filters"}
++                  </button>
++                </div>
++              </div>
++            </div>
++          </div>
++        </div>
++
++        {/* The list */}
++        <div className="flex-grow-1 p-2 p-md-3 shadow-sm border-0 bg-white mb-3" style={{ borderRadius: 12, overflowX: "auto" }}>
++          {loading ? (
++            <Loader fullScreen={false} size="sm" text="Loading booking requests…" />
++          ) : rows.length === 0 ? (
++            <div className="text-center py-5 text-muted px-2">
++              <Inbox size={40} className="mx-auto mb-2 opacity-25" />
++              <p className="mb-1">No booking requests match these filters.</p>
++              <p className="small mb-0">A request appears here the moment a customer sends one — try a wider date range.</p>
++            </div>
++          ) : (
++            <>
++              <div className="table-responsive">
++                <table className="table align-middle mb-0" style={{ fontSize: "0.9rem", minWidth: "860px" }}>
++                  <thead>
++                    <tr className="text-muted small" style={{ textTransform: "uppercase", letterSpacing: "0.4px" }}>
++                      <th>Customer</th>
++                      <th>Salon</th>
++                      <th>Requested</th>
++                      <th className="text-end">Value</th>
++                      <th>Status</th>
++                      <th>Reply time</th>
++                      <th className="text-end">Sent</th>
++                      <th />
++                    </tr>
++                  </thead>
++                  <tbody>
++                    {rows.map((row) => {
++                      const state = statusOf(row);
++                      const meta = LIFECYCLE[state] || LIFECYCLE.PENDING;
++                      return (
++                        <tr key={row.bookingRequestId} style={{ cursor: "pointer" }} onClick={() => setSelected({ ...row, status: state })}>
++                          <td>
++                            <div className="fw-semibold">{row.customerName || "Customer"}</div>
++                            <div className="text-muted small d-flex align-items-center gap-1">
++                              <Phone size={12} /> {row.customerPhone || "no phone"}
++                            </div>
++                          </td>
++                          <td>
++                            <div className="d-flex align-items-center gap-1">
++                              <Store size={13} className="text-muted" />
++                              <span>{row.salonName || "—"}</span>
++                            </div>
++                            <div className="text-muted small">{row.city || ""}</div>
++                          </td>
++                          <td>
++                            <div className="d-flex align-items-center gap-1 small">
++                              <CalendarClock size={13} className="text-muted" /> {istDay(row.bookingDate)} · {clock(row.bookingTime)}
++                            </div>
++                            <div className="text-muted small d-flex align-items-center gap-1">
++                              <Scissors size={12} />
++                              {(row.services || []).map((item) => item.serviceName).join(", ") || "—"}
++                            </div>
++                          </td>
++                          <td className="text-end fw-semibold">{money(row.total)}</td>
++                          <td>
++                            <span className={`badge bg-${meta.tone}-subtle text-${meta.tone}-emphasis`}>{meta.label}</span>
++                          </td>
++                          <td>
++                            {state === "AUTO_CANCELLED"
++                              ? <span className="text-muted small">no answer in 60s</span>
++                              : <span className="small">{shortSeconds(row.responseSeconds)}</span>}
++                          </td>
++                          <td className="text-end text-muted small">{istDateTime(row.createdAt)}</td>
++                          <td className="text-end"><ChevronRight size={16} className="text-muted" /></td>
++                        </tr>
++                      );
++                    })}
++                  </tbody>
++                </table>
++              </div>
++
++              <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 pt-3">
++                <div className="text-muted small">
++                  {pagination.totalRequests} request{pagination.totalRequests === 1 ? "" : "s"} · page {pagination.page} of {pagination.totalPages || 1}
++                </div>
++                <Pagination currentPage={pagination.page} totalPages={pagination.totalPages || 1} onPageChange={setPage} />
++              </div>
++            </>
++          )}
++        </div>
++
++        {/* The per-salon report — which salons get leads and which let them die. */}
++        <div className="p-2 p-md-3 shadow-sm border-0 bg-white" style={{ borderRadius: 12, overflowX: "auto" }}>
++          <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
++            <div>
++              <h2 className="h6 mb-0">Salons by missed leads</h2>
++              <div className="text-muted small">Worst first. A missed lead is a request nobody answered in 60 seconds — not a rejection.</div>
++            </div>
++            <select
++              className="form-select form-select-sm"
++              value={salonSort}
++              onChange={(event) => setSalonSort(event.target.value)}
++              style={{ maxWidth: 220 }}
++              aria-label="Sort the salon report"
++            >
++              <option value="missed">Sort: missed (worst first)</option>
++              <option value="received">Sort: leads received</option>
++              <option value="answerRate">Sort: answer rate (lowest)</option>
++              <option value="median">Sort: slowest replies</option>
++            </select>
++          </div>
++
++          {salonReport.length === 0 ? (
++            <div className="text-muted small py-3">No leads in this range.</div>
++          ) : (
++            <div className="table-responsive">
++              <table className="table table-sm align-middle mb-0" style={{ fontSize: "0.875rem", minWidth: "720px" }}>
++                <thead>
++                  <tr className="text-muted small" style={{ textTransform: "uppercase", letterSpacing: "0.4px" }}>
++                    <th>Salon</th>
++                    <th className="text-end">Received</th>
++                    <th className="text-end">Accepted</th>
++                    <th className="text-end">Rejected</th>
++                    <th className="text-end">Missed</th>
++                    <th className="text-end">Answer rate</th>
++                    <th className="text-end">Median reply</th>
++                  </tr>
++                </thead>
++                <tbody>
++                  {salonReport.map((row) => (
++                    <tr
++                      key={row.salonId}
++                      style={{ cursor: "pointer" }}
++                      onClick={() => { setSalonId(row.salonId); setPage(1); }}
++                      title="Show this salon's requests"
++                    >
++                      <td>
++                        <div className="fw-semibold">{row.salonName || "Unnamed salon"}</div>
++                        {row.city && <div className="text-muted small">{row.city}</div>}
++                      </td>
++                      <td className="text-end">{row.received}</td>
++                      <td className="text-end text-success">{row.accepted}</td>
++                      <td className="text-end text-danger">{row.rejected}</td>
++                      <td className="text-end">
++                        {row.autoCancelled > 0
++                          ? <span className="badge bg-secondary-subtle text-secondary-emphasis">{row.autoCancelled}</span>
++                          : <span className="text-muted">0</span>}
++                      </td>
++                      <td className="text-end fw-semibold">{row.answerRate}%</td>
++                      <td className="text-end text-muted">
++                        {/* A dash, not a zero: a zero would read as "instant reply". */}
++                        {row.medianResponseSeconds === null || row.medianResponseSeconds === undefined
++                          ? "—"
++                          : shortSeconds(row.medianResponseSeconds)}
++                      </td>
++                    </tr>
++                  ))}
++                </tbody>
++              </table>
++            </div>
++          )}
++        </div>
++      </div>
++
++      <BookingRequestDetailModal
++        show={Boolean(selected)}
++        request={selected}
++        onHide={() => setSelected(null)}
++      />
++    </Layout>
++  );
++};
++
++export default BookingRequests;
+diff --git a/src/utils/TabArray.js b/src/utils/TabArray.js
+index 8289817..5873a13 100644
+--- a/src/utils/TabArray.js
++++ b/src/utils/TabArray.js
+@@ -24,6 +24,13 @@ export const TabArray = [
+     label: "Bookings",
+     route: "/bookings",
+   },
++  {
++    // The leads a customer sent: requests, NOT bookings. Its own tab because the
++    // two lists answer different questions (see docs/ADMIN-PANEL-BOOKING-REQUESTS.md).
++    key: "bookingRequests",
++    label: "Booking Requests",
++    route: "/booking-requests",
++  },
+   {
+     key: "advertisement",
+     label: "Advertisement",
+diff --git a/src/services/communication.jsx b/src/services/communication.jsx
+index fcd9d13..6a54391 100644
+--- a/src/services/communication.jsx
++++ b/src/services/communication.jsx
+@@ -1573,4 +1573,33 @@ export const shopSettingsAPI = {
+       return { success: false, message: error.response?.data?.message || "Failed to save shop settings", error: error.response?.data };
+     }
+   }
+-};
+\ No newline at end of file
++};
++
++// Booking REQUESTS — the leads a customer sent, and what the salon did with
++// them. NOT bookings: a booking (`booking_list`) exists only after a salon
++// accepts, and a request carries `bookingId` as a pointer to it. The admin tab
++// reads requests only, which is what makes "accepted + rejected + missed +
++// awaiting + withdrawn = received" hold.
++export const bookingRequestAPI = {
++  adminList: async ({ salonId = "", status = "ALL", search = "", page = 1, limit = 25, fromDate = "", toDate = "" } = {}) => {
++    try {
++      const response = await api.post('/api/bookingRequest/admin/list', {
++        salonId, status, search, page, limit, fromDate, toDate
++      });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to fetch booking requests", error: error.response?.data };
++    }
++  },
++  // Counters + the per-salon report (`bySalon`). `range` is TODAY | WEEK |
++  // MONTH | ALL; `autoCancelled` is its own number and is never folded into
++  // `rejected`.
++  adminSummary: async ({ range = "ALL", salonId = "", fromDate = "", toDate = "" } = {}) => {
++    try {
++      const response = await api.post('/api/bookingRequest/admin/summary', { range, salonId, fromDate, toDate });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to fetch the booking request summary", error: error.response?.data };
++    }
++  }
++};

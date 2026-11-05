@@ -1,0 +1,1228 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MyNaai Dev <dev@mynaai.in>
+Date: Wed, 5 Nov 2026 10:00:00 +0530
+Subject: [PATCH] Booking requests (leads): salon tab API, admin tab API, the 60s window
+
+Requests are NOT bookings. `booking_requests` is the lead a customer sent; the
+`booking` / `booking_list` table holds the chair that exists after a salon
+accepts. This patch adds the two lists the new tabs read, and keeps the two
+concepts apart in every query: nothing here counts a request as a booking, and
+the only link is the `booking_id` pointer written on accept.
+
+  POST /api/bookingRequest/salon/list       { salonId?, status?, page?, limit?, fromDate?, toDate? }
+  POST /api/bookingRequest/salon/summary    { salonId?, range? }  TODAY | WEEK | MONTH | ALL
+  POST /api/bookingRequest/admin/list      { salonId?, status?, search?, page?, limit?, fromDate?, toDate? }
+  POST /api/bookingRequest/admin/summary   { range?, salonId?, fromDate?, toDate? }
+
+Answers use the house envelope. `salon/*` require a salon token and 403 on a
+`salonId` that is not the caller's; `admin/*` require an admin token. The salon
+list answers `{ requests, pagination: { page, limit, totalPages, totalRequests } }`
+with the row shape the website already reads (`bookingRequestId`, `customerName`,
+`customerPhone`, `bookingDate`, `bookingTime`, `barberName`, `status`, `createdAt`,
+`expiresAt`, `respondedAt`, `bookingId`, `services[]`). The admin list adds
+`salonName`, `salonPhone`, `city`, `responseSeconds` and `outcome`
+(`answered | missed | withdrawn | open`).
+
+Counting, which is the whole point of the tabs:
+
+  · `autoCancelled` is its own bucket — never folded into `rejected`. A salon that
+    misses leads has a staffing problem; a salon that rejects them has a pricing
+    one.
+  · a customer's own cancellation (`CANCELLED`) is a third bucket,
+    `cancelledByCustomer`, and is never counted as a missed lead.
+  · `answerRate = round((accepted + rejected) / received * 100)`; the buckets add
+    up to `received`.
+  · `admin/summary` adds `bySalon` (received / accepted / rejected / missed /
+    answerRate / `medianResponseSeconds` from `percentile_cont(0.5)` in SQL) and
+    a `platform` block. Salons that never answered have a null median — the panel
+    shows a dash, not a zero, because a zero reads as "instant reply".
+
+The answer window
+
+  · `POST /bookingRequest/create-booking-request` now stamps `expires_at` =
+    created + 60s, SERVER-side. A client never sends it.
+  · `expires_at` / `responded_at` / `booking_id` / `routed_barber_id` are added
+    to the model and to the migration.
+  · `ownerAction` writes `responded_at` on accept and reject, writes `booking_id`
+    when the booking row exists (inside the same transaction — the old code saved
+    that booking outside it), and refuses a request past its window with
+    "This request has expired and was cancelled automatically". A second accept
+    answers "This request was already actioned".
+  · `cron/bookingRequestSweeper.cron.js` runs every 20 seconds and writes
+    `status = 'AUTO_CANCELLED', responded_at = expires_at` for every PENDING row
+    past its window, then notifies the customer (slot released) and the salon
+    (missed, expressly not "rejected"). Idempotent: the `WHERE status = 'PENDING'`
+    clause means a second run finds nothing.
+  · the list and summary endpoints also derive the state per row, so a tab opened
+    between two cron ticks never offers an Accept that cannot succeed.
+
+Files
+
+  new  src/services/bookingRequestLead.service.js     the lists, the counters, the sweep
+  new  src/controller/bookingRequest/listSalonBookingRequests.js
+  new  src/controller/bookingRequest/salonBookingRequestSummary.js
+  new  src/controller/bookingRequest/adminListBookingRequests.js
+  new  src/controller/bookingRequest/adminBookingRequestSummary.js
+  new  cron/bookingRequestSweeper.cron.js
+  mod  src/database/models/bookingRequest.model.js    window + outcome columns
+  mod  src/controller/bookingRequest/bookingRequest.js  stamp expires_at on create
+  mod  src/controller/bookingRequest/ownerAction.js     responded_at, booking_id,
+                                                        expired refusal, tx fix
+  mod  src/routes/bookingRequest.routes.js              the four new doors
+  mod  index.js                                         boot-time schema guard +
+                                                        start the sweeper
+
+Apply after backend-1-shop-categories (this imports its `ensureShopSchema`).
+
+Verified: `node --check` on every file; `bookingRequest.routes` loads with all
+nine routes; the pure parts were exercised against a stub ORM — effective status
+(an expired PENDING reads AUTO_CANCELLED, an ACCEPTED stays ACCEPTED), the
+services snapshot and ₹ total, `responseSeconds`, `outcome`, the three filter
+clauses (PENDING excludes expired; AUTO_CANCELLED includes both written and
+expired-but-unwritten), and TODAY starting at IST midnight.
+---
+ cron/bookingRequestSweeper.cron.js                 | 117 +++++
+ index.js                                           |  13 +-
+ .../bookingRequest/adminBookingRequestSummary.js   |  38 ++
+ .../bookingRequest/adminListBookingRequests.js     |  46 ++
+ src/controller/bookingRequest/bookingRequest.js    |   8 +-
+ .../bookingRequest/listSalonBookingRequests.js     |  53 ++
+ src/controller/bookingRequest/ownerAction.js       |  32 +-
+ .../bookingRequest/salonBookingRequestSummary.js   |  49 ++
+ src/database/models/bookingRequest.model.js        |  37 ++
+ src/routes/bookingRequest.routes.js                |  22 +
+ src/services/bookingRequestLead.service.js         | 582 +++++++++++++++++++++
+ 11 files changed, 993 insertions(+), 4 deletions(-)
+
+diff --git a/cron/bookingRequestSweeper.cron.js b/cron/bookingRequestSweeper.cron.js
+new file mode 100644
+index 0000000..762b1a8
+--- /dev/null
++++ b/cron/bookingRequestSweeper.cron.js
+@@ -0,0 +1,117 @@
++// cron/bookingRequestSweeper.cron.js
++//
++// The booking-request answer window, closed by the server.
++//
++// A customer sends a booking REQUEST and the salon has 60 seconds to accept,
++// reject or propose another time. When nobody answers, the request becomes
++// AUTO_CANCELLED — the slot is released and the lead is recorded as MISSED.
++// That is not a rejection: a salon that misses leads has a staffing problem, and
++// the salon and admin tabs count the two separately.
++//
++// The Cloud Task scheduled at create time (`src/tasks/autoCancelTask.js`) already
++// cancels one request at its own deadline. This sweeper is the safety net that
++// makes the state true even when that task never fires — a lost task, a deploy,
++// a database restored from a backup. It is safe to run it alongside the task
++// because both are guarded by `status = 'PENDING'`.
++//
++// Idempotent by construction:
++//
++//   UPDATE booking_requests
++//      SET status = 'AUTO_CANCELLED', responded_at = expires_at
++//    WHERE status = 'PENDING' AND expires_at < NOW()
++//   RETURNING …
++//
++// A second run in the same minute finds nothing to do, so nothing is notified
++// twice.
++const cron = require('node-cron');
++const db = require('../src/database/models');
++const sendNotificationToDevice = require('../src/firebase/sendNotification');
++const { sweepExpiredRequests } = require('../src/services/bookingRequestLead.service');
++
++const MESSAGE = 'The salon did not answer in time, so this request was cancelled automatically and the slot released. You can send another request — it costs you nothing.';
++
++/**
++ * Tell the two people involved. Kept best-effort and per row: one customer with
++ * a dead push token must not stop the next row's notification.
++ */
++const notifyMissed = async (row) => {
++    try {
++        const customer = await db.User.findByPk(row.customerId, { attributes: ['userId', 'fullName', 'deviceToken'] });
++        if (customer?.deviceToken) {
++            await sendNotificationToDevice(customer.deviceToken, 'No answer from the salon', MESSAGE, {
++                bookingRequestId: row.bookingRequestId,
++                type: 'BOOKING_AUTO_CANCELLED'
++            });
++        }
++        await db.Notification.create({
++            receiverType: 'USER',
++            receiverId: row.customerId,
++            title: 'No answer from the salon',
++            message: MESSAGE,
++            data: { bookingRequestId: row.bookingRequestId }
++        });
++    } catch (error) {
++        console.error('[booking-request sweeper] customer notification failed:', error.message);
++    }
++
++    try {
++        const tokens = await db.DeviceToken.findAll({
++            where: { salonId: row.salonId, isActive: true },
++            attributes: ['deviceToken'],
++            raw: true
++        });
++        const unique = [...new Set(tokens.map((item) => item.deviceToken).filter(Boolean))];
++        for (const token of unique) {
++            await sendNotificationToDevice(
++                token,
++                'You missed a booking request',
++                'A customer asked for a slot and nobody answered within 60 seconds, so it was cancelled automatically. It is counted as missed, not as a rejection.',
++                { bookingRequestId: row.bookingRequestId, type: 'BOOKING_REQUEST_MISSED' }
++            );
++        }
++        await db.Notification.create({
++            receiverType: 'SALON',
++            receiverId: row.salonId,
++            title: 'You missed a booking request',
++            message: 'A customer asked for a slot and nobody answered within 60 seconds, so it was cancelled automatically.',
++            data: { bookingRequestId: row.bookingRequestId }
++        });
++    } catch (error) {
++        console.error('[booking-request sweeper] salon notification failed:', error.message);
++    }
++};
++
++/**
++ * One pass. Exported so it can be called by hand (or from a test) without
++ * waiting for the scheduler.
++ */
++const runBookingRequestSweep = async ({ notify = true } = {}) => {
++    const cancelled = await sweepExpiredRequests({ force: true });
++    if (!cancelled.length) return { cancelled: 0 };
++
++    console.log(`[booking-request sweeper] ${cancelled.length} request(s) auto-cancelled after the 60s window`);
++    if (notify) {
++        for (const row of cancelled) {
++            await notifyMissed(row);
++        }
++    }
++    return { cancelled: cancelled.length };
++};
++
++// Every 20 seconds. The window is 60 seconds, so a request is classified within
++// a third of its life at worst — fast enough that the salon's own tab, which
++// derives the same state, never disagrees with the stored one for long.
++// `noOverlap` keeps a slow database from stacking runs.
++const task = cron.schedule('*/20 * * * * *', async () => {
++    try {
++        await runBookingRequestSweep();
++    } catch (error) {
++        console.error('[booking-request sweeper] pass failed:', error.message);
++    }
++}, {
++    scheduled: true,
++    timezone: 'Asia/Kolkata',
++    noOverlap: true
++});
++
++module.exports = { runBookingRequestSweep, task };
+diff --git a/index.js b/index.js
+index 0d91ef0..6f94245 100644
+--- a/index.js
++++ b/index.js
+@@ -6,6 +6,7 @@ const dotenv = require("dotenv");
+ const helmet = require('helmet');
+ const { closeConnection, connectDb } = require("./src/database/config/db");
+ const { ensureShopBuyerSchema } = require("./src/database/config/ensureShopBuyerSchema");
++const { ensureShopSchema } = require("./src/database/config/ensureShopSchema");
+ const db = require("./src/database/models");
+ const routes = require("./src/routes/routes");
+ const errorHandler = require("./src/utils/middleware/error.middleware");
+@@ -196,6 +197,9 @@ process.on('SIGTERM', async () => {
+ require('./cron/notification.cron');
+ require('./cron/plan-check.cron');
+ require('./cron/bookingCompletionCron');
++// The booking-request answer window: every PENDING request whose 60 seconds are
++// up becomes AUTO_CANCELLED (a missed lead, never a rejection).
++require('./cron/bookingRequestSweeper.cron');
+ 
+ //connect db
+ // The shop takes orders from salons AND customers. `buyer_type` /
+@@ -204,7 +208,14 @@ require('./cron/bookingCompletionCron');
+ // fails on `salon_id` not-null. Repair it once here (idempotent, no-op on a
+ // migrated database) instead of waiting for someone to run SQL.
+ connectDb().then((connected) => {
+-    if (connected) ensureShopBuyerSchema();
++    if (connected) {
++        ensureShopBuyerSchema();
++        // `shop_categories`, the booking-request answer window and the bulk
++        // import's columns/tables. Same idea, same reason: the panel's
++        // Categories manager and the leads tabs must answer on a database that
++        // never ran migrations/2026-11-05-shop-categories-leads-bulk.sql.
++        ensureShopSchema();
++    }
+ });
+ // sendPushNotification("fc2A21LpQ4W3IBj7ry6RyW:APA91bHexWAirHUAVKOZKqsl_BSxon1wTcvqhk40qWCWE1YGzQjdd76Q520S-zuX0rUtcNfyux60kk7GdtuNtm6H6f_G60SL4ODvKPTUbx55qBmKWtQVrjI","Test Title","This is test notification body")
+ // listen on PORT
+diff --git a/src/controller/bookingRequest/adminBookingRequestSummary.js b/src/controller/bookingRequest/adminBookingRequestSummary.js
+new file mode 100644
+index 0000000..237ade0
+--- /dev/null
++++ b/src/controller/bookingRequest/adminBookingRequestSummary.js
+@@ -0,0 +1,38 @@
++const bookingRequestLeadService = require('../../services/bookingRequestLead.service');
++
++/**
++ * The admin panel's lead report: platform counters plus the per-salon table
++ * ("which salons get leads and which of them let them die").
++ *
++ * Body: `{ range?, salonId?, fromDate?, toDate? }`
++ *
++ * The per-salon rows are sorted worst-first by `autoCancelled`, and
++ * `medianResponseSeconds` is null for a salon that never answered (the panel
++ * shows a dash — a zero would read as an instant reply).
++ */
++const adminBookingRequestSummary = async (request, response) => {
++    try {
++        const { range = 'ALL', salonId, fromDate, toDate } = request.body || {};
++
++        const data = await bookingRequestLeadService.adminSummary({
++            range,
++            salonId: salonId || undefined,
++            fromDate,
++            toDate
++        });
++
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: 'Booking request summary fetched successfully',
++            data
++        });
++    } catch (error) {
++        console.error('ADMIN BOOKING REQUEST SUMMARY ERROR:', error);
++        return response.status(error.status || 500).json({
++            status: 'FAILED',
++            message: error.message
++        });
++    }
++};
++
++module.exports = adminBookingRequestSummary;
+diff --git a/src/controller/bookingRequest/adminListBookingRequests.js b/src/controller/bookingRequest/adminListBookingRequests.js
+new file mode 100644
+index 0000000..6b12b4b
+--- /dev/null
++++ b/src/controller/bookingRequest/adminListBookingRequests.js
+@@ -0,0 +1,46 @@
++const bookingRequestLeadService = require('../../services/bookingRequestLead.service');
++
++/**
++ * The admin panel's Booking requests tab: every lead on the platform, with the
++ * salon it went to and how fast that salon answered.
++ *
++ * Body: `{ salonId?, status?, search?, page?, limit?, fromDate?, toDate? }`
++ * `search` matches the customer's name, the customer's phone and the salon's
++ * name — the three things somebody on a support call knows.
++ *
++ * Read-only: an admin does not accept or reject on a salon's behalf. Conversion
++ * happens when the salon accepts, and a second path would produce two bookings
++ * for one customer.
++ *
++ * Requests only: this never joins `booking` / `booking_list` for a count. A row
++ * carries `bookingId` when the salon accepted, and that is the link.
++ */
++const adminListBookingRequests = async (request, response) => {
++    try {
++        const { salonId, status, search, page, limit, fromDate, toDate } = request.body || {};
++
++        const data = await bookingRequestLeadService.listAdminLeads({
++            salonId: salonId || undefined,
++            status: status || 'ALL',
++            search,
++            page,
++            limit,
++            fromDate,
++            toDate
++        });
++
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: 'Booking requests fetched successfully',
++            data
++        });
++    } catch (error) {
++        console.error('ADMIN LIST BOOKING REQUESTS ERROR:', error);
++        return response.status(error.status || 500).json({
++            status: 'FAILED',
++            message: error.message
++        });
++    }
++};
++
++module.exports = adminListBookingRequests;
+diff --git a/src/controller/bookingRequest/bookingRequest.js b/src/controller/bookingRequest/bookingRequest.js
+index e816b0b..c1b36a7 100644
+--- a/src/controller/bookingRequest/bookingRequest.js
++++ b/src/controller/bookingRequest/bookingRequest.js
+@@ -206,7 +206,13 @@ const createBookingRequest = async (req, res) => {
+                 startTime: bookingTime,
+                 endTime,
+                 status: 'PENDING',
+-                delayMinutes: null
++                delayMinutes: null,
++                // The answer window, stamped by the SERVER. A client never
++                // sends this: whoever sets the deadline would otherwise decide
++                // how long the salon has to answer. The sweeper
++                // (cron/bookingRequestSweeper.cron.js) closes it, and the leads
++                // tab derives the same expiry if the sweep has not run yet.
++                expiresAt: new Date(Date.now() + 60 * 1000)
+             },
+             { transaction: t }
+         );
+diff --git a/src/controller/bookingRequest/listSalonBookingRequests.js b/src/controller/bookingRequest/listSalonBookingRequests.js
+new file mode 100644
+index 0000000..92aa1f8
+--- /dev/null
++++ b/src/controller/bookingRequest/listSalonBookingRequests.js
+@@ -0,0 +1,53 @@
++const bookingRequestLeadService = require('../../services/bookingRequestLead.service');
++
++/**
++ * The salon's Booking requests tab: every lead this salon received, newest
++ * first, with what became of it.
++ *
++ * Body: `{ salonId?, status?, page?, limit?, fromDate?, toDate? }`
++ * `salonId` is optional and, when sent, MUST be the caller's own salon — a
++ * mismatched id is a 403, never a silent switch to the caller's own data (that
++ * would hide a bug in the client behind a page that looks right).
++ *
++ * Requests are not bookings: nothing here reads `booking`/`booking_list`, and
++ * the accept path's `bookingId` pointer is the only reference to one.
++ */
++const listSalonBookingRequests = async (request, response) => {
++    try {
++        const { salonId, status, page, limit, fromDate, toDate } = request.body || {};
++        const ownSalonId = request.salon?.salonId;
++
++        if (!ownSalonId) {
++            return response.status(401).json({ status: 'FAILED', message: 'Not authorized' });
++        }
++        if (salonId && String(salonId) !== String(ownSalonId)) {
++            return response.status(403).json({
++                status: 'FAILED',
++                message: 'You can only read your own booking requests'
++            });
++        }
++
++        const data = await bookingRequestLeadService.listSalonLeads({
++            salonId: ownSalonId,
++            status: status || 'ALL',
++            page,
++            limit,
++            fromDate,
++            toDate
++        });
++
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: 'Booking requests fetched successfully',
++            data
++        });
++    } catch (error) {
++        console.error('LIST SALON BOOKING REQUESTS ERROR:', error);
++        return response.status(error.status || 500).json({
++            status: 'FAILED',
++            message: error.message
++        });
++    }
++};
++
++module.exports = listSalonBookingRequests;
+diff --git a/src/controller/bookingRequest/ownerAction.js b/src/controller/bookingRequest/ownerAction.js
+index abbf785..17c58e4 100644
+--- a/src/controller/bookingRequest/ownerAction.js
++++ b/src/controller/bookingRequest/ownerAction.js
+@@ -23,9 +23,26 @@ const ownerActionBooking = async (req, res) => {
+             return res.status(200).json({ status: 'FAILED', message: 'Booking request already cancelled' });
+         }
+ 
++        // The 60 second window. A request past it is auto-cancelled whether or
++        // not the sweeper has written that down yet, so the answer is a plain
++        // sentence instead of an accept that cannot succeed. `responded_at` is
++        // stamped with the deadline (not "now") so the lead's response time
++        // stays honest.
++        const expiresAt = bookingRequest.expiresAt ? new Date(bookingRequest.expiresAt).getTime() : null;
++        if (bookingRequest.status === 'PENDING' && expiresAt && expiresAt <= Date.now()) {
++            bookingRequest.status = 'AUTO_CANCELLED';
++            bookingRequest.respondedAt = bookingRequest.respondedAt || bookingRequest.expiresAt;
++            await bookingRequest.save({ transaction: t });
++            await t.commit();
++            return res.status(200).json({
++                status: 'FAILED',
++                message: 'This request has expired and was cancelled automatically'
++            });
++        }
++
+         if (['ACCEPTED', 'REJECTED', 'DELAY_PROPOSED'].includes(bookingRequest?.status)) {
+             await t.rollback();
+-            return res.status(200).json({ status: 'FAILED', message: 'Action is already taken on this booking request' });
++            return res.status(200).json({ status: 'FAILED', message: 'This request was already actioned' });
+         }
+ 
+         const user = await db.User.findByPk(bookingRequest.customerId, { attributes: ['userId', 'fullName', 'deviceToken'] });
+@@ -45,6 +62,9 @@ const ownerActionBooking = async (req, res) => {
+         // --------------------------
+         if (action === 'REJECT') {
+             bookingRequest.status = 'REJECTED';
++            // An answer, with a time — the leads tab reports the response time
++            // and the admin report takes its median from it.
++            bookingRequest.respondedAt = new Date();
+             await bookingRequest.save({ transaction: t });
+ 
+             // Notify customer
+@@ -146,6 +166,7 @@ const ownerActionBooking = async (req, res) => {
+         // --------------------------
+         if (action === 'ACCEPT') {
+             bookingRequest.status = 'ACCEPTED';
++            bookingRequest.respondedAt = new Date();
+             await bookingRequest.save({ transaction: t });
+ 
+             // ✅ Create Queue
+@@ -205,7 +226,14 @@ const ownerActionBooking = async (req, res) => {
+             booking.reminderSent = false;
+ 
+ 
+-            await booking.save();
++            await booking.save({ transaction: t });
++
++            // The request keeps a POINTER to the booking, not a copy of it: the
++            // two stay separate tables (a request is a lead, a booking is a
++            // chair), and this id is the only link between them.
++            bookingRequest.bookingId = booking.bookingId;
++            bookingRequest.routedBarberId = bookingRequest.routedBarberId || bookingRequest.barberId || null;
++            await bookingRequest.save({ transaction: t });
+ 
+ 
+             // Notify customer
+diff --git a/src/controller/bookingRequest/salonBookingRequestSummary.js b/src/controller/bookingRequest/salonBookingRequestSummary.js
+new file mode 100644
+index 0000000..dcd8a0a
+--- /dev/null
++++ b/src/controller/bookingRequest/salonBookingRequestSummary.js
+@@ -0,0 +1,49 @@
++const bookingRequestLeadService = require('../../services/bookingRequestLead.service');
++
++/**
++ * The salon's lead counters — the tiles the Booking requests tab leads with.
++ *
++ * Body: `{ salonId?, range? }` where range is TODAY | WEEK | MONTH | ALL.
++ *
++ * `autoCancelled` and `rejected` are separate numbers on purpose (missed leads
++ * are a staffing problem, rejected ones a pricing/capacity answer), and a
++ * customer's own cancellation is a third bucket. `answerRate` is
++ * `(accepted + rejected) / received`; the buckets add up to `received`.
++ */
++const salonBookingRequestSummary = async (request, response) => {
++    try {
++        const { salonId, range = 'ALL', fromDate, toDate } = request.body || {};
++        const ownSalonId = request.salon?.salonId;
++
++        if (!ownSalonId) {
++            return response.status(401).json({ status: 'FAILED', message: 'Not authorized' });
++        }
++        if (salonId && String(salonId) !== String(ownSalonId)) {
++            return response.status(403).json({
++                status: 'FAILED',
++                message: 'You can only read your own booking requests'
++            });
++        }
++
++        const data = await bookingRequestLeadService.salonSummary({
++            salonId: ownSalonId,
++            range,
++            fromDate,
++            toDate
++        });
++
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: 'Booking request summary fetched successfully',
++            data
++        });
++    } catch (error) {
++        console.error('SALON BOOKING REQUEST SUMMARY ERROR:', error);
++        return response.status(error.status || 500).json({
++            status: 'FAILED',
++            message: error.message
++        });
++    }
++};
++
++module.exports = salonBookingRequestSummary;
+diff --git a/src/database/models/bookingRequest.model.js b/src/database/models/bookingRequest.model.js
+index 3d6d2eb..bd5b48e 100644
+--- a/src/database/models/bookingRequest.model.js
++++ b/src/database/models/bookingRequest.model.js
+@@ -89,6 +89,43 @@ module.exports = (sequelize) => {
+         type: DataTypes.TEXT,
+         allowNull: true,
+       },
++
++      // ── The answer window and the outcome ────────────────────────────────
++      // Stamped by the SERVER when the request is created (created_at + 60s).
++      // A client never sends it: whoever sets the window would otherwise set
++      // how long the salon has to answer, and a request could be kept open
++      // forever.
++      expiresAt: {
++        type: DataTypes.DATE,
++        allowNull: true,
++        field: 'expires_at',
++      },
++
++      // When the salon answered (accept / reject), or when the window closed
++      // with no answer. `created_at` -> `responded_at` is the response time the
++      // leads tab reports.
++      respondedAt: {
++        type: DataTypes.DATE,
++        allowNull: true,
++        field: 'responded_at',
++      },
++
++      // Set on ACCEPT: the booking that the acceptance created. This pointer is
++      // the ONLY link between a request and a booking — they stay separate
++      // tables, and a request that was never accepted has no booking at all.
++      bookingId: {
++        type: DataTypes.UUID,
++        allowNull: true,
++        field: 'booking_id',
++      },
++
++      // Which barber the request was routed to (the salon's dispatch), distinct
++      // from `barberId`, which is the barber the CUSTOMER chose.
++      routedBarberId: {
++        type: DataTypes.UUID,
++        allowNull: true,
++        field: 'routed_barber_id',
++      },
+     },
+     {
+       sequelize,
+diff --git a/src/routes/bookingRequest.routes.js b/src/routes/bookingRequest.routes.js
+index a7be549..48c4707 100644
+--- a/src/routes/bookingRequest.routes.js
++++ b/src/routes/bookingRequest.routes.js
+@@ -6,6 +6,11 @@ const { ownerActionBooking } = require('../controller/bookingRequest/ownerAction
+ const { customerActionBooking } = require('../controller/bookingRequest/customerDelayResponse');
+ const { getBookingRequestById } = require('../controller/bookingRequest/getBookingRequest');
+ const { autoCancelBooking } = require('../controller/bookingRequest/autoCancelBookingRequest');
++const listSalonBookingRequests = require('../controller/bookingRequest/listSalonBookingRequests');
++const salonBookingRequestSummary = require('../controller/bookingRequest/salonBookingRequestSummary');
++const adminListBookingRequests = require('../controller/bookingRequest/adminListBookingRequests');
++const adminBookingRequestSummary = require('../controller/bookingRequest/adminBookingRequestSummary');
++const { authenticateAdmin } = require('../utils/middleware/auth.middleware');
+ const bookingRequestRouter = express.Router();
+ 
+ bookingRequestRouter.post('/create-booking-request',authenticateUser, createBookingRequest)
+@@ -14,6 +19,23 @@ bookingRequestRouter.post('/customer-delay-response/:bookingRequestId',authentic
+ bookingRequestRouter.get('/get-bookingRequest-by-id/:bookingRequestId',authenticateSalon, getBookingRequestById);
+ bookingRequestRouter.post('/auto-cancel', autoCancelBooking);
+ 
++// ── The leads tabs ──────────────────────────────────────────────────────────
++// A booking REQUEST is a lead; it is not a booking. These four doors read
++// `booking_requests` only.
++//
++//   salon/list      the salon portal's Booking requests tab
++//   salon/summary   its counters (received / accepted / rejected / missed)
++//   admin/list      the admin panel's Booking requests tab
++//   admin/summary   platform counters + the per-salon answered/missed report
++//
++// Accept / reject still goes through `/owner-action/:bookingRequestId` above,
++// so the web tab, the mobile app and the alert card cannot disagree about what
++// an accept does.
++bookingRequestRouter.post('/salon/list', authenticateSalon, listSalonBookingRequests);
++bookingRequestRouter.post('/salon/summary', authenticateSalon, salonBookingRequestSummary);
++bookingRequestRouter.post('/admin/list', authenticateAdmin, adminListBookingRequests);
++bookingRequestRouter.post('/admin/summary', authenticateAdmin, adminBookingRequestSummary);
++
+ 
+ 
+ 
+diff --git a/src/services/bookingRequestLead.service.js b/src/services/bookingRequestLead.service.js
+new file mode 100644
+index 0000000..1275663
+--- /dev/null
++++ b/src/services/bookingRequestLead.service.js
+@@ -0,0 +1,582 @@
++const { Op, fn, col, QueryTypes } = require('sequelize');
++const db = require('../database/models');
++const { ensureShopSchema } = require('../database/config/ensureShopSchema');
++
++/**
++ * Booking REQUESTS — the leads API behind the salon's Booking requests tab and
++ * the admin panel's Booking requests tab.
++ *
++ * A request is not a booking. `booking_requests` is the lead a customer sent;
++ * `booking` / `booking_list` is the chair that exists after a salon accepts.
++ * Nothing in this file reads the bookings table to answer a question about a
++ * request, and nothing counts a request as a booking: the accept path writes
++ * `booking_id` on the request, and that pointer is the only link.
++ *
++ * The answer window: a request is answerable for 60 seconds (WRITE side:
++ * `expires_at` is stamped by the booking-request create path, never by a
++ * client). The only sane reading of "still PENDING, past its window" is
++ * AUTO_CANCELLED — the salon missed it — so this service derives that state for
++ * every row it returns and the sweeper (§ tasks/bookingRequestSweeper.js) writes
++ * it down. Auto-cancelled is NOT a rejection: a salon that misses leads has a
++ * staffing problem, a salon that rejects them has a pricing one, and the tabs
++ * show them in separate tiles.
++ */
++
++const WINDOW_SECONDS = 60;
++const WINDOW_MS = WINDOW_SECONDS * 1000;
++const DEFAULT_LIMIT = parseInt(process.env.PAGE_LIMIT) || 20;
++const MAX_LIMIT = 100;
++
++// Delhi is UTC+05:30 with no daylight saving, so a fixed offset is exact and
++// avoids pulling a timezone database into a query path.
++const IST_OFFSET_MS = 330 * 60 * 1000;
++
++// Status the client may ask for -> the statuses stored for it.
++//   · 'DELAYED' is the client's word (a new time was proposed); the column
++//     stores 'DELAY_PROPOSED'.
++//   · 'CANCELLED' is the customer withdrawing the request; it is its own bucket
++//     and is never counted as an auto-cancel.
++const STATUS_FILTERS = {
++    ALL: null,
++    PENDING: ['PENDING'],
++    ACCEPTED: ['ACCEPTED'],
++    REJECTED: ['REJECTED'],
++    AUTO_CANCELLED: ['AUTO_CANCELLED'],
++    CANCELLED: ['CANCELLED'],
++    CANCELLED_BY_CUSTOMER: ['CANCELLED'],
++    DELAYED: ['DELAY_PROPOSED'],
++    DELAY_PROPOSED: ['DELAY_PROPOSED']
++};
++
++const statusFilterOf = (value) => {
++    const key = String(value || 'ALL').trim().toUpperCase();
++    return STATUS_FILTERS[key] === undefined ? null : STATUS_FILTERS[key];
++};
++
++// ---------------------------------------------------------------- time helpers
++
++const startOfIstDay = (date = new Date()) => {
++    const shifted = new Date(date.getTime() + IST_OFFSET_MS);
++    shifted.setUTCHours(0, 0, 0, 0);
++    return new Date(shifted.getTime() - IST_OFFSET_MS);
++};
++
++const addDays = (date, days) => new Date(date.getTime() + days * 86400000);
++
++/**
++ * The `range` a tab asks for -> a `createdAt` lower bound (null = everything).
++ * The panel and the salon tab both speak TODAY / WEEK / MONTH / ALL, and "today"
++ * means today in IST for every viewer, wherever they are sitting.
++ */
++const rangeStart = (range) => {
++    const startOfToday = startOfIstDay();
++    switch (String(range || 'ALL').trim().toUpperCase()) {
++        case 'TODAY':
++            return startOfToday;
++        case 'WEEK':
++        case '7D':
++            return addDays(startOfToday, -6);
++        case 'MONTH':
++        case '30D':
++            return addDays(startOfToday, -29);
++        default:
++            return null;
++    }
++};
++
++const parseDate = (value) => {
++    if (!value) return null;
++    const parsed = new Date(`${String(value).slice(0, 10)}T00:00:00.000Z`);
++    return Number.isNaN(parsed.getTime()) ? null : parsed;
++};
++
++const endOfDay = (value) => {
++    const start = parseDate(value);
++    return start ? new Date(start.getTime() + 86400000) : null;
++};
++
++const clampLimit = (value) => {
++    const parsed = parseInt(value, 10);
++    if (!Number.isFinite(parsed)) return Math.min(DEFAULT_LIMIT, MAX_LIMIT);
++    return Math.max(1, Math.min(MAX_LIMIT, parsed));
++};
++
++// --------------------------------------------------------------- derivations
++
++const minutesBetween = (from, to) => {
++    if (!from || !to) return null;
++    const seconds = Math.round((new Date(to).getTime() - new Date(from).getTime()) / 1000);
++    return Number.isFinite(seconds) ? Math.max(0, seconds) : null;
++};
++
++/**
++ * The state a row is IN, as opposed to the state the column still says.
++ * A PENDING row past its window is auto-cancelled even before the sweeper has
++ * written it down, so the tab never offers an Accept that cannot succeed.
++ */
++const effectiveStatus = (row, now = Date.now()) => {
++    if (row.status !== 'PENDING') return row.status;
++    const expiresAt = row.expiresAt ? new Date(row.expiresAt).getTime() : null;
++    if (expiresAt === null) return row.status;
++    return expiresAt <= now ? 'AUTO_CANCELLED' : 'PENDING';
++};
++
++// The client's `summarizeLeads` reads `status`; a request that expired while the
++// page was open must read the same as one the sweeper already caught.
++const DISPLAY_STATUS = {
++    AUTO_CANCELLED: 'AUTO_CANCELLED',
++    DELAY_PROPOSED: 'DELAYED'
++};
++
++/**
++ * The services snapshot taken at request time (`serviceIds` is a JSON column:
++ * `[{ serviceId, name, duration, price }]`). No join: what the customer asked
++ * for is what the lead shows, even if the salon edits its price list later.
++ */
++const servicesOf = (raw) => {
++    const list = Array.isArray(raw) ? raw : [];
++    return list
++        .map((item) => ({
++            serviceId: item?.serviceId || item?.id || null,
++            serviceName: item?.serviceName || item?.name || 'Service',
++            price: item?.price ?? item?.amount ?? null
++        }))
++        .filter((item) => item.serviceName);
++};
++
++const totalOf = (services) => services.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
++
++const toRow = (row, { now = Date.now(), admin = false } = {}) => {
++    const services = servicesOf(row.serviceIds);
++    const status = effectiveStatus(row, now);
++    const respondedAt = row.respondedAt || null;
++    const line = {
++        bookingRequestId: row.bookingRequestId,
++        customerName: row.customer?.fullName || 'Customer',
++        customerPhone: row.customer?.phoneNumber || '',
++        bookingDate: row.bookingDate,
++        bookingTime: row.startTime,
++        endTime: row.endTime,
++        barberName: row.barber?.fullName || '',
++        status: DISPLAY_STATUS[status] || status,
++        rawStatus: row.status,
++        createdAt: row.createdAt,
++        expiresAt: row.expiresAt || (row.createdAt ? new Date(new Date(row.createdAt).getTime() + WINDOW_MS) : null),
++        respondedAt,
++        bookingId: row.bookingId || null,
++        services,
++        total: totalOf(services)
++    };
++
++    if (!admin) return line;
++
++    // Admin-only columns: who the lead belonged to, and how quickly they
++    // answered it. `outcome` is the panel's word for the three buckets a lead
++    // can end in, and it is derived here so the panel never re-implements the
++    // rule differently.
++    return {
++        ...line,
++        salonId: row.salonId,
++        salonName: row.salon?.salonName || '',
++        salonPhone: row.salon?.phoneNumber || '',
++        city: row.salon?.city || '',
++        responseSeconds: minutesBetween(row.createdAt, respondedAt),
++        outcome: status === 'ACCEPTED' || status === 'REJECTED'
++            ? 'answered'
++            : status === 'AUTO_CANCELLED'
++                ? 'missed'
++                : status === 'CANCELLED'
++                    ? 'withdrawn'
++                    : 'open'
++    };
++};
++
++// ------------------------------------------------------------------- queries
++
++const withRelations = () => ([
++    {
++        model: db.User,
++        as: 'customer',
++        attributes: ['userId', 'fullName', 'phoneNumber'],
++        required: false
++    },
++    {
++        model: db.Salon,
++        as: 'salon',
++        attributes: ['salonId', 'salonName', 'phoneNumber', 'city', 'isActive'],
++        required: false
++    },
++    {
++        model: db.Barber,
++        as: 'barber',
++        attributes: ['barberId', 'fullName'],
++        required: false
++    }
++]);
++
++/**
++ * Turn the tab's filters into a WHERE clause.
++ *
++ * `status: 'AUTO_CANCELLED'` must include the PENDING rows whose window has
++ * closed (they ARE auto-cancelled, the sweeper just has not written it yet), and
++ * `status: 'PENDING'` must exclude them. That asymmetry is why the status
++ * filter cannot be a plain `IN`.
++ */
++const buildWhere = ({ salonId, status, search, fromDate, toDate } = {}) => {
++    const where = {};
++    if (salonId) where.salonId = salonId;
++
++    const wanted = statusFilterOf(status);
++    const now = new Date();
++    if (wanted) {
++        if (wanted.length === 1 && wanted[0] === 'PENDING') {
++            // Live leads only: not expired, and with an expiry actually written
++            // (a row from before the migration has no window — the sweeper
++            // stamps it at boot, and until then it is not "answerable").
++            where.status = 'PENDING';
++            where.expiresAt = { [Op.gt]: now };
++        } else if (wanted.length === 1 && wanted[0] === 'AUTO_CANCELLED') {
++            where[Op.or] = [
++                { status: 'AUTO_CANCELLED' },
++                { status: 'PENDING', expiresAt: { [Op.lte]: now } }
++            ];
++        } else {
++            where.status = { [Op.in]: wanted };
++        }
++    }
++
++    const from = parseDate(fromDate);
++    const to = endOfDay(toDate);
++    if (from || to) {
++        where.createdAt = {
++            ...(from ? { [Op.gte]: from } : {}),
++            ...(to ? { [Op.lt]: to } : {})
++        };
++    }
++
++    const term = String(search || '').trim();
++    if (term) {
++        // Customer name, customer phone, or the salon's name — the three things
++        // somebody on the phone actually knows.
++        where[Op.or] = [
++            ...(where[Op.or] || []),
++            { '$customer.full_name$': { [Op.iLike]: `%${term}%` } },
++            { '$customer.phone_number$': { [Op.iLike]: `%${term}%` } },
++            { '$salon.salon_name$': { [Op.iLike]: `%${term}%` } }
++        ];
++    }
++
++    return where;
++};
++
++const pagedQuery = async ({ where, page, limit, admin }) => {
++    const safePage = parseInt(page, 10) > 0 ? parseInt(page, 10) : 1;
++    const safeLimit = clampLimit(limit);
++
++    const { count, rows } = await db.BookingRequest.findAndCountAll({
++        where,
++        include: withRelations(),
++        order: [['createdAt', 'DESC'], ['bookingRequestId', 'DESC']],
++        limit: safeLimit,
++        offset: (safePage - 1) * safeLimit,
++        // The search joins two tables, so the count has to be over the joined
++        // result rather than over booking_requests alone.
++        distinct: true,
++        subQuery: false
++    });
++
++    const now = Date.now();
++    return {
++        requests: rows.map((row) => toRow(row, { admin, now })),
++        pagination: {
++            page: safePage,
++            limit: safeLimit,
++            totalPages: Math.ceil(count / safeLimit) || 0,
++            totalRequests: count
++        }
++    };
++};
++
++/**
++ * Write down the auto-cancels the world can already see.
++ *
++ * The `WHERE status = 'PENDING' AND expires_at < NOW()` clause makes this
++ * idempotent: a second run in the same second finds nothing. It is called by the
++ * cron sweeper (which also notifies the customers) and, best-effort, by the two
++ * list endpoints so a tab opened a second before the cron tick is still right.
++ */
++let lastSweepAt = 0;
++const SWEEP_THROTTLE_MS = 2000;
++
++const sweepExpiredRequests = async ({ force = false } = {}) => {
++    const now = Date.now();
++    if (!force && now - lastSweepAt < SWEEP_THROTTLE_MS) return [];
++    lastSweepAt = now;
++
++    const rows = await db.sequelize.query(
++        `UPDATE booking_requests
++            SET status = 'AUTO_CANCELLED',
++                responded_at = COALESCE(responded_at, expires_at),
++                updated_at = NOW()
++          WHERE status = 'PENDING'
++            AND expires_at IS NOT NULL
++            AND expires_at < NOW()
++        RETURNING booking_request_id AS "bookingRequestId",
++                  salon_id AS "salonId",
++                  customer_id AS "customerId"`,
++        { type: QueryTypes.SELECT }
++    );
++
++    return rows || [];
++};
++
++/**
++ * The safe wrapper: a list must never fail because the sweeper could not run
++ * (a replica without write rights still has to be able to show the tab).
++ */
++const sweepQuietly = async () => {
++    try {
++        return await sweepExpiredRequests();
++    } catch (error) {
++        console.error('[booking-request] sweeper skipped:', error.message);
++        return [];
++    }
++};
++
++// ------------------------------------------------------------------ counting
++
++const countByStatus = async (where) => {
++    const rows = await db.BookingRequest.findAll({
++        where,
++        attributes: ['status', [fn('COUNT', col('booking_request_id')), 'total']],
++        group: ['status'],
++        raw: true
++    });
++    return rows.reduce((acc, row) => {
++        acc[row.status] = Number(row.total) || 0;
++        return acc;
++    }, {});
++};
++
++/**
++ * The counters a tab leads with. Both tabs get the same shape; the admin's adds
++ * the per-salon report.
++ *
++ * `answerRate = round((accepted + rejected) / received * 100)`, and the buckets
++ * add up: accepted + rejected + autoCancelled + cancelledByCustomer + awaiting +
++ * delayed === received.
++ */
++const summarize = async (where) => {
++    const counts = await countByStatus(where);
++    const received = Object.values(counts).reduce((sum, value) => sum + value, 0);
++
++    const accepted = counts.ACCEPTED || 0;
++    const rejected = counts.REJECTED || 0;
++    const autoCancelled = counts.AUTO_CANCELLED || 0;
++    // The column stores the customer's withdrawal as CANCELLED — it is a third
++    // bucket, never folded into the salon's missed leads.
++    const cancelledByCustomer = counts.CANCELLED || 0;
++    const awaiting = counts.PENDING || 0;
++    const delayed = counts.DELAY_PROPOSED || 0;
++    const answered = accepted + rejected;
++
++    const lastReceivedAt = await db.BookingRequest.max('createdAt', { where });
++
++    return {
++        received,
++        awaiting,
++        accepted,
++        rejected,
++        autoCancelled,
++        cancelledByCustomer,
++        delayed,
++        answered,
++        answerRate: received ? Math.round((answered / received) * 100) : 0,
++        lastReceivedAt: lastReceivedAt || null
++    };
++};
++
++// ------------------------------------------------------------------- readers
++
++const listSalonLeads = async ({ salonId, status = 'ALL', page, limit, fromDate, toDate } = {}) => {
++    await ensureShopSchema();
++    await sweepQuietly();
++    return pagedQuery({ where: buildWhere({ salonId, status, fromDate, toDate }), page, limit, admin: false });
++};
++
++const salonSummary = async ({ salonId, range = 'ALL', fromDate, toDate } = {}) => {
++    await ensureShopSchema();
++    await sweepQuietly();
++
++    const start = rangeStart(range);
++    const where = buildWhere({ salonId, status: 'ALL', fromDate: fromDate || (start ? start.toISOString() : undefined), toDate });
++    return summarize(where);
++};
++
++const listAdminLeads = async ({ salonId, status = 'ALL', search, page, limit, fromDate, toDate } = {}) => {
++    await ensureShopSchema();
++    await sweepQuietly();
++    return pagedQuery({
++        where: buildWhere({ salonId, status, search, fromDate, toDate }),
++        page,
++        limit,
++        admin: true
++    });
++};
++
++/**
++ * Median first-response time per salon, straight from Postgres.
++ *
++ * In SQL rather than in JS on purpose: a month of leads on a busy platform is
++ * tens of thousands of rows, and `percentile_cont` answers it without shipping
++ * them anywhere. Salons that never answered are simply absent — the panel shows
++ * a dash, not a zero (a zero would read as "instant reply").
++ */
++const medianResponseBySalon = async (where = {}) => {
++    const clauses = ['responded_at IS NOT NULL'];
++    const replacements = {};
++
++    if (where.salonId) {
++        clauses.push('salon_id = :salonId');
++        replacements.salonId = where.salonId;
++    }
++    const from = where.createdAt?.[Op.gte];
++    const to = where.createdAt?.[Op.lt];
++    if (from) {
++        clauses.push('created_at >= :from');
++        replacements.from = from;
++    }
++    if (to) {
++        clauses.push('created_at < :to');
++        replacements.to = to;
++    }
++
++    const rows = await db.sequelize.query(
++        `SELECT salon_id AS "salonId",
++                percentile_cont(0.5) WITHIN GROUP (
++                    ORDER BY EXTRACT(EPOCH FROM (responded_at - created_at))
++                ) AS "medianSeconds"
++           FROM booking_requests
++          WHERE ${clauses.join(' AND ')}
++          GROUP BY salon_id`,
++        { replacements, type: QueryTypes.SELECT }
++    );
++    return rows.reduce((acc, row) => {
++        acc[row.salonId] = row.medianSeconds === null ? null : Math.round(Number(row.medianSeconds));
++        return acc;
++    }, {});
++};
++
++/**
++ * The report the admin team actually asked for: which salons get leads, and
++ * which of them let them die.
++ */
++const adminSummary = async ({ range = 'ALL', salonId, fromDate, toDate } = {}) => {
++    await ensureShopSchema();
++    await sweepQuietly();
++
++    const start = rangeStart(range);
++    const where = buildWhere({
++        salonId,
++        status: 'ALL',
++        fromDate: fromDate || (start ? start.toISOString() : undefined),
++        toDate
++    });
++
++    const platform = await summarize(where);
++
++    const grouped = await db.BookingRequest.findAll({
++        where,
++        attributes: [
++            'salonId',
++            'status',
++            [fn('COUNT', col('booking_request_id')), 'total']
++        ],
++        group: ['salonId', 'status'],
++        raw: true
++    });
++
++    const bySalon = new Map();
++    grouped.forEach((row) => {
++        const id = row.salonId;
++        if (!bySalon.has(id)) {
++            bySalon.set(id, {
++                salonId: id,
++                salonName: '',
++                received: 0,
++                accepted: 0,
++                rejected: 0,
++                autoCancelled: 0,
++                cancelledByCustomer: 0,
++                awaiting: 0,
++                delayed: 0,
++                answerRate: 0,
++                medianResponseSeconds: null
++            });
++        }
++        const entry = bySalon.get(id);
++        const total = Number(row.total) || 0;
++        entry.received += total;
++        if (row.status === 'ACCEPTED') entry.accepted += total;
++        if (row.status === 'REJECTED') entry.rejected += total;
++        if (row.status === 'AUTO_CANCELLED') entry.autoCancelled += total;
++        if (row.status === 'CANCELLED') entry.cancelledByCustomer += total;
++        if (row.status === 'PENDING') entry.awaiting += total;
++        if (row.status === 'DELAY_PROPOSED') entry.delayed += total;
++    });
++
++    const ids = [...bySalon.keys()].filter(Boolean);
++    if (ids.length) {
++        const salons = await db.Salon.findAll({
++            where: { salonId: { [Op.in]: ids } },
++            attributes: ['salonId', 'salonName', 'city'],
++            raw: true
++        });
++        const names = new Map(salons.map((salon) => [salon.salonId, salon]));
++        bySalon.forEach((entry, id) => {
++            const salon = names.get(id);
++            entry.salonName = salon?.salonName || '';
++            entry.city = salon?.city || '';
++        });
++    }
++
++    const medians = await medianResponseBySalon(where);
++    const rows = [...bySalon.values()].map((entry) => {
++        const answered = entry.accepted + entry.rejected;
++        return {
++            ...entry,
++            answered,
++            answerRate: entry.received ? Math.round((answered / entry.received) * 100) : 0,
++            medianResponseSeconds: medians[entry.salonId] ?? null
++        };
++    });
++
++    // Worst first: the list an account manager works down. A salon that never
++    // answered sorts ahead of one that answered slowly.
++    rows.sort((a, b) => (
++        b.autoCancelled - a.autoCancelled
++        || b.received - a.received
++        || String(a.salonName).localeCompare(String(b.salonName))
++    ));
++
++    return { ...platform, bySalon: rows, platform };
++};
++
++module.exports = {
++    WINDOW_SECONDS,
++    WINDOW_MS,
++    STATUS_FILTERS,
++    statusFilterOf,
++    rangeStart,
++    effectiveStatus,
++    servicesOf,
++    toRow,
++    buildWhere,
++    sweepExpiredRequests,
++    listSalonLeads,
++    salonSummary,
++    listAdminLeads,
++    adminSummary,
++    summarize,
++    medianResponseBySalon
++};

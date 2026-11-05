@@ -1,5 +1,9 @@
 # Admin panel — bulk product upload + category management
 
+> **Implemented by** `patches/admin-panel-2-shop-categories-bulk.patch` (real
+> code: `ShopBulkImportModal.jsx`, `ShopCategoriesModal.jsx`, the buttons and the
+> category select). Apply instructions: `patches/APPLY-2026-11-05.md`.
+
 Target repo: `rightserveinfotechsystems/my-naai-frontend` (admin panel)
 Backend contract: `docs/BACKEND-BULK-PRODUCT-UPLOAD.md`, `docs/BACKEND-SHOP-CATEGORIES-API.md`
 Existing shop tabs: `docs/ADMIN-PANEL-SHOP-TABS.md`

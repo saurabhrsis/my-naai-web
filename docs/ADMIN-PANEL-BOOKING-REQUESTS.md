@@ -1,5 +1,9 @@
 # Admin panel — Booking requests tab
 
+> **Implemented by** `patches/admin-panel-1-booking-requests.patch` (real code:
+> `src/pages/BookingRequests.jsx`, the detail drawer, the service, the tab and the
+> route). Apply instructions: `patches/APPLY-2026-11-05.md`.
+
 Target repo: `rightserveinfotechsystems/my-naai-frontend` (admin panel)
 Backend contract: `docs/BACKEND-BOOKING-REQUESTS-API.md` §4
 

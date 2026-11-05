@@ -1,5 +1,9 @@
 # Backend — booking-request (lead) API + admin/salon reporting
 
+> **Implemented by** `patches/backend-2-booking-request-leads.patch` (real code:
+> service, four controllers, routes, the sweeper cron and the model changes).
+> Apply instructions: `patches/APPLY-2026-11-05.md`.
+
 Target repo: `rightserveinfotechsystems/my_naai_backend`
 Web client already implemented: `src/lib/bookingLeads.js`, `src/components/SalonLeads.jsx`
 Migration: `patches/migrations/2026-11-05-booking-requests-categories.sql`

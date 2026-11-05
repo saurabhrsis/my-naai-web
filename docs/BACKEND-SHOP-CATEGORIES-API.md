@@ -1,5 +1,9 @@
 # Backend — one product-category list for admin, website and app
 
+> **Implemented by** `patches/backend-1-shop-categories.patch` (real code:
+> model, service, five controllers, routes, the public door, the schema guard and
+> the migration). Apply instructions: `patches/APPLY-2026-11-05.md`.
+
 Target repo: `rightserveinfotechsystems/my_naai_backend`
 Web client already implemented: `src/lib/shopCategories.js` (reader + cache)
 Migration: `patches/migrations/2026-11-05-booking-requests-categories.sql` (§1)

@@ -1,0 +1,1216 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MyNaai Dev <dev@mynaai.in>
+Date: Wed, 5 Nov 2026 10:00:00 +0530
+Subject: [PATCH] Admin panel: category manager + bulk product upload
+
+Two additions to Shop Products, both admin-only. Nothing here changes what a
+customer sees, except that the catalogue can finally be filled at a sensible
+pace — and that the shop's filter is now the panel's list.
+
+1 · Categories (`Shop Products → Categories`)
+
+A small manager over `shop_categories` — the ONE list the website and the app
+read. Adding a category here makes it appear in the customer's shop filter on
+the next load, with this label and this position, and with no deploy.
+
+  · Order is `sortOrder`; the arrows write it. There is no second "display
+    order" to keep in step with.
+  · Renaming changes the LABEL only. The dialog says so next to the field
+    ("stays `hair-care` if you rename it"), because the id is a slug fixed at
+    creation and every product stores it.
+  · The eye hides a category (`isActive: false`): it leaves the shop filter but
+    stays on the products already filed under it, and stays visible here.
+  · Deleting is refused while products use it — the API answers with the count,
+    and the dialog then asks "move them to…" and retries with `reassignTo`. A
+    category deleted out from under a product is exactly the "wrong shelf"
+    complaint this whole feature exists to fix.
+  · Free-text values no category owns are listed as `unmatched` with a count:
+    the to-do list for finishing the tidy-up.
+
+The product editor's Category select now reads the same list, so a new category
+is selectable immediately and a product filed here is findable on the website. A
+product still holding an old free-text shelf shows that value as
+"(not in the list)" instead of silently blanking.
+
+`src/utils/productCategory.js` — the hard-coded array of eight long labels that
+used to feed that select — is deleted. With two lists there are two answers, and
+that is how "herbal hair oil filed under HAIR COLOUR" happened.
+
+2 · Bulk add (`Shop Products → Bulk add`)
+
+Download the sample → fill it in → drop it back → read a per-row report → import
+→ undo if it was a mistake.
+
+  · "Check file" runs the import with `dryRun: true`: it writes nothing and
+    answers the report. The button that writes names the exact number
+    ("Import 112 products"), so an import is impossible without a dry run first.
+  · The report shows the SHEET'S row number (the one the admin can find in
+    Excel), the column and a fixable message, and offers itself as a CSV to fix
+    and re-upload.
+  · The choice for names that already exist (skip / update) is remembered from
+    the last import.
+  · A big import does not block the panel: the dialog stays dismissable, and a
+    toast reports the outcome when it finishes. The product list refreshes, and
+    the dialog offers "Undo this import" for the `importId` the API returned.
+  · The image spec is printed inline (square 1200×1200 JPG, white background,
+    ≤250 KB, up to four photos, the first is the cover) — most bad rows are
+    photos, not data.
+
+Files
+
+  new  src/components/ShopCategoriesModal.jsx   the manager
+  new  src/components/ShopBulkImportModal.jsx   sample → drop → report → import → undo
+  mod  src/pages/ShopProducts.jsx               the two buttons, the category label
+                                                column, refresh after an import
+  mod  src/components/ShopProductModal.jsx      the category select reads the server
+  mod  src/services/communication.jsx           shopCategoryAPI; shopProductAPI
+                                                gains bulkTemplate / bulkImport /
+                                                bulkUndo
+  del  src/utils/productCategory.js             the old hard-coded list
+
+Backend it talks to: /api/shop-categories/admin/* and
+/api/shop-products/bulk/{template,import,undo} (patches
+`backend-1-shop-categories.patch` and `backend-3-shop-bulk-products.patch`).
+
+Verified: `vite build` passes with both dialogs in the bundle.
+---
+ src/components/ShopBulkImportModal.jsx | 446 +++++++++++++++++++++++++++++++++
+ src/components/ShopCategoriesModal.jsx | 376 +++++++++++++++++++++++++++
+ src/components/ShopProductModal.jsx    |  48 +++-
+ src/pages/ShopProducts.jsx             |  50 +++-
+ src/utils/productCategory.js           |  10 -
+ 5 files changed, 912 insertions(+), 18 deletions(-)
+ src/services/communication.jsx | 99 ++++
+
+
+diff --git a/src/components/ShopBulkImportModal.jsx b/src/components/ShopBulkImportModal.jsx
+new file mode 100644
+index 0000000..558148c
+--- /dev/null
++++ b/src/components/ShopBulkImportModal.jsx
+@@ -0,0 +1,446 @@
++import { useEffect, useRef, useState } from "react";
++import { Modal, Button, Form, Spinner, ProgressBar } from "react-bootstrap";
++import { toast } from "react-toastify";
++import { FileSpreadsheet, Download, UploadCloud, CheckCircle2, AlertTriangle, Undo2, FileText, X } from "lucide-react";
++import { shopProductAPI } from "../services/communication.jsx";
++
++/**
++ * Bulk add products: download the sample → fill it → upload it → read the
++ * per-row report → import → (if it was a mistake) undo.
++ *
++ * The rules this dialog exists to honour, because breaking any of them turns a
++ * feature into a support queue:
++ *
++ *   · NEVER import straight from the drop. "Check file" always runs the import
++ *     with `dryRun: true` first, which writes nothing and answers the report; the
++ *     button that actually writes names the exact number ("Import 112").
++ *   · SHOW THE SHEET'S ROW NUMBER, not an array index — that is the number the
++ *     admin can find in Excel.
++ *   · NAME THE FIELD AND THE FIX. "Invalid value" is not a message.
++ *   · ONE FILE AT A TIME. Two concurrent imports are two reports nobody can tell
++ *     apart.
++ *   · A BIG IMPORT DOES NOT BLOCK THE PANEL: the dialog stays dismissable, and a
++ *     toast reports the outcome when it finishes.
++ *   · OFFER THE REPORT AS A FILE, so the bad rows can be fixed in Excel.
++ */
++
++const MAX_MB = 5;
++
++const sizeLabel = (bytes) => {
++  if (!Number.isFinite(bytes)) return "";
++  if (bytes < 1024) return `${bytes} B`;
++  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
++  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
++};
++
++const resultTone = {
++  CREATED: "success",
++  UPDATED: "primary",
++  SKIPPED: "secondary",
++  FAILED: "danger"
++};
++
++const ShopBulkImportModal = ({ show, onHide, onImported }) => {
++  const [step, setStep] = useState("pick"); // pick | report | done
++  const [file, setFile] = useState(null);
++  const [mode, setMode] = useState("CREATE_ONLY");
++  const [dragging, setDragging] = useState(false);
++  const [busy, setBusy] = useState(""); // '' | 'check' | 'import' | 'undo' | 'template'
++  const [report, setReport] = useState(null);
++  const [importResult, setImportResult] = useState(null);
++  const inputRef = useRef(null);
++  // The dialog may be closed while the import runs; the request keeps going and
++  // the toast still tells the admin what happened.
++  const alive = useRef(true);
++
++  useEffect(() => () => { alive.current = false; }, []);
++
++  useEffect(() => {
++    if (show) {
++      setStep("pick");
++      setFile(null);
++      // Pre-fill from the last import so the admin does not have to remember
++      // which choice they made.
++      try {
++        setMode(localStorage.getItem("shopBulkImportMode") || "CREATE_ONLY");
++      } catch {
++        setMode("CREATE_ONLY");
++      }
++      setReport(null);
++      setImportResult(null);
++      setBusy("");
++    }
++  }, [show]);
++
++  const rememberMode = (next) => {
++    setMode(next);
++    try { localStorage.setItem("shopBulkImportMode", next); } catch { /* storage blocked */ }
++  };
++
++  const acceptFile = (picked) => {
++    if (!picked) return;
++    const name = String(picked.name || "").toLowerCase();
++    if (!name.endsWith(".xlsx") && !name.endsWith(".csv")) {
++      toast.error("That is not a spreadsheet — upload an .xlsx or .csv file");
++      return;
++    }
++    if (picked.size > MAX_MB * 1024 * 1024) {
++      toast.error(`That file is ${sizeLabel(picked.size)} — the limit is ${MAX_MB} MB. Split the sheet and upload the parts.`);
++      return;
++    }
++    setFile(picked);
++    setReport(null);
++    setStep("pick");
++  };
++
++  const handleDrop = (event) => {
++    event.preventDefault();
++    setDragging(false);
++    acceptFile(event.dataTransfer?.files?.[0]);
++  };
++
++  const downloadBlob = (blob, fileName) => {
++    const url = URL.createObjectURL(blob);
++    const link = document.createElement("a");
++    link.href = url;
++    link.download = fileName;
++    document.body.appendChild(link);
++    link.click();
++    document.body.removeChild(link);
++    URL.revokeObjectURL(url);
++  };
++
++  const handleTemplate = async (format) => {
++    setBusy("template");
++    try {
++      const response = await shopProductAPI.bulkTemplate(format);
++      const blob = response?.data instanceof Blob ? response.data : new Blob([response?.data]);
++      downloadBlob(blob, `naai-shop-product-template.${format}`);
++      toast.success("Template downloaded — fill it in and drop it back here");
++    } catch (error) {
++      toast.error(error?.response?.data?.message || "Could not download the template");
++    } finally {
++      setBusy("");
++    }
++  };
++
++  const runCheck = async () => {
++    if (!file) {
++      toast.error("Choose the sheet first");
++      return;
++    }
++    setBusy("check");
++    try {
++      const result = await shopProductAPI.bulkImport({ file, mode, dryRun: true });
++      if (!result.success && !result.data) {
++        toast.error(result.message || "That file could not be read");
++        return;
++      }
++      setReport({ ...result.data, message: result.message });
++      setStep("report");
++    } catch (error) {
++      toast.error(error?.response?.data?.message || "That file could not be read");
++    } finally {
++      setBusy("");
++    }
++  };
++
++  const runImport = async () => {
++    if (!file) return;
++    setBusy("import");
++    try {
++      const result = await shopProductAPI.bulkImport({ file, mode, dryRun: false });
++      const data = result.data || {};
++      if (alive.current) {
++        setImportResult({ ...data, message: result.message });
++        setStep("done");
++      }
++      if (data?.summary?.created || data?.summary?.updated) {
++        toast.success(`${data.summary.created} added · ${data.summary.updated} updated${data.summary.failed ? ` · ${data.summary.failed} failed` : ""}`);
++        onImported?.();
++      } else {
++        toast.error(result.message || "Nothing was imported");
++      }
++    } catch (error) {
++      toast.error(error?.response?.data?.message || "The import failed");
++    } finally {
++      if (alive.current) setBusy("");
++    }
++  };
++
++  const handleUndo = async () => {
++    const importId = importResult?.importId;
++    if (!importId) return;
++    setBusy("undo");
++    try {
++      const result = await shopProductAPI.bulkUndo({ importId });
++      if (result.success) {
++        toast.success(result.message || "Import undone");
++        onImported?.();
++        setStep("pick");
++        setFile(null);
++        setImportResult(null);
++        setReport(null);
++      } else {
++        toast.error(result.message || "Could not undo this import");
++      }
++    } finally {
++      setBusy("");
++    }
++  };
++
++  /** The report as a CSV the admin can open in Excel, fix and re-upload. */
++  const downloadReport = () => {
++    const source = step === "done" ? importResult : report;
++    if (!source) return;
++    const header = ["row", "productName", "result", "field", "message"];
++    const escape = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
++    const lines = [header.join(",")];
++    (source.rows || []).forEach((row) => {
++      if (row.errors?.length) {
++        row.errors.forEach((error) => {
++          lines.push([row.row, row.productName, row.result, error.field, error.message].map(escape).join(","));
++        });
++      } else {
++        lines.push([row.row, row.productName, row.result, "", ""].map(escape).join(","));
++      }
++    });
++    downloadBlob(new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8;" }), "naai-shop-import-report.csv");
++  };
++
++  const summary = (step === "done" ? importResult : report)?.summary || { rows: 0, created: 0, updated: 0, skipped: 0, failed: 0 };
++  const problems = ((step === "done" ? importResult : report)?.rows || []).filter((row) => row.result !== "CREATED");
++  const importable = summary.created + summary.updated;
++
++  return (
++    <Modal show={show} onHide={onHide} centered size="lg">
++      <Modal.Header closeButton className="border-0 pb-0">
++        <div>
++          <Modal.Title className="h5 mb-1 d-flex align-items-center gap-2">
++            <FileSpreadsheet size={18} /> Bulk add products
++          </Modal.Title>
++          <div className="text-muted small">Download the sample, fill it in, drop it back. Nothing is written until you confirm.</div>
++        </div>
++      </Modal.Header>
++
++      <Modal.Body className="pt-3">
++        {step === "pick" && (
++          <>
++            {/* 1 — the sample */}
++            <div className="mb-3">
++              <div className="fw-semibold small mb-1">1 · Download the sample</div>
++              <div className="d-flex flex-wrap gap-2">
++                <Button size="sm" variant="outline-dark" disabled={busy === "template"} onClick={() => handleTemplate("xlsx")}>
++                  <Download size={14} className="me-1" /> Sample (.xlsx)
++                </Button>
++                <Button size="sm" variant="outline-secondary" disabled={busy === "template"} onClick={() => handleTemplate("csv")}>
++                  <FileText size={14} className="me-1" /> Blank (.csv)
++                </Button>
++              </div>
++              <div className="text-muted small mt-1">
++                Photos: square <strong>1200 × 1200 px JPG</strong>, white background, <strong>≤ 250 KB</strong>, up to four per product.
++                The first one is the cover.
++              </div>
++            </div>
++
++            {/* 2 — the file */}
++            <div className="mb-3">
++              <div className="fw-semibold small mb-1">2 · Fill it in, then drop it here</div>
++              <div
++                onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
++                onDragLeave={() => setDragging(false)}
++                onDrop={handleDrop}
++                onClick={() => inputRef.current?.click()}
++                role="button"
++                tabIndex={0}
++                onKeyDown={(event) => { if (event.key === "Enter") inputRef.current?.click(); }}
++                className={`border border-2 border-dashed rounded-3 p-3 text-center ${dragging ? "bg-light" : ""}`}
++                style={{ borderStyle: "dashed", cursor: "pointer", borderColor: dragging ? "#0d6efd" : "#ced4da" }}
++              >
++                <UploadCloud size={26} className="text-muted mb-1" />
++                {file ? (
++                  <div className="small">
++                    <span className="fw-semibold">{file.name}</span> · {sizeLabel(file.size)}
++                    <button
++                      type="button"
++                      className="btn btn-sm btn-link p-0 ms-2 align-baseline"
++                      onClick={(event) => { event.stopPropagation(); setFile(null); setReport(null); }}
++                    >
++                      <X size={13} /> remove
++                    </button>
++                  </div>
++                ) : (
++                  <div className="small text-muted">Drop an .xlsx or .csv here, or click to browse (max {MAX_MB} MB · 1000 rows)</div>
++                )}
++                <input
++                  ref={inputRef}
++                  type="file"
++                  accept=".xlsx,.csv"
++                  className="d-none"
++                  onChange={(event) => acceptFile(event.target.files?.[0])}
++                />
++              </div>
++            </div>
++
++            {/* 3 — what happens to names that already exist */}
++            <div className="mb-1">
++              <div className="fw-semibold small mb-1">3 · Names that already exist</div>
++              <Form.Check
++                type="radio"
++                id="bulk-create-only"
++                name="bulk-mode"
++                label={<span className="small">Skip them (create only)</span>}
++                checked={mode === "CREATE_ONLY"}
++                onChange={() => rememberMode("CREATE_ONLY")}
++              />
++              <Form.Check
++                type="radio"
++                id="bulk-upsert"
++                name="bulk-mode"
++                label={<span className="small">Update them with the sheet's values</span>}
++                checked={mode === "UPSERT"}
++                onChange={() => rememberMode("UPSERT")}
++              />
++            </div>
++          </>
++        )}
++
++        {(step === "report" || step === "done") && (
++          <>
++            <div className="d-flex flex-wrap gap-2 mb-3">
++              <span className="badge bg-success-subtle text-success-emphasis fs-6 fw-normal">
++                {step === "done" ? summary.created : summary.created} {step === "done" ? "added" : "new"}
++              </span>
++              {summary.updated > 0 && (
++                <span className="badge bg-primary-subtle text-primary-emphasis fs-6 fw-normal">{summary.updated} to update</span>
++              )}
++              {summary.skipped > 0 && (
++                <span className="badge bg-secondary-subtle text-secondary-emphasis fs-6 fw-normal">
++                  {summary.skipped} already exist {step === "done" ? "· skipped" : "(will be skipped)"}
++                </span>
++              )}
++              {summary.failed > 0 && (
++                <span className="badge bg-danger-subtle text-danger-emphasis fs-6 fw-normal">
++                  {summary.failed} need{summary.failed === 1 ? "s" : ""} fixing
++                </span>
++              )}
++              <span className="badge bg-light text-dark border fs-6 fw-normal">{summary.rows} rows</span>
++            </div>
++
++            {step === "report" && summary.failed === 0 && summary.skipped === 0 && (
++              <div className="alert alert-success py-2 px-3 small mb-3 d-flex align-items-center gap-2">
++                <CheckCircle2 size={15} /> Every row is valid. Nothing has been written yet.
++              </div>
++            )}
++
++            {step === "report" && summary.failed > 0 && (
++              <div className="alert alert-warning py-2 px-3 small mb-3 d-flex align-items-start gap-2">
++                <AlertTriangle size={15} className="mt-1" />
++                <div>
++                  {summary.failed} row{summary.failed === 1 ? "" : "s"} will be skipped and reported. The rest still import —
++                  one bad row never blocks the file. Fix them now, or import and re-upload just those rows.
++                </div>
++              </div>
++            )}
++
++            {problems.length > 0 && (
++              <div className="table-responsive mb-3" style={{ maxHeight: 280, overflowY: "auto" }}>
++                <table className="table table-sm align-middle mb-0" style={{ fontSize: "0.85rem" }}>
++                  <thead>
++                    <tr className="text-muted small" style={{ textTransform: "uppercase", letterSpacing: "0.4px" }}>
++                      <th style={{ width: 60 }}>Row</th>
++                      <th>Product</th>
++                      <th style={{ width: 110 }}>Result</th>
++                      <th>Problem</th>
++                    </tr>
++                  </thead>
++                  <tbody>
++                    {problems.map((row, index) => (
++                      <tr key={`${row.row}-${index}`}>
++                        <td className="fw-semibold">{row.row}</td>
++                        <td className="text-break">{row.productName || "—"}</td>
++                        <td>
++                          <span className={`badge bg-${resultTone[row.result] || "secondary"}-subtle text-${resultTone[row.result] || "secondary"}-emphasis`}>
++                            {row.result}
++                          </span>
++                        </td>
++                        <td>
++                          {(row.errors || []).map((error, errorIndex) => (
++                            <div key={`${error.field}-${errorIndex}`}>
++                              <code className="text-danger-emphasis">{error.field}</code> — {error.message}
++                            </div>
++                          ))}
++                        </td>
++                      </tr>
++                    ))}
++                  </tbody>
++                </table>
++              </div>
++            )}
++
++            {step === "done" && summary.failed > 0 && (
++              <div className="text-muted small mb-2">
++                The rows below were refused; download the report, fix them and upload again — products that already
++                landed are skipped by name, never duplicated.
++              </div>
++            )}
++          </>
++        )}
++
++        {busy === "import" && (
++          <div className="mb-2">
++            <ProgressBar animated now={100} variant="warning" style={{ height: 6 }} />
++            <div className="text-muted small mt-1">Importing {summary.rows} rows… you can close this dialog; a toast will tell you when it finishes.</div>
++          </div>
++        )}
++      </Modal.Body>
++
++      <Modal.Footer className="border-0 d-flex flex-wrap justify-content-between gap-2">
++        <div>
++          {(step === "report" || step === "done") && problems.length > 0 && (
++            <Button size="sm" variant="outline-secondary" onClick={downloadReport}>
++              <Download size={14} className="me-1" /> Download this report
++            </Button>
++          )}
++        </div>
++
++        <div className="d-flex gap-2">
++          {step === "pick" && (
++            <>
++              <Button size="sm" variant="outline-secondary" onClick={onHide} disabled={busy === "check"}>Cancel</Button>
++              <Button size="sm" variant="dark" onClick={runCheck} disabled={!file || busy === "check"}>
++                {busy === "check" ? <Spinner animation="border" size="sm" className="me-1" /> : null}
++                {busy === "check" ? "Checking…" : "Check file"}
++              </Button>
++            </>
++          )}
++
++          {step === "report" && (
++            <>
++              <Button size="sm" variant="outline-secondary" onClick={() => setStep("pick")} disabled={busy === "import"}>
++                Fix and re-upload
++              </Button>
++              <Button size="sm" variant="dark" onClick={runImport} disabled={!importable || busy === "import"}>
++                {busy === "import" ? <Spinner animation="border" size="sm" className="me-1" /> : null}
++                Import {importable} product{importable === 1 ? "" : "s"}
++              </Button>
++            </>
++          )}
++
++          {step === "done" && (
++            <>
++              {importResult?.importId && (
++                <Button size="sm" variant="outline-danger" onClick={handleUndo} disabled={busy === "undo"}>
++                  <Undo2 size={14} className="me-1" /> {busy === "undo" ? "Undoing…" : "Undo this import"}
++                </Button>
++              )}
++              <Button size="sm" variant="dark" onClick={onHide}>Done</Button>
++            </>
++          )}
++        </div>
++      </Modal.Footer>
++    </Modal>
++  );
++};
++
++export default ShopBulkImportModal;
+diff --git a/src/components/ShopCategoriesModal.jsx b/src/components/ShopCategoriesModal.jsx
+new file mode 100644
+index 0000000..3696823
+--- /dev/null
++++ b/src/components/ShopCategoriesModal.jsx
+@@ -0,0 +1,376 @@
++import { useCallback, useEffect, useState } from "react";
++import { Modal, Button, Form, Spinner } from "react-bootstrap";
++import { toast } from "react-toastify";
++import { Plus, Pencil, Trash2, ArrowUp, ArrowDown, Eye, EyeOff, Tags, AlertTriangle } from "lucide-react";
++import { shopCategoryAPI } from "../services/communication.jsx";
++
++/**
++ * The shop's category list — the one the website and the app read.
++ *
++ * Everything here writes to `shop_categories` through `/api/shop-categories/admin/*`,
++ * so a category added in this dialog appears in the customer's filter on the next
++ * load, with this label and this position, and with no deploy.
++ *
++ * Three rules the dialog makes visible instead of surprising:
++ *
++ *   · ORDER IS THE CUSTOMER'S ORDER. The arrows write `sortOrder`; there is no
++ *     separate "display order" to keep in step.
++ *   · RENAMING CHANGES ONLY THE LABEL. The id is a slug fixed at creation and the
++ *     products store it, so the dialog says so rather than implying the web
++ *     address moved.
++ *   · DELETING A CATEGORY IN USE IS REFUSED. The API answers with the count; the
++ *     dialog then asks where to move those products and retries with `reassignTo`.
++ *     A category deleted out from under a product is exactly the "wrong shelf"
++ *     complaint this whole feature exists to fix.
++ */
++const ShopCategoriesModal = ({ show, onHide, onChanged }) => {
++  const [categories, setCategories] = useState([]);
++  const [unmatched, setUnmatched] = useState([]);
++  const [loading, setLoading] = useState(true);
++  const [saving, setSaving] = useState(false);
++
++  const [newLabel, setNewLabel] = useState("");
++  const [editing, setEditing] = useState(null); // { id, label }
++  const [deleteTarget, setDeleteTarget] = useState(null); // category awaiting a decision
++  const [moveTo, setMoveTo] = useState("");
++
++  const load = useCallback(async () => {
++    setLoading(true);
++    try {
++      const result = await shopCategoryAPI.list();
++      if (result.success) {
++        setCategories(result.data?.categories || []);
++        setUnmatched(result.data?.unmatched || []);
++      } else {
++        toast.error(result.message || "Could not load the categories");
++      }
++    } finally {
++      setLoading(false);
++    }
++  }, []);
++
++  useEffect(() => {
++    if (show) {
++      load();
++      setEditing(null);
++      setNewLabel("");
++      setDeleteTarget(null);
++      setMoveTo("");
++    }
++  }, [show, load]);
++
++  const afterChange = () => {
++    load();
++    // The product list shows the label, and the product editor's select is fed
++    // from this list — refresh both.
++    onChanged?.();
++  };
++
++  const handleCreate = async (event) => {
++    event?.preventDefault();
++    const label = newLabel.trim();
++    if (label.length < 2) {
++      toast.error("A category name needs at least 2 characters");
++      return;
++    }
++    setSaving(true);
++    try {
++      const result = await shopCategoryAPI.create({ label });
++      if (result.success) {
++        toast.success(`"${label}" added — customers see it in the shop filter`);
++        setNewLabel("");
++        afterChange();
++      } else {
++        toast.error(result.message || "Could not add the category");
++      }
++    } finally {
++      setSaving(false);
++    }
++  };
++
++  const handleRename = async () => {
++    if (!editing) return;
++    const label = String(editing.label || "").trim();
++    if (label.length < 2) {
++      toast.error("A category name needs at least 2 characters");
++      return;
++    }
++    setSaving(true);
++    try {
++      const result = await shopCategoryAPI.update({ id: editing.id, label });
++      if (result.success) {
++        toast.success("Category renamed");
++        setEditing(null);
++        afterChange();
++      } else {
++        toast.error(result.message || "Could not rename the category");
++      }
++    } finally {
++      setSaving(false);
++    }
++  };
++
++  const handleToggleActive = async (category) => {
++    setSaving(true);
++    try {
++      const result = await shopCategoryAPI.update({ id: category.id, isActive: !category.isActive });
++      if (result.success) {
++        toast.success(category.isActive
++          ? `"${category.label}" hidden from the shop filter — its products keep it`
++          : `"${category.label}" shown in the shop filter again`);
++        afterChange();
++      } else {
++        toast.error(result.message || "Could not update the category");
++      }
++    } finally {
++      setSaving(false);
++    }
++  };
++
++  /**
++   * Move a category up or down one place. The two rows swap `sortOrder`; when
++   * two rows already share a position the list is renumbered first so a swap
++   * always changes something.
++   */
++  const handleMove = async (index, direction) => {
++    const target = index + direction;
++    if (target < 0 || target >= categories.length) return;
++    const current = categories[index];
++    const neighbour = categories[target];
++    setSaving(true);
++    try {
++      const first = await shopCategoryAPI.update({ id: current.id, sortOrder: neighbour.sortOrder });
++      const second = first.success
++        ? await shopCategoryAPI.update({ id: neighbour.id, sortOrder: current.sortOrder })
++        : { success: false };
++      if (first.success && second.success) {
++        afterChange();
++      } else {
++        toast.error(first.message || second.message || "Could not change the order");
++        load();
++      }
++    } finally {
++      setSaving(false);
++    }
++  };
++
++  const handleDelete = async (reassignTo) => {
++    if (!deleteTarget) return;
++    setSaving(true);
++    try {
++      const result = await shopCategoryAPI.remove({ id: deleteTarget.id, reassignTo: reassignTo || undefined });
++      if (result.success) {
++        toast.success(result.message || "Category deleted");
++        setDeleteTarget(null);
++        setMoveTo("");
++        afterChange();
++      } else {
++        // The refusal names the count; keep the dialog open offering the move.
++        toast.error(result.message || "Could not delete the category");
++      }
++    } finally {
++      setSaving(false);
++    }
++  };
++
++  const otherCategories = categories.filter((item) => item.id !== deleteTarget?.id);
++
++  return (
++    <Modal show={show} onHide={onHide} centered size="lg" backdrop="static">
++      <Modal.Header closeButton className="border-0 pb-0">
++        <div>
++          <Modal.Title className="h5 mb-1 d-flex align-items-center gap-2">
++            <Tags size={18} /> Categories
++          </Modal.Title>
++          <div className="text-muted small">
++            This list <strong>is</strong> the shop's filter — the website and the app read it, in this order.
++          </div>
++        </div>
++      </Modal.Header>
++
++      <Modal.Body className="pt-3">
++        {loading ? (
++          <div className="text-center py-4"><Spinner animation="border" size="sm" /></div>
++        ) : (
++          <>
++            <div className="table-responsive">
++              <table className="table align-middle mb-2" style={{ fontSize: "0.9rem" }}>
++                <thead>
++                  <tr className="text-muted small" style={{ textTransform: "uppercase", letterSpacing: "0.4px" }}>
++                    <th style={{ width: 76 }}>Order</th>
++                    <th>Category</th>
++                    <th className="text-end">Products</th>
++                    <th className="text-end">Actions</th>
++                  </tr>
++                </thead>
++                <tbody>
++                  {categories.map((category, index) => (
++                    <tr key={category.id} className={category.isActive ? "" : "opacity-75"}>
++                      <td>
++                        <div className="d-flex gap-1">
++                          <button
++                            className="btn btn-sm btn-light border"
++                            title="Move up"
++                            disabled={saving || index === 0}
++                            onClick={() => handleMove(index, -1)}
++                          >
++                            <ArrowUp size={13} />
++                          </button>
++                          <button
++                            className="btn btn-sm btn-light border"
++                            title="Move down"
++                            disabled={saving || index === categories.length - 1}
++                            onClick={() => handleMove(index, 1)}
++                          >
++                            <ArrowDown size={13} />
++                          </button>
++                        </div>
++                      </td>
++                      <td>
++                        {editing?.id === category.id ? (
++                          <div className="d-flex gap-2">
++                            <Form.Control
++                              size="sm"
++                              autoFocus
++                              value={editing.label}
++                              onChange={(event) => setEditing({ ...editing, label: event.target.value })}
++                              onKeyDown={(event) => {
++                                if (event.key === "Enter") handleRename();
++                                if (event.key === "Escape") setEditing(null);
++                              }}
++                            />
++                            <Button size="sm" variant="dark" onClick={handleRename} disabled={saving}>Save</Button>
++                            <Button size="sm" variant="outline-secondary" onClick={() => setEditing(null)} disabled={saving}>Cancel</Button>
++                          </div>
++                        ) : (
++                          <div>
++                            <div className="fw-semibold d-flex align-items-center gap-2">
++                              {category.label}
++                              {!category.isActive && <span className="badge bg-secondary-subtle text-secondary-emphasis">Hidden</span>}
++                            </div>
++                            {/* The id is what products store — say it once, here. */}
++                            <div className="text-muted small">
++                              stays <code>{category.id}</code> if you rename it
++                            </div>
++                          </div>
++                        )}
++                      </td>
++                      <td className="text-end">
++                        {category.productCount > 0
++                          ? category.productCount
++                          : <span className="text-muted">0</span>}
++                      </td>
++                      <td className="text-end">
++                        <div className="d-flex justify-content-end gap-1">
++                          <button
++                            className="btn btn-sm btn-light border"
++                            title={category.isActive ? "Hide from the shop filter" : "Show in the shop filter"}
++                            disabled={saving}
++                            onClick={() => handleToggleActive(category)}
++                          >
++                            {category.isActive ? <EyeOff size={13} /> : <Eye size={13} />}
++                          </button>
++                          <button
++                            className="btn btn-sm btn-light border"
++                            title="Rename"
++                            disabled={saving}
++                            onClick={() => setEditing({ id: category.id, label: category.label })}
++                          >
++                            <Pencil size={13} />
++                          </button>
++                          <button
++                            className="btn btn-sm btn-outline-danger"
++                            title="Delete"
++                            disabled={saving}
++                            onClick={() => { setDeleteTarget(category); setMoveTo(""); }}
++                          >
++                            <Trash2 size={13} />
++                          </button>
++                        </div>
++                      </td>
++                    </tr>
++                  ))}
++                </tbody>
++              </table>
++            </div>
++
++            {/* Products filed under free text that no category owns — the list an
++                admin works through to finish the tidy-up. */}
++            {unmatched.length > 0 && (
++              <div className="alert alert-warning py-2 px-3 small mb-3">
++                <div className="fw-semibold mb-1 d-flex align-items-center gap-1">
++                  <AlertTriangle size={14} /> {unmatched.length} product value{unmatched.length === 1 ? "" : "s"} not in this list
++                </div>
++                {unmatched.map((item) => (
++                  <div key={item.value}>
++                    <code>{item.value}</code> — {item.productCount} product{item.productCount === 1 ? "" : "s"}
++                  </div>
++                ))}
++                <div className="mt-1">Open those products and pick a category; the extra filter chip disappears with them.</div>
++              </div>
++            )}
++
++            <Form onSubmit={handleCreate} className="d-flex gap-2">
++              <Form.Control
++                size="sm"
++                placeholder="New category — e.g. Nail care"
++                value={newLabel}
++                maxLength={120}
++                onChange={(event) => setNewLabel(event.target.value)}
++              />
++              <Button type="submit" size="sm" variant="dark" disabled={saving || newLabel.trim().length < 2}>
++                <Plus size={14} className="me-1" /> Add
++              </Button>
++            </Form>
++          </>
++        )}
++      </Modal.Body>
++
++      <Modal.Footer className="border-0">
++        <Button variant="secondary" onClick={onHide}>Done</Button>
++      </Modal.Footer>
++
++      {/* Deleting a category with products: the API refuses, so the dialog asks
++          where they should go and only then deletes. */}
++      <Modal show={Boolean(deleteTarget)} onHide={() => setDeleteTarget(null)} centered backdrop="static">
++        <Modal.Header closeButton className="border-0 pb-0">
++          <Modal.Title className="h6 mb-0">Delete "{deleteTarget?.label}"?</Modal.Title>
++        </Modal.Header>
++        <Modal.Body className="pt-2">
++          {deleteTarget?.productCount > 0 ? (
++            <>
++              <p className="small mb-2">
++                <strong>{deleteTarget.productCount} product{deleteTarget.productCount === 1 ? "" : "s"}</strong> use
++                this category. Choose where to move them — a product left on a category that no longer exists
++                disappears from the shelf.
++              </p>
++              <Form.Select size="sm" value={moveTo} onChange={(event) => setMoveTo(event.target.value)}>
++                <option value="">Move them to…</option>
++                {otherCategories.map((item) => (
++                  <option key={item.id} value={item.id}>{item.label}</option>
++                ))}
++              </Form.Select>
++            </>
++          ) : (
++            <p className="small mb-0">Nothing uses this category, so it can be removed safely.</p>
++          )}
++        </Modal.Body>
++        <Modal.Footer className="border-0">
++          <Button variant="outline-secondary" size="sm" onClick={() => setDeleteTarget(null)} disabled={saving}>
++            Cancel
++          </Button>
++          <Button
++            variant="danger"
++            size="sm"
++            disabled={saving || (deleteTarget?.productCount > 0 && !moveTo)}
++            onClick={() => handleDelete(moveTo)}
++          >
++            {deleteTarget?.productCount > 0 && moveTo ? "Move products and delete" : "Delete category"}
++          </Button>
++        </Modal.Footer>
++      </Modal>
++    </Modal>
++  );
++};
++
++export default ShopCategoriesModal;
+diff --git a/src/components/ShopProductModal.jsx b/src/components/ShopProductModal.jsx
+index 67d595f..efb5c87 100644
+--- a/src/components/ShopProductModal.jsx
++++ b/src/components/ShopProductModal.jsx
+@@ -1,9 +1,9 @@
+ import { useState, useEffect } from "react";
+ import { Modal, Form, Button } from "react-bootstrap";
+-import { API_BASE_URL, shopProductAPI } from "../services/communication";
++import { API_BASE_URL, shopProductAPI, shopCategoryAPI } from "../services/communication";
+ import { toast } from "react-toastify";
+ import { FaPlus, FaTimes } from "react-icons/fa";
+-import { productCategory } from "../utils/productCategory";
++
+ 
+ const ShopProductModal = ({ showModal, setShowModal, initialProduct = null, onSuccess }) => {
+   const isEdit = Boolean(initialProduct);
+@@ -20,6 +20,34 @@ const ShopProductModal = ({ showModal, setShowModal, initialProduct = null, onSu
+     description: ""
+   });
+ 
++  // The select is fed by the server, not by a hard-coded array: this is the one
++  // list the admin panel, the website and the app share.
++  const [categoryOptions, setCategoryOptions] = useState([]);
++
++  useEffect(() => {
++    if (!showModal) return;
++    let cancelled = false;
++    (async () => {
++      const result = await shopCategoryAPI.list({ includeInactive: true });
++      if (cancelled) return;
++      if (result.success) {
++        setCategoryOptions(result.data?.categories || []);
++      } else {
++        // A failed list must not stop the admin editing a product — the field
++        // simply falls back to what the product already carries.
++        setCategoryOptions([]);
++      }
++    })();
++    return () => { cancelled = true; };
++  }, [showModal]);
++
++  // The row's stored value only counts as "legacy" when the list came back and
++  // does not contain it (an old free-text shelf, or an id from a deleted one).
++  const legacyCategory = formData.category && categoryOptions.length
++    && !categoryOptions.some((item) => item.id === formData.category)
++    ? formData.category
++    : "";
++
+   useEffect(() => {
+     if (showModal) {
+       if (initialProduct) {
+@@ -150,17 +178,27 @@ const ShopProductModal = ({ showModal, setShowModal, initialProduct = null, onSu
+             </div>
+             <div className="col-md-4 col-6">
+               <Form.Label className="fw-semibold small">Category</Form.Label>
++              {/* The SAME list the website's and the app's shop filter reads
++                  (`shop_categories`), so a category added in Shop Products →
++                  Categories is selectable here immediately and a product filed
++                  here is findable there. The value is the category ID, not a
++                  label: a label can be renamed, the id cannot. */}
+               <Form.Select
+                 name="category"
+                 value={formData.category}
+                 onChange={handleChange}
+               >
+                 <option value="">Select Category</option>
+-                {productCategory.map((category, index) => (
+-                  <option key={index} value={category}>
+-                    {category}
++                {categoryOptions.map((category) => (
++                  <option key={category.id} value={category.id}>
++                    {category.label}{category.isActive === false ? " (hidden)" : ""}
+                   </option>
+                 ))}
++                {legacyCategory && (
++                  // A product filed under an old free-text shelf still shows
++                  // what it was, so saving it does not silently blank the field.
++                  <option value={legacyCategory}>{legacyCategory} (not in the list)</option>
++                )}
+               </Form.Select>
+             </div>
+             <div className="col-md-4 col-6">
+diff --git a/src/pages/ShopProducts.jsx b/src/pages/ShopProducts.jsx
+index 2a1eec8..2e9cf6b 100644
+--- a/src/pages/ShopProducts.jsx
++++ b/src/pages/ShopProducts.jsx
+@@ -1,14 +1,16 @@
+ import { useState, useEffect, useCallback } from "react";
+-import { API_BASE_URL, shopProductAPI } from "../services/communication";
++import { API_BASE_URL, shopProductAPI, shopCategoryAPI } from "../services/communication";
+ import Layout from "../components/Layout.jsx";
+ import SearchInput from "../components/SearchInput.jsx";
+ import Pagination from "../components/Pagination.jsx";
+ import Loader from "../components/Loader.jsx";
+ import DeleteConfirmModal from "../components/DeleteConfirmModal.jsx";
+ import ShopProductModal from "../components/ShopProductModal.jsx";
++import ShopCategoriesModal from "../components/ShopCategoriesModal.jsx";
++import ShopBulkImportModal from "../components/ShopBulkImportModal.jsx";
+ import { toast } from "react-toastify";
+ import { useNavigate } from "react-router-dom";
+-import { Package, Plus, Pencil, Trash2 } from "lucide-react";
++import { Package, Plus, Pencil, Trash2, Tags, Upload } from "lucide-react";
+ 
+ const GENDER_LABELS = { MALE: "Men", FEMALE: "Women", UNISEX: "Unisex" };
+ 
+@@ -34,8 +36,18 @@ const ShopProducts = () => {
+   const [showModal, setShowModal] = useState(false);
+   const [editingProduct, setEditingProduct] = useState(null);
+   const [deleteModal, setDeleteModal] = useState({ show: false, target: null });
++  // The shared category list, only to PRINT the label under a product: the row
++  // stores the id (`hair-care`), the admin reads "Hair care".
++  const [categories, setCategories] = useState([]);
++  const [showCategories, setShowCategories] = useState(false);
++  const [showBulk, setShowBulk] = useState(false);
+   const navigate = useNavigate();
+ 
++  const loadCategories = useCallback(async () => {
++    const result = await shopCategoryAPI.list();
++    if (result.success) setCategories(result.data?.categories || []);
++  }, []);
++
+   const fetchProducts = useCallback(async () => {
+     try {
+       setIsLoading(true);
+@@ -65,6 +77,17 @@ const ShopProducts = () => {
+     fetchProducts();
+   }, [fetchProducts]);
+ 
++  useEffect(() => {
++    loadCategories();
++  }, [loadCategories]);
++
++  // The label an admin recognises; a value that is not in the list (an old
++  // free-text shelf) is shown as it is rather than as a blank cell.
++  const categoryLabel = (id) => {
++    if (!id) return "—";
++    return categories.find((item) => item.id === id)?.label || id;
++  };
++
+   useEffect(() => {
+     const tab = localStorage.getItem("accessTab") ? JSON.parse(localStorage.getItem("accessTab")) : null;
+     if (localStorage.getItem("role") === "distributor" || !(tab && tab?.includes("shopProducts"))) {
+@@ -99,6 +122,12 @@ const ShopProducts = () => {
+                 <SearchInput value={search} onChange={setSearch} placeholder="Search catalog products..." />
+               </div>
+               <div className="col-12 col-md-6 d-flex flex-wrap justify-content-md-end gap-2 align-items-center">
++                <button className="button22 flex-fill flex-md-grow-0" onClick={() => setShowBulk(true)} title="Add products from a spreadsheet">
++                  <Upload size={15} className="me-1" /> Bulk add
++                </button>
++                <button className="button22 flex-fill flex-md-grow-0" onClick={() => setShowCategories(true)} title="Manage the category list every surface reads">
++                  <Tags size={15} className="me-1" /> Categories
++                </button>
+                 <button className="button23 flex-fill flex-md-grow-0" onClick={() => { setEditingProduct(null); setShowModal(true); }}>
+                   <Plus size={15} className="me-1" /> Add Product
+                 </button>
+@@ -166,7 +195,7 @@ const ShopProducts = () => {
+                             <span className="text-muted">—</span>
+                           )}
+                         </td>
+-                        <td>{p.category || "—"}</td>
++                        <td>{categoryLabel(p.category)}</td>
+                         <td>{GENDER_LABELS[p.gender] || "Any"}</td>
+                         <td>
+                           {p.isAvailable
+@@ -208,6 +237,21 @@ const ShopProducts = () => {
+           onSuccess={() => { fetchProducts(); setShowModal(false); setEditingProduct(null); }}
+         />
+ 
++        {/* The list everyone reads: adding a category here changes the website's
++            and the app's shop filter on the next load, with no deploy. */}
++        <ShopCategoriesModal
++          show={showCategories}
++          onHide={() => setShowCategories(false)}
++          onChanged={() => { loadCategories(); fetchProducts(); }}
++        />
++
++        {/* Bulk add: sample sheet in, per-row report out, undo if it was a mistake. */}
++        <ShopBulkImportModal
++          show={showBulk}
++          onHide={() => setShowBulk(false)}
++          onImported={() => { fetchProducts(); loadCategories(); }}
++        />
++
+         <DeleteConfirmModal
+           show={deleteModal.show}
+           onHide={() => setDeleteModal({ show: false, target: null })}
+diff --git a/src/utils/productCategory.js b/src/utils/productCategory.js
+deleted file mode 100644
+index 081802f..0000000
+--- a/src/utils/productCategory.js
++++ /dev/null
+@@ -1,10 +0,0 @@
+-export const productCategory = [
+-    "Hair Colour and Chemical Products",
+-    "Hair Care Products",
+-    "Hair Styling Products",
+-    "Shaving and Beard Products",
+-    "Facial and Skin Care Products",
+-    "Waxing Products",
+-    "Salon Hygiene and Disposable Items",
+-    "Salon Tools and Accessories"
+-]
+\ No newline at end of file
+diff --git a/src/services/communication.jsx b/src/services/communication.jsx
+index fcd9d13..576aa27 100644
+--- a/src/services/communication.jsx
++++ b/src/services/communication.jsx
+@@ -1355,6 +1355,49 @@ export default api;
+ // `customerStatus` = what the salon sees. DECIMAL columns come back as
+ // strings — parse with Number() before display.
+ 
++// The shop's category list — the SAME one the website and the app read
++// (`shop_categories`). Adding a category here makes it appear in the customer's
++// shop filter on the next load, in this order, with no deploy.
++export const shopCategoryAPI = {
++  // Every row (hidden ones included, so they can be un-hidden) with how many
++  // products use it, plus `unmatched`: free-text values no category owns.
++  list: async ({ includeInactive = true } = {}) => {
++    try {
++      const response = await api.post('/api/shop-categories/admin/list', { includeInactive });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to load the categories", error: error.response?.data };
++    }
++  },
++  create: async ({ label, sortOrder } = {}) => {
++    try {
++      const response = await api.post('/api/shop-categories/admin/create', { label, sortOrder });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to add the category", error: error.response?.data };
++    }
++  },
++  // `id` identifies the row and never changes — products store it. Send `label`
++  // to rename, `sortOrder` to re-order the customer's filter, `isActive` to hide.
++  update: async ({ id, label, sortOrder, isActive } = {}) => {
++    try {
++      const response = await api.post('/api/shop-categories/admin/update', { id, label, sortOrder, isActive });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to update the category", error: error.response?.data };
++    }
++  },
++  // Refused while products use it — send `reassignTo` to move them first.
++  remove: async ({ id, reassignTo } = {}) => {
++    try {
++      const response = await api.post('/api/shop-categories/admin/delete', { id, reassignTo });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to delete the category", error: error.response?.data };
++    }
++  }
++};
++
+ // Company catalog (admin product management tab)
+ export const shopProductAPI = {
+   adminList: async ({ page = 1, searchString = "" } = {}) => {
+@@ -1389,6 +1432,39 @@ export const shopProductAPI = {
+       return { success: false, message: error.response?.data?.message || "Failed to delete product", error: error.response?.data };
+     }
+   },
++  // Bulk add. The sample file is generated from the importer's own column list,
++  // so its header row and what the import accepts are the same fact.
++  bulkTemplate: async (format = "xlsx") => {
++    return await api.get(`/api/shop-products/bulk/template?format=${format}`, { responseType: "blob" });
++  },
++  // ONE file at a time. `dryRun: true` validates and writes nothing — the dialog
++  // always runs that first and only then offers "Import N".
++  bulkImport: async ({ file, mode = "CREATE_ONLY", dryRun = true } = {}) => {
++    const form = new FormData();
++    form.append("file", file);
++    form.append("mode", mode);
++    form.append("dryRun", String(dryRun));
++    try {
++      const response = await api.post('/api/shop-products/bulk/import', form, {
++        headers: { "Content-Type": "multipart/form-data" },
++        // 1000 rows is a lot of per-row transactions; a 30s default would time
++        // out on a slow database and look like a failure that did happen.
++        timeout: 180000
++      });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "The import failed", error: error.response?.data };
++    }
++  },
++  // Soft-deletes exactly what one import CREATED (never a product it updated).
++  bulkUndo: async ({ importId } = {}) => {
++    try {
++      const response = await api.post('/api/shop-products/bulk/undo', { importId });
++      return { success: response.data?.status === "SUCCESS", data: response.data?.data, message: response.data?.message };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Could not undo the import", error: error.response?.data };
++    }
++  },
+   uploadImage: async (uploadData) => {
+     try {
+       return await api.post(`/api/upload/upload-image`, uploadData, {
