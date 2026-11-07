@@ -28,7 +28,7 @@ customer-facing products are a different system and are NOT managed here.)
 
 | Action | Endpoint | Body | Notes |
 | --- | --- | --- | --- |
-| List | `/api/shop-products/admin-list` | `{ page, search? }` | `data.products[]`, `data.pagination`; soft-deleted rows are hidden |
+| List | `/api/shop-products/admin-list` | `{ page, pageSize?, searchString?, category?, gender?, sort?, inStock? }` | `data.products[]`, `data.pagination` (with `applied`); soft-deleted rows are hidden |
 | Create | `/api/shop-products/admin-create` | `{ name, price, mrp?, category?, gender?, image?, description?, stockStatus? }` | `price` required; `mrp` optional (strikethrough price) |
 | Update | `/api/shop-products/admin-update` | `{ productId, …same fields }` | partial update |
 | Delete | `/api/shop-products/admin-delete` | `{ productId }` | soft delete — cart lines drop, existing orders keep their snapshot |
@@ -39,6 +39,30 @@ stockStatus ('available'|'out_of_stock'), createdAt, updatedAt }`.
 
 UI: table (image, name, price, mrp, category, stock) + search + create/edit
 modal + delete with confirm.
+
+### The Category filter (2026-11)
+
+The tab leads with the shop's own category list — the same `shop_categories` the
+website's filter and the app read — so an admin can answer "what is in Waxing
+products?" without scrolling a mixed table:
+
+- The select is a **Category** facet next to the search box, built from
+  `shop_categories` with the number of products in each (`Waxing products (6)`),
+  plus **All categories**. `applied.category` in the response is the resolved
+  **id**, so the panel, the storefront and the counters always name the same
+  shelf.
+- Choosing a category re-asks the server (`admin-list` now takes `category`,
+  `gender`, `sort` and `inStock` and runs the storefront's own
+  `listCatalog`), so paging and `totalProducts` describe the filtered set, not
+  the whole catalog.
+- The header says what is being shown (*"6 products in Waxing products"*) and
+  offers **Clear filters**; changing any facet returns to page 1; an empty
+  result says which category is empty instead of a blank table.
+- A product whose stored `category` is a **label** an admin typed ("Waxing
+  products") resolves to that category's id, so it is counted and listed under
+  the same filter the website applies — see
+  [`docs/BACKEND-SHOP-CATEGORY-FILTER.md`](BACKEND-SHOP-CATEGORY-FILTER.md).
+- Patch: [`patches/admin-panel-3-shop-products-category-filter.patch`](../patches/admin-panel-3-shop-products-category-filter.patch).
 
 > **Customers can buy too (new).** Shop orders are no longer salon-only: a
 > customer (USER role) browses the same `shop_products` catalog and places
@@ -186,5 +210,7 @@ Field semantics (shown in the panel, mirrored on the shop):
 - **Category management** — the panel owns the single category list the website
   and the app read; §2 of the bulk doc, and
   [`docs/BACKEND-SHOP-CATEGORIES-API.md`](BACKEND-SHOP-CATEGORIES-API.md).
+- **Category filter on Shop products** — pick a category, get its products and
+  its count, from the same list the website filters with (see §1).
 - **Booking requests tab** — a separate tab for booking REQUESTS (not bookings):
   [`docs/ADMIN-PANEL-BOOKING-REQUESTS.md`](ADMIN-PANEL-BOOKING-REQUESTS.md).

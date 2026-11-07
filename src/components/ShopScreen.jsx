@@ -26,6 +26,7 @@ import {
   applyShopFilters,
   categoryChipsFor,
   categoryLabel,
+  resolveProductCategory,
   discountPercent,
   normalizeShopProduct,
   shopCatalogQuery,
@@ -413,12 +414,19 @@ export function ShopScreen({ session, navigate, notify }) {
   // app and the admin panel — see src/lib/shopCategories.js), plus any category
   // a loaded product carries that the list no longer has.
   const shopCategories = useShopCategories(api, guest);
-  const categories = useMemo(() => categoryChipsFor(products, shopCategories), [products, shopCategories]);
+  // A row whose stored category is a label ("Waxing products") is filed under
+  // the id that label belongs to — the same answer the admin panel's filter and
+  // count give, so the two tabs agree.
+  const catalog = useMemo(
+    () => (Array.isArray(products) ? products.map(product => resolveProductCategory(product, shopCategories)) : []),
+    [products, shopCategories],
+  );
+  const categories = useMemo(() => categoryChipsFor(catalog, shopCategories), [catalog, shopCategories]);
   // The server already applied these filters when it could (and the request
   // carried all of them); the same predicate runs here once more so the grid
   // can never show a product the controls exclude — including on a backend
   // that has not shipped the filter patch and answered with an unfiltered page.
-  const visible = useMemo(() => applyShopFilters(products, filters), [products, filters]);
+  const visible = useMemo(() => applyShopFilters(catalog, filters, shopCategories), [catalog, filters, shopCategories]);
   const filtersActive = shopFiltersActive(filters);
   const totals = useMemo(() => cartTotals(cart, shopSettings), [cart, shopSettings]);
   const qtyFor = id => cart.find(line => line.productId === String(id))?.qty || 0;
@@ -593,22 +601,30 @@ export function ShopProductDetailScreen({ session, params, navigate, notify }) {
   const { products, loading, error, load } = useShopCatalog(notify, { guest, all: true });
   const { cart, add, setQty } = useSyncedCart(ownerId);
   const shopSettings = useShopSettings();
+  const shopCategories = useShopCategories(api, guest);
+  // Same category resolution as the grid: a deep-linked phone cover must show
+  // the category the shop's filter calls it, and "you may also like" must group
+  // by that too.
+  const catalog = useMemo(
+    () => (Array.isArray(products) ? products.map(product => resolveProductCategory(product, shopCategories)) : []),
+    [products, shopCategories],
+  );
 
   // A different product resets the gallery to its cover photo.
   useEffect(() => { setActiveImage(0); }, [productId]);
 
   const totals = useMemo(() => cartTotals(cart, shopSettings), [cart, shopSettings]);
-  const product = useMemo(() => products.find(value => String(value.id) === productId) || null, [products, productId]);
+  const product = useMemo(() => catalog.find(value => String(value.id) === productId) || null, [catalog, productId]);
   const images = useMemo(() => (product?.images?.length ? product.images : product?.image ? [product.image] : []), [product]);
   const [activeImage, setActiveImage] = useState(0);
   const similar = useMemo(() => (
     product
-      ? products
+      ? catalog
         .filter(value => value.available && value.category === product.category && String(value.id) !== String(product.id))
         .sort((a, b) => b.rating - a.rating || a.name.localeCompare(b.name))
         .slice(0, 6)
       : []
-  ), [products, product]);
+  ), [catalog, product]);
   const qtyFor = id => cart.find(line => line.productId === String(id))?.qty || 0;
 
   // Same rule as the grid: a visitor may add to the cart. The account is

@@ -8,6 +8,7 @@ import { api } from '../lib/api';
 import { withDeviceToken } from '../lib/apiPayload';
 import { readDeviceTokenSync, syncDeviceToken } from '../lib/deviceToken';
 import { readLocalSession } from '../lib/session';
+import { BOOKING_ACTION_WINDOW_MINUTES } from '../lib/bookingLeads';
 import { Button, Modal, Spinner, cx, getErrorMessage } from './Shared';
 
 // Alerts & permissions — the calm home for the two permissions My Naai uses.
@@ -257,7 +258,7 @@ export function NotificationDiagnostics({ onEnabled }) {
   //   · Sound: the Notifications standard has no custom-sound option — the phone
   //     or computer plays its own alert sound for the notification. With the app
   //     closed nothing of My Naai is running, so the buzzer file cannot play; the
-  //     alert is re-raised twice inside the 60-second answer window so a missed
+  //     alert is re-raised twice inside the answer window so a missed
   //     first sound is not the only chance, and the OS silent switch / channel
   //     setting is what can mute it entirely.
   const deviceAlertNote = () => {
@@ -270,7 +271,7 @@ export function NotificationDiagnostics({ onEnabled }) {
     const sound = isIosDevice()
       ? 'Sound comes from the alert itself (iPhone plays it with the app open or closed unless the phone is on silent).'
       : 'Sound comes from the alert itself, so the device volume and the browser\u2019s notification setting decide how loud it is.';
-    return `${buttons} ${sound} With the app closed the alert repeats twice within the 60-second answer window.${androidAppNotificationHint(detectBrowser())}`;
+    return `${buttons} ${sound} With the app closed the alert repeats twice within the answer window (${BOOKING_ACTION_WINDOW_MINUTES} minutes).${androidAppNotificationHint(detectBrowser())}`;
   };
 
   const alertsSummary = alertsLive

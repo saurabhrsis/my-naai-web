@@ -23,6 +23,7 @@ import {
   LEAD_STATE,
   LEAD_STATE_LABEL,
   LEAD_STATE_TONE,
+  bookingWindowMissed,
   filterLeads,
   leadView,
   normalizeLead,
@@ -114,7 +115,7 @@ function LeadCard({ lead, now, busy, onAnswer, onOpen }) {
             <span className="lead-countdown"><Timer size={12} aria-hidden="true" /> Answer in {view.countdown}</span>
           )}
           {view.state === LEAD_STATE.autoCancelled && (
-            <span className="lead-closed-note"><AlarmClock size={12} aria-hidden="true" /> No answer within 1 minute — cancelled automatically</span>
+            <span className="lead-closed-note"><AlarmClock size={12} aria-hidden="true" /> {bookingWindowMissed} — cancelled automatically</span>
           )}
           {view.state === LEAD_STATE.cancelled && (
             <span className="lead-closed-note"><CircleSlash size={12} aria-hidden="true" /> The customer withdrew this request</span>
@@ -123,7 +124,7 @@ function LeadCard({ lead, now, busy, onAnswer, onOpen }) {
         <div className="lead-actions">
           {/* Details is always here and is always READ-ONLY: it opens the
               request's facts, never the live-answer screen. The answer lives
-              beside it, on the card, because the salon has one minute. */}
+              beside it, on the card. */}
           <button type="button" className="lead-open" onClick={() => onOpen(lead)}>Details <ArrowRight size={13} /></button>
           {lead.customerPhone && (
             <a className="lead-icon-button" href={`tel:${lead.customerPhone}`} aria-label={`Call ${lead.customerName}`}>

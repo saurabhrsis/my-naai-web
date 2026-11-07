@@ -118,12 +118,15 @@ it; it is now only a safety net, never the source of the number.
 ## Shipping it
 
 The web half is in this repository. The backend half is
-[`patches/backend-shop-category-filter.patch`](../patches/backend-shop-category-filter.patch)
-— one commit, applied on top of the backend's current `main` (`1b43fd9`):
+[`patches/backend-8-shop-category-authority.patch`](../patches/backend-8-shop-category-authority.patch)
+— one commit, applied on top of the backend's current `main` (`1b43fd9`). It
+contains everything `backend-shop-category-filter.patch` had plus the live-list
+resolution in §*AF* below, so apply **one or the other, never both**
+(`backend-8` supersedes the older patch):
 
 ```bash
 cd my_naai_backend
-git am /path/to/patches/backend-shop-category-filter.patch
+git am /path/to/patches/backend-8-shop-category-authority.patch
 npm run shop:test-categories            # 13 names, explicit values, SQL shape
 npm run shop:backfill-categories        # dry run: what it would re-file
 npm run shop:backfill-categories -- --apply
@@ -169,3 +172,80 @@ curl -s -X POST "$API/api/shop-products/list" \
 # totalProducts is now the beard shelf only,
 # and pagination.applied.category is "beard-grooming"
 ```
+
+---
+
+## AF — the same six products in both tabs (2026-11)
+
+Reported from the admin panel: the panel counted **6** products under *Waxing
+products* while the shop's filter for that category showed **none**, and the
+rows themselves printed as *Category ID: `fragrance`*.
+
+The two sides were answering two different questions:
+
+| Side | How it decided a row's category |
+| --- | --- |
+| Shop (list + filter) | a `CASE` compiled from the **fixed seed taxonomy only** — a label the admin had renamed (*"Fragrance"* → *"Waxing products"*) matched no seed label, fell through to the keyword rules and landed on some other shelf |
+| Admin panel | `shop_categories` — the **live** list, where that label *is* the category with id `fragrance` |
+
+So the panel said 6 and the shop said 0, and neither was lying about its own
+data source. The fix is to make the live list the authority on both sides.
+
+### Resolution order (backend and web agree, value by value)
+
+`src/services/shopCategoryRules.js` (`resolveCategoryId`, `categoryCaseSql`):
+
+1. the value **is** a live category id (`lower(btrim(category)) = id`);
+2. the value **is** a live category's current label (case- and
+   whitespace-insensitive — a product filed as "waxing products" is Waxing);
+3. the value is a seed label (the seven the shop shipped with);
+4. the value is a slug (`/^[a-z0-9]+(?:-[a-z0-9]+)*$/`) — an admin-created or
+   retired id, kept as its own shelf;
+5. otherwise the keyword rules, then the default shelf.
+
+`src/lib/shopCatalog.js` is the web's version of the same list:
+`resolveCategoryValue(value, categories)` and
+`resolveProductCategory(product, categories)` run a row through it, and
+`applyShopFilters(products, filters, categories)` compares ids — never a label
+against an id.
+
+### What changed in each repo
+
+- **Backend** (`patches/backend-8-shop-category-authority.patch`):
+  `shopCategoryRules.js` gains the live-list arms; `shopProduct.service.js`
+  caches `shop_categories` for 30 s (falling back to the seed taxonomy, with a
+  warning, if the table or query fails) and passes that list into both
+  `categoryWhere` and `pagination.applied.category`; the admin list now runs the
+  **storefront's** `listCatalog`.
+- **Admin panel**
+  (`patches/admin-panel-3-shop-products-category-filter.patch`): the Shop
+  products tab gains the Category facet, per-category counts, page-1 reset on a
+  facet change, *"N products in …"* and **Clear filters** — the panel now asks
+  the same question the shop asks, with the same vocabulary.
+- **Web** (this repo): `normalizeShopProduct` keeps the stored value as
+  `categoryValue`; the Shop screen resolves every row through the live list
+  before it filters, chips or labels it; the category resolution is shared by
+  the grid, the product page and *"you may also like"*.
+
+### Admin list contract (new)
+
+```
+POST /api/shop-products/admin-list
+{ "page": 1, "pageSize": 24, "searchString": "", "category": "fragrance",
+  "gender": "", "sort": "popular", "inStock": "" }
+→ { status, message, data: { products: [...],
+                             pagination: { page, limit, totalProducts, totalPages, applied } } }
+```
+
+`applied.category` is the resolved **id**, so a panel that sent a label can echo
+the shelf it actually filtered.
+
+### Checking it
+
+1. Admin panel → Shop products → Category: **Waxing products**. The header reads
+   *"6 products in Waxing products"* and six rows are listed; every row's
+   category prints as *Waxing products*, not *Category ID: `fragrance`*.
+2. Website → Shop → Category: **Waxing products**. The same six products appear,
+   each card labelled *Waxing products*.
+3. `npm run shop:backfill-categories -- --apply` then re-run 1 and 2: the counts
+   must not change (the backfill writes what the filter already resolves).

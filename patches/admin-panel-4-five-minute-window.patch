@@ -1,0 +1,126 @@
+From 85ff07561af9b420bd9b16f8cf7cbcca376a284e Mon Sep 17 00:00:00 2001
+From: Arena Agent <agent@arena.ai>
+Date: Sat, 7 Nov 2026 06:40:41 +0000
+Subject: [PATCH] Booking requests: the answer window is five minutes
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The window was one minute, which is shorter than it takes to walk to the phone
+when you are holding clippers. The server now stamps a five-minute deadline; the
+panel says so in its own words instead of repeating the old number.
+
+One module (`src/utils/bookingWindow.js`) holds the number the panel PRINTS. The
+deadline itself still comes from the server on every row (`expiresAt`), so the
+panel never decides one — it counts down to the one it was given. The table's
+"no answer in 60s" and the lifecycle's "no answer within 60 seconds" now read
+"5 min", and the closed-window note reads "The 5-minute answer window has
+closed".
+---
+ src/components/BookingRequestDetailModal.jsx | 10 +++----
+ src/pages/BookingRequests.jsx                |  3 +-
+ src/utils/bookingWindow.js                   | 29 ++++++++++++++++++++
+ 3 files changed, 36 insertions(+), 6 deletions(-)
+ create mode 100644 src/utils/bookingWindow.js
+
+diff --git a/src/components/BookingRequestDetailModal.jsx b/src/components/BookingRequestDetailModal.jsx
+index 8ac8ece..711f32d 100644
+--- a/src/components/BookingRequestDetailModal.jsx
++++ b/src/components/BookingRequestDetailModal.jsx
+@@ -19,6 +19,7 @@ import {
+   ShieldCheck,
+   AlertTriangle,
+ } from "lucide-react";
++import { bookingWindowClosedCopy, bookingWindowMissedCopy } from "../utils/bookingWindow.js";
+ 
+ // ==========================================
+ // DATE & FORMAT HELPERS
+@@ -163,8 +164,8 @@ const BookingRequestDetailModal = ({ show, request, onHide, onAnswer }) => {
+     )
+   );
+ 
+-  // An admin may answer a request that is still open — inside its 60 second
+-  // window and with no answer and no booking. Anything else is read-only, and
++  // An admin may answer a request that is still open — inside its answer window
++  // and with no answer and no booking. Anything else is read-only, and
+   // the footer says which, so nobody taps a button that cannot work.
+   const expiresAt = request.expiresAt ? new Date(request.expiresAt).getTime() : null;
+   const windowOpen = !expiresAt || expiresAt > Date.now();
+@@ -209,8 +210,7 @@ const BookingRequestDetailModal = ({ show, request, onHide, onAnswer }) => {
+   if (request.status === "AUTO_CANCELLED") {
+     events.push({
+       title: "Automatically cancelled",
+-      description:
+-        "No answer within 60 seconds. The requested slot was released automatically.",
++      description: bookingWindowMissedCopy,
+       date: request.respondedAt || request.expiresAt,
+       Icon: Clock3,
+       tone: "secondary",
+@@ -1270,7 +1270,7 @@ const BookingRequestDetailModal = ({ show, request, onHide, onAnswer }) => {
+                   <div className="booking-readonly-note">
+                     <Ban size={14} />
+                     {request.status === "PENDING" && !windowOpen
+-                      ? "The 60 second answer window has closed"
++                      ? bookingWindowClosedCopy
+                       : "Read-only · already answered"}
+                   </div>
+ 
+diff --git a/src/pages/BookingRequests.jsx b/src/pages/BookingRequests.jsx
+index 0bbf755..6996fdd 100644
+--- a/src/pages/BookingRequests.jsx
++++ b/src/pages/BookingRequests.jsx
+@@ -19,6 +19,7 @@ import Pagination from "../components/Pagination.jsx";
+ import Loader from "../components/Loader.jsx";
+ import BookingRequestDetailModal, { LIFECYCLE } from "../components/BookingRequestDetailModal.jsx";
+ import { bookingRequestAPI } from "../services/communication.jsx";
++import { bookingWindowShort } from "../utils/bookingWindow.js";
+ 
+ /**
+  * The admin panel's Booking requests tab.
+@@ -608,7 +609,7 @@ const BookingRequests = () => {
+                               {renderStatus(state)}
+                               {row.onBehalfOfSalon && <div className="small text-muted mt-1 d-flex align-items-center gap-1" title="Answered by My Naai on behalf of the salon"><ShieldCheck size={12} />by My Naai</div>}
+                             </td>
+-                            <td className="small">{state === "AUTO_CANCELLED" ? <span className="text-muted">No answer in 60s</span> : shortSeconds(row.responseSeconds)}</td>
++                            <td className="small">{state === "AUTO_CANCELLED" ? <span className="text-muted">No answer in {bookingWindowShort}</span> : shortSeconds(row.responseSeconds)}</td>
+                             <td className="text-muted small br-ellipsis">{istDateTime(row.createdAt)}</td>
+                           </tr>
+                         );
+diff --git a/src/utils/bookingWindow.js b/src/utils/bookingWindow.js
+new file mode 100644
+index 0000000..a9fc293
+--- /dev/null
++++ b/src/utils/bookingWindow.js
+@@ -0,0 +1,29 @@
++// utils/bookingWindow.js
++//
++// ONE number for the booking-request answer window, as the panel speaks it.
++//
++// The window itself is the server's: it stamps `expires_at` on the request
++// (five minutes, `WINDOW_SECONDS` in
++// `src/services/bookingRequestLead.service.js` on the backend), and the panel
++// never decides a deadline — it only counts down to the one it was given and
++// says what happened when it passed.
++//
++// These constants exist so the WORDS cannot drift from that number: a row that
++// expired is "no answer in 5 min" here, in the salon's app and in the customer's
++// notification, and the next change to the window is one line, not a hunt
++// through strings.
++
++export const BOOKING_WINDOW_MINUTES = 5;
++
++/** "5 minutes" — for a sentence. */
++export const bookingWindowLabel = `${BOOKING_WINDOW_MINUTES} minutes`;
++
++/** "5 min" — for a table cell. */
++export const bookingWindowShort = `${BOOKING_WINDOW_MINUTES} min`;
++
++/** "The 60 second window has closed" → "The 5-minute window has closed". */
++export const bookingWindowClosedCopy = `The ${BOOKING_WINDOW_MINUTES}-minute answer window has closed`;
++
++/** What an auto-cancelled request reads as, in the lifecycle. */
++export const bookingWindowMissedCopy =
++  `No answer within ${bookingWindowLabel}. The requested slot was released automatically.`;
+-- 
+2.39.5
+

@@ -1,0 +1,291 @@
+From 7a5c05808eec4efbb91991032be734af7acef4b9 Mon Sep 17 00:00:00 2001
+From: Arena Agent <agent@arena.ai>
+Date: Sat, 7 Nov 2026 06:40:54 +0000
+Subject: [PATCH] Booking requests: five-minute answer window
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+One minute was shorter than it takes to walk to the phone when you are holding
+clippers, so a request could expire while the salon was already reaching for it.
+Five minutes now, from a single constant.
+
+- `WINDOW_SECONDS = 5 * 60` in bookingRequestLead.service.js. The create path
+  stamps `expires_at` from `WINDOW_MS`, the Cloud Task and the sweeper close it,
+  and both leads tabs derive the same deadline when the sweep has not run yet.
+- The sweeper's notification copy is built from `WINDOW_MINUTES`, so "within 5
+  minutes" cannot drift from the number that decided it.
+- The customer's window to answer a proposed delay is five minutes too, as its
+  own named constant (`DELAY_RESPONSE_SECONDS`) — a different promise, the same
+  length.
+- The boot-time backfill for rows that never had a window stamps 300 seconds,
+  not 60.
+
+No client sets the deadline: it is always the server's value.
+---
+ cron/bookingRequestSweeper.cron.js            | 21 ++++++++++++-------
+ .../adminBookingRequestAction.js              |  2 +-
+ .../bookingRequest/bookingRequest.js          |  9 +++++---
+ src/controller/bookingRequest/ownerAction.js  |  2 +-
+ src/database/config/ensureShopSchema.js       |  5 ++++-
+ src/database/models/bookingRequest.model.js   |  2 +-
+ src/services/bookingRequestAction.service.js  | 18 +++++++++++-----
+ src/services/bookingRequestLead.service.js    | 17 ++++++++++++---
+ 8 files changed, 53 insertions(+), 23 deletions(-)
+
+diff --git a/cron/bookingRequestSweeper.cron.js b/cron/bookingRequestSweeper.cron.js
+index 762b1a8..1776509 100644
+--- a/cron/bookingRequestSweeper.cron.js
++++ b/cron/bookingRequestSweeper.cron.js
+@@ -2,8 +2,10 @@
+ //
+ // The booking-request answer window, closed by the server.
+ //
+-// A customer sends a booking REQUEST and the salon has 60 seconds to accept,
+-// reject or propose another time. When nobody answers, the request becomes
++// A customer sends a booking REQUEST and the salon has five minutes to accept,
++// reject or propose another time (WINDOW_SECONDS in
++// src/services/bookingRequestLead.service.js — the one place that window is
++// defined; the copy below is built from it so the words cannot drift). When nobody answers, the request becomes
+ // AUTO_CANCELLED — the slot is released and the lead is recorded as MISSED.
+ // That is not a rejection: a salon that misses leads has a staffing problem, and
+ // the salon and admin tabs count the two separately.
+@@ -26,9 +28,12 @@
+ const cron = require('node-cron');
+ const db = require('../src/database/models');
+ const sendNotificationToDevice = require('../src/firebase/sendNotification');
+-const { sweepExpiredRequests } = require('../src/services/bookingRequestLead.service');
++const { sweepExpiredRequests, WINDOW_MINUTES } = require('../src/services/bookingRequestLead.service');
+ 
+-const MESSAGE = 'The salon did not answer in time, so this request was cancelled automatically and the slot released. You can send another request — it costs you nothing.';
++const MESSAGE = `The salon did not answer within ${WINDOW_MINUTES} minutes, so this request was cancelled automatically and the slot released. You can send another request — it costs you nothing.`;
++
++const MISSED_SALON_MESSAGE = `A customer asked for a slot and nobody answered within ${WINDOW_MINUTES} minutes, so it was cancelled automatically.`;
++const MISSED_SALON_MESSAGE_LONG = `${MISSED_SALON_MESSAGE} It is counted as missed, not as a rejection.`;
+ 
+ /**
+  * Tell the two people involved. Kept best-effort and per row: one customer with
+@@ -65,7 +70,7 @@ const notifyMissed = async (row) => {
+             await sendNotificationToDevice(
+                 token,
+                 'You missed a booking request',
+-                'A customer asked for a slot and nobody answered within 60 seconds, so it was cancelled automatically. It is counted as missed, not as a rejection.',
++                MISSED_SALON_MESSAGE_LONG,
+                 { bookingRequestId: row.bookingRequestId, type: 'BOOKING_REQUEST_MISSED' }
+             );
+         }
+@@ -73,7 +78,7 @@ const notifyMissed = async (row) => {
+             receiverType: 'SALON',
+             receiverId: row.salonId,
+             title: 'You missed a booking request',
+-            message: 'A customer asked for a slot and nobody answered within 60 seconds, so it was cancelled automatically.',
++            message: MISSED_SALON_MESSAGE,
+             data: { bookingRequestId: row.bookingRequestId }
+         });
+     } catch (error) {
+@@ -89,7 +94,7 @@ const runBookingRequestSweep = async ({ notify = true } = {}) => {
+     const cancelled = await sweepExpiredRequests({ force: true });
+     if (!cancelled.length) return { cancelled: 0 };
+ 
+-    console.log(`[booking-request sweeper] ${cancelled.length} request(s) auto-cancelled after the 60s window`);
++    console.log(`[booking-request sweeper] ${cancelled.length} request(s) auto-cancelled after the answer window`);
+     if (notify) {
+         for (const row of cancelled) {
+             await notifyMissed(row);
+@@ -98,7 +103,7 @@ const runBookingRequestSweep = async ({ notify = true } = {}) => {
+     return { cancelled: cancelled.length };
+ };
+ 
+-// Every 20 seconds. The window is 60 seconds, so a request is classified within
++// Every 20 seconds. The window is five minutes, so a request is classified within
+ // a third of its life at worst — fast enough that the salon's own tab, which
+ // derives the same state, never disagrees with the stored one for long.
+ // `noOverlap` keeps a slow database from stacking runs.
+diff --git a/src/controller/bookingRequest/adminBookingRequestAction.js b/src/controller/bookingRequest/adminBookingRequestAction.js
+index 613c6b1..bbafc4f 100644
+--- a/src/controller/bookingRequest/adminBookingRequestAction.js
++++ b/src/controller/bookingRequest/adminBookingRequestAction.js
+@@ -15,7 +15,7 @@ const { applyRequestAction } = require('../../services/bookingRequestAction.serv
+  *
+  *   · locks the request row for the whole transaction,
+  *   · refuses a request that already has a booking or an answer,
+- *   · refuses one past its 60 second window,
++ *   · refuses one past its answer window (five minutes),
+  *   · records `acted_by_role / acted_by_admin_id / acted_at / on_behalf_of_salon`,
+  *   · tells the salon (in-app + socket) that My Naai answered for it.
+  *
+diff --git a/src/controller/bookingRequest/bookingRequest.js b/src/controller/bookingRequest/bookingRequest.js
+index c1b36a7..80e81a7 100644
+--- a/src/controller/bookingRequest/bookingRequest.js
++++ b/src/controller/bookingRequest/bookingRequest.js
+@@ -3,6 +3,7 @@ const { Op } = require('sequelize');
+ const sendNotificationToDevice = require('../../firebase/sendNotification');
+ const { scheduleAutoCancelTask } = require('../../tasks/autoCancelTask');
+ const { createBookingRequestSchema } = require('../../validations/bookingRequest.validation');
++const { WINDOW_MS, WINDOW_SECONDS } = require('../../services/bookingRequestLead.service');
+ 
+ 
+ // 24-hour time (HH:mm) to 12-hour format with AM/PM
+@@ -212,15 +213,17 @@ const createBookingRequest = async (req, res) => {
+                 // how long the salon has to answer. The sweeper
+                 // (cron/bookingRequestSweeper.cron.js) closes it, and the leads
+                 // tab derives the same expiry if the sweep has not run yet.
+-                expiresAt: new Date(Date.now() + 60 * 1000)
++                // Five minutes, from the ONE constant
++                // (services/bookingRequestLead.service.js -> WINDOW_SECONDS).
++                expiresAt: new Date(Date.now() + WINDOW_MS)
+             },
+             { transaction: t }
+         );
+-        // ⏱️ OWNER RESPONSE → 1 MIN
++        // ⏱️ OWNER RESPONSE → the same five minutes the request is stamped with
+         try {
+             const data = await scheduleAutoCancelTask({
+                 bookingRequestId: bookingRequest.bookingRequestId,
+-                delayInSeconds: 60,
++                delayInSeconds: WINDOW_SECONDS,
+             });
+             console.log('Auto-cancel task scheduled:', data);
+         } catch (err) {
+diff --git a/src/controller/bookingRequest/ownerAction.js b/src/controller/bookingRequest/ownerAction.js
+index e00a745..ede284f 100644
+--- a/src/controller/bookingRequest/ownerAction.js
++++ b/src/controller/bookingRequest/ownerAction.js
+@@ -4,7 +4,7 @@ const { applyRequestAction } = require('../../services/bookingRequestAction.serv
+  * The salon's answer to a lead — the web tab, the mobile app's alert card and
+  * everything else that speaks this endpoint.
+  *
+- * The rules (the 60 second window, "already actioned", one booking per request,
++ * The rules (the five-minute answer window, "already actioned", one booking per request,
+  * the queue entry and the reminders) live in
+  * `services/bookingRequestAction.service.js`, because an admin may now answer on
+  * a salon's behalf through a second endpoint and the two must not be able to
+diff --git a/src/database/config/ensureShopSchema.js b/src/database/config/ensureShopSchema.js
+index ed18e77..a1dea81 100644
+--- a/src/database/config/ensureShopSchema.js
++++ b/src/database/config/ensureShopSchema.js
+@@ -70,7 +70,10 @@ const STATEMENTS = [
+     // A request created before this release has no window; give it the one it
+     // would have had. This is a value fill, not a status change — the sweeper
+     // decides what happens next.
+-    `UPDATE booking_requests SET expires_at = created_at + INTERVAL '60 seconds' WHERE expires_at IS NULL;`,
++    // Five minutes: the answer window this release ships with (WINDOW_SECONDS in
++    // services/bookingRequestLead.service.js). Only rows that never had a window
++    // are touched.
++    `UPDATE booking_requests SET expires_at = created_at + INTERVAL '300 seconds' WHERE expires_at IS NULL;`,
+     `CREATE INDEX IF NOT EXISTS idx_booking_requests_salon_status ON booking_requests (salon_id, status, created_at DESC);`,
+     `CREATE INDEX IF NOT EXISTS idx_booking_requests_pending_expiry ON booking_requests (expires_at) WHERE status = 'PENDING';`,
+ 
+diff --git a/src/database/models/bookingRequest.model.js b/src/database/models/bookingRequest.model.js
+index ed71ba1..5f5dcb4 100644
+--- a/src/database/models/bookingRequest.model.js
++++ b/src/database/models/bookingRequest.model.js
+@@ -91,7 +91,7 @@ module.exports = (sequelize) => {
+       },
+ 
+       // ── The answer window and the outcome ────────────────────────────────
+-      // Stamped by the SERVER when the request is created (created_at + 60s).
++      // Stamped by the SERVER when the request is created (created_at + 5 min).
+       // A client never sends it: whoever sets the window would otherwise set
+       // how long the salon has to answer, and a request could be kept open
+       // forever.
+diff --git a/src/services/bookingRequestAction.service.js b/src/services/bookingRequestAction.service.js
+index ba2dad7..4be13ad 100644
+--- a/src/services/bookingRequestAction.service.js
++++ b/src/services/bookingRequestAction.service.js
+@@ -17,8 +17,9 @@
+ //      `status = PENDING`, both passed the guard, and both created a booking.
+ //      The lock makes the second one wait, then read ACCEPTED.
+ //   2. A request that already carries a `booking_id` never creates another one.
+-//   3. Past its window, a request is AUTO_CANCELLED — written down here and
+-//      refused, so an accept can never succeed after the deadline.
++//   3. Past its window (five minutes, `WINDOW_SECONDS` in
++//      bookingRequestLead.service.js), a request is AUTO_CANCELLED — written
++//      down here and refused, so an accept can never succeed after the deadline.
+ //   4. Only the roles in `ACTOR_ROLES` may answer, and an admin answer is
+ //      recorded as such: `acted_by_role`, `acted_by_admin_id`, `acted_at`,
+ //      `on_behalf_of_salon`. The salon's tab shows "accepted by My Naai on your
+@@ -33,6 +34,13 @@ const { createBookingReminderTask } = require('../tasks/bookingReminderTask');
+ 
+ const ACTOR_ROLES = ['SALON', 'ADMIN'];
+ 
++// How long the CUSTOMER has to answer a proposed delay. The same five minutes as
++// the request's own answer window: a proposal that expires while the customer is
++// in a meeting is the same unfairness as a request that expires while the salon
++// is cutting hair, and "all of it is five minutes" is the rule the client asked
++// for. Kept as its own name because the two are different promises.
++const DELAY_RESPONSE_SECONDS = 5 * 60;
++
+ const ACTIONS = ['ACCEPT', 'REJECT', 'DELAY'];
+ 
+ // The salon-facing sentence for an answer given by the platform team. The
+@@ -112,7 +120,7 @@ const applyRequestAction = async ({
+             return fail(200, 'Booking request already cancelled');
+         }
+ 
+-        // 4. The 60 second window. A request past it is auto-cancelled whether or
++        // 4. The answer window (five minutes). A request past it is auto-cancelled whether or
+         //    not the sweeper has written that down yet, so the answer is a plain
+         //    sentence instead of an accept that cannot succeed. `responded_at` is
+         //    stamped with the deadline (not \"now\") so the lead's response time
+@@ -251,11 +259,11 @@ const applyRequestAction = async ({
+ 
+             await transaction.commit();
+ 
+-            // The customer has one minute to answer the proposal.
++            // The customer has DELAY_RESPONSE_SECONDS to answer the proposal.
+             try {
+                 await scheduleAutoCancelTask({
+                     bookingRequestId: bookingRequest.bookingRequestId,
+-                    delayInSeconds: 60
++                    delayInSeconds: DELAY_RESPONSE_SECONDS
+                 });
+             } catch (error) {
+                 console.error('Error scheduling auto-cancel for delayed booking:', error);
+diff --git a/src/services/bookingRequestLead.service.js b/src/services/bookingRequestLead.service.js
+index e0da1fb..d55c3d3 100644
+--- a/src/services/bookingRequestLead.service.js
++++ b/src/services/bookingRequestLead.service.js
+@@ -13,9 +13,9 @@ const { addDays, parseBound, resolveRange, startOfIstDay } = require('../utils/i
+  * request, and nothing counts a request as a booking: the accept path writes
+  * `booking_id` on the request, and that pointer is the only link.
+  *
+- * The answer window: a request is answerable for 60 seconds (WRITE side:
++ * The answer window: a request is answerable for FIVE MINUTES (WRITE side:
+  * `expires_at` is stamped by the booking-request create path, never by a
+- * client). The only sane reading of "still PENDING, past its window" is
++ * client — see WINDOW_SECONDS below). The only sane reading of "still PENDING, past its window" is
+  * AUTO_CANCELLED — the salon missed it — so this service derives that state for
+  * every row it returns and the sweeper (§ tasks/bookingRequestSweeper.js) writes
+  * it down. Auto-cancelled is NOT a rejection: a salon that misses leads has a
+@@ -23,8 +23,18 @@ const { addDays, parseBound, resolveRange, startOfIstDay } = require('../utils/i
+  * show them in separate tiles.
+  */
+ 
+-const WINDOW_SECONDS = 60;
++// FIVE MINUTES, not one.
++//
++// One minute was too short to be fair: the salon is usually holding clippers when
++// a request lands, and a request that expires while somebody walks to the phone
++// is a customer lost to a timer rather than to a decision. Five minutes is the
++// same promise the app shows, and every surface derives its countdown and its
++// words from these two numbers — the create path stamps `expires_at` from
++// WINDOW_MS, the sweeper closes it, and the leads tabs derive the same deadline
++// when the sweep has not run yet. Change it HERE, nowhere else.
++const WINDOW_SECONDS = 5 * 60;
+ const WINDOW_MS = WINDOW_SECONDS * 1000;
++const WINDOW_MINUTES = WINDOW_SECONDS / 60;
+ const DEFAULT_LIMIT = parseInt(process.env.PAGE_LIMIT) || 20;
+ const MAX_LIMIT = 100;
+ 
+@@ -614,6 +624,7 @@ const adminSummary = async ({ range = 'ALL', salonId, fromDate, toDate } = {}) =
+ module.exports = {
+     WINDOW_SECONDS,
+     WINDOW_MS,
++    WINDOW_MINUTES,
+     STATUS_FILTERS,
+     statusFilterOf,
+     rangeStart,
+-- 
+2.39.5
+

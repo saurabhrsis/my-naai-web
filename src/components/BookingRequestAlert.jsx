@@ -3,18 +3,20 @@ import { ArrowLeft, Bell, Check, ChevronRight, Clock3, Info, X } from 'lucide-re
 import { api } from '../lib/api';
 import { closeNotification } from '../lib/push';
 import { Button, cx, formatDate, getErrorMessage, getInitials } from './Shared';
+import { BOOKING_ACTION_WINDOW_MS, bookingWindowClosed } from '../lib/bookingLeads';
 
 // The salon's answer window for a new booking request, mirroring the mobile app:
-// 60 seconds to accept, reject, or propose another time. The same number is the
-// worker's repeat window (public/firebase-messaging-sw.js) and the request
-// screen's countdown (SalonScreens.jsx).
-export const BOOKING_ALERT_WINDOW_MS = 60000;
+// five minutes to accept, reject, or propose another time. The number comes from
+// lib/bookingLeads.js (one constant for every screen); the push payload's own
+// `expiresAt` wins whenever it carries one, because that is the server's
+// deadline and the only one that decides anything.
+export const BOOKING_ALERT_WINDOW_MS = BOOKING_ACTION_WINDOW_MS;
 const WARNING_AT_MS = 15000;
 
 // The in-app face of a booking request: the one alert that asks for a decision
 // instead of just announcing one. It appears on whatever screen the salon is
 // looking at — the queue, a profile editor, the dashboard — with the three
-// answers the mobile app offers, and it offers them for exactly one minute.
+// answers the mobile app offers, and it offers them for the whole window.
 //
 // Why a card and not another toast: a toast is a sentence that disappears; a
 // booking request is a decision with a deadline. The countdown is the same one
@@ -54,6 +56,17 @@ export function BookingRequestAlert({ alert = null, notify, navigate, onDone, on
     const createdMs = created ? new Date(created).getTime() : NaN;
     if (!Number.isFinite(createdMs) || createdMs <= 0) return;
     setDeadline(current => Math.min(current, createdMs + BOOKING_ALERT_WINDOW_MS));
+  }, [details]);
+
+  // Better still: the deadline the SERVER stamped. A request created four
+  // minutes ago has one minute left, not five, and a card that counts from the
+  // push's arrival would offer an answer the server refuses. `Math.min` keeps
+  // whichever estimate is earlier, so this can only ever tighten the promise.
+  useEffect(() => {
+    const expires = details?.expiresAt || details?.expires_at;
+    const expiresMs = expires ? new Date(expires).getTime() : NaN;
+    if (!Number.isFinite(expiresMs) || expiresMs <= 0) return;
+    setDeadline(current => Math.min(current, expiresMs));
   }, [details]);
 
   useEffect(() => {
@@ -124,7 +137,7 @@ export function BookingRequestAlert({ alert = null, notify, navigate, onDone, on
         {expired ? (
           <div className="booking-alert-expired" role="status">
             <Info size={15} />
-            <span>The 60-second answer window has closed. Open the request to see its current status.</span>
+            <span>{bookingWindowClosed}. Open the request to see its current status.</span>
             <button onClick={() => openRequest(false)}>Open request</button>
           </div>
         ) : (

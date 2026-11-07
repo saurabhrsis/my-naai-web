@@ -9,7 +9,7 @@
  * - Works on Android Chrome, Edge, Samsung Internet, Firefox, iOS Safari (PWA), Chrome on iOS (PWA)
  */
 
-const CACHE_NAME = 'mynaai-shell-v10';
+const CACHE_NAME = 'mynaai-shell-v11';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -238,12 +238,18 @@ function alertActions(type) {
 // whatever the device plays for the notification itself. The one lever left is
 // to raise that notification again — a repeat with the same tag and
 // `renotify: true` alerts and vibrates again instead of silently replacing the
-// banner. A booking request gives the salon 60 seconds to answer, so the worker
-// repeats twice inside that window (after ~20s and ~40s) and then stops. The
+// banner. A booking request gives the salon five minutes to answer, so the worker
+// repeats a few times inside that window (after ~30s, 90s, 3 min and 4.5 min)
+// and then stops. The
 // repeat is a live alert being kept alive, never an old alert replayed: an
 // answer, a dismissal, or the app opening the request cancels what is left.
-const BOOKING_ALERT_WINDOW_MS = 60000;
-const BOOKING_ALERT_REPEAT_MS = [20000, 40000];
+// Five minutes, matching the server's answer window (WINDOW_SECONDS in
+// src/services/bookingRequestLead.service.js). The repeats are spread across the
+// whole window instead of bunched into the first minute: a one-minute window
+// could afford two nudges, five minutes needs a reminder that the decision is
+// still waiting.
+const BOOKING_ALERT_WINDOW_MS = 5 * 60 * 1000;
+const BOOKING_ALERT_REPEAT_MS = [30000, 90000, 180000, 270000];
 const alertRepeats = new Map(); // tag -> { cancelled, timer, wake }
 
 function cancelAlertRepeats(tag) {
@@ -739,8 +745,8 @@ self.addEventListener('push', event => {
       // loading, woken by the app switch) stays silent.
       ringOpenClients(windows, type, data);
       // …and keep the phone ringing from the notification centre for the length
-      // of the salon's 60-second answer window, since a closed app has no other
-      // way to make a sound.
+      // of the salon's five-minute answer window, since a closed app has no
+      // other way to make a sound.
       await runAlertRepeats({ tag, title, body, options, type });
     })());
   } catch (e) {

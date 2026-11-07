@@ -2322,14 +2322,14 @@ describe('the in-app booking request alert', () => {
   });
 
   it('ignores a relay that arrives long after the alert did', async () => {
-    // A queued channel message from five minutes ago is not a live request; it
-    // must not open a countdown for a window that has already closed.
+    // A queued channel message from ten minutes ago is not a live request; it
+    // must not open a countdown for a five-minute window that closed long ago.
     globalThis.BroadcastChannel = FakeChannel;
     try {
       await mount();
       const channel = FakeChannel.instances.find(instance => instance.name === 'mynaai-notifications');
       await act(async () => {
-        channel.emit({ type: 'MYNAAI_PLAY_BUZZER', notificationType: 'BOOKING_REQUEST', alertId: 'BOOKING_REQUEST:req-32', sentAt: Date.now() - 300000, data: { bookingRequestId: 'req-32' } });
+        channel.emit({ type: 'MYNAAI_PLAY_BUZZER', notificationType: 'BOOKING_REQUEST', alertId: 'BOOKING_REQUEST:req-32', sentAt: Date.now() - 600000, data: { bookingRequestId: 'req-32' } });
       });
       await flush();
       expect(container.querySelector('.booking-alert')).toBeNull();

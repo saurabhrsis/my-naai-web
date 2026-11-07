@@ -124,7 +124,7 @@ describe('the in-app booking request alert', () => {
     expect(byText('Accept', container)).toBeTruthy();
   });
 
-  it('takes the answers away when the minute is up', async () => {
+  it('takes the answers away when the five minutes are up', async () => {
     const { container } = await renderCard({ alert: { data: { bookingRequestId: 'req-1' }, sentAt: Date.now() } });
     expect(byText('Accept', container)).toBeTruthy();
 
@@ -134,18 +134,20 @@ describe('the in-app booking request alert', () => {
     });
     await flush();
 
-    // A booking request is answerable for one minute — the server will refuse
+    // A booking request is answerable for five minutes — the server will refuse
     // anything later, so the buttons must not pretend otherwise.
+    expect(BOOKING_ALERT_WINDOW_MS).toBe(5 * 60 * 1000);
     expect(byText('Accept', container)).toBeUndefined();
     expect(byText('Reject', container)).toBeUndefined();
-    expect(container.textContent).toContain('The 60-second answer window has closed');
+    expect(container.textContent).toContain('The 5-minute answer window has closed');
     expect(byText('Open request', container)).toBeTruthy();
     expect(bookingRequestOwnerAction).not.toHaveBeenCalled();
   });
 
   it('uses the server\u2019s own window when the request is already a few seconds old', async () => {
-    // The 60 seconds belong to the request, not to this device: a push that took
-    // five seconds to arrive leaves 55, and the card must not offer a minute.
+    // The five minutes belong to the request, not to this device: a push that
+    // took thirty seconds to arrive leaves four and a half, and the card must
+    // not offer a fresh five.
     getBookingRequestById.mockResolvedValue({
       data: { customerName: 'Riya Sharma', bookingDate: '2099-09-07', startTime: '18:30:00', createdAt: new Date(Date.now() - 30000).toISOString() },
     });
@@ -153,7 +155,7 @@ describe('the in-app booking request alert', () => {
     await flush();
 
     const countdown = container.querySelector('.booking-alert .request-timer strong')?.textContent || '';
-    expect(countdown).toBe('0:30');
+    expect(countdown).toBe('4:30');
   });
 
   it('stays shut for an alert that is already older than its window', async () => {
