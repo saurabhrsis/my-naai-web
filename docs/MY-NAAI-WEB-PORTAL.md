@@ -862,31 +862,60 @@ request runs a countdown that a second dialog would eat into.
 
 ## 11.1 The 2026 brand mark
 
-`public/assets/brand/` now carries the 2026 logo: the **"m" monogram** on its own
+`public/assets/brand/` now carries the 2026 logo: the **"mn" monogram** on its own
 (the artwork has no lettered wordmark any more), extracted from the supplied
-2048² gold-on-black file and re-cut as **gold on transparent**
-(`mynaai-mark.png`, 512²) with a padded square (`mynaai-logo.png`) for
-compatibility. A single-colour copy (`mynaai-mark-white.png`) is kept for
-surfaces that cannot take the brand gold.
+3072² gold-on-black file and re-cut as **gold on transparent**
+(`mynaai-mark.png`, 1024×736 — trimmed to the mark, no padding, so it fills the
+46px header box instead of shrinking inside invisible margins) under the second
+name the icon script expects (`mynaai-logo.png`). A single-colour copy
+(`mynaai-mark-white.png`) is kept for surfaces that cannot take the brand gold.
+Frames that crop a photo to fill (`object-fit: cover`) get the `image-fallback-tile`
+class from `ImageWithFallback`, which letterboxes the mark with 14% padding, so a
+placeholder avatar shows the whole logo rather than a middle slice of it.
 
 **The tab and app icons keep that gold.** They used to be re-cut as a *white*
 silhouette while being placed on the near-black plate, so every browser tab and
 home-screen icon showed a white "m" while the logo on the page was gold — the
 owner's report: *"don't change the colour of the logo in favicon, we need the same
 as the logo, not white."* `scripts/brand-icons.sh` now trims the supplied artwork
-and composes it on the `#0B0D0D` plate **without touching its colour**; the
-monochrome conversion is kept for exactly one file, `badge-96.png`, because Android
-draws status-bar badges as a silhouette by platform rule. Both service-worker
-caches were bumped (`mynaai-shell-v13` / `v10`), so an installed app does not keep
-serving the cached white icons.
+and composes it on the **pure black** plate the artwork itself uses, without
+touching its colour. Both service-worker caches are bumped whenever the set is
+regenerated (`mynaai-shell-v14` / `v12`), so an installed app does not keep
+serving the cached old icons.
+
+**The notification carries the logo too, and it is not a dark tile.** Two files
+do two different jobs:
+
+| File | Purpose | Colour |
+| --- | --- | --- |
+| `icons/notification-192.png` | the **large icon** the banner draws (what people actually see in colour) | the gold mark on **transparency**, filling 92% of the square — at 64dp a plated 192 read as a dark smudge with a small mark |
+| `icons/badge-96.png` | the **status-bar glyph** | white, **solid** (alpha 255) |
+
+The badge is the only monochrome file in the set, and it has to be: Android
+ignores every colour channel in the small notification icon and draws it as a
+tinted silhouette, and the Web Notifications API has no colour setting, so no web
+app can put a gold badge in the status bar. Two things were still wrong and are
+now fixed — the silhouette was white at ~93% alpha, which the phone composites to
+a **grey ghost** (the literal "dull icon"), and the artwork inside it was framed
+too loosely to read at 24dp.
+
+`src/brandIcons.test.js` pins all of it: every icon keeps `#F2B96B`, the badge is
+solid white over black, the notification icon is transparent while the app icon
+keeps its plate, and the maskable art stays inside the 80% safe circle.
 
 Because the mark no longer contains the name, the `<Brand>` component in
 `src/App.jsx` renders **mark + "My Naai" as text** (`.brand-word`), and drops the
 wordmark below 1024 px — the same breakpoint that decides sidebar vs phone top
 bar — where a 320 px bar has no room for it. The app icon, favicons, maskable
 icon, PWA badge and the social card (`og-cover.png`, 1200×630) were regenerated
-from the supplied app icon, so the tab, the installed app, the share preview and
-the in-app brand are the same shape.
+from the supplied app icon, so the tab, the installed app, the share preview, the
+notification and the in-app brand are the same shape.
+
+One more thing about small sizes: the tab icons do **not** scale the same
+fraction as the app icon. At 16–32px the counters between the two arches are a
+couple of pixels wide, so art that fills the plate closes them and the mark turns
+into a solid block — the 16px favicon uses 62% of the plate and the 32px one 68%,
+which keeps both gaps open.
 
 
 ## 12. Important source locations
@@ -910,11 +939,12 @@ the in-app brand are the same shape.
 | `src/components/SubscriptionScreen.jsx` | Plan picker, Razorpay flow, cancellation/failure copy and payment recovery |
 | `src/components/ConfirmDialog.jsx` | Promise-based in-app confirmation sheet that replaces every native browser dialog |
 | `src/lib/push.js` | Firebase initialization, permission/token flow and notification route mapping |
-| `public/assets/brand/mynaai-mark.png` | Official My Naai monogram (**gold on transparent**, the supplied colour) — the app icon art, the default image fallback and the phone-size brand mark |
-| `public/assets/brand/mynaai-logo.png` | Official lockup: the M monogram with **My Naai** lettered underneath — header, sidebar, login and registration |
-| `public/icons/icon-192.png`, `icon-512.png`, `icon-maskable-512.png`, `apple-touch-icon.png` | The app icon at every size the manifest, iOS and Android ask for (maskable padded for Android's mask) |
-| `public/favicon.ico`, `public/icons/favicon-32.png`, `favicon-16.png` | Browser-tab icons |
-| `public/icons/badge-96.png` | Monochrome notification badge (status-bar icon) |
+| `public/assets/brand/mynaai-mark.png` | Official My Naai monogram (**gold on transparent**, the supplied colour, trimmed) — the app-icon art, the default image fallback and the phone-size brand mark |
+| `public/assets/brand/mynaai-logo.png` | The same artwork under the second name the icon script takes (the supplied file has no lettered wordmark, so the name is text beside the mark) |
+| `public/icons/icon-192.png`, `icon-512.png`, `icon-maskable-512.png`, `apple-touch-icon.png` | The app icon at every size the manifest, iOS and Android ask for (maskable inside Android's safe circle) |
+| `public/favicon.ico`, `public/icons/favicon-32.png`, `favicon-16.png` | Browser-tab icons (framed looser than the app icon so the mark reads at 16px) |
+| `public/icons/notification-192.png` | The notification's **large** icon: the gold mark on transparency, filling 92% — what the banner draws in colour |
+| `public/icons/badge-96.png` | Status-bar badge: the only monochrome file (Android masks it), in solid white |
 | `public/assets/my_naai.png` | Raster brand tile for surfaces that need a PNG at a stable path (Razorpay checkout) |
 | `public/assets/brand/og-cover.png` | Link preview (1200×630): the lockup centred on the app background |
 | `public/firebase-messaging-sw.js` | Background push display and notification click routing |

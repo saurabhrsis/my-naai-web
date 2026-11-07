@@ -9,7 +9,18 @@
  * - Works on Android Chrome, Edge, Samsung Internet, Firefox, iOS Safari (PWA), Chrome on iOS (PWA)
  */
 
-const CACHE_NAME = 'mynaai-shell-v11';
+// v12: the artwork itself as the notification's large icon (and a solid-white,
+// fully opaque badge), so the banner carries the gold logo instead of a small
+// mark on a black tile. Bumping the name is what makes an installed app fetch
+// the new files.
+const CACHE_NAME = 'mynaai-shell-v12';
+// The LARGE icon the phone draws — the artwork on transparency, not the plated
+// app icon: at 64dp a black tile with a small monogram reads as a dark smudge,
+// while the mark itself is bright on a white card and on a dark one. The badge
+// stays monochrome because Android masks that one.
+const NOTIFICATION_ICON = '/icons/notification-192.png';
+const NOTIFICATION_BADGE = '/icons/badge-96.png';
+
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -18,6 +29,7 @@ const APP_SHELL = [
   '/icons/icon-512.png',
   '/icons/icon-maskable-512.png',
   '/icons/badge-96.png',
+  '/icons/notification-192.png',
   '/favicon.ico',
   '/assets/brand/mynaai-mark.png',
   '/assets/brand/mynaai-logo.png',
@@ -429,8 +441,8 @@ function showFallbackNotification(title, body, data, type) {
   const target = notificationRoute(data);
   return self.registration.showNotification(title, {
     body,
-    icon: '/icons/icon-192.png',
-    badge: '/icons/badge-96.png',
+    icon: NOTIFICATION_ICON,
+    badge: NOTIFICATION_BADGE,
     tag: alertTag(data, type),
     data: { ...data, target },
     requireInteraction: false,
@@ -642,8 +654,8 @@ if (firebaseSdkAvailable && firebaseConfig.apiKey && firebaseConfig.projectId &&
     // stays deliberately calm: no buttons to miss, a single banner, one sound.)
     return self.registration.showNotification(title, {
       body,
-      icon: '/icons/icon-192.png',
-      badge: '/icons/badge-96.png',
+      icon: NOTIFICATION_ICON,
+      badge: NOTIFICATION_BADGE,
       tag: alertTag(data, type),
       data: { ...data, target },
       requireInteraction: false,
@@ -718,8 +730,8 @@ self.addEventListener('push', event => {
       let shown = false;
       const options = {
         body,
-        icon: '/icons/icon-192.png',
-        badge: '/icons/badge-96.png',
+        icon: NOTIFICATION_ICON,
+        badge: NOTIFICATION_BADGE,
         tag,
         data: { ...data, target },
         requireInteraction: true,

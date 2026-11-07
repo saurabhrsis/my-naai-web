@@ -8,9 +8,19 @@
  */
 
 // v12: the 2026 gold "m" icon set (favicon.ico, icons/*, assets/my_naai.png).
+// v14: the notification large icon is the artwork on transparency
+// (icons/notification-192.png) and the badge is solid white — the banner now
+// carries the gold logo instead of a small mark on a black tile.
 // Bumping the name is what makes an INSTALLED app fetch the new artwork — the
 // old cache would otherwise keep serving the retired icons from disk forever.
-const CACHE_NAME = 'mynaai-shell-v13';
+const CACHE_NAME = 'mynaai-shell-v14';
+// The LARGE icon the phone draws — the artwork on transparency, not the plated
+// app icon: at 64dp a black tile with a small monogram reads as a dark smudge,
+// while the mark itself is bright on a white card and on a dark one. The badge
+// stays monochrome because Android masks that one.
+const NOTIFICATION_ICON = '/icons/notification-192.png';
+const NOTIFICATION_BADGE = '/icons/badge-96.png';
+
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -19,6 +29,7 @@ const APP_SHELL = [
   '/icons/icon-512.png',
   '/icons/icon-maskable-512.png',
   '/icons/badge-96.png',
+  '/icons/notification-192.png',
   '/icons/apple-touch-icon.png',
   '/icons/favicon-16.png',
   '/icons/favicon-32.png',
@@ -378,8 +389,8 @@ if (firebaseMessaging) {
     // The SW is woken by push event, shows notification, and stays alive until showNotification completes
     return self.registration.showNotification(title, {
       body,
-      icon: '/icons/icon-192.png',
-      badge: '/icons/badge-96.png',
+      icon: NOTIFICATION_ICON,
+      badge: NOTIFICATION_BADGE,
       tag: data.bookingRequestId || data.bookingId || data.type || 'mynaai-notification',
       data: { ...data, target },
       requireInteraction: isBookingRequest || type === 'DELAY_TIME_PROPOSAL' || isDelayBooking,
@@ -445,8 +456,8 @@ self.addEventListener('push', event => {
           broadcastViaChannel(type, data),
           self.registration.showNotification(title, {
             body,
-            icon: '/icons/icon-192.png',
-            badge: '/icons/badge-96.png',
+            icon: NOTIFICATION_ICON,
+            badge: NOTIFICATION_BADGE,
             tag: data.bookingRequestId || data.bookingId || data.type || 'mynaai-notification',
             data: { ...data, target },
             requireInteraction: true,
