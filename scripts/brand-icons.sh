@@ -27,9 +27,10 @@ ICONS=$PUBLIC/icons
 ICON_SRC=${1:-$BRAND/mynaai-mark.png}
 LOGO_ONLY_SRC=${2:-$BRAND/mynaai-logo.png}
 
-# The plate the icons sit on: the app's own background, not pure black, so an
-# installed icon and the app behind it are the same shade.
-PLATE='#0B0D0D'
+# The plate the icons sit on: the black the supplied artwork itself uses. The
+# gold is brighter against it than against the app's slightly lifted #0B0D0D,
+# and on a launcher nobody can see the difference between the two anyway.
+PLATE='#000000'
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -60,11 +61,14 @@ artcut () { # $1 = source, $2 = destination
 }
 
 # the monochrome silhouette the status bar needs (badge-96 only) --------------
+# Pure white at FULL opacity. An earlier version derived the alpha from the
+# artwork's luminance and landed on white at ~93% alpha, which the phone
+# composites to a grey ghost — the "dull icon" in the status bar. The shape now
+# comes from the trimmed mark's own alpha, so every inside pixel is solid white,
+# and only the anti-aliased edge is partial.
 whitecut () { # $1 = source, $2 = destination
-  local max
-  max=$(convert "$1" -colorspace Gray -format '%[fx:maxima*100]' info:)
-  convert "$1" -colorspace Gray -level "0%,${max}%" \( +clone \) -alpha off \
-    -compose CopyOpacity -composite -fill white -colorize 100 -depth 8 -strip "$2"
+  convert "$1" -channel A -threshold 45% +channel \
+    -fill white -colorize 100 -depth 8 -strip "$2"
 }
 
 # trim the surround — transparent for the committed PNGs, black for a flat master
@@ -94,17 +98,31 @@ plate () { # $1 = size, $2 = art width fraction, $3 = destination
     -gravity center -compose over -composite -depth 8 -strip "$3"
 }
 
-plate 512 0.56 "$ICONS/icon-512.png"
-plate 512 0.56 "$ICONS/icon-maskable-512.png"
-plate 192 0.62 "$ICONS/icon-192.png"
-plate 180 0.62 "$ICONS/apple-touch-icon.png"
+# 62% of the plate is the framing the supplied artwork uses (the monogram is
+# 1.39x wider than it is tall, so a 62% width is a 45% height and its corners
+# stay inside the 80% circle every launcher mask keeps).
+plate 512 0.62 "$ICONS/icon-512.png"
+plate 512 0.62 "$ICONS/icon-maskable-512.png"
+plate 192 0.64 "$ICONS/icon-192.png"
+plate 180 0.64 "$ICONS/apple-touch-icon.png"
+# The tab sizes go SMALLER, not bigger. At 16–32px the counters between the two
+# arches are only a couple of pixels wide, so art that fills the plate closes
+# them and the mark turns into a solid block; 62% / 68% keeps both gaps open.
 plate 32  0.68 "$ICONS/favicon-32.png"
-plate 16  0.74 "$ICONS/favicon-16.png"
+plate 16  0.62 "$ICONS/favicon-16.png"
 convert "$ICONS/favicon-16.png" "$ICONS/favicon-32.png" "$PUBLIC/favicon.ico"
 
-# the notification badge: a white silhouette on transparency, by platform rule
-whitecut "$TMP/icon-trim.png" "$TMP/badge.png"
-convert -size 96x96 xc:none \( "$TMP/badge.png" -resize 76x \) \
+# The notification's LARGE icon. This is the one the phone draws in colour, so
+# it is the artwork itself on transparency rather than the plated app icon: at
+# 64dp a black tile with a small mark reads as a dark smudge, while the mark
+# itself is bright on both a white and a dark notification card.
+convert -size 192x192 xc:none \( "$TMP/mark.png" -resize 176x \) \
+  -gravity center -compose over -composite -depth 8 -strip "$ICONS/notification-192.png"
+
+# the notification badge: a white silhouette on transparency, by platform rule —
+# the only monochrome file in the set, and only because Android masks it
+whitecut "$TMP/mark.png" "$TMP/badge.png"
+convert -size 96x96 xc:none \( "$TMP/badge.png" -resize 80x \) \
   -gravity center -compose over -composite -depth 8 -strip "$ICONS/badge-96.png"
 
 # Razorpay's checkout sheet loads a plain PNG from a stable path — gold on
@@ -119,7 +137,7 @@ convert -size 1200x630 xc:"$PLATE" \
 
 # A white copy of the mark stays committed for surfaces that draw the logo over
 # a photograph or an unknown background — it is a variant, not the icon.
-whitecut "$TMP/icon-trim.png" "$TMP/mark-white.png"
+whitecut "$TMP/mark.png" "$TMP/mark-white.png"
 convert "$TMP/mark-white.png" -resize 1024x -depth 8 -strip "$BRAND/mynaai-mark-white.png"
 
 echo "Brand files regenerated from $(basename "$ICON_SRC") and $(basename "$LOGO_ONLY_SRC")."

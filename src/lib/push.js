@@ -21,6 +21,18 @@ import {
 // below are re-exported because they were public API here first.
 export { detectBrowser, isCrossOriginEmbeddedFrame, isEmbeddedFrame, isIosDevice, isIosPwaInstalled };
 
+// The artwork on the notification itself.
+//
+// `icon` is the LARGE picture the phone draws in colour, so it is the logo on
+// transparency (public/icons/notification-192.png) rather than the plated app
+// icon: at 64dp a black tile with a small monogram reads as a dark smudge,
+// while the mark alone is bright on a white card and on a dark one.
+// `badge` is the status-bar glyph, which Android masks to one colour — it is
+// the only monochrome file in the set, and it is solid white so the mask does
+// not grey it out.
+const NOTIFICATION_ICON = '/icons/notification-192.png';
+const NOTIFICATION_BADGE = '/icons/badge-96.png';
+
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -602,8 +614,11 @@ export async function displayNotification({ title, body, data = {}, onClick } = 
 
   const options = {
     body: finalBody,
-    icon: '/icons/icon-192.png',
-    badge: '/icons/badge-96.png',
+    // The logo, in colour, as large as the banner allows (see
+    // public/icons/notification-192.png and scripts/brand-icons.sh). The badge
+    // beside it is the monochrome silhouette Android requires for the status bar.
+    icon: NOTIFICATION_ICON,
+    badge: NOTIFICATION_BADGE,
     tag: notificationTag(data, type),
     data: { ...data, target },
     requireInteraction: type === 'BOOKING_REQUEST' || type === 'DELAY_TIME_PROPOSAL' || type === 'DELAY_BOOKING',
