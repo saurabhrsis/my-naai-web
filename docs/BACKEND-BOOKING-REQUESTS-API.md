@@ -1,11 +1,12 @@
 # Backend — booking-request (lead) API + admin/salon reporting
 
 > **Implemented by** `patches/backend-2-booking-request-leads.patch` (the leads
-> API, the four doors, the sweeper and the model changes) and
+> API, the four doors, the sweeper and the model changes),
 > **`patches/backend-6-booking-request-admin-actions.patch`** (today-by-default
 > ranges, filters that filter, per-status counts, and answering on a salon's
-> behalf — §§4–5 below).
-> Apply instructions: `patches/APPLY-2026-11-05.md`.
+> behalf — §§4–5 below) and **`patches/backend-7-five-minute-window.patch`**
+> (the five-minute answer window, §7).
+> Apply instructions: `patches/README.md`.
 
 Target repo: `rightserveinfotechsystems/my_naai_backend`
 Web client already implemented: `src/lib/bookingLeads.js`, `src/components/SalonLeads.jsx`
@@ -13,7 +14,8 @@ Migration: `patches/migrations/2026-11-05-booking-requests-categories.sql`
 
 > **Requests and bookings are different tables and different concepts.**
 > A **booking request** is a lead: a customer asked for a slot and the salon has
-> one minute to answer. A **booking** is the chair that exists after an accept
+> **five minutes** to answer (`WINDOW_SECONDS = 300` — it was sixty seconds
+> until the window was widened, see `patches/backend-7-five-minute-window.patch`). A **booking** is the chair that exists after an accept
 > (`booking` / `booking_list`, what the queue and History read). Nothing in this
 > document reads one to answer a question about the other, and no endpoint below
 > joins them except by the optional `booking_id` pointer written on accept.
@@ -77,7 +79,7 @@ Rules:
 - `status: "ALL"` (or absent) returns every request, newest first.
 - `totalPages` and `totalRequests` are required — the client pages with them.
 - `price` may come back as a string (DECIMAL); the client coerces it.
-- `expiresAt` is stored on insert (`created_at + 60s`). If it is missing the
+- `expiresAt` is stored on insert (`created_at + 300s`, i.e. five minutes). If it is missing the
   client derives it from `createdAt`, so an un-migrated row still behaves.
 - A `PENDING` row whose `expiresAt` has passed must be reported as
   `AUTO_CANCELLED` **by the server too** (the sweeper in §5 does this); the
@@ -218,7 +220,7 @@ admin answered** — from their side "the salon" is the service.
 The salon the request belongs to is read from the row, never from the body. The
 call runs `applyRequestAction` with `actorRole = ADMIN`, so it is the same
 transaction as §3 and inherits every guard: row lock, "already actioned", the
-60 second window, one booking per request. Failures are answers, not 5xx:
+five minute window, one booking per request. Failures are answers, not 5xx:
 
 | Case | Answer |
 | --- | --- |
@@ -258,6 +260,13 @@ UPDATE booking_requests
 RETURNING booking_request_id, salon_id, customer_id;
 ```
 
+- **The window is five minutes.** `expires_at` is written as
+  `created_at + WINDOW_SECONDS` with `WINDOW_SECONDS = 300` in
+  `src/services/bookingRequestLead.service.js`; the sweeper cancels whatever is
+  still `PENDING` at that timestamp, so the whole flow — the countdown the salon
+  sees, the refusal message, the admin panel's read-only footer, the customer's
+  "the salon did not respond" — is keyed off the same five minutes. No copy
+  anywhere says sixty seconds.
 - Run it every 15–30 s (cron, `setInterval`, or a BullMQ repeatable job).
 - For each returned row: notify the customer (slot released) and, if the salon
   has notifications on, count it in their "missed" number — never as a rejection.

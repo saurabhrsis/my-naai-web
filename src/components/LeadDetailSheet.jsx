@@ -9,13 +9,13 @@ import {
   UserRound,
   XCircle,
 } from 'lucide-react';
-import { LEAD_STATE, LEAD_STATE_LABEL, LEAD_STATE_TONE, leadView } from '../lib/bookingLeads';
+import { LEAD_STATE, LEAD_STATE_LABEL, LEAD_STATE_TONE, bookingWindowLabel, leadView } from '../lib/bookingLeads';
 import { Modal, StatusPill, formatCurrency, formatDate, formatTime } from './Shared';
 
 // One request, read-only.
 //
 // This used to open the "New booking request" screen — the one a live push
-// notification opens, with its 60-second countdown and Accept / Reject / Update
+// notification opens, with its countdown and Accept / Reject / Update
 // time. Tapping "Details" on a request from last month therefore offered to
 // accept a month-old lead, and its back button dropped the salon in the Queue
 // tab. A request that is already accepted, rejected, cancelled or expired has
@@ -87,7 +87,7 @@ export function LeadDetailSheet({ lead, now = Date.now(), open, onClose }) {
         <p className={`lead-detail-outcome ${state}`}>
           {state === LEAD_STATE.accepted && <>You accepted this request — it is in your <strong>customer queue</strong> as a booking.</>}
           {state === LEAD_STATE.rejected && <><XCircle size={14} aria-hidden="true" /> You rejected this request. The customer was told.</>}
-          {state === LEAD_STATE.autoCancelled && <><AlarmClock size={14} aria-hidden="true" /> Nobody answered within 1 minute, so the request was cancelled automatically. It is not a rejection.</>}
+          {state === LEAD_STATE.autoCancelled && <><AlarmClock size={14} aria-hidden="true" /> Nobody answered within {bookingWindowLabel}, so the request was cancelled automatically. It is not a rejection.</>}
           {state === LEAD_STATE.cancelled && <><CircleSlash size={14} aria-hidden="true" /> The customer withdrew this request.</>}
           {state === LEAD_STATE.delayed && <>You proposed a new time and the request is waiting on the customer.</>}
           {state === LEAD_STATE.awaiting && view.canAnswer && (

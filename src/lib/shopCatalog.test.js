@@ -13,6 +13,8 @@ import {
   matchesPriceRange,
   normalizeShopProduct,
   parseProductImages,
+  resolveCategoryValue,
+  resolveProductCategory,
 } from './shopCatalog';
 
 describe('inferCategory', () => {
@@ -214,6 +216,45 @@ describe('applyShopFilters', () => {
     expect(matchesPriceRange(1000, '500to1000')).toBe(true);
     expect(matchesPriceRange(1000, 'over1000')).toBe(false);
     expect(PRICE_RANGES).toHaveLength(4);
+  });
+});
+
+// The admin panel counts a product by the category the product stores; the
+// storefront used to count it by a guess made from its name. A category whose
+// label the admin renamed ("Fragrance" → "Waxing products", id `fragrance`)
+// then showed six products in the panel and none on the site. Both sides now
+// resolve the stored value through the same live category list.
+describe('category vocabulary shared with the admin panel', () => {
+  const categories = [
+    { id: 'hair-care', label: 'Hair care' },
+    { id: 'fragrance', label: 'Waxing products' },
+  ];
+
+  it('resolves a stored label, an id and a slug to the same category id', () => {
+    expect(resolveCategoryValue('Waxing products', categories)).toBe('fragrance');
+    expect(resolveCategoryValue('  waxing   PRODUCTS ', categories)).toBe('fragrance');
+    expect(resolveCategoryValue('fragrance', categories)).toBe('fragrance');
+    expect(resolveCategoryValue('fragrance-x', categories)).toBe('fragrance-x');
+    expect(resolveCategoryValue('', categories)).toBe('');
+  });
+
+  it('corrects the guess a label-stored product would otherwise get', () => {
+    const row = normalizeShopProduct({ productId: 'w1', productName: 'Roll-on Wax', price: 240, category: 'Waxing products' });
+    // Without the list the client can only guess from the name…
+    expect(row.category).not.toBe('fragrance');
+    // …and with it, the product is on the shelf the panel put it on.
+    expect(resolveProductCategory(row, categories).category).toBe('fragrance');
+  });
+
+  it('shows those products when the category is filtered', () => {
+    const products = ['Roll-on Wax', 'Wax Beans', 'After-wax Oil'].map((productName, index) => normalizeShopProduct({
+      productId: `w${index}`, productName, price: 200 + index, category: 'Waxing products',
+    }));
+    const filtered = applyShopFilters(products, { ...DEFAULT_SHOP_FILTERS, category: 'fragrance' }, categories);
+    expect(filtered.map(product => product.id).sort()).toEqual(['w0', 'w1', 'w2']);
+    // The same filter on the resolved list is what the panel's count describes.
+    const resolved = products.map(product => resolveProductCategory(product, categories));
+    expect(applyShopFilters(resolved, { ...DEFAULT_SHOP_FILTERS, category: 'fragrance' }, categories)).toHaveLength(3);
   });
 });
 

@@ -291,7 +291,7 @@ The web wrapper is `api.salonDelayBooking()`. The server-side `owner-action` imp
 
 ### Updating the time from the Customer queue
 
-The booking-request screen only exists during the 60-second response window. Once a booking is accepted it lives in the **Customer queue**, and until now a salon that fell behind had no way to tell the customer. Every queue card therefore carries an **Update time** action next to **Done**.
+The booking-request screen only exists during the five-minute response window. Once a booking is accepted it lives in the **Customer queue**, and until now a salon that fell behind had no way to tell the customer. Every queue card therefore carries an **Update time** action next to **Done**.
 
 The modal (`UpdateTimeModal` in `src/components/SalonScreens.jsx`) works in **signed minutes** — negative means *earlier* — so one control covers both directions. A switch at the top picks how the salon expresses the new time, because the two situations are genuinely different: *"I'm about twenty minutes behind"* is an offset, while *"the chair frees up at quarter past seven"* is a clock time, and making the salon convert one into the other in its head is where mistakes come from.
 
@@ -456,7 +456,7 @@ request side only.
 - **A live request is answered ON the card** (`Accept` / `Reject`, one tap, the
   same `owner-action` contract the notifications screen and the mobile app use).
   Opening anything first would be a step the salon does not have time for: the
-  window is one minute. An answer shows on the card immediately (a local override
+  window is five minutes. An answer shows on the card immediately (a local override
   applied over every refresh) because the list API can answer a beat behind the
   action.
 - **`Details` is read-only** (`src/components/LeadDetailSheet.jsx`): customer
@@ -517,6 +517,12 @@ ids, labels and order the backend patch inserts, so the two never disagree.
 - A product filed under a category the list no longer has still gets its own
   filter entry (the storefront appends those itself), so nothing silently lands
   in "All".
+- A product whose stored `category` is a **label** rather than an id ("Waxing
+  products") is resolved through this list before it is filtered or labelled
+  (`resolveCategoryValue` / `resolveProductCategory` in
+  [`src/lib/shopCatalog.js`](../src/lib/shopCatalog.js)), so the shop's filter
+  and the admin panel's Category filter return the same products and the same
+  count.
 - Backend contract (table, endpoints, slug rule, delete/reassign rules):
   [`docs/BACKEND-SHOP-CATEGORIES-API.md`](BACKEND-SHOP-CATEGORIES-API.md).
 
@@ -688,13 +694,13 @@ Foreground messages are rendered by the app itself (browser notification + in-ap
 
 ### Booking-request action buttons & response timer
 
-**Notifications tab (salon).** Every `BOOKING_REQUEST` row in the salon's Notifications screen (`NotificationsScreen` in `src/components/UserScreens.jsx`) is itself actionable for the mobile app's 60-second window: the card shows a live **Respond in m:ss** countdown and **Accept / Reject / Delay** buttons (Delay opens the same +20 / +40 / +60 picker as the request screen), plus **Details** to open the full request. Accept and Reject post `{ action }` to `owner-action`; the card then shows the outcome in place (Accepted / Rejected / Delay sent) instead of stale buttons. When the minute has passed — or passes while the screen is open — the buttons go away, the card says **Time has gone**, and the request's server status is fetched once so it can also say whether it was accepted elsewhere, rejected or left unanswered. The list refreshes itself when a new push reaches the page, and a booking request that arrives while the salon is on this tab does not yank them to another screen. Every API call also has a 25-second timeout (`src/lib/api.js`), so an Accept that never answers surfaces a retryable error instead of an endless loader.
+**Notifications tab (salon).** Every `BOOKING_REQUEST` row in the salon's Notifications screen (`NotificationsScreen` in `src/components/UserScreens.jsx`) is itself actionable for the five-minute response window: the card shows a live **Respond in m:ss** countdown and **Accept / Reject / Delay** buttons (Delay opens the same +20 / +40 / +60 picker as the request screen), plus **Details** to open the full request. Accept and Reject post `{ action }` to `owner-action`; the card then shows the outcome in place (Accepted / Rejected / Delay sent) instead of stale buttons. When the five minutes have passed — or passes while the screen is open — the buttons go away, the card says **Time has gone**, and the request's server status is fetched once so it can also say whether it was accepted elsewhere, rejected or left unanswered. The list refreshes itself when a new push reaches the page, and a booking request that arrives while the salon is on this tab does not yank them to another screen. Every API call also has a 25-second timeout (`src/lib/api.js`), so an Accept that never answers surfaces a retryable error instead of an endless loader.
 
 A `BOOKING_REQUEST` notification carries the mobile app's **Accept / Reject / Delay** action buttons — and **only** that type. Every other notification type (`BOOKING_CONFIRMED`, `BOOKING_REJECTED`, `DELAY_RESPONSE`, `DELAY_TIME_PROPOSAL`, `DELAY_BOOKING`, etc.) has **no** action buttons; clicking it just opens the PWA/browser on its route. `firebase-messaging-sw.js` handles the action buttons in `notificationclick`: Accept and Reject call `POST /api/bookingRequest/owner-action/{bookingRequestId}/` directly from the worker (the salon token is mirrored into IndexedDB by `src/lib/api.js`, so this works even when the PWA is closed) and then close the alert; Delay opens `#/bookingRequest?bookingRequestId=...&openDelayModal=true`. Browsers cap notification actions at two (Chrome), so Accept + Reject are the visible buttons while Delay stays reachable by tapping the notification body — and every action is always available in the booking-request screen as a fallback for browsers that do not render action buttons.
 
 The **audible background sound is client-side, not a backend `sound` field.** The worker passes the buzzer WAV as the notification `sound` and a `vibrate` pattern; browsers (especially Android Chrome) largely use the OS notification sound for web push and ignore a custom file, so the reliable buzz is the Web Audio one that plays whenever the app is open. Set a `sound` on the server payload only if you also send a `notification` block for the mobile app — it does not affect the web client, which reads the sound from the bundled WAV.
 
-The mobile app shows a 60-second countdown on a booking-request alert and auto-cancels it after 70 seconds. The web Notification API cannot render a live chronometer, so the countdown is mirrored in the **Booking request** screen («Respond in m:ss», red in the final 15 seconds). When the timer expires, the app asks the worker (via a `MYNAAI_CLOSE_NOTIFICATION` message) to clear the matching notification and re-checks the request status.
+A booking request is answerable for **five minutes** (`BOOKING_ACTION_WINDOW_MINUTES` in `src/lib/bookingLeads.js`; the server's `expires_at` is the authority, and the client only ever tightens to it). The mobile app shows a countdown on a booking-request alert and auto-cancels it once the window closes. The web Notification API cannot render a live chronometer, so the countdown is mirrored in the **Booking request** screen («Respond in m:ss», red in the final 15 seconds). When the timer expires, the app asks the worker (via a `MYNAAI_CLOSE_NOTIFICATION` message) to clear the matching notification and re-checks the request status.
 
 Hash query parameters are parsed by `App.jsx`, so a notification click remains actionable after a cold start or browser restart. See [FIREBASE-WEB-PUSH.md](./FIREBASE-WEB-PUSH.md) for Firebase setup and payload details.
 
@@ -849,7 +855,7 @@ that starts outside the sheet).
 
 Deliberately **not** confirmed: accepting or declining a booking request and a
 delay proposal. Those are already two explicit, labelled choices, and the booking
-request runs a 60-second countdown that a second dialog would eat into.
+request runs a countdown that a second dialog would eat into.
 
 `src/components/ConfirmDialog.test.jsx` covers the dialog behaviour and fails if
 `window.confirm`, `window.alert` or `window.prompt` reappears anywhere in `src`.

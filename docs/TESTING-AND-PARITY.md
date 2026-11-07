@@ -75,7 +75,7 @@ boundary so the lib can be imported under jsdom.
 | SalonProduct | `#/salonProducts` | ➖ retired — the Naai Shop (`/shop`) replaced it; the screen is kept but unlinked |
 | SalonAccountScreen | `#/account` | ✅ profile, plan, toggle open/closed |
 | AddOfflineCustomer (walk-in) | — | ⬜ commented out in mobile, not a live flow |
-| BookingRequestScreen | `#/bookingRequest` | ✅ Accept/Reject/Delay + 60s timer |
+| BookingRequestScreen | `#/bookingRequest` | ✅ Accept/Reject/Delay + 5 min timer |
 | EditSalonProfileScreen | `#/editProfile` | ✅ full profile editor + payment step |
 | SalonNotifications | `#/notifications` | ✅ |
 | SalonAbout / FAQ / Terms | `#/salonAbout`, `#/salonFAQ`, `#/salonTerms` | ✅ |
@@ -83,7 +83,7 @@ boundary so the lib can be imported under jsdom.
 
 ### Notification parity (background & foreground)
 
-- `BOOKING_REQUEST` → **Accept / Reject / Delay** action buttons + 60-second
+- `BOOKING_REQUEST` → **Accept / Reject / Delay** action buttons + 5-minute
   response timer. Worker calls the owner-action API for Accept/Reject, opens the
   delay modal for Delay. ✅
 - All other notification types → **no** action buttons; clicking opens the

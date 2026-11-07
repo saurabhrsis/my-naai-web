@@ -5,9 +5,13 @@ and verified with `git apply --check` on a clean checkout:
 
 | Patch | Repo | What it does |
 | --- | --- | --- |
+| [`backend-7-five-minute-window.patch`](backend-7-five-minute-window.patch) | `rightserveinfotechsystems/my_naai_backend` | **the booking-request answer window is five minutes, not one** — `WINDOW_SECONDS = 300` and the derived `expires_at`, the sweeper's copy, the refusal message, and a backfill of rows still holding a 60-second deadline ([docs](../docs/BACKEND-BOOKING-REQUESTS-API.md) §7) |
+| [`backend-8-shop-category-authority.patch`](backend-8-shop-category-authority.patch) | `rightserveinfotechsystems/my_naai_backend` | **the live category list decides** — a product filed under a label the admin renamed ("Waxing products") resolves to that category's id, and the admin list runs the storefront's own `listCatalog` so the panel's filter and the shop's return the same products ([docs](../docs/BACKEND-SHOP-CATEGORY-FILTER.md) §AF) |
 | [`backend-6-booking-request-admin-actions.patch`](backend-6-booking-request-admin-actions.patch) | `rightserveinfotechsystems/my_naai_backend` | **Booking requests open on today, the filters filter, and an admin can answer for a salon** — one IST range helper, the status/search `OR` split, per-status counts in SQL, and `POST /api/bookingRequest/admin/action/:id` through the salon's own locked accept path ([docs](../docs/BACKEND-BOOKING-REQUESTS-API.md) §§4–6) |
 | [`admin-panel-2-booking-requests.patch`](admin-panel-2-booking-requests.patch) | `rightserveinfotechsystems/my-naai-frontend` | the panel side of the same: today by default, status chips with the server's counts, page reset on every filter, a table that ellipsises instead of widening past the sidebar, and **Accept / Decline for salon** ([docs](../docs/ADMIN-PANEL-BOOKING-REQUESTS.md)) |
-| [`backend-shop-category-filter.patch`](backend-shop-category-filter.patch) | `rightserveinfotechsystems/my_naai_backend` | **the "Load more 88" fix** — the shop's category and gender filters become exact SQL, so the count, the pages and the grid are one list ([docs](../docs/BACKEND-SHOP-CATEGORY-FILTER.md)) |
+| [`admin-panel-3-shop-products-category-filter.patch`](admin-panel-3-shop-products-category-filter.patch) | `rightserveinfotechsystems/my-naai-frontend` | **a Category filter on Shop products** — the shop's own list with per-category counts, the server asked for the filtered set, page 1 on every facet change, "N products in …" and Clear filters ([docs](../docs/ADMIN-PANEL-SHOP-TABS.md) §1) |
+| [`admin-panel-4-five-minute-window.patch`](admin-panel-4-five-minute-window.patch) | `rightserveinfotechsystems/my-naai-frontend` | **five minutes in the panel's copy** — `src/utils/bookingWindow.js` as the one source of the label, the picker's note and the detail modal's read-only footer ([docs](../docs/ADMIN-PANEL-BOOKING-REQUESTS.md)) |
+| [`backend-shop-category-filter.patch`](backend-shop-category-filter.patch) | `rightserveinfotechsystems/my_naai_backend` | **superseded by `backend-8`** — the "Load more 88" fix, which `backend-8-shop-category-authority.patch` contains in full ([docs](../docs/BACKEND-SHOP-CATEGORY-FILTER.md)) |
 | [`backend-5-salon-services.patch`](backend-5-salon-services.patch) | `rightserveinfotechsystems/my_naai_backend` | `POST /api/salons/services/save` — the whole menu in one transaction, for the portal's Edit services screen ([docs](../docs/BACKEND-SALON-SERVICES-API.md)) |
 | [`backend-shop-customers.patch`](backend-shop-customers.patch) | `rightserveinfotechsystems/my_naai_backend` | customers as a second buyer + the website's no-token API |
 | [`admin-panel-shop-customers.patch`](admin-panel-shop-customers.patch) | `rightserveinfotechsystems/my-naai-frontend` | the admin panel shows who bought each shop order |
@@ -48,9 +52,10 @@ git am /path/to/patches/backend-shop-customers.patch
 git am /path/to/patches/backend-shop-catalog-filters.patch
 git am /path/to/patches/backend-shop-schema-selfheal.patch
 
-# backend — the shop's filtered counts (independent of the three above, but it
-# edits the same service, so take it after them)
-git am /path/to/patches/backend-shop-category-filter.patch
+# backend — the shop's filtered counts AND the live category list (independent of
+# the three above, but it edits the same service, so take it after them).
+# backend-8 SUPERSEDES backend-shop-category-filter.patch: apply one, not both.
+git am /path/to/patches/backend-8-shop-category-authority.patch
 npm run shop:test-categories        # the classification table, both sides
 npm run shop:backfill-categories    # dry run; then re-run with -- --apply
 
@@ -61,12 +66,28 @@ git am /path/to/patches/backend-6-booking-request-admin-actions.patch
 # schema: the API adds the audit columns and the two indexes at boot. The SQL of
 # record is migrations/2026-11-05-booking-request-admin-actions.sql (in the patch).
 
+# backend — the answer window becomes five minutes (take it after backend-6:
+# it edits the same services, and its backfill rewrites rows that still expire
+# one minute after they were created)
+git am /path/to/patches/backend-7-five-minute-window.patch
+# then restart the API. Every new request now stores created_at + 300s.
+
 # admin panel
 git clone https://github.com/rightserveinfotechsystems/my-naai-frontend.git
 cd my-naai-frontend
 git am /path/to/patches/admin-panel-shop-customers.patch
 git am /path/to/patches/admin-panel-2-booking-requests.patch   # Booking requests tab
+git am /path/to/patches/admin-panel-3-shop-products-category-filter.patch
+git am /path/to/patches/admin-panel-4-five-minute-window.patch
 ```
+
+**Order matters.** Backend: `backend-8` → `backend-6` → `backend-7` (the
+category work first because `backend-6` is independent of it, then the window —
+verified end-to-end on a clean clone of `1b43fd9`). Admin panel:
+`admin-panel-2` → `admin-panel-3` → `admin-panel-4`. The two `five-minute`
+patches are what make the window five minutes everywhere; nothing else in either
+repo still says sixty seconds, so applying only one of them leaves that panel
+counting down to the wrong deadline.
 
 ### If "Show more products (88)" is still on screen
 

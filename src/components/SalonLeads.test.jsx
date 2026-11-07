@@ -101,17 +101,30 @@ describe('booking request vs booking', () => {
     expect(summary.answerRate).toBe(40);
   });
 
-  it('turns an unanswered request into auto-cancelled once the minute is up', () => {
+  it('turns an unanswered request into auto-cancelled once the five minutes are up', () => {
     const live = normalizeLead({ bookingRequestId: 'x', status: 'PENDING', createdAt: new Date().toISOString() });
     expect(leadView(live).state).toBe(LEAD_STATE.awaiting);
     expect(leadView(live).canAnswer).toBe(true);
-    // 1:00 on the tick it arrives, 0:59 a moment later.
-    expect(leadView(live).countdown).toMatch(/^[01]:\d\d$/);
+    // 5:00 on the tick it arrives, 4:59 a moment later.
+    expect(leadView(live).countdown).toMatch(/^[45]:\d\d$/);
 
-    const stale = normalizeLead({ bookingRequestId: 'y', status: 'PENDING', createdAt: minutesAgo(5) });
+    const stale = normalizeLead({ bookingRequestId: 'y', status: 'PENDING', createdAt: minutesAgo(6) });
     // Still PENDING on the server's row, but not answerable: it is cancelled.
     expect(leadView(stale).state).toBe(LEAD_STATE.autoCancelled);
     expect(leadView(stale).canAnswer).toBe(false);
+  });
+
+  it('counts down to m:ss without ever printing 5:60', () => {
+    // The deadline is usually a few milliseconds inside the window (created_at
+    // plus five minutes, read back later), and rounding the remainder used to
+    // print "4:60" on a request that had only just arrived.
+    const lead = normalizeLead({ bookingRequestId: 'z', status: 'PENDING', createdAt: new Date().toISOString() });
+    const justInside = leadView(lead, lead.expiresAt - 299999);
+    expect(justInside.countdown).toBe('5:00');
+    expect(leadView(lead, lead.expiresAt - 60000).countdown).toBe('1:00');
+    expect(leadView(lead, lead.expiresAt - 59999).countdown).toBe('1:00');
+    expect(leadView(lead, lead.expiresAt - 1).countdown).toBe('0:01');
+    expect(leadView(lead, lead.expiresAt).countdown).toBe('');
   });
 
   it('maps the server vocabulary onto the four states it can show', () => {

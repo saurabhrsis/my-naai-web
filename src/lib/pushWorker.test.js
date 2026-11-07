@@ -337,7 +337,7 @@ describe('ringing the app that is open in another tab', () => {
 // buzzer file — the Notifications API has no custom sound (it was removed from
 // the standard in 2018 and no browser ever implemented it). The device's own
 // notification sound is the alarm, so the worker raises the alert again inside
-// the salon's 60-second answer window.
+// the salon's five-minute answer window.
 describe('keeping the alert audible with the app closed', () => {
   it('re-raises the booking alert inside the answer window, then stops', async () => {
     const harness = makeHarness({ clients: [] });
@@ -345,18 +345,26 @@ describe('keeping the alert audible with the app closed', () => {
     expect(harness.notifications).toHaveLength(1);
     expect(harness.notifications[0].options.renotify).toBe(true);
 
-    await harness.settle(20000);
+    // Four nudges spread across the five minutes, each counting down against
+    // the same deadline the server enforces.
+    await harness.settle(30000);
     expect(harness.notifications).toHaveLength(1);
-    expect(harness.notifications[0].options.body).toMatch(/40s left to respond/);
+    expect(harness.notifications[0].options.body).toMatch(/270s left to respond/);
     expect(harness.notifications[0].options.renotify).toBe(true);
 
-    await harness.settle(20000);
-    expect(harness.notifications[0].options.body).toMatch(/20s left to respond/);
-
-    // The window is over: no fourth banner, whatever the phone did with the
-    // first three.
     await harness.settle(60000);
-    expect(harness.showNotification).toHaveBeenCalledTimes(3);
+    expect(harness.notifications[0].options.body).toMatch(/210s left to respond/);
+
+    await harness.settle(90000);
+    expect(harness.notifications[0].options.body).toMatch(/120s left to respond/);
+
+    await harness.settle(90000);
+    expect(harness.notifications[0].options.body).toMatch(/30s left to respond/);
+
+    // The window is over: no sixth banner, whatever the phone did with the
+    // first five.
+    await harness.settle(120000);
+    expect(harness.showNotification).toHaveBeenCalledTimes(5);
   });
 
   it('never repeats an informational alert', async () => {

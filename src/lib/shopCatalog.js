@@ -192,6 +192,11 @@ export function normalizeShopProduct(item = {}, index = 0) {
     salonName: salon.salonName || item.salonName || '',
     salonGenderType: String(salon.genderType || item.salonGenderType || '').toUpperCase(),
     category: readExplicitCategory(item.category || item.categoryName) || inferCategory(name),
+    // The value the row actually stores. Kept because it may be a LABEL the
+    // admin typed ("Waxing products") rather than an id, and only the live
+    // category list can say which shelf that label means — see
+    // `applyShopFilters`, which resolves it with the same list the filter uses.
+    categoryValue: String(item.category || item.categoryName || '').trim(),
     gender: readExplicitGender(item.gender || item.genderType) || inferGender(name) || sellerGender(item) || 'unisex',
   };
 }
@@ -207,6 +212,35 @@ export function categoryLabel(id) {
 // actually carries that the list does not know about — a product filed under a
 // retired category must still be reachable by its own filter instead of
 // disappearing into "All".
+// A stored category value as an id, using a LIVE category list when there is
+// one. This is the client's half of the rule the backend applies in SQL: a row
+// whose `category` is a label the admin typed resolves to that category's id,
+// so a product the panel counts under "Waxing products" (id `fragrance`) is on
+// the same shelf when a customer filters for it. Without the list a label falls
+// back to the keyword inference, which is exactly the mismatch that made six
+// products invisible.
+export function resolveCategoryValue(value, categories = []) {
+  const text = String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!text) return '';
+  const live = (Array.isArray(categories) ? categories : [])
+    .map(category => ({ id: String(category?.id || ''), label: String(category?.label || '').trim().toLowerCase() }))
+    .find(category => category.id && (category.id.toLowerCase() === text || category.label === text));
+  if (live) return live.id;
+  return readExplicitCategory(value);
+}
+
+// Turns a product's stored category into the id the filter and the panel both
+// mean. Products come back from `normalizeShopProduct` with a guess in
+// `category`; when the row stored a label, only the live list can correct that
+// guess, so every place that shows, filters or groups by category runs the
+// product through here first.
+export function resolveProductCategory(product, categories = []) {
+  if (!product) return product;
+  const resolved = product.categoryValue ? resolveCategoryValue(product.categoryValue, categories) : '';
+  if (!resolved || resolved === product.category) return product;
+  return { ...product, category: resolved };
+}
+
 export function categoryChipsFor(products, categories = SHOP_CATEGORIES) {
   const base = (categories || SHOP_CATEGORIES).map(({ id, label }) => ({ id, label }));
   const seen = new Set(base.map(category => category.id));
@@ -281,13 +315,19 @@ export function shopFiltersActive(filters = DEFAULT_SHOP_FILTERS) {
 
 // Pure + synchronous so the grid can re-filter on every keystroke without a
 // network round-trip (the catalog endpoint does not accept these facets).
-export function applyShopFilters(products, filters = DEFAULT_SHOP_FILTERS) {
+export function applyShopFilters(products, filters = DEFAULT_SHOP_FILTERS, categories = []) {
   const list = Array.isArray(products) ? products : [];
   const search = String(filters.search || '').trim().toLowerCase();
+  const wantedCategory = String(filters.category || 'all').toLowerCase();
+  const categoryOf = product => (
+    product?.categoryValue
+      ? (resolveCategoryValue(product.categoryValue, categories) || product.category)
+      : product.category
+  );
   const filtered = list.filter(product => {
     if (!product?.available) return false;
     if (search && !`${product.name} ${product.salonName} ${product.description}`.toLowerCase().includes(search)) return false;
-    if (filters.category && filters.category !== 'all' && product.category !== filters.category) return false;
+    if (wantedCategory !== 'all' && String(categoryOf(product) || '').toLowerCase() !== wantedCategory) return false;
     if (filters.gender && filters.gender !== 'all' && product.gender !== filters.gender) return false;
     if (!matchesPriceRange(product.price, filters.priceRange)) return false;
     return true;

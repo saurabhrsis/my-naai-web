@@ -82,9 +82,9 @@ Clicking a request opens it without leaving the tab:
 ## 4. Answering on the salon's behalf
 
 The footer offers **Accept for salon** / **Decline for salon** while the request
-is answerable — `PENDING`, inside its 60 second window, with no booking. Anything
-else is read-only and the footer says which: *"The 60 second answer window has
-closed"* or *"Read-only · already answered"*.
+is answerable — `PENDING`, inside its five minute window, with no booking.
+Anything else is read-only and the footer says which: *"The 5-minute answer
+window has closed"* or *"Read-only · already answered"*.
 
 Pressing either opens an **inline** confirm (not a second dialog, which would
 cover the request being confirmed on a phone): the heading names the salon, the

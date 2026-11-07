@@ -11,8 +11,21 @@
 // cancelled by the server (a customer cannot hold a slot forever, and the salon
 // cannot leave a lead hanging). That is an **auto-cancelled** request — not a
 // rejection, and deliberately counted apart from one.
+//
+// FIVE MINUTES. It was one minute, which is less time than it takes to put the
+// clippers down and pick the phone up. The server stamps each request's own
+// deadline (`expiresAt`) and that is always what counts; this constant is only
+// the fallback for a payload that arrives without one, and the source of the
+// words every screen uses. The backend's number lives in
+// `services/bookingRequestLead.service.js` -> WINDOW_SECONDS.
+export const BOOKING_ACTION_WINDOW_MINUTES = 5;
+export const BOOKING_ACTION_WINDOW_MS = BOOKING_ACTION_WINDOW_MINUTES * 60 * 1000;
 
-export const BOOKING_ACTION_WINDOW_MS = 60 * 1000;
+// "5 minutes" / "5-minute" / "5 min" — one place, so the screens cannot drift.
+export const bookingWindowLabel = `${BOOKING_ACTION_WINDOW_MINUTES} minutes`;
+export const bookingWindowShort = `${BOOKING_ACTION_WINDOW_MINUTES} min`;
+export const bookingWindowClosed = `The ${BOOKING_ACTION_WINDOW_MINUTES}-minute answer window has closed`;
+export const bookingWindowMissed = `No answer within ${bookingWindowLabel}`;
 
 export const LEAD_STATE = {
   awaiting: 'awaiting', // live, still inside the answer window
@@ -102,6 +115,12 @@ export function normalizeLead(row = {}, now = Date.now()) {
 // What the card shows, given the clock. A request the salon has not answered
 // stops being answerable the moment its window closes: it is auto-cancelled
 // then, whether or not the server has caught up with that fact yet.
+// "m:ss" for what is left, never "5:60".
+export function countdownLabel(remainingMs) {
+  const seconds = Math.max(0, Math.ceil(Number(remainingMs || 0) / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
 export function leadView(lead, now = Date.now()) {
   const remainingMs = lead.status === LEAD_STATE.awaiting && lead.expiresAt ? Math.max(0, lead.expiresAt - now) : 0;
   const state = lead.status === LEAD_STATE.awaiting && lead.expiresAt && now >= lead.expiresAt
@@ -111,7 +130,10 @@ export function leadView(lead, now = Date.now()) {
     state,
     remainingMs,
     canAnswer: state === LEAD_STATE.awaiting && remainingMs > 0,
-    countdown: remainingMs > 0 ? `${Math.floor(remainingMs / 60000)}:${String(Math.ceil((remainingMs % 60000) / 1000)).padStart(2, '0')}` : '',
+    // Whole seconds first, then split: rounding the REMAINDER would print
+    // "4:60" for anything a hair under five minutes, which is every request
+    // that has just arrived.
+    countdown: remainingMs > 0 ? countdownLabel(remainingMs) : '',
   };
 }
 

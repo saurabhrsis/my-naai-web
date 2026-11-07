@@ -53,6 +53,7 @@ import { api } from '../lib/api';
 import { getErrorMessage as getApiError } from './Shared';
 import { normalizeAdImages } from '../lib/ads';
 import { describeOffset } from '../lib/bookingTime';
+import { BOOKING_ACTION_WINDOW_MINUTES } from '../lib/bookingLeads';
 import { closeNotification, getNotificationRoute, isActionableNotification } from '../lib/push';
 import { armStoredReminders, cancelBookingReminder, remindersEnabled, scheduleBookingReminder, setRemindersEnabled } from '../lib/reminders';
 import { stashPendingRoute } from '../lib/pendingRoute';
@@ -1667,12 +1668,14 @@ export function NotificationsScreen({ session, notify, navigate }) {
   // The list API is not always quick to reflect an answer, so the card shows
   // the result it just got straight away instead of a loader or stale buttons.
   const [outcomes, setOutcomes] = useState({});
-  // Server-side status for booking requests whose 60 seconds have passed, keyed
+  // Server-side status for booking requests whose answer window has closed, keyed
   // by id — "time has gone" should still say what happened to the request.
   const [statuses, setStatuses] = useState({});
   const [now, setNow] = useState(Date.now());
 
-  // The one-minute countdown on booking-request cards ticks while this screen is open.
+  // The countdown on booking-request cards ticks while this screen is open. It
+  // runs to the server's own deadline (five minutes), never to a number printed
+  // here.
   useEffect(() => {
     if (!isSalon) return undefined;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -1803,11 +1806,11 @@ export function NotificationsScreen({ session, notify, navigate }) {
     rejected: { label: 'Rejected', text: 'You rejected this booking request.', tone: 'bad' },
     delayed: { label: 'Delay sent', text: 'The customer has been asked to accept the new time.', tone: 'warn' },
     completed: { label: 'Completed', text: 'This booking has been completed.', tone: 'ok' },
-    expired: { label: 'Time has gone', text: 'The 60-second response window closed before an action was taken. The customer has been told the salon did not respond.', tone: 'muted' },
+    expired: { label: 'Time has gone', text: `The ${BOOKING_ACTION_WINDOW_MINUTES}-minute response window closed before an action was taken. The customer has been told the salon did not respond.`, tone: 'muted' },
     closed: { label: 'Already handled', text: 'This request was already answered — from another device, or by the time limit.', tone: 'muted' },
-    pending: { label: 'Time has gone', text: 'The 60-second window to respond has closed. Open the request to check whether it is still waiting.', tone: 'muted' },
-    unknown: { label: 'Time has gone', text: 'The 60-second window to respond has closed and the request could not be checked. Open it to see its status.', tone: 'muted' },
-    loading: { label: 'Time has gone', text: 'The 60-second window to respond has closed. Checking what happened…', tone: 'muted' },
+    pending: { label: 'Time has gone', text: `The ${BOOKING_ACTION_WINDOW_MINUTES}-minute window to respond has closed. Open the request to check whether it is still waiting.`, tone: 'muted' },
+    unknown: { label: 'Time has gone', text: `The ${BOOKING_ACTION_WINDOW_MINUTES}-minute window to respond has closed and the request could not be checked. Open it to see its status.`, tone: 'muted' },
+    loading: { label: 'Time has gone', text: `The ${BOOKING_ACTION_WINDOW_MINUTES}-minute window to respond has closed. Checking what happened…`, tone: 'muted' },
   };
 
   const formatCountdown = ms => {
@@ -1816,7 +1819,7 @@ export function NotificationsScreen({ session, notify, navigate }) {
   };
 
   return <div className="screen notifications-screen">
-    <PageHeader title="Notifications" subtitle={isSalon ? 'New booking requests can be accepted, rejected or delayed right here within 60 seconds.' : 'Updates about your appointments.'} onBack={() => navigate(isSalon ? 'queue' : 'home')} action={<button className="icon-btn ghost" onClick={() => load()} aria-label="Refresh notifications"><Zap size={18} /></button>} />
+    <PageHeader title="Notifications" subtitle={isSalon ? `New booking requests can be accepted, rejected or delayed right here within ${BOOKING_ACTION_WINDOW_MINUTES} minutes.` : 'Updates about your appointments.'} onBack={() => navigate(isSalon ? 'queue' : 'home')} action={<button className="icon-btn ghost" onClick={() => load()} aria-label="Refresh notifications"><Zap size={18} /></button>} />
     {loadError && !loading && <div className="inline-notice notification-error"><CircleAlert size={16} /><span>{loadError}</span><button onClick={() => load()}>Try again</button></div>}
     {loading ? <div className="notification-list">{[1, 2, 3].map(item => <SkeletonCard key={item} className="notification-skeleton" />)}</div> : items.length ? <div className="notification-list">{items.map((item, index) => {
       const type = notificationType(item);
@@ -1860,7 +1863,7 @@ export function NotificationsScreen({ session, notify, navigate }) {
           </div>
         </div>
       </article>;
-    })}</div> : !loadError && <EmptyState icon={Bell} title="No notifications yet" message={isSalon ? 'New booking requests will appear here with Accept / Reject / Delay actions for 60 seconds.' : 'We will keep important booking updates here.'} />}
+    })}</div> : !loadError && <EmptyState icon={Bell} title="No notifications yet" message={isSalon ? `New booking requests will appear here with Accept / Reject / Delay actions for ${BOOKING_ACTION_WINDOW_MINUTES} minutes.` : 'We will keep important booking updates here.'} />}
 
     <Modal open={Boolean(delayModal)} onClose={() => { if (!actionLoading) setDelayModal(null); }} title="Update time & notify customer">
       <p className="modal-lede">Running a little late? Choose a delay. My Naai will send the customer a delay request so they can accept or decline the updated time.</p>
