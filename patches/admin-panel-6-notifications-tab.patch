@@ -1,0 +1,451 @@
+From e266efe423be5da4047b2ed775c1831e73f74c81 Mon Sep 17 00:00:00 2001
+From: Arena Agent <agent@arena.ai>
+Date: Mon, 16 Nov 2026 09:25:50 +0000
+Subject: [PATCH] Make Notifications a real tab: role access, unread badge,
+ feeds and event deep links
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The panel already had a Notifications page but the tab was easy to lose: it was
+labelled "Push Notifications", it was hidden for the super admin whenever their
+stored `accessTab` predated it, and nothing told an admin when an event arrived.
+
+* **Role access.** The tab's key (`notifications`) is the role-access checkbox
+  in `utils/TabArray.js` and is now labelled "Notifications". It rides along
+  with role management (`user`) exactly like Plans & Trials, so the super admin
+  can open the inbox without first granting themselves the new key. A role that
+  has neither sees an explicit "No access to notifications" card instead of the
+  list.
+* **Unread badge.** The sidebar (and the phone "More" drawer) shows the unread
+  event count, polled every 60 s and cleared the moment the tab is opened.
+* **Two feeds, one list.** All / Events / Sent by admin chips, filtered on the
+  server (`feed`) rather than in the browser, so pagination stays honest.
+* **Events lead somewhere.** An event row opens the tab it is about — order and
+  delivery actions → Shop Orders, registration → Salons, renewal → Plans,
+  booking request → Booking Requests.
+* **Mark all read** next to the chips, and the page zeroes the badge on open.
+---
+ src/components/Layout.jsx       |  67 +++++++++++++---
+ src/pages/PushNotifications.jsx | 134 +++++++++++++++++++++++++++++---
+ src/services/communication.jsx  |  36 ++++++++-
+ src/utils/TabArray.js           |   8 +-
+ 4 files changed, 219 insertions(+), 26 deletions(-)
+
+diff --git a/src/components/Layout.jsx b/src/components/Layout.jsx
+index 2996575..10cd5c0 100644
+--- a/src/components/Layout.jsx
++++ b/src/components/Layout.jsx
+@@ -4,7 +4,7 @@ import ProfileDropdown from "./ProfileDropdown.jsx";
+ import ChangePasswordModal from "./ChangePasswordModal.jsx";
+ import { useUser } from "../contexts/UserContext.jsx";
+ import { ClipboardList, Store, CalendarCheck, User, Users, Package, Truck, ShoppingBag, SlidersHorizontal, Menu, X, Sparkles } from "lucide-react";
+-import { salonRequestAPI } from "../services/communication.jsx";
++import { notificationAPI } from "../services/communication.jsx";
+ 
+ const Icons = {
+   Salon: () => (
+@@ -47,7 +47,7 @@ const navItems = [
+   { path: "/bookings", key: "bookings", label: "Booking Management", icon: <CalendarCheck size={18} /> },
+   { path: "/booking-requests", key: "bookingRequests", label: "Booking Requests", icon: <CalendarCheck size={18} /> },
+   { path: "/advertisement", key: "advertisement", label: "Advertisement", icon: <Icons.Advertisement /> },
+-  { path: "/notifications", key: "notifications", label: "Push Notifications", icon: <Icons.Notification /> },
++  { path: "/notifications", key: "notifications", label: "Notifications", icon: <Icons.Notification /> },
+   { path: "/shop-products", key: "shopProducts", label: "Shop Products", icon: <Package size={18} /> },
+   { path: "/distributors", key: "distributors", label: "Distributors", icon: <Truck size={18} /> },
+   { path: "/shop-orders", key: "shopOrders", label: "Shop Orders", icon: <ShoppingBag size={18} /> },
+@@ -60,22 +60,50 @@ const Layout = ({ children }) => {
+   const [showLogoutModal, setShowLogoutModal] = useState(false);
+   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+   const [isLogoutLoading, setIsLogoutLoading] = useState(false);
+-  const [salonRequestCount, setSalonRequestCount] = useState(0);
++  const [notificationCount, setNotificationCount] = useState(0);
+   const [showMoreDrawer, setShowMoreDrawer] = useState(false);
+   
+   const navigate = useNavigate();
+   const accessTab = JSON.parse(localStorage.getItem("accessTab")) || [];
+   
+   const hasAnyShopTab = ["shopProducts", "distributors", "shopOrders"].some((key) => accessTab?.includes(key));
+-  const filteredTabs = navItems.filter(
+-    (navDetails) =>
+-      accessTab?.includes(navDetails.key) ||
++  // The Notifications tab is the panel's inbox for the API's own event rows (a
++  // new order, a salon registration, a renewal, a delivery-partner action, a new
++  // booking request) plus the pushes an admin has sent. It is granted by its own
++  // role-access key, and it rides along with role management (`user`) — the
++  // super admin's stored access list predates this tab, so without the ride-along
++  // the owner's own panel had no way to open it.
++  const canSeeNotifications = Boolean(accessTab?.includes("notifications") || accessTab?.includes("user"));
++  const filteredTabs = navItems.filter((navDetails) => {
++    if (navDetails.key === "notifications") return canSeeNotifications;
++    return accessTab?.includes(navDetails.key) ||
+       // Shop Settings rides along with any shop tab; Plans & Trials with the
+       // role-management tab, so the super admin can set prices without first
+       // granting themselves the new tab.
+       (navDetails.key === "shopSettings" && hasAnyShopTab) ||
+-      (navDetails.key === "plans" && accessTab?.includes("user"))
+-  );
++      (navDetails.key === "plans" && accessTab?.includes("user"));
++  });
++
++  // Unread event rows, for the badge. It refreshes itself while the panel is
++  // open, and the Notifications page zeroes it the moment the tab is opened
++  // (it dispatches `notifications:read`).
++  useEffect(() => {
++    if (!canSeeNotifications) return undefined;
++    let cancelled = false;
++    const loadCount = async () => {
++      const res = await notificationAPI.getNotificationCount();
++      if (!cancelled && res.success) setNotificationCount(Number(res.count) || 0);
++    };
++    loadCount();
++    const timer = setInterval(loadCount, 60000);
++    const onRead = () => setNotificationCount(0);
++    window.addEventListener("notifications:read", onRead);
++    return () => {
++      cancelled = true;
++      clearInterval(timer);
++      window.removeEventListener("notifications:read", onRead);
++    };
++  }, [canSeeNotifications]);
+ 
+   const primaryMobileTabs = filteredTabs.slice(0, 4);
+   const overflowMobileTabs = filteredTabs.slice(4);
+@@ -142,9 +170,9 @@ const Layout = ({ children }) => {
+             >
+               {item.icon}
+               <span className="text-truncate">{item.label}</span>
+-              {item.path === "/salonrequest" && salonRequestCount > 0 && (
++              {item.key === "notifications" && notificationCount > 0 && (
+                 <span className="badge bg-danger ms-auto" style={{ fontSize: '0.65rem', padding: '0.2rem 0.4rem' }}>
+-                  {salonRequestCount > 99 ? '99+' : salonRequestCount}
++                  {notificationCount > 99 ? '99+' : notificationCount}
+                 </span>
+               )}
+             </NavLink>
+@@ -320,9 +348,19 @@ const Layout = ({ children }) => {
+                   className={`btn nav-link text-center p-2 mobile-nav-item border-0 bg-transparent ${showMoreDrawer ? "active text-primary" : "text-secondary"}`}
+                   onClick={() => setShowMoreDrawer(true)}
+                 >
+-                  <div className="d-flex flex-column align-items-center">
++                  <div className="d-flex flex-column align-items-center position-relative">
+                     <Menu size={20} />
+                     <small className="mt-1 nav-text" style={{ fontSize: "0.68rem" }}>More</small>
++                    {/* The inbox lives in this drawer once the role has enough
++                        tabs for it to overflow the bottom bar. */}
++                    {notificationCount > 0 && overflowMobileTabs.some((item) => item.key === "notifications") && (
++                      <span
++                        className="badge bg-danger position-absolute"
++                        style={{ top: "-4px", right: "-10px", fontSize: "0.6rem" }}
++                      >
++                        {notificationCount > 99 ? '99+' : notificationCount}
++                      </span>
++                    )}
+                   </div>
+                 </button>
+               )}
+@@ -363,7 +401,12 @@ const Layout = ({ children }) => {
+                       onClick={() => setShowMoreDrawer(false)}
+                     >
+                       <span className="text-primary">{item.icon}</span>
+-                      <span>{item.label}</span>
++                      <span className="flex-grow-1">{item.label}</span>
++                      {item.key === "notifications" && notificationCount > 0 && (
++                        <span className="badge bg-danger" style={{ fontSize: '0.65rem' }}>
++                          {notificationCount > 99 ? '99+' : notificationCount}
++                        </span>
++                      )}
+                     </NavLink>
+                   ))}
+                 </div>
+diff --git a/src/pages/PushNotifications.jsx b/src/pages/PushNotifications.jsx
+index ef8e71b..4cd8710 100644
+--- a/src/pages/PushNotifications.jsx
++++ b/src/pages/PushNotifications.jsx
+@@ -4,7 +4,7 @@ import Loader from "../components/Loader.jsx";
+ import DeleteConfirmModal from "../components/DeleteConfirmModal.jsx";
+ import SearchInput from "../components/SearchInput.jsx";
+ import Pagination from "../components/Pagination.jsx";
+-import { FaPaperPlane, FaTrash, FaPlus } from "react-icons/fa";
++import { FaPaperPlane, FaTrash, FaPlus, FaExternalLinkAlt } from "react-icons/fa";
+ import { notificationAPI } from "../services/communication.jsx";
+ import { useNavigate } from "react-router-dom";
+ import SendNotificationModal from "../components/sendNotificationModal.jsx";
+@@ -22,6 +22,20 @@ const targetBadge = (targetType) => {
+     return { label: "All", className: "bg-dark" };
+ };
+ 
++// The event rows the API writes are the panel's "what just happened" feed. Each
++// one belongs to a tab, so opening it from the inbox lands on the record it is
++// about (the API copy is set by services/eventNotification.service.js).
++const eventLinkFor = (title = "") => {
++    const text = String(title).toLowerCase();
++    if (/order|delivery partner/.test(text)) return "/shop-orders";
++    if (/salon registration/.test(text)) return "/salons";
++    if (/subscription|renewal/.test(text)) return "/plans";
++    if (/booking request/.test(text)) return "/booking-requests";
++    return "";
++};
++
++const isEvent = (notification) => notification?.targetType === "ADMINS";
++
+ const Notifications = () => {
+     const [loading, setLoading] = useState(false);
+     const [recentNotifications, setRecentNotifications] = useState([]);
+@@ -32,6 +46,9 @@ const Notifications = () => {
+     const [showAddForm, setShowAddForm] = useState(false);
+     const [showSendModal, setShowSendModal] = useState(false);
+     const [deleteModal, setDeleteModal] = useState({ show: false, ids: [], loading: false });
++    // The inbox shows two feeds in one list: the API's own events and the pushes
++    // an admin sent. "All" is the default so an admin never misses either.
++    const [feed, setFeed] = useState("all");
+ 
+     const [formData, setFormData] = useState({
+         targetType: "",
+@@ -42,6 +59,17 @@ const Notifications = () => {
+ 
+     const navigate = useNavigate();
+ 
++    // The tab is a role-access key (see utils/TabArray.js). Role management
++    // (`user`) sees it too, which is what lets the super admin open the inbox
++    // without first granting themselves the new key. A direct URL by anyone else
++    // is refused, exactly like the Booking Requests tab.
++    const canOpen = Boolean(
++        (() => {
++            const tabs = JSON.parse(localStorage.getItem("accessTab") || "null") || [];
++            return tabs.includes("notifications") || tabs.includes("user");
++        })()
++    );
++
+     //debouncing
+     useEffect(() => {
+         const handler = setTimeout(() => {
+@@ -57,11 +85,12 @@ const Notifications = () => {
+             setLoading(true);
+             const res = await notificationAPI.getNotifications(
+                 currentPage,
+-                debouncedSearch
++                debouncedSearch,
++                feed === "all" ? "" : feed
+             );
+             if (res.success) {
+-                setRecentNotifications(res.data.notifications || []);
+-                setTotalPages(res.data.pagination?.totalPages || 1);
++                setRecentNotifications(res.data?.notifications || []);
++                setTotalPages(res.data?.pagination?.totalPages || 1);
+             }
+         } catch (error) {
+             console.error("Fetch error:", error);
+@@ -72,7 +101,7 @@ const Notifications = () => {
+ 
+     useEffect(() => {
+         fetchNotifications();
+-    }, [currentPage, debouncedSearch]);
++    }, [currentPage, debouncedSearch, feed]);
+ 
+     // Event rows (orders, registrations, renewals, delivery actions, booking
+     // requests) are written by the API, not by this screen, so the list refreshes
+@@ -80,7 +109,25 @@ const Notifications = () => {
+     useEffect(() => {
+         const timer = setInterval(() => { fetchNotifications(); }, 60000);
+         return () => clearInterval(timer);
+-    }, [currentPage, debouncedSearch]);
++    }, [currentPage, debouncedSearch, feed]);
++
++    // Opening the inbox is reading it: the badge in the sidebar clears on the
++    // first successful load, and `notifications:read` tells the Layout so it does
++    // not wait for its next poll.
++    const markAllRead = async ({ silent = false } = {}) => {
++        const res = await notificationAPI.markAllNotificationsRead();
++        if (res.success) {
++            window.dispatchEvent(new Event("notifications:read"));
++            if (!silent) fetchNotifications();
++        }
++    };
++
++    useEffect(() => {
++        if (!canOpen) return;
++        markAllRead({ silent: true });
++        // Runs once per visit; the badge is a convenience, not state.
++        // eslint-disable-next-line react-hooks/exhaustive-deps
++    }, [canOpen]);
+ 
+     const handleInputChange = (e) => {
+         const { name, value } = e.target;
+@@ -120,6 +167,23 @@ const Notifications = () => {
+             setDeleteModal(prev => ({ ...prev, loading: false }));
+         }
+     };
++    if (!canOpen) {
++        return (
++            <Layout>
++                <div className="container-fluid px-2 px-md-4 mt-2 mt-md-4">
++                    <div className="card shadow-sm border-0">
++                        <div className="card-body text-center py-5">
++                            <h5 className="fw-bold mb-2">No access to notifications</h5>
++                            <p className="text-muted mb-0">
++                                Ask the super admin to grant the <strong>Notifications</strong> tab to your role.
++                            </p>
++                        </div>
++                    </div>
++                </div>
++            </Layout>
++        );
++    }
++
+     return (
+         <Layout>
+             <div className="container-fluid px-2 px-md-4 mt-2 mt-md-4 thin-scrollbar">
+@@ -210,6 +274,32 @@ const Notifications = () => {
+ 
+                                     {/* --- DYNAMIC TOOLBAR (Responsive) --- */}
+                                     <div className="p-2 p-md-3 border-bottom bg-light">
++                                        {/* The two feeds that share this list. An event is
++                                            something that happened in the business; a sent
++                                            push was written by an admin. */}
++                                        <div className="d-flex flex-wrap align-items-center gap-2 mb-2">
++                                            {[
++                                                { key: "all", label: "All" },
++                                                { key: "events", label: "Events" },
++                                                { key: "sent", label: "Sent by admin" },
++                                            ].map((chip) => (
++                                                <button
++                                                    key={chip.key}
++                                                    type="button"
++                                                    className={`btn btn-sm ${feed === chip.key ? "buttoncolor" : "btn-outline-secondary"} px-3`}
++                                                    onClick={() => { setFeed(chip.key); setCurrentPage(1); }}
++                                                >
++                                                    {chip.label}
++                                                </button>
++                                            ))}
++                                            <button
++                                                type="button"
++                                                className="btn btn-sm btn-link ms-auto text-decoration-none"
++                                                onClick={() => markAllRead()}
++                                            >
++                                                Mark all read
++                                            </button>
++                                        </div>
+                                         <div className="d-flex flex-column flex-md-row gap-2">
+                                             {/* 1. Search Bar */}
+                                             <div className="flex-grow-1">
+@@ -271,8 +361,25 @@ const Notifications = () => {
+                                                                         </span>
+                                                                     </td>
+                                                                     <td className="px-4 text-truncate" style={{ maxWidth: "300px" }}>
+-                                                                        <div className="fw-bold text-capitalize">{notif.title}</div>
+-                                                                        <div className="small text-muted text-capitalize">{notif.body}</div>
++                                                                        {(() => {
++                                                                            // An API event belongs to a tab: clicking it opens the
++                                                                            // record it is about (order → Shop Orders, registration →
++                                                                            // Salons, renewal → Plans, lead → Booking Requests).
++                                                                            const link = isEvent(notif) ? eventLinkFor(notif.title) : "";
++                                                                            return (
++                                                                                <>
++                                                                                    <div
++                                                                                        className={`fw-bold text-capitalize d-flex align-items-center gap-1 ${link ? "text-primary" : ""}`}
++                                                                                        style={link ? { cursor: "pointer" } : undefined}
++                                                                                        onClick={link ? () => navigate(link) : undefined}
++                                                                                    >
++                                                                                        <span className="text-truncate">{notif.title}</span>
++                                                                                        {link && <FaExternalLinkAlt size={10} title="Open the related tab" />}
++                                                                                    </div>
++                                                                                    <div className="small text-muted text-capitalize">{notif.body}</div>
++                                                                                </>
++                                                                            );
++                                                                        })()}
+                                                                     </td>
+                                                                     <td className="px-4 text-muted text-center small">{new Date(notif.createdAt).toLocaleDateString('en-GB')}</td>
+                                                                     <td className="text-center">
+@@ -311,8 +418,15 @@ const Notifications = () => {
+ 
+                                                                 </div>
+ 
+-                                                                <div className="mb-1">
+-                                                                    <h6 className="fw-bold mb-0 text-truncate" style={{ fontSize: "13px" }}>{notif.title}</h6>
++                                                                <div
++                                                                    className="mb-1"
++                                                                    style={isEvent(notif) && eventLinkFor(notif.title) ? { cursor: "pointer" } : undefined}
++                                                                    onClick={isEvent(notif) && eventLinkFor(notif.title) ? () => navigate(eventLinkFor(notif.title)) : undefined}
++                                                                >
++                                                                    <h6 className="fw-bold mb-0 text-truncate d-flex align-items-center gap-1" style={{ fontSize: "13px" }}>
++                                                                        <span className="text-truncate">{notif.title}</span>
++                                                                        {isEvent(notif) && eventLinkFor(notif.title) && <FaExternalLinkAlt size={9} className="text-primary" />}
++                                                                    </h6>
+                                                                     <p className="text-muted mb-0 text-truncate" style={{ fontSize: "11px" }}>{notif.body}</p>
+                                                                 </div>
+ 
+diff --git a/src/services/communication.jsx b/src/services/communication.jsx
+index 545ac43..06b78a1 100644
+--- a/src/services/communication.jsx
++++ b/src/services/communication.jsx
+@@ -1322,12 +1322,44 @@ export const notificationAPI = {
+     }
+   },
+ 
++  // Unread event rows, for the sidebar badge. The API answers SUCCESS with a
++  // number even on a fresh install, so callers only have to deal with `count`.
++  getNotificationCount: async () => {
++    try {
++      const response = await api.post('/api/adminNotification/get-admin-notification-count', {});
++      return {
++        success: response.data?.status === "SUCCESS",
++        count: Number(response.data?.notification) || 0
++      };
++    } catch (error) {
++      return { success: false, count: 0, message: error.response?.data?.message || "Failed to fetch notification count" };
++    }
++  },
++
++  // Opening the Notifications tab clears the badge (only the API's event rows —
++  // an admin's own sent push was never unread for them).
++  markAllNotificationsRead: async () => {
++    try {
++      const response = await api.post('/api/adminNotification/mark-admin-notifications-read', {});
++      return {
++        success: response.data?.status === "SUCCESS",
++        updated: Number(response.data?.updated) || 0,
++        message: response.data?.message
++      };
++    } catch (error) {
++      return { success: false, message: error.response?.data?.message || "Failed to mark notifications as read" };
++    }
++  },
++
+   // Get notifications (same as before)
+-  getNotifications: async (page = 1, searchString = "") => {
++  getNotifications: async (page = 1, searchString = "", feed = "") => {
+     try {
+       const response = await api.post('/api/adminNotification/get-admin-notification-list', {
+         page: page,
+-        searchString: searchString
++        searchString: searchString,
++        // '' = both feeds, 'events' = the API's own event rows, 'sent' = pushes
++        // an admin sent from this screen.
++        feed: feed
+       });
+       return {
+         success: response.data?.status === "SUCCESS",
+diff --git a/src/utils/TabArray.js b/src/utils/TabArray.js
+index f444b27..7ba92c9 100644
+--- a/src/utils/TabArray.js
++++ b/src/utils/TabArray.js
+@@ -36,9 +36,13 @@ export const TabArray = [
+     label: "Advertisement",
+     route: "/advertisement",
+   },
+-    {
++  {
++    // The panel's notification inbox: the API's own event rows (new order, salon
++    // registration, renewal, delivery-partner action, booking request) plus every
++    // push an admin has sent. This key is also the role-access checkbox, so a
++    // role can be granted the inbox without any other tab.
+     key: "notifications",
+-    label: "Push Notifications",
++    label: "Notifications",
+     route: "/notifications",
+   },
+   {
+-- 
+2.39.5
+
