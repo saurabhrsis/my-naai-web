@@ -1,0 +1,164 @@
+From 0b59166fa6c2f896c5b5f09c10a1798b4f7ad8a4 Mon Sep 17 00:00:00 2001
+From: Arena Agent <agent@arena.ai>
+Date: Mon, 16 Nov 2026 09:38:56 +0000
+Subject: [PATCH] Open the panel on what it receives, and put the inbox in the
+ phone topbar
+
+* The Notifications tab is the admin's inbox, so it now opens on **Received**
+  (the API's own events: new order, salon registration, subscription renewal,
+  delivery-partner action, booking request). "All" and "Sent by admin" stay as
+  secondary views, and the empty state says which feed is empty.
+* The page title carries one line of explanation, so an admin knows the list is
+  what the panel received and that opening the tab marks it read.
+* On a phone, a **bell beside the profile button** in the topbar opens the
+  Notifications tab and carries the same unread badge (99+ cap, hidden once the
+  tab is opened). It is only rendered for a role that can open the tab.
+---
+ src/components/Layout.jsx       | 57 +++++++++++++++++++++++++--------
+ src/pages/PushNotifications.jsx | 33 ++++++++++++++-----
+ 2 files changed, 69 insertions(+), 21 deletions(-)
+
+diff --git a/src/components/Layout.jsx b/src/components/Layout.jsx
+index 10cd5c0..1d2a749 100644
+--- a/src/components/Layout.jsx
++++ b/src/components/Layout.jsx
+@@ -291,19 +291,50 @@ const Layout = ({ children }) => {
+                 />
+               </div>
+ 
+-              <button
+-                className="btn btn-outline-secondary btn-sm flex-shrink-0 d-flex align-items-center justify-content-center profile-btn"
+-                onClick={() => setShowProfileDropdown(!showProfileDropdown)}
+-                style={{
+-                  width: '36px',
+-                  height: '36px',
+-                  borderRadius: '50%',
+-                  padding: '0'
+-                }}
+-                title="Profile"
+-              >
+-                <span style={{ fontSize: '1.2rem' }}>👤</span>
+-              </button>
++              <div className="d-flex align-items-center gap-1 flex-shrink-0">
++                {/* The phone topbar carries the inbox beside the profile button:
++                    a bell with the unread-event badge, opening the Notifications
++                    tab. Hidden for a role without the tab (or role management). */}
++                {canSeeNotifications && (
++                  <button
++                    type="button"
++                    className="btn btn-outline-secondary btn-sm d-flex align-items-center justify-content-center position-relative"
++                    onClick={() => navigate("/notifications")}
++                    style={{
++                      width: '36px',
++                      height: '36px',
++                      borderRadius: '50%',
++                      padding: '0'
++                    }}
++                    title="Notifications"
++                    aria-label={notificationCount > 0 ? `Notifications, ${notificationCount} unread` : "Notifications"}
++                  >
++                    <Icons.Notification />
++                    {notificationCount > 0 && (
++                      <span
++                        className="badge rounded-pill bg-danger position-absolute"
++                        style={{ top: '-2px', right: '-2px', fontSize: '0.58rem', padding: '0.15rem 0.3rem' }}
++                      >
++                        {notificationCount > 99 ? '99+' : notificationCount}
++                      </span>
++                    )}
++                  </button>
++                )}
++
++                <button
++                  className="btn btn-outline-secondary btn-sm flex-shrink-0 d-flex align-items-center justify-content-center profile-btn"
++                  onClick={() => setShowProfileDropdown(!showProfileDropdown)}
++                  style={{
++                    width: '36px',
++                    height: '36px',
++                    borderRadius: '50%',
++                    padding: '0'
++                  }}
++                  title="Profile"
++                >
++                  <span style={{ fontSize: '1.2rem' }}>👤</span>
++                </button>
++              </div>
+             </div>
+           </header>
+ 
+diff --git a/src/pages/PushNotifications.jsx b/src/pages/PushNotifications.jsx
+index 4cd8710..ef369a6 100644
+--- a/src/pages/PushNotifications.jsx
++++ b/src/pages/PushNotifications.jsx
+@@ -46,9 +46,11 @@ const Notifications = () => {
+     const [showAddForm, setShowAddForm] = useState(false);
+     const [showSendModal, setShowSendModal] = useState(false);
+     const [deleteModal, setDeleteModal] = useState({ show: false, ids: [], loading: false });
+-    // The inbox shows two feeds in one list: the API's own events and the pushes
+-    // an admin sent. "All" is the default so an admin never misses either.
+-    const [feed, setFeed] = useState("all");
++    // The tab is the admin's INBOX, so it opens on what the panel receives (the
++    // API's own events: a new order, a salon registration, a renewal, a
++    // delivery-partner action, a booking request). "Sent by admin" is the record
++    // of pushes written from this screen, and "All" mixes the two.
++    const [feed, setFeed] = useState("events");
+ 
+     const [formData, setFormData] = useState({
+         targetType: "",
+@@ -189,8 +191,13 @@ const Notifications = () => {
+             <div className="container-fluid px-2 px-md-4 mt-2 mt-md-4 thin-scrollbar">
+                 <div className="row">
+                     <div className="col-12">
+-                        <div className="d-flex justify-content-between align-items-center mb-3">
+-                            <h4 className="mb-0 fw-bold">Notifications</h4>
++                        <div className="mb-3">
++                            <h4 className="mb-1 fw-bold">Notifications</h4>
++                            <p className="text-muted mb-0" style={{ fontSize: "13px" }}>
++                                Everything the admin panel receives — new shop orders, salon
++                                registrations, subscription renewals, delivery-partner updates and
++                                booking requests. Opening this tab marks them read.
++                            </p>
+                         </div>
+ 
+                         {showAddForm ? (
+@@ -279,8 +286,8 @@ const Notifications = () => {
+                                             push was written by an admin. */}
+                                         <div className="d-flex flex-wrap align-items-center gap-2 mb-2">
+                                             {[
++                                                { key: "events", label: "Received" },
+                                                 { key: "all", label: "All" },
+-                                                { key: "events", label: "Events" },
+                                                 { key: "sent", label: "Sent by admin" },
+                                             ].map((chip) => (
+                                                 <button
+@@ -392,7 +399,11 @@ const Notifications = () => {
+                                                         ) : (
+                                                             <tr>
+                                                                 <td colSpan="5" className="text-center py-4 text-muted" style={{ fontSize: "20px" }}>
+-                                                                    No notifications found
++                                                                    {feed === "sent"
++                                                                        ? "No notifications sent yet"
++                                                                        : feed === "all"
++                                                                            ? "No notifications found"
++                                                                            : "Nothing new — the panel has received no updates yet"}
+                                                                 </td>
+                                                             </tr>
+                                                         )}
+@@ -403,7 +414,13 @@ const Notifications = () => {
+                                             {/* --- COMPACT MOBILE VIEW (Cards) --- */}
+                                             <div className="d-md-none p-2 bg-light">
+                                                 {recentNotifications.length === 0 ? (
+-                                                    <div className="text-center py-4 text-muted small">No notifications found</div>
++                                                    <div className="text-center py-4 text-muted small">
++                                                        {feed === "sent"
++                                                            ? "No notifications sent yet"
++                                                            : feed === "all"
++                                                                ? "No notifications found"
++                                                                : "Nothing new — the panel has received no updates yet"}
++                                                    </div>
+                                                 ) : (
+                                                     recentNotifications.map((notif, idx) => (
+                                                         <div key={notif.id} className="card shadow-sm mb-2 border-0" style={{ borderRadius: "8px" }}>
+-- 
+2.39.5
+
