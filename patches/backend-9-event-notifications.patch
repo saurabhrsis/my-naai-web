@@ -1,0 +1,580 @@
+From 82afc4345e793b14ba0fd0444f0869c150d49497 Mon Sep 17 00:00:00 2001
+From: Arena Agent <agent@arena.ai>
+Date: Mon, 16 Nov 2026 08:16:55 +0000
+Subject: [PATCH] Notify the admin panel and the salon for orders,
+ registration, renewal, delivery actions and booking requests
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The owner wants the same five events on both sides: the admin panel and the
+salon.
+
+New `services/eventNotification.service.js`:
+
+* `notifyAdmins({ title, body })` writes one `admin_notification` row with the
+  internal target type `ADMINS`, which the admin panel's list now includes
+  (`created_by = <admin> OR target_type = 'ADMINS'`). Salon and customer
+  notification lists only ever ask for ALL / ALL_SALONS / ALL_USERS, so an
+  internal event cannot leak to a partner or a customer.
+* `notifySalon({ salonId, title, body, data })` writes the salon's own
+  `notifications` row and pushes to every active device of that salon.
+* `notifyAdminsAndSalon(...)` for the events both sides must see.
+
+Both functions swallow and log their own failures: an order is placed, a salon
+is created and a plan is renewed whether or not a notification could be
+written.
+
+Wired into:
+
+* `shopOrder.service` — order placed, delivery partner assigned, accepted,
+  rejected, and each fulfilment step (picked up / shipped / delivered);
+* `razorpay/createSalonWithPlan` — new salon registration;
+* `razorpay/renewSalonPlan` — subscription renewed (the copy tells the salon
+  that the queue and history are open again);
+* `bookingRequest/bookingRequest` — new booking request (the salon already got
+  its own push + inbox row there; this adds the admin panel).
+
+The migration `patches/migrations/2026-11-06-admin-event-notifications.sql`
+adds the `ADMINS` enum value and the list index.
+---
+ package.json                                  |   3 +-
+ scripts/test-event-notifications.js           | 155 ++++++++++++++++++
+ .../bookingRequest/bookingRequest.js          |   9 +
+ .../razorpay/createSalonWithPlan.js           |  12 ++
+ src/controller/razorpay/renewSalonPlan.js     |  12 ++
+ .../models/adminNotification.model.js         |   5 +-
+ src/services/adminNotification.service.js     |  12 +-
+ src/services/eventNotification.service.js     | 118 +++++++++++++
+ src/services/shopOrder.service.js             |  53 ++++++
+ 9 files changed, 376 insertions(+), 3 deletions(-)
+ create mode 100644 scripts/test-event-notifications.js
+ create mode 100644 src/services/eventNotification.service.js
+
+diff --git a/package.json b/package.json
+index dfc96d4..a383c4b 100644
+--- a/package.json
++++ b/package.json
+@@ -8,7 +8,8 @@
+     "start": "node index.js",
+     "dev": "nodemon index.js",
+     "shop:backfill-categories": "node scripts/backfill-shop-categories.js",
+-    "shop:test-categories": "node scripts/test-shop-categories.js"
++    "shop:test-categories": "node scripts/test-shop-categories.js",
++    "event:test-notifications": "node scripts/test-event-notifications.js"
+   },
+   "repository": {
+     "type": "git",
+diff --git a/scripts/test-event-notifications.js b/scripts/test-event-notifications.js
+new file mode 100644
+index 0000000..5270d13
+--- /dev/null
++++ b/scripts/test-event-notifications.js
+@@ -0,0 +1,155 @@
++// Event notifications — self-check that runs without a database or Firebase.
++//
++//   npm run event:test-notifications
++//
++// `services/eventNotification.service.js` is the one path that writes the
++// admin panel's event rows and the salon's own notifications. It must:
++//
++//   • write an admin row with the internal target type ADMINS;
++//   • write the salon's row and push to every active device once;
++//   • NEVER throw — an order is placed and a salon is created whatever Firebase
++//     or Postgres answered.
++//
++// This stubs the two dependencies (the Sequelize models and the FCM sender) in
++// Node's require cache and exercises the real service file.
++const path = require('path');
++const assert = require('assert');
++
++const ROOT = path.join(__dirname, '..');
++const modelsPath = require.resolve(path.join(ROOT, 'src/database/models'));
++const firebasePath = require.resolve(path.join(ROOT, 'src/firebase/sendNotification'));
++
++const calls = { admin: [], notification: [], push: [], tokens: [] };
++const fakeDb = {
++    AdminNotification: {
++        create: async (row) => {
++            if (fakeDb.failAdmin) throw new Error('invalid input value for enum: "ADMINS"');
++            calls.admin.push(row);
++            return { id: 'admin-row', ...row };
++        },
++    },
++    Notification: {
++        create: async (row) => {
++            if (fakeDb.failSalon) throw new Error('notifications insert failed');
++            calls.notification.push(row);
++            return { notificationId: 'notification-row', ...row };
++        },
++    },
++    DeviceToken: {
++        findAll: async ({ where }) => {
++            calls.tokens.push(where);
++            if (fakeDb.failTokens) throw new Error('device_tokens lookup failed');
++            return where.salonId === 'salon-1'
++                ? [{ deviceToken: 'token-1' }, { deviceToken: 'token-2' }, { deviceToken: 'token-1' }]
++                : [];
++        },
++    },
++};
++fakeDb.failAdmin = false;
++fakeDb.failSalon = false;
++fakeDb.failTokens = false;
++
++require.cache[modelsPath] = { id: modelsPath, filename: modelsPath, loaded: true, exports: fakeDb };
++require.cache[firebasePath] = {
++    id: firebasePath,
++    filename: firebasePath,
++    loaded: true,
++    exports: async (token, title, body, data) => {
++        calls.push.push({ token, title, body, data });
++        // One device failing must not stop the others, and must not throw.
++        if (token === 'token-2') throw new Error('messaging/registration-token-not-registered');
++        return true;
++    },
++};
++
++const service = require(path.join(ROOT, 'src/services/eventNotification.service.js'));
++
++const check = async (label, fn) => {
++    await fn();
++    console.log(`  ✓ ${label}`);
++};
++
++(async () => {
++    console.log('\nEvent notification checks\n');
++
++    await check('an admin event row uses the internal ADMINS target type', async () => {
++        calls.admin.length = 0;
++        await service.notifyAdmins({ title: 'New shop order', body: 'Rita placed order NAI-1234' });
++        assert.strictEqual(calls.admin.length, 1);
++        assert.strictEqual(calls.admin[0].targetType, 'ADMINS');
++        assert.strictEqual(calls.admin[0].createdBy, null);
++        assert.strictEqual(calls.admin[0].isRead, false);
++    });
++
++    await check('a failing admin row is logged, not thrown', async () => {
++        fakeDb.failAdmin = true;
++        const result = await service.notifyAdmins({ title: 'x', body: 'y' });
++        assert.strictEqual(result, null);
++        fakeDb.failAdmin = false;
++    });
++
++    await check('the salon gets its own row and one push per device', async () => {
++        calls.notification.length = 0;
++        calls.push.length = 0;
++        await service.notifySalon({ salonId: 'salon-1', title: 'Order placed', body: 'Order NAI-1234', data: { type: 'SHOP_ORDER' } });
++        assert.strictEqual(calls.notification.length, 1);
++        assert.strictEqual(calls.notification[0].receiverType, 'SALON');
++        assert.strictEqual(calls.notification[0].receiverId, 'salon-1');
++        assert.deepStrictEqual(calls.push.map(entry => entry.token).sort(), ['token-1', 'token-2'], 'duplicate tokens are sent once');
++        assert.strictEqual(calls.push[0].data.type, 'SHOP_ORDER');
++    });
++
++    await check('an event with no salon writes no salon notification', async () => {
++        calls.notification.length = 0;
++        const result = await service.notifySalon({ salonId: null, title: 'x', body: 'y' });
++        assert.strictEqual(result, null);
++        assert.strictEqual(calls.notification.length, 0);
++    });
++
++    await check('a failed device lookup still leaves the salon row', async () => {
++        calls.notification.length = 0;
++        calls.push.length = 0;
++        fakeDb.failTokens = true;
++        const row = await service.notifySalon({ salonId: 'salon-1', title: 't', body: 'b' });
++        assert.ok(row, 'the inbox row is written even when the device lookup fails');
++        fakeDb.failTokens = false;
++    });
++
++    await check('a failed salon row still sends the push', async () => {
++        calls.push.length = 0;
++        fakeDb.failSalon = true;
++        const result = await service.notifySalon({ salonId: 'salon-1', title: 't', body: 'b' });
++        assert.strictEqual(result, null);
++        assert.strictEqual(calls.push.length, 2);
++        fakeDb.failSalon = false;
++    });
++
++    await check('one call reaches both audiences', async () => {
++        calls.admin.length = 0;
++        calls.notification.length = 0;
++        await service.notifyAdminsAndSalon({
++            salonId: 'salon-1',
++            adminTitle: 'Delivery partner assigned',
++            adminBody: 'Ravi was assigned to order NAI-1234',
++            title: 'Delivery partner assigned',
++            body: 'Ravi will deliver order NAI-1234.',
++        });
++        assert.strictEqual(calls.admin.length, 1);
++        assert.strictEqual(calls.notification.length, 1);
++        assert.strictEqual(calls.admin[0].title, 'Delivery partner assigned');
++        assert.strictEqual(calls.notification[0].title, 'Delivery partner assigned');
++    });
++
++    await check('copy is trimmed to the column sizes', async () => {
++        calls.admin.length = 0;
++        await service.notifyAdmins({ title: 'x'.repeat(300), body: 'y'.repeat(600) });
++        const row = calls.admin[0];
++        assert.ok(row.title.length <= 120, 'title fits the 120-character title column');
++        assert.ok(row.body.length <= 240, 'body fits the 240-character body copy');
++    });
++
++    console.log('\nAll event-notification checks passed.\n');
++})().catch((error) => {
++    console.error('\n✗ Event notification check failed:', error.message, '\n');
++    process.exit(1);
++});
+diff --git a/src/controller/bookingRequest/bookingRequest.js b/src/controller/bookingRequest/bookingRequest.js
+index 80e81a7..3854e47 100644
+--- a/src/controller/bookingRequest/bookingRequest.js
++++ b/src/controller/bookingRequest/bookingRequest.js
+@@ -1,6 +1,7 @@
+ const db = require('../../database/models');
+ const { Op } = require('sequelize');
+ const sendNotificationToDevice = require('../../firebase/sendNotification');
++const { notifyAdmins } = require('../../services/eventNotification.service');
+ const { scheduleAutoCancelTask } = require('../../tasks/autoCancelTask');
+ const { createBookingRequestSchema } = require('../../validations/bookingRequest.validation');
+ const { WINDOW_MS, WINDOW_SECONDS } = require('../../services/bookingRequestLead.service');
+@@ -290,6 +291,14 @@ const createBookingRequest = async (req, res) => {
+ 
+         await t.commit();
+ 
++        // Committed first: the admin panel's copy of the lead must never exist
++        // for a request that was rolled back. (The salon's own notification
++        // above travels with the transaction, as it always has.)
++        await notifyAdmins({
++            title: 'New booking request',
++            body: `${userName} requested ${serviceNames} at ${formattedTime} on ${formattedDate}`,
++        });
++
+         return res.status(200).json({
+             status: 'SUCCESS',
+             message: 'Booking request sent to salon owner',
+diff --git a/src/controller/razorpay/createSalonWithPlan.js b/src/controller/razorpay/createSalonWithPlan.js
+index ba0dc10..31661de 100644
+--- a/src/controller/razorpay/createSalonWithPlan.js
++++ b/src/controller/razorpay/createSalonWithPlan.js
+@@ -8,6 +8,7 @@ const jwt = require("jsonwebtoken");
+ const { getPlanEndDate } = require('../../utils/plan.util');
+ const partnerPlanService = require('../../services/partnerPlan.service');
+ const db = require('../../database/models');
++const { notifyAdminsAndSalon } = require('../../services/eventNotification.service');
+ 
+ 
+ const createSalonWithPlan = async (request, response) => {
+@@ -226,6 +227,17 @@ const createSalonWithPlan = async (request, response) => {
+ 
+         await t.commit()
+ 
++        // The owner's rule: a new salon registration reaches the admin panel,
++        // and the new partner gets the same event in their own inbox.
++        await notifyAdminsAndSalon({
++            salonId: salon?.salonId,
++            adminTitle: "New salon registration",
++            adminBody: `${salonName} (${ownerName}) registered on the ${planType} plan — ${phoneNumber || "no phone"}`,
++            title: "Welcome to My Naai",
++            body: `Your salon ${salonName} is on the ${planType} plan until ${new Date(planEndDate).toLocaleDateString("en-IN")}. Add your photos and services to start taking bookings.`,
++            data: { type: "SALON_REGISTERED" },
++        });
++
+         //  token generate
+         const token = jwt.sign(
+             { salonId: salon?.salonId },
+diff --git a/src/controller/razorpay/renewSalonPlan.js b/src/controller/razorpay/renewSalonPlan.js
+index 1856bee..714f1f7 100644
+--- a/src/controller/razorpay/renewSalonPlan.js
++++ b/src/controller/razorpay/renewSalonPlan.js
+@@ -5,6 +5,7 @@ const razorpay = require("../../services/razorpay.service");
+ const { isPlanActive, getPlanEndDate } = require('../../utils/plan.util');
+ const partnerPlanService = require('../../services/partnerPlan.service');
+ const db = require('../../database/models');
++const { notifyAdminsAndSalon } = require('../../services/eventNotification.service');
+ 
+ const renewSalonPlan = async (request, response) => {
+     const t = await sequelize.transaction();
+@@ -118,6 +119,17 @@ const renewSalonPlan = async (request, response) => {
+ 
+         await t.commit();
+ 
++        // The owner's rule: a subscription renewal reaches the admin panel, and
++        // the salon is told its plan is live again (the two gated tabs reopen).
++        await notifyAdminsAndSalon({
++            salonId,
++            adminTitle: 'Subscription renewed',
++            adminBody: `${salon.salonName || 'A salon'} renewed the ${planType} plan until ${new Date(endDate).toLocaleDateString('en-IN')}`,
++            title: 'Subscription renewed',
++            body: `Your ${planType} plan is active until ${new Date(endDate).toLocaleDateString('en-IN')}. The Customer queue and Booking history are open again.`,
++            data: { type: 'PLAN_RENEWED' },
++        });
++
+         return response.status(200).json({
+             status: "SUCCESS",
+             message: "Plan renewed successfully",
+diff --git a/src/database/models/adminNotification.model.js b/src/database/models/adminNotification.model.js
+index 7d2b9e3..3436970 100644
+--- a/src/database/models/adminNotification.model.js
++++ b/src/database/models/adminNotification.model.js
+@@ -9,7 +9,10 @@ module.exports = (sequelize) => {
+         },
+ 
+         targetType: {
+-            type: DataTypes.ENUM('ALL', 'ALL_USERS', 'ALL_SALONS'),
++            // ADMINS is an internal event row: the admin panel's inbox only.
++            // Salon/user notification lists never ask for it (they filter
++            // ALL / ALL_SALONS / ALL_USERS), so it cannot leak to partners.
++            type: DataTypes.ENUM('ALL', 'ALL_USERS', 'ALL_SALONS', 'ADMINS'),
+             allowNull: false,
+             field: 'target_type'
+         },
+diff --git a/src/services/adminNotification.service.js b/src/services/adminNotification.service.js
+index 507c6e0..24ca455 100644
+--- a/src/services/adminNotification.service.js
++++ b/src/services/adminNotification.service.js
+@@ -91,7 +91,17 @@ const sendAdminNotification = async ({ targetType, title, body, data = {} }) =>
+             const safePage = parseInt(page, 10) > 0 ? parseInt(page, 10) : 1;
+             const offset = (safePage - 1) * limit;
+ 
+-            const where = { createdBy: adminId };
++            // Two kinds of row share this inbox: what an admin sent (createdBy =
++            // that admin) and the system's own event rows (targetType ADMINS,
++            // createdBy null) — a new order, a salon registration, a renewal, a
++            // delivery-partner action, a new booking request. Every admin sees
++            // the event rows; nobody's own sends leak to another admin.
++            const where = {
++                [Op.or]: [
++                    { createdBy: adminId },
++                    { targetType: 'ADMINS' }
++                ]
++            };
+ 
+             // 🔥 search
+             if (searchString && searchString.trim()) {
+diff --git a/src/services/eventNotification.service.js b/src/services/eventNotification.service.js
+new file mode 100644
+index 0000000..094945e
+--- /dev/null
++++ b/src/services/eventNotification.service.js
+@@ -0,0 +1,118 @@
++const db = require('../database/models');
++const sendNotificationToDevice = require('../firebase/sendNotification');
++
++// One place for the five events the owner wants visible on BOTH sides:
++//
++//   • a new shop order                (shopOrder.service.createOrder)
++//   • a new salon registration        (razorpay/createSalonWithPlan)
++//   • a subscription renewal          (razorpay/renewSalonPlan)
++//   • a delivery-partner action       (shopOrder.service: assign/accept/reject/status)
++//   • a new booking request           (bookingRequest/bookingRequest)
++//
++// The two audiences are different, so there are two functions:
++//
++//   notifyAdmins({ title, body })            → one row in the admin panel's inbox
++//   notifySalon({ salonId, title, body, data }) → the salon's inbox + a push
++//
++// NEITHER function may break the business action it describes. An order is
++// placed whether or not Firebase answered, a salon is created whether or not the
++// admin inbox row was written — every failure is logged and swallowed here, and
++// every caller may simply `await` without a try/catch.
++
++// `ADMINS` is an INTERNAL target: the row exists for the admin panel only. The
++// salon list filters `targetType IN ('ALL','ALL_SALONS')` and the customer list
++// filters `('ALL','ALL_USERS')`, so an internal event can never appear in a
++// partner's or a customer's notifications. (Migration: patches/migrations/
++// 2026-11-06-admin-event-notifications.sql adds the enum value.)
++const ADMIN_TARGET = 'ADMINS';
++
++const shortText = (value, max = 180) => {
++    const text = String(value ?? '').replace(/\s+/g, ' ').trim();
++    return text.length > max ? `${text.slice(0, max - 1)}…` : text;
++};
++
++/**
++ * Write one inbox entry for the admin panel. No device push: an admin is a
++ * panel session, not an FCM registration, so there is no token to send to —
++ * the notification appears in the panel's list (and its unread count).
++ */
++const notifyAdmins = async ({ title, body }) => {
++    try {
++        const notification = await db.AdminNotification.create({
++            targetType: ADMIN_TARGET,
++            title: shortText(title, 120) || 'My Naai event',
++            body: shortText(body, 240),
++            createdBy: null,
++            isRead: false,
++        });
++        return notification;
++    } catch (error) {
++        console.error('❌ Admin event Notification Error:', error.message);
++        return null;
++    }
++};
++
++/**
++ * The salon's own record of the same event: a `notifications` row it reads in
++ * the app, plus the FCM push to every active device of that salon.
++ *
++ * The row is written even with no device tokens, so the event is never lost
++ * from the inbox — the push is the extra.
++ */
++const notifySalon = async ({ salonId, title, body, data = {} }) => {
++    if (!salonId) return null;
++    const safeTitle = shortText(title, 120) || 'My Naai update';
++    const safeBody = shortText(body, 240);
++
++    let notification = null;
++    try {
++        notification = await db.Notification.create({
++            receiverType: 'SALON',
++            receiverId: salonId,
++            title: safeTitle,
++            message: safeBody,
++        });
++    } catch (error) {
++        console.error('❌ Salon Notification row Error:', error.message);
++    }
++
++    try {
++        const devices = await db.DeviceToken.findAll({
++            where: { salonId, isActive: true },
++            attributes: ['deviceToken'],
++        });
++        const tokens = [...new Set(devices.map((device) => device.deviceToken).filter(Boolean))];
++        if (tokens.length) {
++            await Promise.allSettled(tokens.map((token) => sendNotificationToDevice(token, safeTitle, safeBody, {
++                ...data,
++                type: data.type || 'SALON_EVENT',
++                title: safeTitle,
++                body: safeBody,
++            })));
++        }
++    } catch (error) {
++        console.error('❌ Salon Notification push Error:', error.message);
++    }
++
++    return notification;
++};
++
++/**
++ * Both sides of one event, in one call — the shape most callers want.
++ * `salonId` is optional: an event with no salon (a customer's shop order) still
++ * reaches the admin panel.
++ */
++const notifyAdminsAndSalon = async ({ salonId, adminTitle, adminBody, title, body, data = {} }) => {
++    const [admin] = await Promise.all([
++        notifyAdmins({ title: adminTitle || title, body: adminBody || body }),
++        salonId ? notifySalon({ salonId, title, body, data }) : Promise.resolve(null),
++    ]);
++    return admin;
++};
++
++module.exports = {
++    ADMIN_TARGET,
++    notifyAdmins,
++    notifySalon,
++    notifyAdminsAndSalon,
++};
+diff --git a/src/services/shopOrder.service.js b/src/services/shopOrder.service.js
+index 80a0b60..4f731dc 100644
+--- a/src/services/shopOrder.service.js
++++ b/src/services/shopOrder.service.js
+@@ -4,6 +4,7 @@ const shopSettingsService = require('./shopSettings.service');
+ const { toCoordinate, toPoint, distanceKm, formatKm } = require('../utils/geo');
+ const { buyerWhere, buyerColumns, buyerOwnsOrder, buyerActor } = require('../utils/shopBuyer');
+ const { withBuyerSchema } = require('../database/config/ensureShopBuyerSchema');
++const { notifyAdminsAndSalon } = require('./eventNotification.service');
+ const DEFAULT_LIMIT = parseInt(process.env.PAGE_LIMIT) || 20;
+ 
+ /* ------------------------------------------------------------------ *\
+@@ -211,6 +212,19 @@ const createOrder = async ({ buyerType, buyerId, isSalon, orderId, items, addres
+   if (paid) {
+     await logEvent(order, { ...actor, action: 'PAYMENT_CONFIRMED', toStatus: order.customerStatus });
+   }
++
++  // The owner's rule: a new order reaches the admin panel, and the salon hears
++  // about every order it is part of (a customer's order has no salon yet — it
++  // gets one when a partner is assigned).
++  const buyerLabel = isSalon ? (salon?.salonName || 'A salon') : (customer?.fullName || 'A customer');
++  await notifyAdminsAndSalon({
++    salonId: order.salonId || null,
++    adminTitle: 'New shop order',
++    adminBody: `${buyerLabel} placed order ${order.orderId} · ${inr(order.amounts?.total)} · ${method === 'ONLINE' ? 'paid online' : 'cash on delivery'}`,
++    title: 'Order placed',
++    body: `Order ${order.orderId} for ${inr(order.amounts?.total)} was placed (${method === 'ONLINE' ? 'paid online' : 'cash on delivery'}).`,
++    data: { type: 'SHOP_ORDER', orderId: order.orderId },
++  });
+   return order;
+ };
+ 
+@@ -376,6 +390,16 @@ const assignDistributor = async (orderIdOrId, distributorId, note, actor = {}, d
+       distanceLabel ? `${distanceLabel} from the delivery location` : 'delivery distance unknown (no coordinates)'
+     ].filter(Boolean).join(' — ')
+   });
++
++  const partner = distributor?.name || 'A delivery partner';
++  await notifyAdminsAndSalon({
++    salonId: order.salonId || null,
++    adminTitle: 'Delivery partner assigned',
++    adminBody: `${partner} was assigned to order ${order.orderId}${distanceLabel ? ` · ${distanceLabel} from the delivery location` : ''}`,
++    title: 'Delivery partner assigned',
++    body: `${partner} will deliver order ${order.orderId}.`,
++    data: { type: 'SHOP_ORDER', orderId: order.orderId, status: order.status },
++  });
+   return order;
+ };
+ 
+@@ -399,6 +423,16 @@ const acceptOrder = async (orderIdOrId, actor = {}, distributor = null) => {
+ 
+   const who = distributor ? `Distributor ${distributor.name} accepted` : (actor.label ? `${actor.label} recorded acceptance for distributor ${order.distributor?.name || order.distributorId}` : 'Order accepted by distributor');
+   await logEvent(order, { ...actor, action: 'ACCEPTED', fromStatus, toStatus: order.status, note: who });
++
++  const partner = distributor?.name || order.distributor?.name || 'the delivery partner';
++  await notifyAdminsAndSalon({
++    salonId: order.salonId || null,
++    adminTitle: 'Delivery partner accepted an order',
++    adminBody: `${partner} accepted order ${order.orderId}`,
++    title: 'Order accepted',
++    body: `${partner} accepted order ${order.orderId} and will pick it up.`,
++    data: { type: 'SHOP_ORDER', orderId: order.orderId, status: order.status },
++  });
+   return order;
+ };
+ 
+@@ -426,6 +460,16 @@ const rejectOrder = async (orderIdOrId, reason, actor = {}, distributor = null)
+ 
+   const who = distributor ? `Distributor ${distributor.name} rejected` : (actor.label ? `${actor.label} recorded rejection by distributor ${order.distributor?.name || order.distributorId}` : 'Order rejected by distributor');
+   await logEvent(order, { ...actor, action: 'REJECTED', fromStatus, toStatus: order.status, note: `${who} — reason: ${trimmedReason}` });
++
++  const partner = distributor?.name || 'the delivery partner';
++  await notifyAdminsAndSalon({
++    salonId: order.salonId || null,
++    adminTitle: 'Delivery partner rejected an order',
++    adminBody: `${partner} rejected order ${order.orderId}. Reason: ${trimmedReason || 'not given'}`,
++    title: 'Delivery partner could not take the order',
++    body: `${partner} rejected order ${order.orderId}, so another partner is being assigned.`,
++    data: { type: 'SHOP_ORDER', orderId: order.orderId, status: order.status },
++  });
+   return order;
+ };
+ 
+@@ -467,6 +511,15 @@ const distributorUpdateStatus = async (orderIdOrId, nextStatus, actor = {}, dist
+     ? `Distributor ${distributor.name}`
+     : (actor.label ? `${actor.label} for distributor ${order.distributor?.name || order.distributorId}` : 'Distributor');
+   await logEvent(order, { ...actor, action: nextStatus, fromStatus, toStatus: nextStatus, note: `${who} marked the order ${step.label}` });
++
++  await notifyAdminsAndSalon({
++    salonId: order.salonId || null,
++    adminTitle: `Order ${step.label}`,
++    adminBody: `${who} marked order ${order.orderId} as ${step.label}`,
++    title: `Order ${step.label}`,
++    body: `${who} marked order ${order.orderId} as ${step.label}.`,
++    data: { type: 'SHOP_ORDER', orderId: order.orderId, status: nextStatus },
++  });
+   return order;
+ };
+ 
+-- 
+2.39.5
+
