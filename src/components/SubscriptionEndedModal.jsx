@@ -25,7 +25,7 @@ export function SubscriptionEndedModal({ open, onRenew, onCancel }) {
           Renew your subscription to open this feature again.
         </p>
         <ul className="subscription-ended-list">
-          <li><CalendarClock size={15} aria-hidden="true" /> Everything else stays open — your profile, booking requests, shop orders and account.</li>
+          <li><CalendarClock size={15} aria-hidden="true" /> Everything else stays open — your profile, shop orders and account.</li>
           <li><ShoppingBag size={15} aria-hidden="true" /> No customer payments happen here; the plan is a partner subscription.</li>
         </ul>
       </div>
