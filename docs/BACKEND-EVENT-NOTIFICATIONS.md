@@ -94,8 +94,10 @@ never thrown, so orders and registrations still succeed.
 * the existing delete control still works — deleting an event row removes it for
   every admin, which is the intended "dismiss".
 
-No new page, no new endpoint: the events land in the Notifications tab the panel
-already has.
+The tab itself — its role key (`notifications`), unread badge, All / Events / Sent
+feeds and event deep links — is `admin-panel-6-notifications-tab.patch` plus
+`backend-10-admin-notification-inbox.patch`; see
+[`ADMIN-PANEL-NOTIFICATIONS.md`](ADMIN-PANEL-NOTIFICATIONS.md).
 
 ## 5. Verification
 

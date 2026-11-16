@@ -1,0 +1,403 @@
+From f35211d7383bb66da43a195184eae25df66a8f81 Mon Sep 17 00:00:00 2001
+From: Arena Agent <agent@arena.ai>
+Date: Mon, 16 Nov 2026 09:25:27 +0000
+Subject: [PATCH] Give the admin panel a Notifications inbox: unread badge,
+ mark-read, and feeds
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The panel's Notifications tab shows two kinds of row: the API's own event rows
+(targetType ADMINS — new order, salon registration, renewal, delivery-partner
+action, booking request, written by backend-9) and the pushes an admin sent from
+the screen. This adds the endpoints that make it a real inbox:
+
+* `POST /api/adminNotification/get-admin-notification-count` — unread event
+  rows, for the sidebar badge. Always answers SUCCESS with a number (0 on a
+  fresh install or a read failure), because a badge is not worth an error.
+* `POST /api/adminNotification/mark-admin-notifications-read` — marks the event
+  rows read, so opening the tab clears the badge. It never touches an admin's
+  own sent rows: those were never unread messages to them.
+* `get-admin-notification-list` accepts `feed` (`events` / `sent` / empty for
+  both) and the conditions are now ANDed — the old shape replaced the whole
+  `where[Op.or]` with the search term, so typing anything into the box widened
+  the list beyond the admin's own rows.
+
+`npm run notification:test-inbox` is a database-free self-check of all of it.
+
+Apply after backend-9.
+---
+ package.json                                  |   3 +-
+ scripts/test-admin-notification-inbox.js      | 125 ++++++++++++++++++
+ .../getAdminNotificationCount.js              |  24 ++++
+ .../adminNotification/getNotificationList.js  |   6 +-
+ .../markAdminNotificationsRead.js             |  24 ++++
+ src/routes/adminNotification.routes.js        |   5 +
+ src/services/adminNotification.service.js     |  78 ++++++++---
+ 7 files changed, 246 insertions(+), 19 deletions(-)
+ create mode 100644 scripts/test-admin-notification-inbox.js
+ create mode 100644 src/controller/adminNotification/getAdminNotificationCount.js
+ create mode 100644 src/controller/adminNotification/markAdminNotificationsRead.js
+
+diff --git a/package.json b/package.json
+index a383c4b..90cd032 100644
+--- a/package.json
++++ b/package.json
+@@ -9,7 +9,8 @@
+     "dev": "nodemon index.js",
+     "shop:backfill-categories": "node scripts/backfill-shop-categories.js",
+     "shop:test-categories": "node scripts/test-shop-categories.js",
+-    "event:test-notifications": "node scripts/test-event-notifications.js"
++    "event:test-notifications": "node scripts/test-event-notifications.js",
++    "notification:test-inbox": "node scripts/test-admin-notification-inbox.js"
+   },
+   "repository": {
+     "type": "git",
+diff --git a/scripts/test-admin-notification-inbox.js b/scripts/test-admin-notification-inbox.js
+new file mode 100644
+index 0000000..8c6920f
+--- /dev/null
++++ b/scripts/test-admin-notification-inbox.js
+@@ -0,0 +1,125 @@
++// The admin panel's Notifications tab — self-check that needs no database.
++//
++//   npm run notification:test-inbox
++//
++// The tab shows two kinds of row: what an admin sent (createdBy = that admin)
++// and the API's own event rows (targetType = 'ADMINS'). Only the event rows are
++// unread messages TO an admin, so:
++//
++//   • the sidebar badge counts unread ADMINS rows;
++//   • "mark all read" clears exactly those, and nothing else.
++//
++// This stubs the Sequelize model in Node's require cache and checks both.
++const path = require('path');
++const assert = require('assert');
++const Module = require('module');
++
++// The service also imports `sequelize` for its operators. Only the database
++// layer matters here, and a fresh checkout has no node_modules, so the package
++// is stubbed at the loader instead of being installed.
++const originalLoad = Module._load;
++const OPERATORS = { or: Symbol('or'), in: Symbol('in'), ne: Symbol('ne'), iLike: Symbol('iLike'), and: Symbol('and') };
++Module._load = function load(request, parent, isMain) {
++    if (request === 'sequelize') return { Op: OPERATORS };
++    return originalLoad.call(this, request, parent, isMain);
++};
++
++const ROOT = path.join(__dirname, '..');
++const modelsPath = require.resolve(path.join(ROOT, 'src/database/models'));
++
++const calls = { count: [], update: [], list: [] };
++const fakeDb = {
++    AdminNotification: {
++        findAndCountAll: async ({ where, limit, offset }) => {
++            calls.list.push({ where, limit, offset });
++            return { count: 0, rows: [] };
++        },
++        count: async ({ where }) => {
++            calls.count.push(where);
++            return fakeDb.unread;
++        },
++        update: async (values, { where }) => {
++            calls.update.push({ values, where });
++            return [fakeDb.changed];
++        },
++    },
++};
++fakeDb.unread = 3;
++fakeDb.changed = 3;
++
++// The service also pulls the FCM sender (which pulls firebase-admin); nothing
++// in this check sends a push, so it is stubbed too.
++const firebasePath = require.resolve(path.join(ROOT, 'src/firebase/sendNotification'));
++
++require.cache[modelsPath] = { id: modelsPath, filename: modelsPath, loaded: true, exports: fakeDb };
++require.cache[firebasePath] = { id: firebasePath, filename: firebasePath, loaded: true, exports: async () => true };
++
++const service = require(path.join(ROOT, 'src/services/adminNotification.service.js'));
++
++const check = async (label, fn) => {
++    await fn();
++    console.log(`  ✓ ${label}`);
++};
++
++(async () => {
++    console.log('\nAdmin notification inbox checks\n');
++
++    await check('the badge counts unread event rows only', async () => {
++        calls.count.length = 0;
++        const total = await service.getAdminNotificationCount();
++        assert.strictEqual(total, 3);
++        assert.deepStrictEqual(calls.count[0], { targetType: 'ADMINS', isRead: false });
++    });
++
++    await check('marking read touches unread event rows and reports how many', async () => {
++        calls.update.length = 0;
++        const updated = await service.markAdminNotificationsRead();
++        assert.strictEqual(updated, 3);
++        assert.deepStrictEqual(calls.update[0].values, { isRead: true });
++        assert.deepStrictEqual(calls.update[0].where, { targetType: 'ADMINS', isRead: false });
++    });
++
++    await check('an empty inbox is zero, not an error', async () => {
++        fakeDb.unread = 0;
++        const total = await service.getAdminNotificationCount();
++        assert.strictEqual(total, 0);
++        fakeDb.unread = 3;
++    });
++
++    await check('the events feed asks for the API event rows only', async () => {
++        calls.list.length = 0;
++        await service.getAdminNotificationList({ adminId: 7, feed: 'events' });
++        const conditions = calls.list[0].where[OPERATORS.and];
++        assert.ok(Array.isArray(conditions), 'conditions are ANDed');
++        assert.ok(conditions.some(condition => condition.targetType === 'ADMINS'));
++        assert.deepStrictEqual(conditions[0], { [OPERATORS.or]: [{ createdBy: 7 }, { targetType: 'ADMINS' }] });
++    });
++
++    await check('the sent feed asks for everything except the event rows', async () => {
++        calls.list.length = 0;
++        await service.getAdminNotificationList({ adminId: 7, feed: 'sent' });
++        const conditions = calls.list[0].where[OPERATORS.and];
++        assert.ok(conditions.some(condition => condition.targetType && condition.targetType[OPERATORS.ne] === 'ADMINS'));
++    });
++
++    await check('a search narrows the inbox instead of widening it', async () => {
++        calls.list.length = 0;
++        await service.getAdminNotificationList({ adminId: 7, searchString: 'order' });
++        const conditions = calls.list[0].where[OPERATORS.and];
++        assert.strictEqual(conditions.length, 2, 'scope + search, not a bare OR');
++        assert.deepStrictEqual(conditions[0][OPERATORS.or], [{ createdBy: 7 }, { targetType: 'ADMINS' }], 'the permission scope is still applied');
++        assert.ok(Array.isArray(conditions[1][OPERATORS.or]), 'the search is its own OR group');
++    });
++
++    await check('a failed count propagates so the controller can degrade to 0', async () => {
++        const original = fakeDb.AdminNotification.count;
++        fakeDb.AdminNotification.count = async () => { throw new Error('db down'); };
++        await assert.rejects(() => service.getAdminNotificationCount(), /db down/);
++        fakeDb.AdminNotification.count = original;
++    });
++
++    console.log('\nAll admin notification inbox checks passed.\n');
++})().catch((error) => {
++    console.error('\n✗ Admin notification inbox check failed:', error.message, '\n');
++    process.exit(1);
++});
+diff --git a/src/controller/adminNotification/getAdminNotificationCount.js b/src/controller/adminNotification/getAdminNotificationCount.js
+new file mode 100644
+index 0000000..2466a54
+--- /dev/null
++++ b/src/controller/adminNotification/getAdminNotificationCount.js
+@@ -0,0 +1,24 @@
++const adminNotificationService = require('../../services/adminNotification.service');
++
++// The unread-event badge on the panel's Notifications tab. Always answers
++// SUCCESS with a number: a badge is not worth a 404, and a brand-new install
++// simply has zero.
++const getAdminNotificationCount = async (request, response) => {
++    try {
++        const notification = await adminNotificationService.getAdminNotificationCount();
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: 'Notification count fetched successfully',
++            notification: notification || 0
++        });
++    } catch (error) {
++        console.error('Error fetching admin notification count:', error);
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: 'Notification count unavailable',
++            notification: 0
++        });
++    }
++};
++
++module.exports = getAdminNotificationCount;
+diff --git a/src/controller/adminNotification/getNotificationList.js b/src/controller/adminNotification/getNotificationList.js
+index f9fa824..86f7eff 100644
+--- a/src/controller/adminNotification/getNotificationList.js
++++ b/src/controller/adminNotification/getNotificationList.js
+@@ -3,10 +3,10 @@ const adminNotificationService = require('../../services/adminNotification.servi
+ const getAdminNotificationsList = async (request, response) => {
+     try {
+         const adminId = request.admin?.id;
+-        const { page, searchString } = request.body || {};
++        const { page, searchString, feed } = request.body || {};
+ 
+-        const notifications = await adminNotificationService.getAdminNotificationList({adminId, page, searchString });
+-        if (notifications.length === 0) {
++        const notifications = await adminNotificationService.getAdminNotificationList({ adminId, page, searchString, feed });
++        if (!notifications?.notifications?.length) {
+             return response.status(200).json({
+                 status: 'SUCCESS',
+                 message: 'No notifications found',
+diff --git a/src/controller/adminNotification/markAdminNotificationsRead.js b/src/controller/adminNotification/markAdminNotificationsRead.js
+new file mode 100644
+index 0000000..f09ba99
+--- /dev/null
++++ b/src/controller/adminNotification/markAdminNotificationsRead.js
+@@ -0,0 +1,24 @@
++const adminNotificationService = require('../../services/adminNotification.service');
++
++// Called when an admin opens the Notifications tab (and by its "Mark all read"
++// action): the event rows stop being unread, so the sidebar badge clears.
++// Only ADMINS rows are touched — an admin's own sent notifications are not
++// unread messages to them, and never carry a badge.
++const markAdminNotificationsRead = async (request, response) => {
++    try {
++        const updated = await adminNotificationService.markAdminNotificationsRead();
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: 'Notifications marked as read',
++            updated: updated || 0
++        });
++    } catch (error) {
++        console.error('Error marking admin notifications as read:', error);
++        return response.status(500).json({
++            status: 'FAILED',
++            message: error.message
++        });
++    }
++};
++
++module.exports = markAdminNotificationsRead;
+diff --git a/src/routes/adminNotification.routes.js b/src/routes/adminNotification.routes.js
+index 2f6717d..1465356 100644
+--- a/src/routes/adminNotification.routes.js
++++ b/src/routes/adminNotification.routes.js
+@@ -5,6 +5,8 @@ const getAdminNotificationsList = require("../controller/adminNotification/getNo
+ const deleteAdminNotification = require("../controller/adminNotification/deleteAdminNotification");
+ const getNotificationById = require("../controller/adminNotification/getNotificationById");
+ const getUserAdminNotificationCount = require("../controller/adminNotification/getUserAdminNotificationCount");
++const getAdminNotificationCount = require("../controller/adminNotification/getAdminNotificationCount");
++const markAdminNotificationsRead = require("../controller/adminNotification/markAdminNotificationsRead");
+ const authenticateUser = require("../utils/middleware/authUser.middleware");
+ 
+ const adminNotificationRouter = express.Router();
+@@ -17,6 +19,9 @@ adminNotificationRouter.use(authenticateAdmin);
+ 
+ adminNotificationRouter.post('/send-notification-by-admin', sendNotificationUserAndSalons);
+ adminNotificationRouter.post('/get-admin-notification-list', getAdminNotificationsList);
++// The panel's Notifications tab: its unread-event badge and its "mark all read".
++adminNotificationRouter.post('/get-admin-notification-count', getAdminNotificationCount);
++adminNotificationRouter.post('/mark-admin-notifications-read', markAdminNotificationsRead);
+ adminNotificationRouter.post('/delete-admin-notification', deleteAdminNotification);
+ adminNotificationRouter.get('/get-admin-notification/:notificationId', getNotificationById);
+ 
+diff --git a/src/services/adminNotification.service.js b/src/services/adminNotification.service.js
+index 24ca455..de6f8df 100644
+--- a/src/services/adminNotification.service.js
++++ b/src/services/adminNotification.service.js
+@@ -85,7 +85,14 @@ const sendAdminNotification = async ({ targetType, title, body, data = {} }) =>
+     }
+ };
+ 
+-    const getAdminNotificationList = async ({ adminId, page = 1, searchString = '' }) => {
++    // `feed` comes from the panel's filter chips:
++    //   'events' → only the API's own event rows (what happened in the business),
++    //   'sent'   → only the pushes an admin sent from this screen,
++    //   anything else → both.
++    const ADMIN_FEED = 'events';
++    const SENT_FEED = 'sent';
++
++    const getAdminNotificationList = async ({ adminId, page = 1, searchString = '', feed = '' }) => {
+         try {
+             const limit = DEFAULT_LIMIT;
+             const safePage = parseInt(page, 10) > 0 ? parseInt(page, 10) : 1;
+@@ -96,23 +103,31 @@ const sendAdminNotification = async ({ targetType, title, body, data = {} }) =>
+             // createdBy null) — a new order, a salon registration, a renewal, a
+             // delivery-partner action, a new booking request. Every admin sees
+             // the event rows; nobody's own sends leak to another admin.
+-            const where = {
+-                [Op.or]: [
+-                    { createdBy: adminId },
+-                    { targetType: 'ADMINS' }
+-                ]
+-            };
+-
+-            // 🔥 search
++            //
++            // The conditions are ANDed: the permission scope first, then the feed
++            // filter, then the search. Overwriting `where[Op.or]` with the search
++            // (the old shape) widened the query to every admin's rows as soon as
++            // something was typed into the box.
++            const conditions = [
++                {
++                    [Op.or]: [
++                        { createdBy: adminId },
++                        { targetType: 'ADMINS' }
++                    ]
++                }
++            ];
++            if (feed === ADMIN_FEED) conditions.push({ targetType: 'ADMINS' });
++            if (feed === SENT_FEED) conditions.push({ targetType: { [Op.ne]: 'ADMINS' } });
+             if (searchString && searchString.trim()) {
+                 const like = `%${searchString.trim()}%`;
+-
+-                where[Op.or] = [
+-                    { title: { [Op.iLike]: like } },
+-                    { body: { [Op.iLike]: like } },
+-                    // { targetType: { [Op.iLike]: like } }
+-                ];
++                conditions.push({
++                    [Op.or]: [
++                        { title: { [Op.iLike]: like } },
++                        { body: { [Op.iLike]: like } }
++                    ]
++                });
+             }
++            const where = { [Op.and]: conditions };
+ 
+             const { count: totalNotifications, rows: notifications } =
+                 await db.AdminNotification.findAndCountAll({
+@@ -180,6 +195,37 @@ const getAdminNotificationById = async (notificationId) => {
+     }
+ };
+ 
++// ── The admin panel's own inbox ──────────────────────────────────────────────
++// The panel's Notifications tab is built from two kinds of row (see
++// getAdminNotificationList): what an admin sent, and the API's own event rows
++// (targetType ADMINS) — a new order, a salon registration, a renewal, a
++// delivery-partner action, a booking request.
++//
++// Only the event rows are "for" the admins in the unread sense: a row an admin
++// sent is not an unread message *to* them. So the badge counts unread events,
++// and opening the tab clears exactly those.
++const getAdminNotificationCount = async () => {
++    return await db.AdminNotification.count({
++        where: {
++            targetType: 'ADMINS',
++            isRead: false
++        }
++    });
++};
++
++const markAdminNotificationsRead = async () => {
++    const [updated] = await db.AdminNotification.update(
++        { isRead: true },
++        {
++            where: {
++                targetType: 'ADMINS',
++                isRead: false
++            }
++        }
++    );
++    return updated;
++};
++
+ const getUserAdminNotificationCount = async (userId) => {
+     return await db.AdminNotification.count({
+         where: {
+@@ -194,6 +240,8 @@ const getUserAdminNotificationCount = async (userId) => {
+ 
+ module.exports = {
+     sendAdminNotification,
++    getAdminNotificationCount,
++    markAdminNotificationsRead,
+     getAdminNotificationList,
+     deleteAdminNotification,
+     getAdminNotificationById,
+-- 
+2.39.5
+
