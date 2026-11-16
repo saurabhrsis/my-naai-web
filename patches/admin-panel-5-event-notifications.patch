@@ -1,0 +1,87 @@
+From cdd4acae1ee29ecf338e7ad81fb76998075ccf59 Mon Sep 17 00:00:00 2001
+From: Arena Agent <agent@arena.ai>
+Date: Mon, 16 Nov 2026 08:16:58 +0000
+Subject: [PATCH] Show the panel's event notifications and refresh them while
+ the page is open
+
+The API now writes the panel's own inbox rows for the owner's five events: a
+new shop order, a new salon registration, a subscription renewal, a delivery
+partner action and a new booking request. They arrive with the internal target
+type ADMINS.
+
+* A shared `targetBadge()` labels All / Users / Salons / **Event** in both the
+  table and the phone cards, so an event is no longer mislabelled "All".
+* The list refreshes every 60 seconds, so an order placed while the page is
+  open appears without a manual reload.
+---
+ src/pages/PushNotifications.jsx | 33 +++++++++++++++++++++++----------
+ 1 file changed, 23 insertions(+), 10 deletions(-)
+
+diff --git a/src/pages/PushNotifications.jsx b/src/pages/PushNotifications.jsx
+index e5d9ac1..ef8e71b 100644
+--- a/src/pages/PushNotifications.jsx
++++ b/src/pages/PushNotifications.jsx
+@@ -11,6 +11,17 @@ import SendNotificationModal from "../components/sendNotificationModal.jsx";
+ 
+ const ITEMS_PER_PAGE = 20;
+ 
++// The backend now also writes the panel's own event rows: a new shop order, a
++// new salon registration, a subscription renewal, a delivery-partner action and
++// a new booking request. They arrive with targetType ADMINS (internal — they are
++// never sent to salons or customers), so they must not be labelled "All".
++const targetBadge = (targetType) => {
++    if (targetType === "ALL_USERS") return { label: "Users", className: "bg-primary-subtle text-black" };
++    if (targetType === "ALL_SALONS") return { label: "Salons", className: "bg-secondary" };
++    if (targetType === "ADMINS") return { label: "Event", className: "bg-warning-subtle text-black" };
++    return { label: "All", className: "bg-dark" };
++};
++
+ const Notifications = () => {
+     const [loading, setLoading] = useState(false);
+     const [recentNotifications, setRecentNotifications] = useState([]);
+@@ -63,6 +74,14 @@ const Notifications = () => {
+         fetchNotifications();
+     }, [currentPage, debouncedSearch]);
+ 
++    // Event rows (orders, registrations, renewals, delivery actions, booking
++    // requests) are written by the API, not by this screen, so the list refreshes
++    // itself while it is open.
++    useEffect(() => {
++        const timer = setInterval(() => { fetchNotifications(); }, 60000);
++        return () => clearInterval(timer);
++    }, [currentPage, debouncedSearch]);
++
+     const handleInputChange = (e) => {
+         const { name, value } = e.target;
+         setFormData(prev => ({ ...prev, [name]: value }));
+@@ -247,11 +266,8 @@ const Notifications = () => {
+                                                                         {notif.targetType}
+                                                                     </span> */}
+ 
+-                                                                        <span className={`badge px-2 ${notif.targetType === "ALL_USERS" ? "bg-primary-subtle text-black" :
+-                                                                            notif.targetType === "ALL_SALONS" ? "bg-secondary" : "bg-dark"
+-                                                                            }`} style={{ fontSize: "16px" }}>
+-                                                                            {notif.targetType === "ALL_USERS" ? "Users" :
+-                                                                                notif.targetType === "ALL_SALONS" ? "Salons" : "All"}
++                                                                        <span className={`badge px-2 ${targetBadge(notif.targetType).className}`} style={{ fontSize: "16px" }}>
++                                                                            {targetBadge(notif.targetType).label}
+                                                                         </span>
+                                                                     </td>
+                                                                     <td className="px-4 text-truncate" style={{ maxWidth: "300px" }}>
+@@ -289,11 +305,8 @@ const Notifications = () => {
+                                                                     <small className="text-muted fw-bold" style={{ fontSize: "14px" }}>
+                                                                         {(currentPage - 1) * ITEMS_PER_PAGE + idx + 1}
+                                                                     </small>
+-                                                                    <span className={`badge px-2 py-1 ${notif.targetType === "ALL_USERS" ? "bg-primary-subtle text-black" :
+-                                                                            notif.targetType === "ALL_SALONS" ? "bg-secondary" : "bg-dark"
+-                                                                        }`} style={{ fontSize: "12px" }}>
+-                                                                        {notif.targetType === "ALL_USERS" ? "Users" :
+-                                                                            notif.targetType === "ALL_SALONS" ? "Salons" : "All"}
++                                                                    <span className={`badge px-2 py-1 ${targetBadge(notif.targetType).className}`} style={{ fontSize: "12px" }}>
++                                                                        {targetBadge(notif.targetType).label}
+                                                                     </span>
+ 
+                                                                 </div>
+-- 
+2.39.5
+
