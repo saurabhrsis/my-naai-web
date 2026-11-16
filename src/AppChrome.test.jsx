@@ -488,32 +488,38 @@ describe('Bottom navigation labels', () => {
   });
 });
 
-// ── 5. The expired-subscription paywall has to be escapable ─────────────────
-// Reported from a partner whose plan had lapsed: the renewal screen was the
-// ONLY screen the portal would render (every navigation is funnelled through
-// safeNavigate), so the one sign-out control on it had to lead somewhere the
-// partner could act. It now signs out to the LOGIN page with the salon role
-// preselected — and the public website stays reachable from that page's own
-// "Browse salons" link.
-describe('Expired-subscription paywall sign-out', () => {
+// ── 5. An expired subscription closes two tabs, not the portal ──────────────
+// It used to replace every partner screen with the renewal UI, so the only
+// sign-out control a lapsed partner could reach was the one on that screen.
+// The owner's rule is narrower: the Customer queue and Booking history close,
+// everything else — profile, booking requests, shop orders, account — stays
+// open, and the two closed tabs answer with a renew-or-shop modal. These tests
+// pin the "everything else stays open" half; the modal itself is covered in
+// src/SubscriptionGating.test.jsx.
+describe('An expired subscription leaves the rest of the portal open', () => {
   const expiredSalon = {
     salonId: 'salon-1',
     salonName: 'Golden Scissors',
+    ownerName: 'Rita Rao',
+    addressLine1: '12 Market Road',
+    genderType: 'FEMALE',
+    latitude: 21.14,
+    longitude: 79.08,
+    services: [{ name: 'Hair cut' }],
+    businessHours: [{ day: 'Monday', openingTime: '10:00', closingTime: '20:00' }],
     profileCompleted: true,
     isOpen: true,
     planType: 'monthly',
     planExpiryDate: '2020-01-31T00:00:00.000Z',
   };
 
-  // The cached session alone is enough for the gate: a plan that already reads
-  // as expired never waits for the profile call to mount the paywall.
-  const signInExpiredSalon = () => {
+  const signInExpiredSalon = path => {
     localStorage.setItem('isLoggedIn', 'true');
     localStorage.setItem('userType', 'SALON');
     localStorage.setItem('isNewSalon', 'false');
     localStorage.setItem('mynaai', JSON.stringify({ token: 'test-token' }));
     localStorage.setItem('mynaaiUser', JSON.stringify({ salon: expiredSalon }));
-    setPath('/subscription?mode=RENEW&forceRenewal=true');
+    setPath(path);
   };
 
   const currentPath = () => `${window.location.pathname}${window.location.search}`;
@@ -522,9 +528,6 @@ describe('Expired-subscription paywall sign-out', () => {
 
   beforeEach(() => {
     salonProfile.mockResolvedValue({ status: 'SUCCESS', data: { salon: expiredSalon } });
-    // The permission rows are the LOGIN page's job (see the Login permission
-    // flow tests in App.test.jsx) — the sign-out has to land somewhere they
-    // appear. Make the alert status readable so both rows render.
     vi.mocked(push.getPushStatus).mockResolvedValue({ state: 'needs-permission', reason: '' });
   });
 
@@ -532,26 +535,26 @@ describe('Expired-subscription paywall sign-out', () => {
     vi.mocked(push.getPushStatus).mockImplementation(() => Promise.resolve({ state: 'unsupported', token: '', name: 'getPushStatus' }));
   });
 
-  it('offers sign-out on the renewal screen, and the renewal screen is the only screen', async () => {
-    signInExpiredSalon();
+  it('renders the renewal screen without taking the rest of the portal away', async () => {
+    signInExpiredSalon('/subscription?mode=RENEW&forceRenewal=true');
     await mount();
 
     expect(container.querySelector('.forced-renewal-screen')).not.toBeNull();
-    expect(container.querySelector('.subscription-lock-notice')).not.toBeNull();
-    // No queue, no account, no bottom nav — renewal is all there is.
-    expect(container.querySelector('.mobile-nav')).toBeNull();
-    const footerSignOut = container.querySelector('.forced-renewal-logout');
-    expect(footerSignOut).not.toBeNull();
-    expect(footerSignOut.textContent).toContain('Sign out');
-    // Both sign-out controls on the paywall are present and labelled.
-    expect(container.querySelector('.subscription-lock-logout')).not.toBeNull();
+    // The paywall banner and the full-screen swap are gone…
+    expect(container.querySelector('.subscription-lock-notice')).toBeNull();
+    // …the partner keeps the portal chrome while they renew, so they can leave
+    // the renewal screen for any other tab instead of being held on it.
+    expect(container.querySelector('.sidebar-nav')).not.toBeNull();
+    expect(container.querySelector('.sidebar-logout')).not.toBeNull();
+    expect(container.querySelector('.subscription-gate-loading')).toBeNull();
   });
 
-  it('signs out to the login page (salon role preselected) and keeps the website one tap away', async () => {
-    signInExpiredSalon();
+  it('still lets the partner sign out from the sidebar, with the app confirmation', async () => {
+    signInExpiredSalon('/account');
     await mount();
 
-    const signOut = container.querySelector('.forced-renewal-logout');
+    const signOut = container.querySelector('.sidebar-logout');
+    expect(signOut).not.toBeNull();
     await act(async () => { signOut.click(); });
     await flush();
 
@@ -563,45 +566,9 @@ describe('Expired-subscription paywall sign-out', () => {
     await act(async () => { buttonByText(document.body, 'Log out').click(); });
     await flush();
 
-    // Landing on the LOGIN page, not the app home: the address bar agrees, so a
-    // refresh or a shared link reopens the same screen.
     expect(container.querySelector('.login-page')).not.toBeNull();
-    expect(container.querySelector('.guest-shell')).toBeNull();
     expect(currentPath()).toBe('/login?role=SALON');
-    expect(container.querySelector('.login-hero-badge').textContent).toContain('Salon partner');
-    // Sign-out really cleared the session…
     expect(localStorage.getItem('mynaai')).toBeNull();
     expect(localStorage.getItem('mynaaiUser')).toBeNull();
-
-    // …and the login page the partner lands on carries the portal's two one-tap
-    // permission rows: their taps call the browser API directly, so booking
-    // alerts and location can be re-allowed before signing back in.
-    const permCard = container.querySelector('.login-perm-card');
-    expect(permCard).not.toBeNull();
-    expect(permCard.querySelector('.allow-alerts-button')).not.toBeNull();
-    expect(permCard.querySelector('.perm-location-button')).not.toBeNull();
-
-    // …and the login page's own "Browse salons" link leads to the public website.
-    const browse = Array.from(container.querySelectorAll('button')).find(node => /Browse salons/.test(node.textContent));
-    expect(browse).toBeTruthy();
-    await act(async () => { browse.click(); });
-    await flush();
-    expect(container.querySelector('.guest-shell')).not.toBeNull();
-    expect(currentPath()).toBe('/');
-  });
-
-  it('keeps the partner on the paywall when they choose Stay signed in', async () => {
-    signInExpiredSalon();
-    await mount();
-
-    await act(async () => { container.querySelector('.subscription-lock-logout').click(); });
-    await flush();
-    await act(async () => { buttonByText(document.body, 'Stay signed in').click(); });
-    await flush();
-
-    expect(container.querySelector('.forced-renewal-screen')).not.toBeNull();
-    expect(container.querySelector('.login-page')).toBeNull();
-    expect(currentPath()).toBe('/subscription?mode=RENEW&forceRenewal=true');
-    expect(localStorage.getItem('mynaai')).not.toBeNull();
   });
 });

@@ -2,8 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bell,
   CalendarCheck2,
+  Camera,
   ChevronRight,
-  CircleAlert,
   CircleUserRound,
   // Download, // the install buttons now render themselves (InstallControl)
   HelpCircle,
@@ -11,6 +11,7 @@ import {
   BellRing,
   Inbox,
   Info,
+  LockKeyhole,
   LogOut,
   MapPin,
   Menu,
@@ -87,6 +88,9 @@ import {
 // the profile editor except the shape of a service row.
 import { EditSalonServicesScreen } from './components/EditSalonServices';
 import { SalonLeadsScreen } from './components/SalonLeads';
+import { SubscriptionEndedModal } from './components/SubscriptionEndedModal';
+import { ImageSourcePicker } from './components/ImageSourcePicker';
+import { clearPendingSalonPhotos, stashPendingSalonPhotos } from './lib/pendingSalonPhotos';
 import { ShopProductDetailScreen, ShopScreen } from './components/ShopScreen';
 import { ShopCartScreen, ShopCheckoutScreen } from './components/ShopCartCheckout';
 import { shopStorageOwnerId } from './lib/shopBuyer';
@@ -116,6 +120,13 @@ const USER_NAV = [
   // { name: 'products', label: 'Products', short: 'Products', icon: Package },
   { name: 'account', label: 'Account', short: 'Account', icon: CircleUserRound },
 ];
+// The two tabs a lapsed plan closes. Kept next to the nav it describes so the
+// list and the tabs cannot drift apart: the Customer queue (the day's work) and
+// Booking history (the record of finished bookings) are what a partner is paying
+// for. Booking REQUESTS are not on this list — a lead that arrives while the plan
+// is lapsed still reaches the salon, because the customer is waiting either way.
+const RESTRICTED_SALON_ROUTES = new Set(['queue', 'history']);
+
 const SALON_NAV = [
   { name: 'queue', label: 'Customer queue', short: 'Queue', icon: UsersRound },
   // Requests ≠ bookings. The queue works from accepted BOOKINGS; this tab is the
@@ -180,7 +191,7 @@ const SHOP_ROUTE_NAMES = ['shop', 'shopProduct', 'shopCart', 'shopCheckout', 'sh
 // Products tabs pointed at them. A stale /products link is aliased onto the shop
 // in src/lib/routes.js, so it still lands somewhere useful.
 const USER_ROUTE_NAMES = ['home', 'bookings', 'account', 'detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'privacy', 'contact', ...SHOP_ROUTE_NAMES];
-const SALON_ROUTE_NAMES = ['queue', 'history', ...SHOP_ROUTE_NAMES, 'account', 'notifications', 'editProfile', 'editServices', 'bookingRequest', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
+const SALON_ROUTE_NAMES = ['queue', 'history', ...SHOP_ROUTE_NAMES, 'account', 'notifications', 'editProfile', 'editServices', 'bookingRequest', 'bookingRequests', 'subscription', 'salonAbout', 'salonFaq', 'salonTerms'];
 // Every route a visitor may open WITHOUT an account — salons are browsable
 // first, login only appears when they try to book (the client's headline
 // ask). The info pages are public too: the site footer links About/FAQ/Terms/
@@ -938,6 +949,14 @@ function SalonRegistration({ initialData, onBack, onComplete }) {
   const [locationSheetState, setLocationSheetState] = useState('denied');
   const [busy, setBusy] = useState(false);
   const [registrationPushToken, setRegistrationPushToken] = useState(() => normalizeDeviceToken(pushToken));
+  // Optional photos of the shop, taken now with the camera or picked from the
+  // gallery. The salon record does not exist until the plan payment succeeds, so
+  // the files are uploaded on the way to the plan screen and their URLs are
+  // handed to the onboarding editor, which saves them with the profile.
+  const [photos, setPhotos] = useState([]);
+  // URLs of those photos, once uploaded — they travel with the registration
+  // payload and become the onboarding editor's starting gallery.
+  const [registrationPhotos, setRegistrationPhotos] = useState([]);
   const [error, setError] = useState('');
   // The salon pin is required, so it is asked in context — with a labelled tap
   // and never an automatic popup on arrival (that popup is what users answered
@@ -994,6 +1013,20 @@ function SalonRegistration({ initialData, onBack, onComplete }) {
     setError('');
     setStep('business');
   };
+  const addRegistrationPhotos = files => {
+    const picked = Array.from(files || []);
+    const valid = picked.filter(file => file && (!file.type || file.type.startsWith('image/')) && file.size <= 2 * 1024 * 1024);
+    if (valid.length < picked.length) setError('Each salon photo must be an image smaller than 2 MB.');
+    setPhotos(current => [
+      ...current,
+      ...valid.slice(0, Math.max(0, 4 - current.length)).map(file => ({ file, preview: URL.createObjectURL(file) })),
+    ]);
+  };
+  const removeRegistrationPhoto = index => setPhotos(current => {
+    const entry = current[index];
+    if (entry?.preview) URL.revokeObjectURL(entry.preview);
+    return current.filter((_, itemIndex) => itemIndex !== index);
+  });
   const continueBusiness = async event => {
     event.preventDefault();
     if (!business.genderType) return setError('Choose a salon type.');
@@ -1007,11 +1040,29 @@ function SalonRegistration({ initialData, onBack, onComplete }) {
       // Alerts are strongly recommended for a salon (the buzzer), but a blocked
       // browser must never trap a partner mid-signup: the plan step carries the
       // alerts card, and the API is the final judge.
+      // Photos are optional, so a failed upload never blocks signup: the partner
+      // can add them again from the profile editor.
+      let photoUrls = [];
+      if (photos.length) {
+        const uploaded = await Promise.all(photos.map(async photo => {
+          try {
+            const response = await api.uploadImage(photo.file);
+            return response?.url || response?.data?.url || response?.path || response?.data?.path || '';
+          } catch {
+            return '';
+          }
+        }));
+        photoUrls = uploaded.filter(Boolean);
+        stashPendingSalonPhotos(photoUrls);
+      } else {
+        clearPendingSalonPhotos();
+      }
       const token = await resolveDeviceToken({ patient: true });
       // Do not carry a previously minted token into salon creation. If Firebase
       // cannot return the current subscription, the plan screen must ask for a
       // fresh token rather than sending a stale browser/PWA token to the backend.
       setRegistrationPushToken(token);
+      setRegistrationPhotos(photoUrls);
       setStep('plans');
     } catch (businessError) {
       setError(getErrorMessage(businessError, 'We could not finish setup. Please try again.'));
@@ -1019,7 +1070,7 @@ function SalonRegistration({ initialData, onBack, onComplete }) {
   };
   if (step === 'plans') {
     const effectiveToken = normalizeDeviceToken(registrationPushToken);
-    return <SubscriptionScreen params={{ registrationData: { ...profile, phoneNumber: mobile, tempToken, genderType: business.genderType, agentCode: business.agentCode, deviceToken: effectiveToken, latitude: Number(latitude), longitude: Number(longitude), businessHours: { openingTime: `${business.openingTime}:00`, closingTime: `${business.closingTime}:00`, breakStartTime: null, breakEndTime: null }, services: DEFAULT_SERVICES[business.genderType.toLowerCase()] || [] }, onBack }} notify={(type, message) => setError(message)} onAuthComplete={onComplete} />;
+    return <SubscriptionScreen params={{ registrationData: { ...profile, phoneNumber: mobile, tempToken, genderType: business.genderType, agentCode: business.agentCode, deviceToken: effectiveToken, latitude: Number(latitude), longitude: Number(longitude), businessHours: { openingTime: `${business.openingTime}:00`, closingTime: `${business.closingTime}:00`, breakStartTime: null, breakEndTime: null }, services: DEFAULT_SERVICES[business.genderType.toLowerCase()] || [], imagesArray: registrationPhotos }, onBack }} notify={(type, message) => setError(message)} onAuthComplete={onComplete} />;
   }
   const title = step === 'profile' ? 'Tell us about you.' : 'Set up your day.';
   return <div className="auth-page registration-page"><div className="registration-back"><button className="icon-btn ghost" onClick={step === 'profile' ? onBack : () => setStep('profile')} aria-label="Go back"><ChevronRight size={19} className="rotate-180" /></button><Brand /><InstallAppButton className="registration-install-button" /></div><div className="registration-card"><div className="registration-progress"><span className="active" /><span className={step === 'business' ? 'active' : ''} /><span /><span /></div><span className="eyebrow">SALON PARTNER · STEP {step === 'profile' ? '2' : '3'} OF 3</span><h1>{title}</h1><p className="auth-subtitle">{step === 'profile' ? 'A few details help customers find you.' : 'Tell us when you are ready for your next customer.'}</p><NotificationSetupCard compact />{error && <div className="form-error"><Info size={16} />{error}</div>}{step === 'profile' && <form onSubmit={continueProfile}><Field label="Mobile number"><div className="phone-input"><span>+91</span><input inputMode="numeric" value={mobile} readOnly aria-label="Registered mobile number" /></div></Field><Field label="Owner name"><input value={profile.ownerName} onChange={event => setProfile(current => ({ ...current, ownerName: event.target.value }))} placeholder="Your full name" autoFocus /></Field><Field label="Salon name"><input value={profile.salonName} onChange={event => setProfile(current => ({ ...current, salonName: event.target.value }))} placeholder="What is your salon called?" /></Field><Field label="Address line 1"><textarea rows="3" value={profile.addressLine1} onChange={event => setProfile(current => ({ ...current, addressLine1: event.target.value }))} placeholder="Area, street, building" /></Field><Field label="Address line 2" hint="Optional"><input value={profile.addressLine2} onChange={event => setProfile(current => ({ ...current, addressLine2: event.target.value }))} placeholder="Landmark" /></Field><div className="form-two-col"><Field label="City"><input value={profile.city} onChange={event => setProfile(current => ({ ...current, city: event.target.value }))} placeholder="City" /></Field><SelectField label="State" value={profile.state} onChange={event => setProfile(current => ({ ...current, state: event.target.value }))} options={STATE_OPTIONS} placeholder="Select state" /></div><div className="form-two-col"><Field label="Pincode" hint="Optional"><input inputMode="numeric" maxLength="6" value={profile.pincode} onChange={event => setProfile(current => ({ ...current, pincode: event.target.value.replace(/\D/g, '').slice(0, 6) }))} placeholder="Pincode" /></Field><Field label="Email" hint="Optional"><input type="email" value={profile.email} onChange={event => setProfile(current => ({ ...current, email: event.target.value }))} placeholder="owner@example.com" /></Field></div><div className={cx('registration-location', latitude !== null && longitude !== null && 'ready')}><MapPin size={15} /><span>{latitude !== null && longitude !== null ? `Location ready · ${Number(latitude).toFixed(4)}, ${Number(longitude).toFixed(4)}` : locationError || (locationAllowed ? 'Detecting salon location…' : 'Allow location so customers can find your salon nearby.')}</span><button type="button" onClick={detectLocation} disabled={locationBusy}>{locationBusy ? 'Detecting…' : locationAllowed ? 'Retry' : 'Allow location'}</button></div><PermissionSheet
@@ -1028,7 +1079,7 @@ function SalonRegistration({ initialData, onBack, onComplete }) {
           state={locationSheetState}
           onClose={() => setLocationSheetOpen(false)}
           onGranted={() => { setLocationSheetOpen(false); detectLocation(); }}
-        /><Button type="submit">Next <ChevronRight size={17} /></Button></form>}{step === 'business' && <form onSubmit={continueBusiness}><label className="field"><span className="field-label">Salon type</span><div className="type-option-grid">{['MALE', 'FEMALE', 'UNISEX'].map(type => <button type="button" key={type} className={business.genderType === type ? 'active' : ''} onClick={() => setBusiness(current => ({ ...current, genderType: type }))}>{type === 'UNISEX' ? 'Unisex' : `${type.charAt(0)}${type.slice(1).toLowerCase()}`}</button>)}</div></label><div className="form-two-col"><Field label="Opens"><input type="time" value={business.openingTime} onChange={event => setBusiness(current => ({ ...current, openingTime: event.target.value }))} /></Field><Field label="Closes"><input type="time" value={business.closingTime} onChange={event => setBusiness(current => ({ ...current, closingTime: event.target.value }))} /></Field></div><Field label="Agent code" hint="Optional · exactly 10 digits"><input inputMode="numeric" maxLength="10" value={business.agentCode} onChange={event => setBusiness(current => ({ ...current, agentCode: event.target.value.replace(/\D/g, '').slice(0, 10) }))} placeholder="Optional agent code" /></Field><Button type="submit" loading={busy}>Choose a plan <ChevronRight size={17} /></Button></form>}</div></div>;
+        /><Button type="submit">Next <ChevronRight size={17} /></Button></form>}{step === 'business' && <form onSubmit={continueBusiness}><label className="field"><span className="field-label">Salon type</span><div className="type-option-grid">{['MALE', 'FEMALE', 'UNISEX'].map(type => <button type="button" key={type} className={business.genderType === type ? 'active' : ''} onClick={() => setBusiness(current => ({ ...current, genderType: type }))}>{type === 'UNISEX' ? 'Unisex' : `${type.charAt(0)}${type.slice(1).toLowerCase()}`}</button>)}</div></label><div className="form-two-col"><Field label="Opens"><input type="time" value={business.openingTime} onChange={event => setBusiness(current => ({ ...current, openingTime: event.target.value }))} /></Field><Field label="Closes"><input type="time" value={business.closingTime} onChange={event => setBusiness(current => ({ ...current, closingTime: event.target.value }))} /></Field></div><Field label="Agent code" hint="Optional · exactly 10 digits"><input inputMode="numeric" maxLength="10" value={business.agentCode} onChange={event => setBusiness(current => ({ ...current, agentCode: event.target.value.replace(/\D/g, '').slice(0, 10) }))} placeholder="Optional agent code" /></Field><Field label="Salon photos" hint="Optional · up to 4 · take one now or pick from your gallery"><div className="registration-photos">{photos.map((photo, index) => <div className="registration-photo" key={photo.preview}><img src={photo.preview} alt={`Salon photo ${index + 1}`} /><button type="button" onClick={() => removeRegistrationPhoto(index)} aria-label={`Remove salon photo ${index + 1}`}><X size={13} /></button></div>)}{photos.length < 4 && <ImageSourcePicker className="registration-photo-add" multiple title="Add salon photos" onFiles={addRegistrationPhotos}><Camera size={18} /><span>{photos.length ? 'Add more' : 'Add photo'}</span></ImageSourcePicker>}</div></Field><Button type="submit" loading={busy}>Choose a plan <ChevronRight size={17} /></Button></form>}</div></div>;
 }
 function Brand({ light = false }) {
   return (
@@ -1048,16 +1099,6 @@ function Brand({ light = false }) {
 
 function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessionUpdate }) {
   const isSalon = session.role === 'SALON';
-  const confirm = useConfirm();
-  // Even on the paywall the partner gets the same in-app confirmation: the
-  // notice is the only sign-out control left on that screen. That sign-out ends
-  // on the LOGIN PAGE, not the app's default home — a partner whose plan expired
-  // can only get out through this control, so it has to leave them somewhere
-  // they can act: sign back in with the salon role already selected, or take the
-  // login page's "Browse salons" link to the public website. It falls back to
-  // the plain sign-out if a host shell (a test, an embed) never provided the
-  // login-landing variant.
-  const confirmSignOut = async () => { if (await confirm(LOGOUT_CONFIRM)) (onLogoutToLogin || onLogout)?.(); };
   const nav = isSalon ? SALON_NAV : USER_NAV;
   const primaryRoutes = nav.map(item => item.name);
   const utilityRoutes = ['detail', 'salon', 'services', 'schedule', 'notifications', 'delay', 'about', 'faq', 'terms', 'salonAbout', 'salonFaq', 'salonTerms', 'subscription', 'editProfile', 'bookingRequest'];
@@ -1079,11 +1120,12 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
   }, [navigate]);
   // Never lock based on a stored session's expiry date. Check the current
   // subscription with the API before rendering partner screens.
+  // 'expired' no longer means "paywall": it means the plan has lapsed, and only
+  // the two plan features (Customer queue, Booking history) are closed. Every
+  // other tab stays usable — see RESTRICTED_SALON_ROUTES below.
   const [subscriptionGate, setSubscriptionGate] = useState(() =>
     !isSalon || session.isNewSalon ? 'active' : 'checking'
   );
-  const subscriptionGateRef = useRef(subscriptionGate);
-  useEffect(() => { subscriptionGateRef.current = subscriptionGate; }, [subscriptionGate]);
   const routeName = useRef(route.name);
   useEffect(() => { routeName.current = route.name; }, [route.name]);
   // Keep the latest session available to the device-token sync effect.
@@ -1109,11 +1151,11 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
       if (!Number.isFinite(expiryTime)) return;
       const delay = expiryTime - Date.now();
       if (delay <= 0) {
-        setSubscriptionGate('locked');
+        setSubscriptionGate('expired');
         return;
       }
       expiryTimer = window.setTimeout(() => {
-        if (!cancelled) setSubscriptionGate('locked');
+        if (!cancelled) setSubscriptionGate('expired');
       }, delay + 1);
     };
 
@@ -1127,7 +1169,7 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
         // PLAN_EXPIRED status from a cached salon document must not force
         // mode=RENEW&forceRenewal=true while the record itself is live.
         if (state.expired || (!state.active && isPlanExpiredResponse(response))) {
-          setSubscriptionGate('locked');
+          setSubscriptionGate('expired');
           return;
         }
         // Do not schedule a stale expiry when the server explicitly reports
@@ -1154,7 +1196,7 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
           setSubscriptionGate('active');
           return;
         }
-        setSubscriptionGate(isPlanExpiredResponse(error) || errorState.expired ? 'locked' : 'active');
+        setSubscriptionGate(isPlanExpiredResponse(error) || errorState.expired ? 'expired' : 'active');
       });
 
     return () => {
@@ -1164,19 +1206,15 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
   }, [isSalon, session.isNewSalon, session.userId]);
 
   // A server-side PLAN_EXPIRED response can arrive after the initial check (for
-  // example exactly at midnight). It is a hard redirect, not a dismissible
-  // warning, and the renewal screen is the only salon view left mounted.
-  // First, though, the salon's subscription record is the arbiter: a PLAN_EXPIRED
-  // signal emitted from a stale copy of the salon document (before
-  // `renew-salon-plan` rewrote planStartDate / planEndDate / isPlanActive) must
-  // not force mode=RENEW&forceRenewal=true on a partner whose plan is live.
+  // example exactly at midnight). It now only marks the plan as lapsed: the two
+  // plan tabs close (with the renew-or-shop modal) and every other screen keeps
+  // working, so nothing is force-redirected to the renewal UI.
+  // The salon's subscription record stays the arbiter: a PLAN_EXPIRED signal
+  // emitted from a stale copy of the salon document (before `renew-salon-plan`
+  // rewrote planStartDate / planEndDate / isPlanActive) must not close a partner
+  // whose record says the plan is live.
   const forceSalonRenewal = useCallback(() => {
-    const lockNow = () => {
-      setSubscriptionGate('locked');
-      if (route.name !== 'subscription' || route.params?.mode !== 'RENEW' || !flagIsTrue(route.params?.forceRenewal)) {
-        navigate('subscription', { mode: 'RENEW', forceRenewal: true }, { replace: true });
-      }
-    };
+    const lockNow = () => { setSubscriptionGate('expired'); };
     // The backend record (isPlanActive / planStartDate / planEndDate) is the
     // arbiter wherever it appears: the get-salon response, a PLAN_EXPIRED
     // rejection body, or the copy cached at login from the login response.
@@ -1215,27 +1253,13 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     return () => window.removeEventListener('mynaai:plan-expired', onPlanExpired);
   }, [forceSalonRenewal, isSalon]);
 
-  // Guarded navigation: when subscription is locked, only the renewal
-  // screen is allowed. This prevents any hash manipulation or in-app
-  // navigation from escaping the paywall until payment succeeds.
+  // Navigation is no longer guarded by the plan. An expired plan closes two
+  // routes, and the modal that closes them opens on arrival — the list of
+  // routes is decided in one place (`isRestrictedByPlan`), so a tab added later
+  // cannot be locked by accident and a hash link cannot slip past the gate.
   const safeNavigate = useCallback((screen, params = {}, options = {}) => {
-    const targetName = typeof screen === 'object' ? screen.name : screen;
-    if (subscriptionGateRef.current === 'locked' && targetName !== 'subscription') {
-      // Force back to renewal — do not allow any other screen.
-      if (routeName.current !== 'subscription') {
-        navigate('subscription', { mode: 'RENEW', forceRenewal: true }, { replace: true });
-      }
-      return;
-    }
     navigate(screen, params, options);
   }, [navigate]);
-
-  useEffect(() => {
-    if (!isSalon || subscriptionGate !== 'locked') return;
-    if (route.name !== 'subscription' || route.params?.mode !== 'RENEW' || !flagIsTrue(route.params?.forceRenewal)) {
-      navigate('subscription', { mode: 'RENEW', forceRenewal: true }, { replace: true });
-    }
-  }, [isSalon, navigate, route.name, route.params, subscriptionGate]);
 
   // Foreground web push: FCM hands these messages to the page instead of the OS,
   // so My Naai renders the notification itself, toasts it, and only auto-navigates
@@ -1282,9 +1306,10 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
         // carries the system alert sound. The ring is therefore never allowed to
         // decide whether the alert is *shown*.
         playBuzzer({ type: message.type, alertId, sentAt: arrivedAt, claimed: true });
-        // If locked, still show the OS notification but do not auto-navigate
-        // away from the renewal paywall.
-        const isLocked = subscriptionGateRef.current === 'locked';
+        // Notifications navigate normally whatever the plan says: a lapsed plan
+        // closes the queue and the history, not the shop order or the booking
+        // request this banner is about. A link to a closed tab lands on the
+        // renew-or-shop modal, which is the honest answer to that tap.
         displayNotification({
           title: message.title,
           body: message.body,
@@ -1292,10 +1317,6 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
           // If this browser cannot attach a service-worker notification click,
           // the Notification API fallback still opens the same route.
           onClick: () => {
-            if (subscriptionGateRef.current === 'locked') {
-              safeNavigate('subscription', { mode: 'RENEW', forceRenewal: true }, { replace: true });
-              return;
-            }
             const next = getNotificationRoute(message.data, session.role);
             if (next.name && next.name !== routeName.current) safeNavigate(next.name, next.params);
           },
@@ -1311,15 +1332,13 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
         // that screen allows, and the OS notification above still says a request
         // came in.
         if (String(session.role).toUpperCase() === 'SALON' && message.type === 'BOOKING_REQUEST') seenRequestIds.current.add(String(message.data.bookingRequestId || message.data.bookingId || ''));
-        if (!isLocked && String(session.role).toUpperCase() === 'SALON' && message.type === 'BOOKING_REQUEST' && !isOnBookingRequestScreen(message.data.bookingRequestId)) {
+        if (String(session.role).toUpperCase() === 'SALON' && message.type === 'BOOKING_REQUEST' && !isOnBookingRequestScreen(message.data.bookingRequestId)) {
           setBookingAlert({ data: message.data, sentAt: arrivedAt });
         }
         // Time-critical notification: the buzzer + vibration were already
         // sounded above, at the instant this message arrived — never here, where
         // it would be a second ring for the same alert. Informational messages
         // stay silent by design.
-        // Suppress buzzer navigation when locked — renewal is the only focus.
-        if (isLocked) return;
         if (!actionable) return;
         // On the Notifications tab the request is already in front of the salon
         // with its own Accept / Reject / Delay buttons (and the alert card is
@@ -1386,13 +1405,14 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
   // in the salon's notification list. Poll that list while the app is visible
   // and raise the SAME card for a request that is still inside its minute and
   // has not already been handled here. It is a safety net, not the main path,
-  // so it runs every 15 s, only for salons, and never while the plan is locked.
+  // so it runs every 15 s, only for salons. A lapsed plan does not stop it: a
+  // booking request still needs an answer.
   useEffect(() => {
     if (!isSalon || !session.userId) return undefined;
     let cancelled = false;
     let timer = 0;
     const check = async () => {
-      if (cancelled || document.visibilityState !== 'visible' || subscriptionGateRef.current === 'locked') return;
+      if (cancelled || document.visibilityState !== 'visible') return;
       if (bookingAlertRef.current) return; // one card at a time; the open one is the freshest
       try {
         const response = await api.salonNotificationList({ salonId: session.userId, page: 1 });
@@ -1441,19 +1461,25 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     const explicitlyExpired = flagIsTrue(user?.subscriptionExpired) || flagIsTrue(sessionPatch?.subscriptionExpired);
     const explicitlyActive = flagIsFalse(user?.subscriptionExpired) || flagIsFalse(sessionPatch?.subscriptionExpired);
     const nextState = getSubscriptionState(getSalonSubscriptionProfile({ user }));
-    if (nextState.expired) setSubscriptionGate('locked');
+    if (nextState.expired) setSubscriptionGate('expired');
     else if (nextState.active) setSubscriptionGate('active');
     else if (explicitlyActive) setSubscriptionGate('active');
-    else if (explicitlyExpired) setSubscriptionGate('locked');
+    else if (explicitlyExpired) setSubscriptionGate('expired');
   }, [isSalon, onSessionUpdate]);
 
-  const isSubscriptionLocked = isSalon && subscriptionGate === 'locked';
+  const isPlanExpired = isSalon && subscriptionGate === 'expired';
+  // A partner who signs out from the app chrome is usually coming straight back
+  // (renewing, switching device, fixing a login), so their sign-out lands on the
+  // LOGIN page with the Salon partner role already selected instead of on the
+  // public home page. Customers keep the plain sign-out.
+  const signOut = isSalon && onLogoutToLogin ? onLogoutToLogin : onLogout;
   const isCheckingSubscription = isSalon && !session.isNewSalon && subscriptionGate === 'checking';
-  const isSubscriptionGateScreen = isSubscriptionLocked || isCheckingSubscription;
+  const isSubscriptionGateScreen = isCheckingSubscription;
+  // The two tabs an expired plan closes. Everything else — profile, booking
+  // REQUESTS, shop, shop orders, notifications, account — stays usable.
+  const planBlocksRoute = isPlanExpired && RESTRICTED_SALON_ROUTES.has(route.name);
   const render = () => {
-    // When locked, only renewal is allowed — all screens receive safeNavigate
-    // so even if they attempt to navigate elsewhere, the paywall holds.
-    const navForScreens = isSubscriptionLocked ? safeNavigate : navigate;
+    const navForScreens = navigate;
     const props = { session, navigate: navForScreens, notify, onSessionUpdate: handleSessionUpdate };
     if (isSalon && session.isNewSalon && route.name !== 'editProfile') return <EditSalonProfileScreen {...props} params={{ ...(route.params || {}), isOnboarding: 'true' }} onLogout={onLogout} />;
     // ── The Naai Shop, for BOTH roles ───────────────────────────────────────
@@ -1501,43 +1527,39 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     if (route.name === 'salonTerms') return <PartnerInfo type="terms" navigate={navForScreens} />;
     return <SalonQueueScreen {...props} />;
   };
-  // When plan expired, show ONLY the renewal screen — no queue, no history,
-  // no account. After successful payment, handleSessionUpdate flips the gate
-  // to active and the full portal is unlocked.
-  const gateContent = isSubscriptionLocked
-    ? <SubscriptionScreen session={session} navigate={safeNavigate} notify={notify} params={{ mode: 'RENEW', forceRenewal: true }} onSessionUpdate={handleSessionUpdate} onLogout={confirmSignOut} />
-    : isCheckingSubscription
-      ? <SubscriptionGateLoading />
+  // An expired plan no longer replaces the portal. The gated tab's own screen is
+  // never mounted (its API answers PLAN_EXPIRED), so the shop is drawn behind the
+  // modal instead: Cancel already has somewhere to land, and a partner who opened
+  // the app straight onto the queue sees a usable page under the notice.
+  const content = isCheckingSubscription
+    ? <SubscriptionGateLoading />
+    : planBlocksRoute
+      ? <ShopScreen session={session} navigate={navigate} notify={notify} onSessionUpdate={handleSessionUpdate} />
       : render();
-  // Navigation for shell chrome should also respect the paywall.
-  const shellNavigate = isSubscriptionLocked ? safeNavigate : navigate;
+  const shellNavigate = navigate;
+  const renewSubscription = () => navigate('subscription', { mode: 'RENEW' });
+  const cancelToShop = () => navigate('shop');
   // Everything below is the APP, not the website: the screens shared with the
   // public site (home, salon page, About/FAQ/Terms/Privacy, Contact) drop their
   // marketing footer and review carousel here. See SurfaceProvider in Shared.jsx.
   return <SurfaceProvider value="app"><div className={cx('app-shell', isSalon && 'salon-shell', isSubscriptionGateScreen && 'subscription-gate-shell', !showBottomNav && 'utility-shell')}>
-    {!isSubscriptionGateScreen && <Sidebar session={session} nav={nav} route={route} navigate={shellNavigate} onLogout={onLogout} />}
+    {!isSubscriptionGateScreen && <Sidebar session={session} nav={nav} route={route} navigate={shellNavigate} onLogout={signOut} lockedRoutes={isPlanExpired ? RESTRICTED_SALON_ROUTES : null} />}
     <main className="workspace">
       {!isSubscriptionGateScreen && <MobileShellBar
         session={session}
         nav={nav}
         route={route}
         navigate={shellNavigate}
-        onLogout={onLogout}
+        onLogout={signOut}
       />}
       <div className={cx('workspace-content', (isSubscriptionGateScreen || utilityRoutes.includes(route.name)) && 'utility-content', isSubscriptionGateScreen && 'subscription-gate-content')}>
-        {isSubscriptionLocked && (
-          <div className="subscription-lock-notice" role="alert">
-            <CircleAlert size={17} />
-            <span><strong>Your salon subscription has expired.</strong> Renew now to unlock your salon dashboard. Customers do not make payments here.</span>
-            <button className="subscription-lock-logout" onClick={confirmSignOut} aria-label="Sign out"><LogOut size={14} /> Sign out</button>
-          </div>
-        )}
-        {gateContent}
+        {content}
       </div>
     </main>
-    {!isSubscriptionGateScreen && showBottomNav && <MobileNav nav={nav} route={route} navigate={shellNavigate} />}
+    {!isSubscriptionGateScreen && showBottomNav && <MobileNav nav={nav} route={route} navigate={shellNavigate} lockedRoutes={isPlanExpired ? RESTRICTED_SALON_ROUTES : null} />}
     <div className="alert-dock">
       {toast && <div className={cx('toast', `toast-${toast.type || 'info'}`)} role="status"><span className="toast-mark">{toast.type === 'error' ? '!' : '✓'}</span><span>{toast.message}</span><button onClick={() => setToast(null)} aria-label="Dismiss"><X size={15} /></button></div>}
+      {isSalon && <SubscriptionEndedModal open={planBlocksRoute} onRenew={renewSubscription} onCancel={cancelToShop} />}
       {isSalon && bookingAlert && <BookingRequestAlert key={`${bookingAlert.data?.bookingRequestId || ''}:${bookingAlert.sentAt}`} alert={bookingAlert} notify={notify} navigate={shellNavigate} onDone={resolveBookingAlert} onDismiss={dismissBookingAlert} />}
     </div>
   </div></SurfaceProvider>;
@@ -1576,11 +1598,11 @@ function SubscriptionGateLoading() {
   return <div className="subscription-gate-loading" role="status" aria-live="polite"><div className="subscription-gate-mark"><Store size={22} /></div><h1>Checking your salon subscription</h1><p>One moment while we verify access to your salon dashboard.</p><Spinner label="Checking subscription…" /></div>;
 }
 
-function Sidebar({ session, nav, route, navigate, onLogout }) {
+function Sidebar({ session, nav, route, navigate, onLogout, lockedRoutes = null }) {
   const isSalon = session.role === 'SALON';
   const confirm = useConfirm();
   const signOut = async () => { if (await confirm(LOGOUT_CONFIRM)) onLogout?.(); };
-  return <aside className="sidebar"><Brand /><div className="sidebar-role"><span className="role-mark">{isSalon ? <Store size={15} /> : <Scissors size={15} />}</span><span><small>Signed in as</small><strong>{isSalon ? 'Salon partner' : 'Customer'}</strong></span></div><nav className="sidebar-nav"><button className={route.name === 'notifications' ? 'active' : ''} onClick={() => navigate('notifications')}><Bell size={18} /><span>Notifications</span>{route.name === 'notifications' && <i />}</button>{nav.map(item => <button key={item.name} className={route.name === item.name ? 'active' : ''} onClick={() => navigate(item.name)}><item.icon size={18} /><span>{item.label}</span>{route.name === item.name && <i />}</button>)}</nav><div className="sidebar-bottom"><InstallControl variant="sidebar" /><div className="sidebar-tip"><Sparkles size={16} /><p>{isSalon ? 'Keep your profile fresh to stand out nearby.' : 'Your next great look is closer than you think.'}</p></div><button className="sidebar-logout" onClick={signOut}><LogOut size={16} /> Sign out</button></div></aside>;
+  return <aside className="sidebar"><Brand /><div className="sidebar-role"><span className="role-mark">{isSalon ? <Store size={15} /> : <Scissors size={15} />}</span><span><small>Signed in as</small><strong>{isSalon ? 'Salon partner' : 'Customer'}</strong></span></div><nav className="sidebar-nav"><button className={route.name === 'notifications' ? 'active' : ''} onClick={() => navigate('notifications')}><Bell size={18} /><span>Notifications</span>{route.name === 'notifications' && <i />}</button>{nav.map(item => <button key={item.name} className={cx(route.name === item.name ? 'active' : '', lockedRoutes?.has(item.name) && 'plan-locked')} onClick={() => navigate(item.name)} aria-label={lockedRoutes?.has(item.name) ? `${item.label} — renew your plan to open` : undefined}><item.icon size={18} /><span>{item.label}</span>{lockedRoutes?.has(item.name) ? <LockKeyhole size={13} className="plan-lock-mark" aria-hidden="true" /> : null}{route.name === item.name && <i />}</button>)}</nav><div className="sidebar-bottom"><InstallControl variant="sidebar" /><div className="sidebar-tip"><Sparkles size={16} /><p>{isSalon ? 'Keep your profile fresh to stand out nearby.' : 'Your next great look is closer than you think.'}</p></div><button className="sidebar-logout" onClick={signOut}><LogOut size={16} /> Sign out</button></div></aside>;
 }
 
 // The in-app top bar for phones and tablets (the sidebar takes over at 1024px).
@@ -1661,6 +1683,6 @@ function MobileShellBar({ session, nav, route, navigate, onLogout }) {
 // The column count follows the nav's length: four tabs on both sides now that the
 // old Products tab is gone (Discover, Shop, Bookings, Account for customers;
 // Queue, History, Shop, Account for partners).
-function MobileNav({ nav, route, navigate }) { return <nav className="mobile-nav" style={{ gridTemplateColumns: `repeat(${nav.length}, minmax(0, 1fr))` }}>{nav.map(item => <button key={item.name} className={route.name === item.name ? 'active' : ''} aria-current={route.name === item.name ? 'page' : undefined} onClick={() => navigate(item.name)}><item.icon size={20} /><span>{item.short || item.label}</span></button>)}</nav>; }
+function MobileNav({ nav, route, navigate, lockedRoutes = null }) { return <nav className="mobile-nav" style={{ gridTemplateColumns: `repeat(${nav.length}, minmax(0, 1fr))` }}>{nav.map(item => <button key={item.name} className={cx(route.name === item.name ? 'active' : '', lockedRoutes?.has(item.name) && 'plan-locked')} aria-current={route.name === item.name ? 'page' : undefined} onClick={() => navigate(item.name)}><item.icon size={20} /><span>{item.short || item.label}</span>{lockedRoutes?.has(item.name) ? <LockKeyhole size={11} className="plan-lock-mark" aria-hidden="true" /> : null}</button>)}</nav>; }
 
 function PartnerInfo({ type, navigate }) { const content = type === 'about' ? SALON_ABOUT_CONTENT : type === 'faq' ? SALON_FAQ_CONTENT : SALON_TERMS_CONTENT; return <div className="screen info-screen"><div className="page-header"><div className="page-header-leading"><button className="icon-btn ghost" onClick={() => navigate(-1)} aria-label="Go back"><ChevronRight size={19} className="rotate-180" /></button><div><span className="eyebrow">{content.eyebrow}</span><h1>{content.title}</h1></div></div></div><div className="info-intro"><Sparkles size={18} /><p>{content.intro || 'Everything you need to know about partnering with My Naai.'}</p></div><div className="info-sections">{content.sections.map(section => <section key={section.title}><h2>{section.title}</h2><p>{section.text}</p></section>)}</div><div className="info-contact"><span className="info-contact-icon"><HelpCircle size={18} /></span><div><strong>Need more help?</strong><p>Call our partner team on 8380017393</p></div><button onClick={() => window.open('tel:8380017393')}><ChevronRight size={17} /></button></div></div>; }
