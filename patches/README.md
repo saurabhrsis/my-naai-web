@@ -5,6 +5,7 @@ and verified with `git apply --check` on a clean checkout:
 
 | Patch | Repo | What it does |
 | --- | --- | --- |
+| [`backend-13-firebase-push-credentials.patch`](backend-13-firebase-push-credentials.patch) | `rightserveinfotechsystems/my_naai_backend` | **push stops failing invisibly** — the service account comes from the environment (never the repo), a broken key is caught before firebase-admin sees it, `invalid_grant: Invalid JWT Signature` is diagnosed as *revoked key* vs *mixed key* vs *clock skew* by verifying a probe JWT against Google's published certificate, one failure suspends push instead of printing a stack per token, and a credential outage can never deactivate device tokens ([docs](../docs/FIREBASE-PUSH-CREDENTIALS.md)) |
 | [`backend-12-booking-request-speed.patch`](backend-12-booking-request-speed.patch) | `rightserveinfotechsystems/my_naai_backend` | **the two Booking requests tabs answer now, not after the bookkeeping** — the expiry sweep is fired instead of awaited, the join-aware count runs only for a search, the panel's roll-up is cached for 15 s and cleared by every answer, and the three indexes the tabs order by are built `CONCURRENTLY` at boot ([docs](../docs/LIVE-BOOKING-REQUESTS.md) §5) — **apply after `backend-11`; needs nothing else** |
 | [`backend-11-live-customer-booking-requests.patch`](backend-11-live-customer-booking-requests.patch) | `rightserveinfotechsystems/my_naai_backend` | **a request reaches all three screens the moment it moves** — `booking_request_created` / `booking_request_updated` fan out to the salon room, the customer's room and the new `admin` room (`join_admin`), and `POST /api/bookingRequest/user/list` is the customer's read-only history ([docs](../docs/LIVE-BOOKING-REQUESTS.md) §§3–4) — **apply after `backend-10`** |
 | [`admin-panel-9-live-booking-requests.patch`](admin-panel-9-live-booking-requests.patch) | `rightserveinfotechsystems/my-naai-frontend` | **the panel's Booking requests tab moves on its own** — a panel socket joins the `admin` room and the table + tiles re-read themselves on either event, with a toast naming the customer ([docs](../docs/LIVE-BOOKING-REQUESTS.md) §3) — **apply after `admin-panel-8`; needs `npm ci` (adds `socket.io-client`)** |
@@ -99,6 +100,24 @@ node scripts/test-booking-request-live.js                       # 10 checks
 # backend — the tabs stop waiting on bookkeeping
 git am /path/to/patches/backend-12-booking-request-speed.patch
 node scripts/test-booking-request-speed.js                      # 8 checks
+
+# backend — push credentials: environment first, and a real diagnosis
+git am /path/to/patches/backend-13-firebase-push-credentials.patch
+node scripts/test-firebase-credentials.js                       # 48 checks
+npm run firebase:check                                          # can this key sign?
+npm run firebase:check -- --online                              # is it still published?
+```
+
+> **Push is broken until a new key is generated.** `src/firebase/myNaai-firebase.json`
+> is a service-account key committed to a public repository, and Google revokes keys
+> it finds there — which is what `invalid_grant: Invalid JWT Signature` means here.
+> Generate a new key, put it in `FIREBASE_SERVICE_ACCOUNT_JSON` (or
+> `FIREBASE_SERVICE_ACCOUNT_PATH`), delete the old key in the console, restart the API.
+> Step by step: [`docs/FIREBASE-PUSH-CREDENTIALS.md`](../docs/FIREBASE-PUSH-CREDENTIALS.md).
+> The patch is what makes that work without touching code, and what stops the log
+> flood until it is done. It applies to the current `main` (which already carries
+> `backend-11` and `backend-12`).
+
 # the indexes build themselves at boot; to run them by hand instead:
 #   psql "$DATABASE_URL" -f patches/migrations/2026-11-17-booking-request-indexes.sql
 ```
