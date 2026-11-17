@@ -92,6 +92,7 @@ import {
   useIsAppSurface,
 } from './Shared';
 import { NotificationDiagnostics } from './NotificationDiagnostics';
+import { CustomerBookingRequests } from './CustomerBookingRequests';
 import { ASK_CHOICES, alertsPromptFallback, canAskForAlerts, promptsAvailable, readAskChoice, readPermission, rememberAskChoice, requestLocation, requestNotifications, watchPermission } from '../lib/permissions';
 import { PermissionSheet } from './PermissionUI';
 import { BuzzerTestCard } from './BuzzerTestCard';
@@ -839,12 +840,21 @@ export function HomeScreen({ session, navigate, notify }) {
   );
 }
 
-export function BookingsScreen({ session, notify }) {
+export function BookingsScreen({ session, notify, params }) {
   const confirm = useConfirm();
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState('');
   const [filter, setFilter] = useState('all');
+  // 'bookings' | 'requests' — see the switch in the return below. A screen that
+  // sends the customer here can ask for the request history by name
+  // (`navigate('bookings', { tab: 'requests' })`), which is what "Request sent"
+  // does: that is the side with the five-minute countdown on it.
+  const [mode, setMode] = useState(params?.tab === 'requests' ? 'requests' : 'bookings');
+  // A second "Watch the request" while this screen is already mounted (the
+  // request page can link here twice) has to land on the same tab, not on the
+  // one the customer last looked at.
+  useEffect(() => { if (params?.tab === 'requests') setMode('requests'); }, [params?.tab]);
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -901,7 +911,11 @@ export function BookingsScreen({ session, notify }) {
   };
 
   const waiting = bookings.filter(item => getBookingStatus(item).key === 'pending').length;
-  return <div className="screen bookings-screen"><PageHeader title="My bookings" subtitle="Keep every appointment in view." action={<button className="refresh-text-button" onClick={load}><Zap size={15} /> Live updates</button>} />{!loading && waiting > 0 && <div className="booking-waiting-banner" role="status"><Clock3 size={16} /><span><strong>Waiting for the salon to accept.</strong> {waiting === 1 ? 'Your booking request has been sent' : `${waiting} booking requests have been sent`} — the salon will accept it or suggest another time, and you will get an alert either way.</span></div>}<div className="booking-tabs"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All <span>{bookings.length}</span></button><button className={filter === 'confirmed' ? 'active' : ''} onClick={() => setFilter('confirmed')}>Confirmed</button><button className={filter === 'pending' ? 'active' : ''} onClick={() => setFilter('pending')}>Pending</button><button className={filter === 'completed' ? 'active' : ''} onClick={() => setFilter('completed')}>Completed</button></div>{loading ? <div className="list-stack">{[1, 2, 3].map(item => <SkeletonCard key={item} className="booking-skeleton" />)}</div> : filtered.length ? <div className="booking-list">{filtered.map((item, index) => { const status = getBookingStatus(item); const canCancel = !['completed', 'cancelled'].includes(status.key); return <article className="booking-card" key={item.bookingId || item.id || index}><div className="booking-calendar"><span>{new Date(item.bookingDate || Date.now()).toLocaleDateString('en-IN', { month: 'short' })}</span><strong>{new Date(item.bookingDate || Date.now()).getDate()}</strong><small>{new Date(item.bookingDate || Date.now()).toLocaleDateString('en-IN', { weekday: 'short' })}</small></div><div className="booking-main"><div className="booking-title-row"><div><span className="booking-label">APPOINTMENT</span><h3>{item.salonName || 'My Naai salon'}</h3><p>{item.salonCity || item.city || 'Nearby'}</p></div><StatusPill tone={status.key} dot>{status.label}</StatusPill></div><div className="booking-details"><span><UserRound size={14} /> {item.barberName || 'Any specialist'}</span><span><Scissors size={14} /> {item.serviceName || item.services || 'Salon service'}</span><span><Clock3 size={14} /> {formatTime(item.bookingTime)}</span></div>{status.key === 'pending' && <p className="booking-waiting-note"><Clock3 size={13} /> Sent to the salon — waiting for their action. We will alert you when they respond.</p>}{canCancel && <button className="cancel-booking" onClick={() => cancel(item.bookingId)} disabled={cancelling === item.bookingId}>{cancelling === item.bookingId ? <Spinner size={14} /> : <><X size={14} /> Cancel booking</>}</button>}</div></article>; })}</div> : <EmptyState icon={CalendarCheck2} title="No bookings yet" message="Your next good hair day is only a few taps away." />}</div>;
+  // Bookings and requests live in the same tab because they answer the same
+  // question — "what did I ask for, and what happened?" — but they are different
+  // lists from different tables. `mode` switches between them; the request list
+  // is read-only history (see CustomerBookingRequests.jsx).
+  return <div className="screen bookings-screen"><PageHeader title="My bookings" subtitle="Keep every appointment in view." action={<button className="refresh-text-button" onClick={load}><Zap size={15} /> Live updates</button>} /><div className="booking-mode-switch" role="tablist" aria-label="Bookings and requests"><button type="button" role="tab" aria-selected={mode === 'bookings'} className={mode === 'bookings' ? 'active' : ''} onClick={() => setMode('bookings')}>My bookings</button><button type="button" role="tab" aria-selected={mode === 'requests'} className={mode === 'requests' ? 'active' : ''} onClick={() => setMode('requests')}>Booking requests</button></div>{mode === 'requests' ? <CustomerBookingRequests session={session} notify={notify} /> : <>{!loading && waiting > 0 && <div className="booking-waiting-banner" role="status"><Clock3 size={16} /><span><strong>Waiting for the salon to accept.</strong> {waiting === 1 ? 'Your booking request has been sent' : `${waiting} booking requests have been sent`} — the salon will accept it or suggest another time, and you will get an alert either way.</span></div>}<div className="booking-tabs"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All <span>{bookings.length}</span></button><button className={filter === 'confirmed' ? 'active' : ''} onClick={() => setFilter('confirmed')}>Confirmed</button><button className={filter === 'pending' ? 'active' : ''} onClick={() => setFilter('pending')}>Pending</button><button className={filter === 'completed' ? 'active' : ''} onClick={() => setFilter('completed')}>Completed</button></div>{loading ? <div className="list-stack">{[1, 2, 3].map(item => <SkeletonCard key={item} className="booking-skeleton" />)}</div> : filtered.length ? <div className="booking-list">{filtered.map((item, index) => { const status = getBookingStatus(item); const canCancel = !['completed', 'cancelled'].includes(status.key); return <article className="booking-card" key={item.bookingId || item.id || index}><div className="booking-calendar"><span>{new Date(item.bookingDate || Date.now()).toLocaleDateString('en-IN', { month: 'short' })}</span><strong>{new Date(item.bookingDate || Date.now()).getDate()}</strong><small>{new Date(item.bookingDate || Date.now()).toLocaleDateString('en-IN', { weekday: 'short' })}</small></div><div className="booking-main"><div className="booking-title-row"><div><span className="booking-label">APPOINTMENT</span><h3>{item.salonName || 'My Naai salon'}</h3><p>{item.salonCity || item.city || 'Nearby'}</p></div><StatusPill tone={status.key} dot>{status.label}</StatusPill></div><div className="booking-details"><span><UserRound size={14} /> {item.barberName || 'Any specialist'}</span><span><Scissors size={14} /> {item.serviceName || item.services || 'Salon service'}</span><span><Clock3 size={14} /> {formatTime(item.bookingTime)}</span></div>{status.key === 'pending' && <p className="booking-waiting-note"><Clock3 size={13} /> Sent to the salon — waiting for their action. We will alert you when they respond.</p>}{canCancel && <button className="cancel-booking" onClick={() => cancel(item.bookingId)} disabled={cancelling === item.bookingId}>{cancelling === item.bookingId ? <Spinner size={14} /> : <><X size={14} /> Cancel booking</>}</button>}</div></article>; })}</div> : <EmptyState icon={CalendarCheck2} title="No bookings yet" message="Your next good hair day is only a few taps away." />}</>}</div>;
 }
 
 export function ProductsScreen({ notify }) {
@@ -1471,10 +1485,10 @@ export function ScheduleScreen({ params, navigate, notify }) {
           <li><Check size={15} /> Your slot is held while the salon reviews the request.</li>
           <li><Bell size={15} /> We will alert you when the salon accepts or suggests another time.</li>
           <li><Banknote size={15} /> Pay {formatCurrency(sent.total)} at the salon after your service — nothing was charged now.</li>
-          <li><CalendarDays size={15} /> Nothing to do now — track it any time under My bookings.</li>
+          <li><CalendarDays size={15} /> Nothing to do now — the request is under My bookings → Booking requests, counting down the time the salon has to answer.</li>
         </ul>
         <div className="request-sent-actions">
-          <Button onClick={() => navigate('bookings')}>View my bookings <CalendarCheck2 size={17} /></Button>
+          <Button onClick={() => navigate('bookings', { tab: 'requests' })}>Watch the request <Clock3 size={17} /></Button>
           <Button variant="secondary" onClick={() => navigate('home')}>Book another salon</Button>
         </div>
       </section>

@@ -36,7 +36,7 @@ import { api } from '../lib/api';
 import { closeNotification } from '../lib/push';
 import { DEFAULT_SERVICES } from '../lib/defaultServices';
 import { normalizePlanDetails } from '../lib/planDetails';
-import { LEAD_STATE, LEAD_STATE_LABEL, leadView, normalizeLead } from '../lib/bookingLeads';
+import { LEAD_STATE, LEAD_STATE_LABEL, bookingWindowLabel, leadView, normalizeLead } from '../lib/bookingLeads';
 import { customerMobileFrom } from '../lib/customerPhone';
 import {
   EARLIER_OFFSETS,
@@ -1450,7 +1450,7 @@ export function BookingRequestScreen({ params, navigate, notify }) {
             {state === LEAD_STATE.rejected && 'You rejected this request. The customer was told.'}
             {state === LEAD_STATE.cancelled && 'The customer withdrew this request.'}
             {state === LEAD_STATE.delayed && 'You proposed a new time and the request is waiting on the customer.'}
-            {(state === LEAD_STATE.autoCancelled || state === LEAD_STATE.awaiting) && 'Nobody answered within the one-minute window, so this request was cancelled automatically. It is not a rejection.'}
+            {(state === LEAD_STATE.autoCancelled || state === LEAD_STATE.awaiting) && `Nobody answered within ${bookingWindowLabel}, so this request was cancelled automatically. It is not a rejection.`}
           </p>
           <button onClick={() => navigate('bookingRequests')}><RefreshCw size={15} /> All booking requests</button>
         </div>

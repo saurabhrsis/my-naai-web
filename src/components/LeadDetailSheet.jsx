@@ -94,7 +94,7 @@ export function LeadDetailSheet({ lead, now = Date.now(), open, onClose }) {
             <>This request is still open — answer it with <strong>Accept</strong> or <strong>Reject</strong> on the card. {view.countdown} left.</>
           )}
           {state === LEAD_STATE.awaiting && !view.canAnswer && (
-            <>The one-minute answer window for this request has closed. Refresh the list to see how the server recorded it.</>
+            <>The {bookingWindowLabel} answer window for this request has closed. Refresh the list to see how the server recorded it.</>
           )}
         </p>
       </div>

@@ -95,7 +95,18 @@ img { display: block; max-width: 100%; }
 .icon-btn.ghost { background: var(--card); color: var(--white); border: 1px solid var(--line); }
 .icon-btn.ghost:hover { background: var(--card-raised); }
 .rotate-180 { transform: rotate(180deg); }
-.btn { min-height: 46px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 18px; border-radius: 13px; font-weight: 700; font-size: 13px; letter-spacing: .01em; transition: transform .2s, background .2s, opacity .2s; white-space: nowrap; }
+/* A button never spills its label outside its own box.
+   `white-space: nowrap` used to be set here, so a long label — "Save and
+   continue to payment", "Continue to payment", "Send request to salon" — was
+   drawn past the rounded edge of the pill on a phone, and on the narrowest
+   screens it ran off the card entirely. The label now wraps INSIDE the button
+   (the box grows a line taller instead), `overflow-wrap: anywhere` covers a
+   single unbreakable word, and `min-width: 0` lets a flex row (`.editor-actions`,
+   `.delay-actions`, `.request-actions`) actually shrink its buttons instead of
+   forcing the row wider than the screen. Icons keep their size and never wrap
+   away from the words they belong to. */
+.btn { min-height: 46px; max-width: 100%; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 18px; border-radius: 13px; font-weight: 700; font-size: 13px; line-height: 1.25; letter-spacing: .01em; text-align: center; overflow-wrap: anywhere; white-space: normal; transition: transform .2s, background .2s, opacity .2s; }
+.btn > svg { flex: 0 0 auto; }
 .btn:hover:not(:disabled) { transform: translateY(-1px); }
 .btn:active:not(:disabled) { transform: translateY(0); }
 .btn-primary { background: var(--gold); color: #0c0d0d; }
@@ -105,7 +116,7 @@ img { display: block; max-width: 100%; }
 .btn-success { background: var(--green); color: #09120d; }
 .btn-danger { background: var(--red); color: #190909; }
 .btn-warning { background: var(--yellow); color: #171106; }
-.btn-small { min-height: 34px; padding: 0 13px; border-radius: 10px; font-size: 12px; }
+.btn-small { min-height: 34px; padding: 6px 13px; border-radius: 10px; font-size: 12px; }
 .btn.is-loading { opacity: .7; }
 .spinner-wrap { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
 .spin { animation: spin 1s linear infinite; }
@@ -504,6 +515,28 @@ img { display: block; max-width: 100%; }
 .booking-waiting-banner strong { display: block; color: var(--white); font-size: 12.5px; }
 .booking-waiting-note { display: flex; align-items: center; gap: 6px; margin: 9px 0 0; color: var(--gold); font-size: 10.5px; line-height: 1.45; }
 .booking-waiting-note svg { flex: none; }
+
+/* Bookings ⟷ Booking requests: two lists behind one tab.
+   Bookings are what the salon is working from; requests are the history of what
+   was asked for, with the five-minute window that decided it. The switch is a
+   segmented control rather than another run of chips, because it changes the
+   whole list underneath — not a filter of it. */
+.booking-mode-switch { display: flex; gap: 5px; margin: 0 0 14px; padding: 4px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.booking-mode-switch button { flex: 1 1 0; min-width: 0; min-height: 40px; padding: 5px 8px; border-radius: 10px; color: var(--muted); background: transparent; font-size: 12px; font-weight: 700; line-height: 1.25; white-space: normal; }
+.booking-mode-switch button:hover { color: var(--white); }
+.booking-mode-switch button.active { color: #111; background: var(--gold); }
+.booking-tabs-refresh { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; min-height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 20px; color: var(--muted-light); background: transparent; font-size: 10px; font-weight: 700; }
+.customer-requests { min-width: 0; }
+.lead-customer-note { margin: 0; color: var(--muted-light); font-size: 10.5px; line-height: 1.5; }
+.lead-requested-at { color: #7d8887; font-size: 10px; }
+.customer-request-count { margin: 12px 2px 0; text-align: center; }
+@media (max-width: 520px) {
+  /* On a phone the countdown is the reason the tab exists, so it gets the width:
+     the amount moves above it and the sentence below shrinks a notch. */
+  .customer-requests .lead-card-foot { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .customer-requests .lead-countdown { font-size: 11.5px; }
+  .booking-mode-switch button { min-height: 38px; font-size: 11.5px; }
+}
 .booking-card { display: flex; min-height: 143px; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: var(--card); }
 /* The date rail. This rule used to read `flex: nolex` — not a value, so the
    whole declaration was dropped AND the intended `display: flex` was never
@@ -2056,6 +2089,15 @@ a.store-badge:hover { border-color: var(--gold); background: #121512; }
   .editor-photo-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .product-manage-row { flex-wrap: wrap; }
   .editor-actions .btn { min-width: 0; }
+  /* Phone-width buttons hold their label whole. Two side-by-side buttons in a
+     sticky action bar get one row each instead of two lines of 12px text
+     ("Save and continue to payment" beside "Cancel" was the reported one), and
+     the label drops a notch so a full sentence fits the width of the phone. */
+  .editor-actions, .delay-actions, .request-actions > div, .sticky-continue, .schedule-total { flex-wrap: wrap; }
+  .editor-actions .btn, .delay-actions .btn, .request-actions > div .btn, .sticky-continue .btn, .schedule-total .btn { flex: 1 1 100%; width: 100%; font-size: 12.5px; }
+  .btn { font-size: 12.5px; padding-right: 14px; padding-left: 14px; }
+  .btn-small { font-size: 11.5px; padding-right: 11px; padding-left: 11px; }
+  .subscription-continue { min-height: 48px; font-size: 12.5px; }
   .toast { max-width: 100%; }
 }
 

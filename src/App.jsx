@@ -125,7 +125,7 @@ const USER_NAV = [
 // Booking history (the record of finished bookings) are what a partner is paying
 // for. Booking REQUESTS are not on this list — a lead that arrives while the plan
 // is lapsed still reaches the salon, because the customer is waiting either way.
-const RESTRICTED_SALON_ROUTES = new Set(['queue', 'bookingRequests', 'history']);
+const RESTRICTED_SALON_ROUTES = new Set(['queue', 'history']);
 
 const SALON_NAV = [
   { name: 'queue', label: 'Customer queue', short: 'Queue', icon: UsersRound },
@@ -1494,7 +1494,9 @@ function AppShell({ session, route, navigate, onLogout, onLogoutToLogin, onSessi
     if (shopScreen) return shopScreen;
     if (!isSalon) {
       if (route.name === 'home') return <HomeScreen {...props} />;
-      if (route.name === 'bookings') return <BookingsScreen {...props} />;
+      // `params.tab` lets another screen open the request history directly
+      // ("Request sent" → "Watch the request"), which is where the countdown is.
+      if (route.name === 'bookings') return <BookingsScreen {...props} params={route.params} />;
       // if (route.name === 'products') return <ProductsScreen {...props} />; // retired tab
       if (route.name === 'account') return <AccountScreen {...props} onLogout={onLogout} />;
       if (route.name === 'detail' || route.name === 'salon') return <SalonDetailScreen {...props} params={route.params} />;

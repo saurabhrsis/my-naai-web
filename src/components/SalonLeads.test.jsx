@@ -336,6 +336,6 @@ describe('SalonLeadsScreen', () => {
     salonBookingRequestList.mockResolvedValue({ status: 'SUCCESS', data: { requests: [], pagination: { page: 1, totalPages: 1 } } });
     const { container } = await render(<SalonLeadsScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
     expect(container.textContent).toContain('No booking requests yet');
-    expect(container.textContent).toContain('one-minute window');
+    expect(container.textContent).toContain('5 min window');
   });
 });

@@ -1,0 +1,344 @@
+From d433ddf4e798c5174742999ca32b02474b429f18 Mon Sep 17 00:00:00 2001
+From: My Naai <dev@mynaai.in>
+Date: Tue, 17 Nov 2026 06:29:52 +0000
+Subject: [PATCH] Booking requests arrive on their own in the panel
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The salon portal has had live booking requests since the socket work; the panel
+did not, so a request that came in while the Booking requests tab was open sat
+unseen until somebody pressed Refresh.
+
+`src/services/liveSocket.js` is the smallest thing that fixes it: one socket per
+tab to the API, joining the new `admin` room on connect (the API's `join_admin`,
+next to the `salon_` / `user_` rooms it already had). The page listens for
+`booking_request_created` and `booking_request_updated` and re-reads the list and
+the tiles quietly — a toast names the customer who just asked, because an admin
+looking at another tab is the case this exists for. The same two events re-count
+the inbox, so the sidebar / phone-topbar bell badge moves on whatever page the
+admin is on instead of waiting for its next minute.
+
+The event is a signal, never data: it carries ids and a couple of labels, and
+every row on screen still comes from the authenticated list endpoint, so the
+panel cannot show a request the database does not have. `socket.io-client` is the
+one new dependency (the portal already ships it).
+---
+ package-lock.json             | 94 +++++++++++++++++++++++++++++++++--
+ package.json                  |  1 +
+ src/components/Layout.jsx     |  9 ++++
+ src/pages/BookingRequests.jsx | 26 ++++++++++
+ src/services/liveSocket.js    | 67 +++++++++++++++++++++++++
+ 5 files changed, 192 insertions(+), 5 deletions(-)
+ create mode 100644 src/services/liveSocket.js
+
+diff --git a/package-lock.json b/package-lock.json
+index e146cb1..6197ec2 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -59,6 +59,7 @@
+         "react-router-dom": "^6.21.3",
+         "react-toastify": "^11.0.5",
+         "recharts": "^2.15.4",
++        "socket.io-client": "^4.8.1",
+         "sonner": "^1.7.4",
+         "swiper": "^12.0.3",
+         "tailwind-merge": "^2.6.0",
+@@ -2948,6 +2949,12 @@
+         "win32"
+       ]
+     },
++    "node_modules/@socket.io/component-emitter": {
++      "version": "3.1.2",
++      "resolved": "https://registry.npmjs.org/@socket.io/component-emitter/-/component-emitter-3.1.2.tgz",
++      "integrity": "sha512-9BCxFwvbGg/RsZK9tjXd8s4UcwR0MWeFQ1XEKIQVVvAGJyINdrqKMcTRyLoK8Rse1GjzLV9cwjWV1olXRWEXVA==",
++      "license": "MIT"
++    },
+     "node_modules/@swc/core": {
+       "version": "1.13.2",
+       "resolved": "https://registry.npmjs.org/@swc/core/-/core-1.13.2.tgz",
+@@ -4043,10 +4050,9 @@
+       }
+     },
+     "node_modules/debug": {
+-      "version": "4.3.7",
+-      "resolved": "https://registry.npmjs.org/debug/-/debug-4.3.7.tgz",
+-      "integrity": "sha512-Er2nc/H7RrMXZBFCEim6TCmMk02Z8vLC2Rbi1KEBggpo0fS6l0S1nnapwmIi3yW/+GOJap1Krg4w0Hg80oCqgQ==",
+-      "dev": true,
++      "version": "4.4.3",
++      "resolved": "https://registry.npmjs.org/debug/-/debug-4.4.3.tgz",
++      "integrity": "sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==",
+       "license": "MIT",
+       "dependencies": {
+         "ms": "^2.1.3"
+@@ -4194,6 +4200,28 @@
+       "integrity": "sha512-L18DaJsXSUk2+42pv8mLs5jJT2hqFkFE4j21wOmgbUqsZ2hL72NsUU785g9RXgo3s0ZNgVl42TiHp3ZtOv/Vyg==",
+       "license": "MIT"
+     },
++    "node_modules/engine.io-client": {
++      "version": "6.6.8",
++      "resolved": "https://registry.npmjs.org/engine.io-client/-/engine.io-client-6.6.8.tgz",
++      "integrity": "sha512-DPN6+2uNi3A2cbSR3gqJepLVOnSQmbaJT4USgU+TgGPczEqLQT0i6t05jHrf4TT6rcxABrGp/1As0FyqwIZlGg==",
++      "license": "MIT",
++      "dependencies": {
++        "@socket.io/component-emitter": "~3.1.0",
++        "debug": "~4.4.1",
++        "engine.io-parser": "~5.2.1",
++        "ws": "~8.21.0",
++        "xmlhttprequest-ssl": "~2.1.1"
++      }
++    },
++    "node_modules/engine.io-parser": {
++      "version": "5.2.3",
++      "resolved": "https://registry.npmjs.org/engine.io-parser/-/engine.io-parser-5.2.3.tgz",
++      "integrity": "sha512-HqD3yTBfnBxIrbnM1DoD6Pcq8NECnh8d4As1Qgh0z5Gg3jRRIqijury0CL3ghu/edArpUYiYqQiDUQBIs4np3Q==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=10.0.0"
++      }
++    },
+     "node_modules/enquirer": {
+       "version": "2.4.1",
+       "resolved": "https://registry.npmjs.org/enquirer/-/enquirer-2.4.1.tgz",
+@@ -5838,7 +5866,6 @@
+       "version": "2.1.3",
+       "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+       "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
+-      "dev": true,
+       "license": "MIT"
+     },
+     "node_modules/mz": {
+@@ -6952,6 +6979,34 @@
+         "node": ">=8"
+       }
+     },
++    "node_modules/socket.io-client": {
++      "version": "4.8.4",
++      "resolved": "https://registry.npmjs.org/socket.io-client/-/socket.io-client-4.8.4.tgz",
++      "integrity": "sha512-7wjKAvVXYOJsbmUgkWbnhPD4bFpkqrUR0++XOjpGFmqDqsqV1CI93VTraeExLxpjxEqrWgFoSRZu1ihjLWfkAA==",
++      "license": "MIT",
++      "dependencies": {
++        "@socket.io/component-emitter": "~3.1.0",
++        "debug": "~4.4.1",
++        "engine.io-client": "~6.6.1",
++        "socket.io-parser": "~4.2.4"
++      },
++      "engines": {
++        "node": ">=10.0.0"
++      }
++    },
++    "node_modules/socket.io-parser": {
++      "version": "4.2.7",
++      "resolved": "https://registry.npmjs.org/socket.io-parser/-/socket.io-parser-4.2.7.tgz",
++      "integrity": "sha512-IH/iSeO9T6gz1KkFleGDWkG9N3dl4jXVYUtMhIqH10Md0ttMer8nUNWiP1DKuNrybD2xBrixLJdCC9J6ECoYkg==",
++      "license": "MIT",
++      "dependencies": {
++        "@socket.io/component-emitter": "~3.1.0",
++        "debug": "~4.4.1"
++      },
++      "engines": {
++        "node": ">=10.0.0"
++      }
++    },
+     "node_modules/sonner": {
+       "version": "1.7.4",
+       "resolved": "https://registry.npmjs.org/sonner/-/sonner-1.7.4.tgz",
+@@ -7647,6 +7702,35 @@
+         "url": "https://github.com/chalk/ansi-styles?sponsor=1"
+       }
+     },
++    "node_modules/ws": {
++      "version": "8.21.3",
++      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.3.tgz",
++      "integrity": "sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=10.0.0"
++      },
++      "peerDependencies": {
++        "bufferutil": "^4.0.1",
++        "utf-8-validate": ">=5.0.2"
++      },
++      "peerDependenciesMeta": {
++        "bufferutil": {
++          "optional": true
++        },
++        "utf-8-validate": {
++          "optional": true
++        }
++      }
++    },
++    "node_modules/xmlhttprequest-ssl": {
++      "version": "2.1.2",
++      "resolved": "https://registry.npmjs.org/xmlhttprequest-ssl/-/xmlhttprequest-ssl-2.1.2.tgz",
++      "integrity": "sha512-TEU+nJVUUnA4CYJFLvK5X9AOeH4KvDvhIfm0vV1GaQRtchnG0hgK5p8hw/xjv8cunWYCsiPCSDzObPyhEwq3KQ==",
++      "engines": {
++        "node": ">=0.4.0"
++      }
++    },
+     "node_modules/yaml": {
+       "version": "2.6.0",
+       "resolved": "https://registry.npmjs.org/yaml/-/yaml-2.6.0.tgz",
+diff --git a/package.json b/package.json
+index fe1184e..7867989 100644
+--- a/package.json
++++ b/package.json
+@@ -61,6 +61,7 @@
+     "react-resizable-panels": "^2.1.9",
+     "react-router-dom": "^6.21.3",
+     "react-toastify": "^11.0.5",
++    "socket.io-client": "^4.8.1",
+     "recharts": "^2.15.4",
+     "sonner": "^1.7.4",
+     "swiper": "^12.0.3",
+diff --git a/src/components/Layout.jsx b/src/components/Layout.jsx
+index 36b07ce..d7f64ba 100644
+--- a/src/components/Layout.jsx
++++ b/src/components/Layout.jsx
+@@ -5,6 +5,7 @@ import ChangePasswordModal from "./ChangePasswordModal.jsx";
+ import { useUser } from "../contexts/UserContext.jsx";
+ import { ClipboardList, Store, CalendarCheck, User, Users, Package, Truck, ShoppingBag, SlidersHorizontal, Menu, X, Sparkles } from "lucide-react";
+ import { notificationAPI } from "../services/communication.jsx";
++import { subscribeToAdminEvents } from "../services/liveSocket.js";
+ 
+ const Icons = {
+   Salon: () => (
+@@ -98,10 +99,18 @@ const Layout = ({ children }) => {
+     const timer = setInterval(loadCount, 60000);
+     const onRead = () => setNotificationCount(0);
+     window.addEventListener("notifications:read", onRead);
++    // The badge is live too: a booking request (or its answer) re-counts the
++    // inbox the moment it happens, so the bell is right on whatever page the
++    // admin happens to be on — not only on the Booking requests tab, and not
++    // only after the next minute's tick.
++    const offCreated = subscribeToAdminEvents("booking_request_created", loadCount);
++    const offUpdated = subscribeToAdminEvents("booking_request_updated", loadCount);
+     return () => {
+       cancelled = true;
+       clearInterval(timer);
+       window.removeEventListener("notifications:read", onRead);
++      offCreated();
++      offUpdated();
+     };
+   }, [canSeeNotifications]);
+ 
+diff --git a/src/pages/BookingRequests.jsx b/src/pages/BookingRequests.jsx
+index e4847e2..b39c458 100644
+--- a/src/pages/BookingRequests.jsx
++++ b/src/pages/BookingRequests.jsx
+@@ -19,6 +19,7 @@ import Pagination from "../components/Pagination.jsx";
+ import Loader from "../components/Loader.jsx";
+ import BookingRequestDetailModal, { LIFECYCLE } from "../components/BookingRequestDetailModal.jsx";
+ import { bookingRequestAPI } from "../services/communication.jsx";
++import { subscribeToAdminEvents } from "../services/liveSocket.js";
+ import { bookingWindowShort } from "../utils/bookingWindow.js";
+ 
+ /**
+@@ -213,6 +214,31 @@ const BookingRequests = () => {
+     return () => clearInterval(timer);
+   }, [loadSummary]);
+ 
++  // ── Live ──────────────────────────────────────────────────────────────────
++  // `booking_request_created` lands here the moment a customer sends a request
++  // (the API emits it into the `admin` room), and `booking_request_updated`
++  // whenever one is answered — by a salon, by an admin on this very screen, or
++  // by the sweeper expiring it. The table and the tiles re-read themselves, so
++  // the page is current without a Refresh; the toast is what tells an admin who
++  // is looking at another tab that a customer is waiting.
++  //
++  // The event carries no rows: everything shown still comes from the
++  // authenticated list endpoint, so the panel cannot display a request the
++  // database does not have.
++  useEffect(() => {
++    const offCreated = subscribeToAdminEvents("booking_request_created", (payload) => {
++      const who = payload?.customerName ? ` from ${payload.customerName}` : "";
++      toast.info(`New booking request${who}`);
++      loadList();
++      loadSummary();
++    });
++    const offUpdated = subscribeToAdminEvents("booking_request_updated", () => {
++      loadList();
++      loadSummary();
++    });
++    return () => { offCreated(); offUpdated(); };
++  }, [loadList, loadSummary]);
++
+   const handleRefresh = async () => {
+     setRefreshing(true);
+     await Promise.all([loadList(), loadSummary()]);
+diff --git a/src/services/liveSocket.js b/src/services/liveSocket.js
+new file mode 100644
+index 0000000..536873b
+--- /dev/null
++++ b/src/services/liveSocket.js
+@@ -0,0 +1,67 @@
++// Live updates for the admin panel.
++//
++// The salon portal has talked to the API over a socket for a long time
++// (`salon_<id>` / `user_<id>` rooms). The panel had none, so a booking request
++// that arrived while the Booking requests tab was open sat unseen until someone
++// pressed Refresh. This is the smallest thing that fixes that: one socket per
++// tab, one room — `admin` — and named events.
++//
++// The server joins the room on `join_admin` (index.js). Rooms are not
++// authenticated on the API today (the salon rooms have the same shape), so the
++// panel only ever reads what these events carry — an id and a couple of labels —
++// and still fetches every row through the authenticated REST endpoints.
++import { io } from "socket.io-client";
++import { API_BASE_URL } from "./communication.jsx";
++
++let socket = null;
++const listeners = new Map();
++
++function ensureSocket() {
++  if (socket) return socket;
++  socket = io(API_BASE_URL, {
++    transports: ["polling", "websocket"],
++    upgrade: true,
++    reconnection: true,
++    reconnectionAttempts: Infinity,
++    reconnectionDelay: 1000,
++    reconnectionDelayMax: 8000,
++    timeout: 20000,
++  });
++  socket.on("connect", () => {
++    socket.emit("join_admin");
++  });
++  return socket;
++}
++
++/**
++ * Listen for one admin event until the returned function is called.
++ * Subscribing twice to the same event keeps both handlers.
++ */
++export function subscribeToAdminEvents(event, handler) {
++  if (!event || typeof handler !== "function") return () => {};
++  const live = ensureSocket();
++  if (!listeners.has(event)) listeners.set(event, new Set());
++  const handlers = listeners.get(event);
++  handlers.add(handler);
++
++  const wrapped = (...args) => {
++    if (!handlers.has(handler)) return;
++    handler(...args);
++  };
++  live.on(event, wrapped);
++
++  return () => {
++    live.off(event, wrapped);
++    handlers.delete(handler);
++    if (!handlers.size) listeners.delete(event);
++  };
++}
++
++// Used by tests and by a sign-out that wants the socket gone.
++export function resetAdminLiveSocket() {
++  if (!socket) return;
++  socket.removeAllListeners();
++  socket.disconnect();
++  socket = null;
++  listeners.clear();
++}
+-- 
+2.39.5
+

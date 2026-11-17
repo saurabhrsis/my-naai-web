@@ -1,0 +1,185 @@
+From 5b313e84d645cfb8cc62469f8967b70def332687 Mon Sep 17 00:00:00 2001
+From: My Naai <dev@mynaai.in>
+Date: Tue, 17 Nov 2026 06:29:41 +0000
+Subject: [PATCH] Page headers lose their subtitle, and every button holds its
+ own label
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two things reported from a phone, fixed together because both are the same
+complaint: the panel spends screen space on words and then draws the remaining
+words outside the boxes they belong to.
+
+Subtitles are gone from the four pages that had one — Booking requests
+("Customer enquiries, salon answers and missed leads. Opens on today (IST)…"),
+Notifications, Plans & Trials and Shop Settings. Each one restated what the
+control underneath it already said, and each one cost a full row above the fold
+on a phone. The filter card's "Search, filter and page through every request"
+line went with them; the tab title and the field labels still say it.
+
+Buttons now wrap their own label instead of spilling past the rounded edge:
+`min-width: 0` so a flex row can shrink them, `overflow-wrap: anywhere` for a
+single long word, and a slightly smaller label on phones. "Accept for salon" and
+"Decline for salon" in the request footer, and "Send Notification" in the
+Notifications composer, were the ones running out of their card.
+---
+ src/index.css                   | 42 ++++++++++++++++++++++++++++++++-
+ src/pages/BookingRequests.jsx   |  9 ++++---
+ src/pages/PlansAndTrials.jsx    |  8 +++----
+ src/pages/PushNotifications.jsx | 13 +++++-----
+ src/pages/ShopSettings.jsx      |  8 +++----
+ 5 files changed, 58 insertions(+), 22 deletions(-)
+
+diff --git a/src/index.css b/src/index.css
+index 7f8cf92..29230b9 100644
+--- a/src/index.css
++++ b/src/index.css
+@@ -2718,4 +2718,44 @@ img {
+     height: 35px;
+     font-size: 13px;
+     margin-top: 3px;
+-}
+\ No newline at end of file
++}
++/* ── Button labels stay inside their button ─────────────────────────────────
++   Reported from a phone: a label longer than the button it sits in was drawn
++   past the rounded edge — and in the Booking requests cards and the detail
++   modal's footer it ran out of the card entirely. A button now wraps its own
++   text instead of refusing to: the box grows a line taller, the words never
++   leave it. `min-width: 0` is what lets a flex row (`.d-flex` footers, the
++   mobile action grids) actually shrink the button rather than push the row
++   wider than the screen, and `overflow-wrap: anywhere` covers one long word.
++   The `.text-nowrap` utility still wins where a label really must not break. */
++.btn {
++  min-width: 0;
++  max-width: 100%;
++  white-space: normal;
++  overflow-wrap: anywhere;
++  text-align: center;
++  line-height: 1.25;
++}
++.btn > svg,
++.btn > i {
++  flex: 0 0 auto;
++}
++.btn-group > .btn,
++.d-flex > .btn {
++  flex-shrink: 1;
++}
++
++/* On a phone the label drops a notch and the padding tightens, so a sentence
++   like "Accept for salon" keeps one line inside a two-column footer. */
++@media (max-width: 575.98px) {
++  .btn {
++    font-size: 0.82rem;
++    padding-left: 0.7rem;
++    padding-right: 0.7rem;
++  }
++  .btn-sm {
++    font-size: 0.78rem;
++    padding-left: 0.6rem;
++    padding-right: 0.6rem;
++  }
++}
+diff --git a/src/pages/BookingRequests.jsx b/src/pages/BookingRequests.jsx
+index 6996fdd..e4847e2 100644
+--- a/src/pages/BookingRequests.jsx
++++ b/src/pages/BookingRequests.jsx
+@@ -424,10 +424,10 @@ const BookingRequests = () => {
+ 
+         <div className="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-3 px-1">
+           <div style={{ minWidth: 0 }}>
+-            <h1 className="h4 fw-bold mb-1">Booking requests</h1>
+-            <p className="text-muted small mb-0">
+-              Customer enquiries, salon answers and missed leads. Opens on today (IST); every filter narrows the list.
+-            </p>
++            {/* No subtitle under the page title. It said what the tiles below it
++                already say in numbers, and on a phone it pushed the first
++                request two rows down the screen. */}
++            <h1 className="h4 fw-bold mb-0">Booking requests</h1>
+           </div>
+           <button className="btn btn-sm btn-outline-secondary flex-shrink-0" type="button" onClick={handleRefresh} disabled={refreshing || loading}>
+             <RefreshCw size={14} className={`me-1 ${refreshing ? "spin" : ""}`} />{refreshing ? "Refreshing…" : "Refresh"}
+@@ -439,7 +439,6 @@ const BookingRequests = () => {
+             <div className="d-flex align-items-center justify-content-between gap-2 mb-3">
+               <div style={{ minWidth: 0 }}>
+                 <div className="fw-semibold">Filter requests</div>
+-                <div className="small text-muted">Search, filter and page through every request on the platform.</div>
+               </div>
+               <button className="btn btn-sm btn-outline-secondary d-lg-none flex-shrink-0" type="button" onClick={() => setShowMobileFilters((value) => !value)} aria-expanded={showMobileFilters}>
+                 <Search size={14} className="me-1" />{showMobileFilters ? "Hide filters" : `Filters${activeFilterCount ? ` (${activeFilterCount})` : ""}`}
+diff --git a/src/pages/PlansAndTrials.jsx b/src/pages/PlansAndTrials.jsx
+index 7856fae..b8f99ac 100644
+--- a/src/pages/PlansAndTrials.jsx
++++ b/src/pages/PlansAndTrials.jsx
+@@ -323,13 +323,11 @@ const PlansAndTrials = () => {
+               <Sparkles size={24} />
+             </div>
+             <div style={{ flex: "1 1 250px", minWidth: 0 }}>
+-              <h4 style={{ margin: "0 0 4px 0", fontWeight: "700", color: "#212529", fontSize: "1.2rem" }}>
++              {/* Title only — the plan table below explains itself, and the
++                  paragraph was most of the phone screen's first fold. */}
++              <h4 style={{ margin: 0, fontWeight: "700", color: "#212529", fontSize: "1.2rem" }}>
+                 Plans &amp; Trials
+               </h4>
+-              <p style={{ margin: 0, color: "#6c757d", fontSize: "0.85rem", lineHeight: "1.4" }}>
+-                What a salon pays, how long each plan runs and how long a new salon is free. The
+-                website and the app read this list — a change here reaches both without an app release.
+-              </p>
+             </div>
+             <button
+               type="button"
+diff --git a/src/pages/PushNotifications.jsx b/src/pages/PushNotifications.jsx
+index ef369a6..001f592 100644
+--- a/src/pages/PushNotifications.jsx
++++ b/src/pages/PushNotifications.jsx
+@@ -192,12 +192,11 @@ const Notifications = () => {
+                 <div className="row">
+                     <div className="col-12">
+                         <div className="mb-3">
+-                            <h4 className="mb-1 fw-bold">Notifications</h4>
+-                            <p className="text-muted mb-0" style={{ fontSize: "13px" }}>
+-                                Everything the admin panel receives — new shop orders, salon
+-                                registrations, subscription renewals, delivery-partner updates and
+-                                booking requests. Opening this tab marks them read.
+-                            </p>
++                            {/* The subtitle is gone on purpose: the feed chips below
++                                ("Received / All / Sent by admin") and the event rows say
++                                the same thing, and on a phone the paragraph took the space
++                                the first notification needed. */}
++                            <h4 className="mb-0 fw-bold">Notifications</h4>
+                         </div>
+ 
+                         {showAddForm ? (
+@@ -264,7 +263,7 @@ const Notifications = () => {
+                                         </div>
+                                         <div className="col-12">
+                                             <button
+-                                                className="btn-sm buttoncolor px-3 text-nowrap"
++                                                className="btn btn-sm buttoncolor px-3"
+                                                 disabled={!formData.title || !formData.body || !formData.targetType}
+                                                 onClick={() => setShowSendModal(true)}
+                                             >
+diff --git a/src/pages/ShopSettings.jsx b/src/pages/ShopSettings.jsx
+index abd3a00..efac87d 100644
+--- a/src/pages/ShopSettings.jsx
++++ b/src/pages/ShopSettings.jsx
+@@ -143,10 +143,10 @@ const ShopSettings = () => {
+               <SlidersHorizontal size={24} />
+             </div>
+             <div style={{ flex: "1 1 250px", minWidth: 0 }}>
+-              <h4 style={{ margin: "0 0 4px 0", fontWeight: "700", color: "#212529", fontSize: "1.2rem" }}>Shop Settings</h4>
+-              <p style={{ margin: 0, color: "#6c757d", fontSize: "0.85rem", lineHeight: "1.4" }}>
+-                Configure delivery charges, discounts, and Cash-on-Delivery rules for Naai Shop. Changes apply immediately to new orders.
+-              </p>
++              {/* No subtitle: each field below is labelled with what it does, and
++                  on a phone the paragraph cost a full screen row before the first
++                  setting. */}
++              <h4 style={{ margin: 0, fontWeight: "700", color: "#212529", fontSize: "1.2rem" }}>Shop Settings</h4>
+             </div>
+           </div>
+         </div>
+-- 
+2.39.5
+

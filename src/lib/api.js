@@ -452,6 +452,14 @@ export const api = {
   // and the tab falls back to the notifications feed (see SalonLeads.jsx).
   salonBookingRequestList: payload => post('/api/bookingRequest/salon/list', payload),
   salonBookingRequestSummary: payload => post('/api/bookingRequest/salon/summary', payload),
+  // ── The customer's own request history ────────────────────────────────────
+  // The other half of the same table: every request THIS customer sent, newest
+  // first, with the answer the salon gave (or the window running out). It is a
+  // read-only list — the customer answers nothing here, because there is
+  // nothing for them to answer: accept / reject belongs to the salon, and the
+  // five-minute deadline to the server. A deployment without the patch answers
+  // 404 and the tab says so instead of showing an empty history.
+  userBookingRequestList: payload => post('/api/bookingRequest/user/list', payload),
   salonNotificationCount: payload => get('/api/notifications/get-notification-count', { params: payload }),
 
   // A test alert through the real push path, used by the Alerts & permissions

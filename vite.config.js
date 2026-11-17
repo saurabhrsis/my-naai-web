@@ -178,6 +178,21 @@ const DEV_MOCK_ENDPOINTS = {
       source: 'fixture',
     },
   },
+  // The CUSTOMER's side of the same table: their own requests, with the same
+  // four states the salon sees — one still inside its five minutes (so the
+  // countdown runs), one accepted, one declined, one that ran out unanswered.
+  '/api/bookingRequest/user/list': () => {
+    const now = Date.now();
+    const mins = value => new Date(now - value * 60000).toISOString();
+    const day = offset => new Date(now + offset * 86400000).toISOString().slice(0, 10);
+    const requests = [
+      { bookingRequestId: 'dev-me-1', salonName: 'Golden Scissors', salonCity: 'Nagpur', bookingDate: day(1), bookingTime: '18:30:00', status: 'PENDING', createdAt: new Date(now - 45000).toISOString(), services: [{ serviceId: 's1', serviceName: 'Haircut', price: 300 }, { serviceId: 's2', serviceName: 'Beard trim', price: 150 }] },
+      { bookingRequestId: 'dev-me-2', salonName: 'Urban Cut Studio', salonCity: 'Nagpur', bookingDate: day(1), bookingTime: '12:00:00', status: 'ACCEPTED', createdAt: mins(90), services: [{ serviceId: 's3', serviceName: 'Hair spa', price: 900 }] },
+      { bookingRequestId: 'dev-me-3', salonName: 'Trim & Co.', salonCity: 'Nagpur', bookingDate: day(2), bookingTime: '16:00:00', status: 'REJECTED', createdAt: mins(240), services: [{ serviceId: 's4', serviceName: 'Fade cut', price: 250 }] },
+      { bookingRequestId: 'dev-me-4', salonName: 'Glow Unisex Salon', salonCity: 'Nagpur', bookingDate: day(1), bookingTime: '19:00:00', status: 'PENDING', createdAt: mins(25), services: [{ serviceId: 's5', serviceName: 'Global colour', price: 2400 }] },
+    ];
+    return { status: 'SUCCESS', message: 'Booking requests fetched successfully', data: { requests, pagination: { page: 1, limit: 20, totalPages: 1, totalRequests: requests.length } } };
+  },
   '/api/bookingRequest/owner-action': { status: 'SUCCESS' },
   '/api/notifications/register-device': { status: 'SUCCESS' },
   '/api/notifications/test-push': { status: 'SUCCESS' },

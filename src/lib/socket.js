@@ -57,9 +57,13 @@ function relay(scope, id, event, args) {
 function receiveCrossTab(message) {
   if (!message || message.source === TAB_ID || !message.roomKey || !markSeen(message.eventId || '')) return;
   const room = current?.rooms.get(message.roomKey);
-  if (!room || room.event !== message.event) return;
+  // One room can carry several events now — a salon's Booking requests tab
+  // listens for `booking_request_created` AND `booking_request_updated` in
+  // `salon_<id>`, and the relay must not drop the second one for not being the
+  // first event the room was opened with.
+  if (!room || !room.events.has(message.event)) return;
   const args = Array.isArray(message.args) ? message.args : [message.args];
-  room.handlers.forEach(handler => {
+  (room.handlers.get(message.event) || new Set()).forEach(handler => {
     try { handler(...args); } catch (error) { setTimeout(() => { throw error; }, 0); }
   });
 }
@@ -102,12 +106,18 @@ export function subscribeToLiveUpdates({ scope, id, event, handler }) {
   const roomKey = `${scope}:${id}`;
   let room = state.rooms.get(roomKey);
   if (!room) {
-    room = { scope, id, event, handlers: new Set() };
+    // `events` + `handlers` are per-event: subscribing twice in the same room
+    // for two different events (created / updated) keeps BOTH, where the old
+    // single `event` slot silently replaced the first one and stopped relaying
+    // it to the other tabs.
+    room = { scope, id, events: new Set(), handlers: new Map() };
     state.rooms.set(roomKey, room);
   }
-  room.handlers.add(handler);
+  room.events.add(event);
+  if (!room.handlers.has(event)) room.handlers.set(event, new Set());
+  room.handlers.get(event).add(handler);
   const socketHandler = (...args) => {
-    if (!room.handlers.has(handler)) return;
+    if (!room.handlers.get(event)?.has(handler)) return;
     handler(...args);
     relay(scope, id, event, args);
   };
@@ -117,9 +127,16 @@ export function subscribeToLiveUpdates({ scope, id, event, handler }) {
     if (!current || current.identity !== identity) return;
     const activeRoom = current.rooms.get(roomKey);
     if (activeRoom) {
-      activeRoom.handlers.delete(handler);
       state.socket.off(event, socketHandler);
-      if (!activeRoom.handlers.size) current.rooms.delete(roomKey);
+      const eventHandlers = activeRoom.handlers.get(event);
+      if (eventHandlers) {
+        eventHandlers.delete(handler);
+        if (!eventHandlers.size) {
+          activeRoom.handlers.delete(event);
+          activeRoom.events.delete(event);
+        }
+      }
+      if (!activeRoom.events.size) current.rooms.delete(roomKey);
     }
   };
 }
