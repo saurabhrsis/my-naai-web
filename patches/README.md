@@ -5,6 +5,9 @@ and verified with `git apply --check` on a clean checkout:
 
 | Patch | Repo | What it does |
 | --- | --- | --- |
+| [`backend-11-live-customer-booking-requests.patch`](backend-11-live-customer-booking-requests.patch) | `rightserveinfotechsystems/my_naai_backend` | **a request reaches all three screens the moment it moves** — `booking_request_created` / `booking_request_updated` fan out to the salon room, the customer's room and the new `admin` room (`join_admin`), and `POST /api/bookingRequest/user/list` is the customer's read-only history ([docs](../docs/LIVE-BOOKING-REQUESTS.md) §§3–4) — **apply after `backend-10`** |
+| [`admin-panel-9-live-booking-requests.patch`](admin-panel-9-live-booking-requests.patch) | `rightserveinfotechsystems/my-naai-frontend` | **the panel's Booking requests tab moves on its own** — a panel socket joins the `admin` room and the table + tiles re-read themselves on either event, with a toast naming the customer ([docs](../docs/LIVE-BOOKING-REQUESTS.md) §3) — **apply after `admin-panel-8`; needs `npm ci` (adds `socket.io-client`)** |
+| [`admin-panel-8-compact-headers.patch`](admin-panel-8-compact-headers.patch) | `rightserveinfotechsystems/my-naai-frontend` | **no page subtitles, and buttons that hold their labels** — the four pages that carried a title paragraph lose it, and `.btn` wraps its own text instead of spilling past the rounded edge on a phone ([docs](../docs/LIVE-BOOKING-REQUESTS.md) §§1–2) — **apply after `admin-panel-7`** |
 | [`backend-10-admin-notification-inbox.patch`](backend-10-admin-notification-inbox.patch) | `rightserveinfotechsystems/my_naai_backend` | **the inbox behind the panel's Notifications tab** — unread event count (`get-admin-notification-count`), mark-all-read (`mark-admin-notifications-read`), and a `feed` filter on the list whose conditions are ANDed, so a search no longer widens the query ([docs](../docs/ADMIN-PANEL-NOTIFICATIONS.md)) — **apply after `backend-9`** |
 | [`backend-9-event-notifications.patch`](backend-9-event-notifications.patch) | `rightserveinfotechsystems/my_naai_backend` | **the five events reach both sides** — a new order, a salon registration, a subscription renewal, a delivery-partner action and a new booking request each write an admin-panel inbox row (`target_type = 'ADMINS'`) *and* the salon's own notification + push ([docs](../docs/BACKEND-EVENT-NOTIFICATIONS.md)) — **run [`migrations/2026-11-06-admin-event-notifications.sql`](migrations/2026-11-06-admin-event-notifications.sql) with it** |
 | [`backend-7-five-minute-window.patch`](backend-7-five-minute-window.patch) | `rightserveinfotechsystems/my_naai_backend` | **the booking-request answer window is five minutes, not one** — `WINDOW_SECONDS = 300` and the derived `expires_at`, the sweeper's copy, the refusal message, and a backfill of rows still holding a 60-second deadline ([docs](../docs/BACKEND-BOOKING-REQUESTS-API.md) §7) |
@@ -84,6 +87,13 @@ git am /path/to/patches/admin-panel-shop-customers.patch
 git am /path/to/patches/admin-panel-2-booking-requests.patch   # Booking requests tab
 git am /path/to/patches/admin-panel-3-shop-products-category-filter.patch
 git am /path/to/patches/admin-panel-4-five-minute-window.patch
+git am /path/to/patches/admin-panel-8-compact-headers.patch    # no subtitles, labels fit
+git am /path/to/patches/admin-panel-9-live-booking-requests.patch  # live requests
+npm ci                                                          # 9 adds socket.io-client
+
+# backend — live booking requests + the customer's own list
+git am /path/to/patches/backend-11-live-customer-booking-requests.patch
+node scripts/test-booking-request-live.js                       # 10 checks
 ```
 
 **Order matters.** Backend: `backend-8` → `backend-6` → `backend-7` (the

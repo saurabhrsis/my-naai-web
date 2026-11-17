@@ -16,6 +16,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { subscribeToLiveUpdates } from '../lib/socket';
 import { LeadDetailSheet } from './LeadDetailSheet';
 import {
   LEAD_FILTERS,
@@ -23,7 +24,9 @@ import {
   LEAD_STATE,
   LEAD_STATE_LABEL,
   LEAD_STATE_TONE,
+  bookingWindowLabel,
   bookingWindowMissed,
+  bookingWindowShort,
   filterLeads,
   leadView,
   normalizeLead,
@@ -231,14 +234,40 @@ export function SalonLeadsScreen({ session, notify }) {
 
   useEffect(() => { load(); }, [load]);
 
-  // The answer window is a minute, so a live request has to turn into an
-  // auto-cancelled one while the salon is looking at it — the tick is what
-  // notices, and it also keeps the countdown honest.
+  // The answer window (five minutes) closes while the salon may be looking at
+  // the screen, so a live request has to turn into an auto-cancelled one on its
+  // own — the tick is what notices, and it also keeps the countdown honest.
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
-  // …and new requests arrive on their own: the tab refreshes every 20s.
+
+  // ── Requests arrive LIVE ────────────────────────────────────────────────
+  // The backend emits `booking_request_created` into this salon's own room the
+  // moment a customer sends one, and `booking_request_updated` whenever one is
+  // answered — by this salon, by an admin on its behalf, or by the sweeper
+  // expiring it. So the list (and its countdown) is right without a refresh.
+  //
+  // An event only says "something changed in your room": the list itself is
+  // still read from the API, so the card can never show a request the server
+  // does not have. Both handlers are quiet loads — no spinner, no cleared
+  // scroll — and a new request announces itself so a phone lying on the counter
+  // is noticed.
+  const onCreated = useCallback(payload => {
+    load({ quiet: true });
+    const who = payload?.customerName ? ` from ${payload.customerName}` : '';
+    notify?.('info', `New booking request${who} — ${bookingWindowLabel} to answer.`);
+  }, [load, notify]);
+  const onUpdated = useCallback(() => load({ quiet: true }), [load]);
+  useEffect(() => subscribeToLiveUpdates({
+    scope: 'salon', id: salonId, event: 'booking_request_created', handler: onCreated,
+  }), [onCreated, salonId]);
+  useEffect(() => subscribeToLiveUpdates({
+    scope: 'salon', id: salonId, event: 'booking_request_updated', handler: onUpdated,
+  }), [onUpdated, salonId]);
+
+  // …and the 20-second poll stays: it is the fallback for a deployment whose
+  // backend predates those two events, and it repairs a socket that dropped.
   useEffect(() => {
     const timer = window.setInterval(() => load({ quiet: true }), 20000);
     return () => window.clearInterval(timer);
@@ -310,7 +339,7 @@ export function SalonLeadsScreen({ session, notify }) {
         <p className="lead-rate">
           <strong>{summary.answerRate}%</strong> of these requests were answered
           {summary.awaiting > 0 ? ` · ${summary.awaiting} still waiting` : ''}
-          {' '}· a request left unanswered for a minute is cancelled automatically.
+          {' '}· a request left unanswered for {bookingWindowLabel} is cancelled automatically.
         </p>
       )}
 
@@ -353,7 +382,7 @@ export function SalonLeadsScreen({ session, notify }) {
           icon={Inbox}
           title={filter === 'all' ? 'No booking requests yet' : 'Nothing in this filter'}
           message={filter === 'all'
-            ? 'When a customer requests a slot at your salon, it lands here with a one-minute window to accept or reject it.'
+            ? `When a customer requests a slot at your salon, it lands here with a ${bookingWindowShort} window to accept or reject it.`
             : 'Try another filter to see the rest of your requests.'}
           action={filter === 'all' ? undefined : <Button variant="secondary" onClick={() => setFilter('all')}>Show all requests</Button>}
         />

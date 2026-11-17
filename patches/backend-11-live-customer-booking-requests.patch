@@ -1,0 +1,668 @@
+From c8df4255be50668706d1ec0d214c68aae9057317 Mon Sep 17 00:00:00 2001
+From: My Naai <dev@mynaai.in>
+Date: Tue, 17 Nov 2026 06:29:30 +0000
+Subject: [PATCH] Live booking requests: the customer's own list, and one event
+ to all three screens
+
+---
+ index.js                                      |  11 +
+ package.json                                  |   3 +-
+ scripts/test-booking-request-live.js          | 212 ++++++++++++++++++
+ .../autoCancelBookingRequest.js               |  10 +
+ .../bookingRequest/bookingRequest.js          |  15 ++
+ .../bookingRequest/listUserBookingRequests.js |  51 +++++
+ src/routes/bookingRequest.routes.js           |   5 +
+ src/services/bookingRequestAction.service.js  |  19 ++
+ src/services/bookingRequestLead.service.js    |  51 ++++-
+ src/utils/bookingRequestEvents.js             |  73 ++++++
+ 10 files changed, 445 insertions(+), 5 deletions(-)
+ create mode 100644 scripts/test-booking-request-live.js
+ create mode 100644 src/controller/bookingRequest/listUserBookingRequests.js
+ create mode 100644 src/utils/bookingRequestEvents.js
+
+diff --git a/index.js b/index.js
+index 85ff2f7..40b9193 100644
+--- a/index.js
++++ b/index.js
+@@ -49,6 +49,17 @@ io.on("connection", (socket) => {
+            console.log(`👤 User joined room: ${room}`);
+         }
+     });
++    // Admin panel room: one room for every signed-in admin, so the panel's
++    // Booking requests tab and its notification bell can hear about the same
++    // platform-wide events. Like the two rooms above, joining is a plain emit
++    // (the API's sockets are not authenticated); the events only ever carry ids
++    // and labels, and every row a panel shows is still read over an
++    // authenticated REST call.
++    socket.on("join_admin", () => {
++        socket.join("admin");
++        console.log("🛡️ Admin joined room: admin");
++    });
++
+     socket.on("disconnect", () => {
+         console.log("🔴 Socket disconnected:", socket.id);
+     });
+diff --git a/package.json b/package.json
+index 90cd032..4ab0c0f 100644
+--- a/package.json
++++ b/package.json
+@@ -10,7 +10,8 @@
+     "shop:backfill-categories": "node scripts/backfill-shop-categories.js",
+     "shop:test-categories": "node scripts/test-shop-categories.js",
+     "event:test-notifications": "node scripts/test-event-notifications.js",
+-    "notification:test-inbox": "node scripts/test-admin-notification-inbox.js"
++    "notification:test-inbox": "node scripts/test-admin-notification-inbox.js",
++    "booking:test-live": "node scripts/test-booking-request-live.js"
+   },
+   "repository": {
+     "type": "git",
+diff --git a/scripts/test-booking-request-live.js b/scripts/test-booking-request-live.js
+new file mode 100644
+index 0000000..0578576
+--- /dev/null
++++ b/scripts/test-booking-request-live.js
+@@ -0,0 +1,212 @@
++// Live booking requests — the one script that proves the four moving parts.
++//
++//   node scripts/test-booking-request-live.js
++//
++// It runs on a FRESH clone with no `npm ci`: `sequelize` and the model layer are
++// stubbed through `Module._load`, so nothing reaches a database or a network.
++//
++// What it checks:
++//   1. one helper fans a booking-request event out to the salon room, the
++//      customer's room AND the admin room (a new call site cannot forget one);
++//   2. the customer's list is scoped to the caller's own id, carries the salon's
++//      name (the customer knows the salon, not their own name) and derives
++//      AUTO_CANCELLED for a PENDING row whose window has closed;
++//   3. the two wires that make it real are in place: `POST
++//      /api/bookingRequest/user/list` behind authenticateUser, and `join_admin`
++//      putting a panel socket in the `admin` room.
++const assert = require('assert');
++const fs = require('fs');
++const path = require('path');
++const Module = require('module');
++
++const ROOT = path.join(__dirname, '..');
++const read = (relative) => fs.readFileSync(path.join(ROOT, relative), 'utf8');
++
++// ── stubs ───────────────────────────────────────────────────────────────────
++const queries = [];
++const row = {
++    bookingRequestId: 'req-1',
++    customerId: 'cust-1',
++    salonId: 'salon-1',
++    barberId: null,
++    serviceIds: [{ serviceId: 's1', name: 'Haircut', price: 300 }],
++    bookingDate: '2026-11-06',
++    startTime: '18:30:00',
++    endTime: '19:00:00',
++    status: 'PENDING',
++    expiresAt: new Date(Date.now() - 60000), // window already closed
++    createdAt: new Date(Date.now() - 400000),
++    respondedAt: null,
++    bookingId: null,
++    customer: { fullName: 'Asha Rane', phoneNumber: '9876500009' },
++    salon: { salonName: 'Glow Studio', city: 'Nagpur', phoneNumber: '9876500002' },
++    barber: null
++};
++
++const fakeDb = {
++    sequelize: { query: async (sql, options) => { queries.push({ sql, options }); return []; } },
++    BookingRequest: {
++        findAndCountAll: async (options) => {
++            queries.push({ sql: 'findAndCountAll', options });
++            return { count: 1, rows: [row] };
++        },
++        findAll: async () => []
++    },
++    User: {},
++    Salon: {},
++    Barber: {},
++    Service: {}
++};
++
++const fakeSequelize = {
++    Op: { in: 'in', gt: 'gt', gte: 'gte', lt: 'lt', lte: 'lte', iLike: 'iLike', or: 'or', and: 'and' },
++    fn: (...args) => ({ fn: args }),
++    col: (name) => ({ col: name }),
++    literal: (value) => ({ literal: value }),
++    QueryTypes: { SELECT: 'SELECT' }
++};
++
++const originalLoad = Module._load;
++Module._load = function load(request, parent, isMain) {
++    if (request === 'sequelize') return fakeSequelize;
++    if (/database[\\/]models$/.test(request)) return fakeDb;
++    if (/ensureShopSchema$/.test(request)) return { ensureShopSchema: async () => {} };
++    if (/firebase[\\/]sendNotification$/.test(request)) return async () => ({});
++    return originalLoad.apply(this, arguments);
++};
++
++const leadService = require('../src/services/bookingRequestLead.service');
++const {
++    BOOKING_REQUEST_CREATED,
++    BOOKING_REQUEST_UPDATED,
++    bookingRequestEventPayload,
++    emitBookingRequestEvent
++} = require('../src/utils/bookingRequestEvents');
++
++let passed = 0;
++const check = (name, fn) => {
++    try {
++        const result = fn();
++        if (result && typeof result.then === 'function') {
++            return result.then(() => { passed += 1; console.log(`  ✓ ${name}`); })
++                .catch((error) => { console.error(`  ✗ ${name}\n    ${error.message}`); process.exitCode = 1; });
++        }
++        passed += 1;
++        console.log(`  ✓ ${name}`);
++    } catch (error) {
++        console.error(`  ✗ ${name}\n    ${error.message}`);
++        process.exitCode = 1;
++    }
++    return Promise.resolve();
++};
++
++const recorder = () => {
++    const sent = [];
++    const io = {
++        to: (room) => ({ emit: (event, body) => sent.push({ room, event, body }) })
++    };
++    return { io, sent };
++};
++
++(async () => {
++    console.log('booking-request live events\n');
++
++    // 1 ── fan-out ───────────────────────────────────────────────────────────
++    await check('a created event reaches the salon, the customer and the admin room', () => {
++        const { io, sent } = recorder();
++        emitBookingRequestEvent(io, BOOKING_REQUEST_CREATED, {
++            bookingRequestId: 'req-1', salonId: 'salon-1', customerId: 'cust-1', customerName: 'Asha Rane'
++        });
++        assert.deepStrictEqual(sent.map((item) => item.room), ['salon_salon-1', 'user_cust-1', 'admin']);
++        assert.ok(sent.every((item) => item.event === BOOKING_REQUEST_CREATED));
++        assert.strictEqual(sent[0].body.customerName, 'Asha Rane');
++        // The payload is a label, not a record: no service list, no phone number.
++        assert.deepStrictEqual(Object.keys(sent[0].body).sort(), [
++            'bookingDate', 'bookingRequestId', 'bookingTime', 'createdAt', 'customerId',
++            'customerName', 'expiresAt', 'salonId', 'salonName', 'status'
++        ]);
++    });
++
++    await check('an admin-only event still reaches the panel when there is no salon or customer', () => {
++        const { io, sent } = recorder();
++        emitBookingRequestEvent(io, BOOKING_REQUEST_UPDATED, { bookingRequestId: 'req-2' });
++        assert.deepStrictEqual(sent.map((item) => item.room), ['admin']);
++    });
++
++    await check('a dead socket never breaks the write that caused it', () => {
++        const broken = { to: () => { throw new Error('socket closed'); } };
++        const originalError = console.error;
++        console.error = () => {};
++        try {
++            assert.doesNotThrow(() => emitBookingRequestEvent(broken, BOOKING_REQUEST_UPDATED, { salonId: 's' }));
++        } finally {
++            console.error = originalError;
++        }
++        // …and a missing io is a no-op, not a crash.
++        assert.doesNotThrow(() => emitBookingRequestEvent(null, BOOKING_REQUEST_UPDATED, { salonId: 's' }));
++    });
++
++    await check('the payload builder reads the row it was given', () => {
++        const payload = bookingRequestEventPayload(row, { customerName: 'Asha Rane' });
++        assert.strictEqual(payload.bookingRequestId, 'req-1');
++        assert.strictEqual(payload.bookingTime, '18:30:00'); // startTime, not bookingTime
++        assert.strictEqual(payload.salonId, 'salon-1');
++        assert.strictEqual(payload.customerName, 'Asha Rane');
++    });
++
++    // 2 ── the customer's list ───────────────────────────────────────────────
++    await check('the customer list is scoped to the caller and names the salon', async () => {
++        queries.length = 0;
++        const data = await leadService.listCustomerLeads({ customerId: 'cust-1', page: 1, limit: 20 });
++        const call = queries.find((item) => item.sql === 'findAndCountAll');
++        assert.ok(call, 'the list has to query booking_requests');
++        assert.strictEqual(call.options.where.customerId, 'cust-1');
++        assert.strictEqual(data.requests.length, 1);
++        assert.strictEqual(data.requests[0].salonName, 'Glow Studio');
++        assert.strictEqual(data.requests[0].salonCity, 'Nagpur');
++        assert.strictEqual(data.requests[0].customerName, 'Asha Rane');
++        // The salon's own columns are not in the customer's payload.
++        assert.strictEqual(data.requests[0].answeredByRole, undefined);
++        assert.strictEqual(data.requests[0].outcome, undefined);
++    });
++
++    await check('an expired PENDING row reads as AUTO_CANCELLED, never as a rejection', async () => {
++        queries.length = 0;
++        const data = await leadService.listCustomerLeads({ customerId: 'cust-1' });
++        assert.strictEqual(data.requests[0].status, 'AUTO_CANCELLED');
++        assert.strictEqual(data.requests[0].rawStatus, 'PENDING');
++    });
++
++    await check('a customer list without an identity is refused, not widened', async () => {
++        await assert.rejects(() => leadService.listCustomerLeads({}), /Not authorized/);
++    });
++
++    // 3 ── the wires ─────────────────────────────────────────────────────────
++    await check('POST /api/bookingRequest/user/list is behind authenticateUser', () => {
++        const routes = read('src/routes/bookingRequest.routes.js');
++        assert.ok(/bookingRequestRouter\.post\('\/user\/list',\s*authenticateUser/.test(routes),
++            'the route must sit behind the customer token');
++    });
++
++    await check('the panel can join the admin room', () => {
++        const index = read('index.js');
++        assert.ok(/socket\.on\("join_admin"/.test(index), 'join_admin listener missing');
++        assert.ok(/socket\.join\("admin"\)/.test(index), 'the socket must actually join `admin`');
++    });
++
++    await check('every answer path emits an update', () => {
++        const actions = read('src/services/bookingRequestAction.service.js');
++        const occurrences = actions.match(/emitBookingRequestEvent\(io, BOOKING_REQUEST_UPDATED/g) || [];
++        // ACCEPT, REJECT, DELAY and the expired-during-answer refusal.
++        assert.ok(occurrences.length >= 4, `expected 4 update emits, found ${occurrences.length}`);
++        const autoCancel = read('src/controller/bookingRequest/autoCancelBookingRequest.js');
++        assert.ok(/emitBookingRequestEvent\(req\.io, BOOKING_REQUEST_UPDATED/.test(autoCancel));
++        const create = read('src/controller/bookingRequest/bookingRequest.js');
++        assert.ok(/emitBookingRequestEvent\(req\.io, BOOKING_REQUEST_CREATED/.test(create));
++    });
++
++    console.log(`\n${passed} checks passed${process.exitCode ? ' — with failures above' : ''}`);
++})().catch((error) => {
++    console.error(error);
++    process.exit(1);
++});
+diff --git a/src/controller/bookingRequest/autoCancelBookingRequest.js b/src/controller/bookingRequest/autoCancelBookingRequest.js
+index 736c19c..60df2b3 100644
+--- a/src/controller/bookingRequest/autoCancelBookingRequest.js
++++ b/src/controller/bookingRequest/autoCancelBookingRequest.js
+@@ -1,5 +1,10 @@
+ const db = require('../../database/models');
+ const sendNotificationToDevice = require('../../firebase/sendNotification');
++const {
++    BOOKING_REQUEST_UPDATED,
++    bookingRequestEventPayload,
++    emitBookingRequestEvent
++} = require('../../utils/bookingRequestEvents');
+ 
+ const autoCancelBooking = async (req, res) => {
+     try {
+@@ -72,6 +77,11 @@ const autoCancelBooking = async (req, res) => {
+             );
+         }
+ 
++        // The window closed with nobody answering. The salon's tab, the panel and
++        // the customer's own request history all have to stop showing this as a
++        // live request — for the customer that is the countdown reaching zero.
++        emitBookingRequestEvent(req.io, BOOKING_REQUEST_UPDATED, bookingRequestEventPayload(bookingRequest));
++
+         return res.status(200).json({ status: 'SUCCESS', message: 'Booking auto-cancelled' });
+     } catch (error) {
+         console.error('Auto-cancel error:', error);
+diff --git a/src/controller/bookingRequest/bookingRequest.js b/src/controller/bookingRequest/bookingRequest.js
+index 3854e47..441cc41 100644
+--- a/src/controller/bookingRequest/bookingRequest.js
++++ b/src/controller/bookingRequest/bookingRequest.js
+@@ -2,6 +2,11 @@ const db = require('../../database/models');
+ const { Op } = require('sequelize');
+ const sendNotificationToDevice = require('../../firebase/sendNotification');
+ const { notifyAdmins } = require('../../services/eventNotification.service');
++const {
++    BOOKING_REQUEST_CREATED,
++    bookingRequestEventPayload,
++    emitBookingRequestEvent
++} = require('../../utils/bookingRequestEvents');
+ const { scheduleAutoCancelTask } = require('../../tasks/autoCancelTask');
+ const { createBookingRequestSchema } = require('../../validations/bookingRequest.validation');
+ const { WINDOW_MS, WINDOW_SECONDS } = require('../../services/bookingRequestLead.service');
+@@ -299,6 +304,16 @@ const createBookingRequest = async (req, res) => {
+             body: `${userName} requested ${serviceNames} at ${formattedTime} on ${formattedDate}`,
+         });
+ 
++        // …and the three screens that are waiting for it hear about it at once:
++        // the salon's Booking requests tab, the admin panel's copy of the same
++        // page, and the customer's own request history (which starts its
++        // countdown from this request's `expires_at`). Emitted AFTER the
++        // commit: an event must never announce a request that was rolled back.
++        emitBookingRequestEvent(req.io, BOOKING_REQUEST_CREATED, bookingRequestEventPayload(bookingRequest, {
++            salonName: '',
++            customerName: userName
++        }));
++
+         return res.status(200).json({
+             status: 'SUCCESS',
+             message: 'Booking request sent to salon owner',
+diff --git a/src/controller/bookingRequest/listUserBookingRequests.js b/src/controller/bookingRequest/listUserBookingRequests.js
+new file mode 100644
+index 0000000..bc6486a
+--- /dev/null
++++ b/src/controller/bookingRequest/listUserBookingRequests.js
+@@ -0,0 +1,51 @@
++const bookingRequestLeadService = require('../../services/bookingRequestLead.service');
++
++/**
++ * The CUSTOMER's own booking-request history.
++ *
++ * The other half of the salon's Booking requests tab: every request this user
++ * sent, newest first, with what the salon did about it — accepted, rejected, or
++ * nothing at all inside the five-minute window, which the server records as
++ * AUTO_CANCELLED. The client shows it as a read-only tab; nothing here accepts,
++ * rejects or cancels anything.
++ *
++ * Identity comes from the token ONLY (`request.user.id` via authenticateUser).
++ * There is deliberately no `userId` in the body: a body field is a client
++ * choosing whose history to read, and that is not a decision a client gets to
++ * make.
++ *
++ * Body: `{ status?, page?, limit?, fromDate?, toDate? }`
++ */
++const listUserBookingRequests = async (request, response) => {
++    try {
++        const { status, page, limit, fromDate, toDate } = request.body || {};
++        const customerId = request.user?.id;
++
++        if (!customerId) {
++            return response.status(401).json({ status: 'FAILED', message: 'Not authorized' });
++        }
++
++        const data = await bookingRequestLeadService.listCustomerLeads({
++            customerId,
++            status: status || 'ALL',
++            page,
++            limit,
++            fromDate,
++            toDate
++        });
++
++        return response.status(200).json({
++            status: 'SUCCESS',
++            message: 'Booking requests fetched successfully',
++            data
++        });
++    } catch (error) {
++        console.error('LIST USER BOOKING REQUESTS ERROR:', error);
++        return response.status(error.status || 500).json({
++            status: 'FAILED',
++            message: error.message
++        });
++    }
++};
++
++module.exports = listUserBookingRequests;
+diff --git a/src/routes/bookingRequest.routes.js b/src/routes/bookingRequest.routes.js
+index f6ef329..6e763cb 100644
+--- a/src/routes/bookingRequest.routes.js
++++ b/src/routes/bookingRequest.routes.js
+@@ -7,6 +7,7 @@ const { customerActionBooking } = require('../controller/bookingRequest/customer
+ const { getBookingRequestById } = require('../controller/bookingRequest/getBookingRequest');
+ const { autoCancelBooking } = require('../controller/bookingRequest/autoCancelBookingRequest');
+ const listSalonBookingRequests = require('../controller/bookingRequest/listSalonBookingRequests');
++const listUserBookingRequests = require('../controller/bookingRequest/listUserBookingRequests');
+ const salonBookingRequestSummary = require('../controller/bookingRequest/salonBookingRequestSummary');
+ const adminListBookingRequests = require('../controller/bookingRequest/adminListBookingRequests');
+ const adminBookingRequestSummary = require('../controller/bookingRequest/adminBookingRequestSummary');
+@@ -28,12 +29,16 @@ bookingRequestRouter.post('/auto-cancel', autoCancelBooking);
+ //   salon/summary   its counters (received / accepted / rejected / missed)
+ //   admin/list      the admin panel's Booking requests tab
+ //   admin/summary   platform counters + the per-salon answered/missed report
++//   user/list       the CUSTOMER's own request history (read-only)
+ //
+ // A salon's accept / reject goes through `/owner-action/:bookingRequestId` and
+ // an admin's through `/admin/action/:bookingRequestId`; both are thin wrappers
+ // over `services/bookingRequestAction.service.js`, so the web tab, the mobile
+ // app and the alert card cannot disagree about what an accept does.
+ bookingRequestRouter.post('/salon/list', authenticateSalon, listSalonBookingRequests);
++// A customer's own requests. The user id comes from the token, so this door can
++// only ever answer with the caller's own history.
++bookingRequestRouter.post('/user/list', authenticateUser, listUserBookingRequests);
+ bookingRequestRouter.post('/salon/summary', authenticateSalon, salonBookingRequestSummary);
+ bookingRequestRouter.post('/admin/list', authenticateAdmin, adminListBookingRequests);
+ bookingRequestRouter.post('/admin/summary', authenticateAdmin, adminBookingRequestSummary);
+diff --git a/src/services/bookingRequestAction.service.js b/src/services/bookingRequestAction.service.js
+index 4be13ad..0af29ff 100644
+--- a/src/services/bookingRequestAction.service.js
++++ b/src/services/bookingRequestAction.service.js
+@@ -31,6 +31,11 @@ const sendNotificationToDevice = require('../firebase/sendNotification');
+ const { formatTo12Hour } = require('../utils/timeFormat');
+ const { scheduleAutoCancelTask } = require('../tasks/autoCancelTask');
+ const { createBookingReminderTask } = require('../tasks/bookingReminderTask');
++const {
++    BOOKING_REQUEST_UPDATED,
++    bookingRequestEventPayload,
++    emitBookingRequestEvent
++} = require('../utils/bookingRequestEvents');
+ 
+ const ACTOR_ROLES = ['SALON', 'ADMIN'];
+ 
+@@ -131,6 +136,9 @@ const applyRequestAction = async ({
+             bookingRequest.respondedAt = bookingRequest.respondedAt || bookingRequest.expiresAt;
+             await bookingRequest.save({ transaction });
+             await transaction.commit();
++            // The refusal is a state change too: the salon's tab, the panel and
++            // the customer's countdown all have to stop showing it as live.
++            emitBookingRequestEvent(io, BOOKING_REQUEST_UPDATED, bookingRequestEventPayload(bookingRequest));
+             return fail(200, 'This request has expired and was cancelled automatically');
+         }
+ 
+@@ -211,6 +219,7 @@ const applyRequestAction = async ({
+             }
+ 
+             await transaction.commit();
++            emitBookingRequestEvent(io, BOOKING_REQUEST_UPDATED, bookingRequestEventPayload(bookingRequest));
+             return {
+                 httpStatus: 200,
+                 payload: {
+@@ -276,6 +285,10 @@ const applyRequestAction = async ({
+                     bookingId: bookingRequest.bookingRequestId
+                 });
+             }
++            // The request stays OPEN on a delay, but its state changed — the
++            // salon's tab and the panel show "new time proposed" now, and the
++            // customer's countdown keeps running against the same deadline.
++            emitBookingRequestEvent(io, BOOKING_REQUEST_UPDATED, bookingRequestEventPayload(bookingRequest));
+ 
+             return {
+                 httpStatus: 200,
+@@ -388,6 +401,12 @@ const applyRequestAction = async ({
+             });
+         }
+ 
++        // The answer itself. Queue and the customer already heard above; this is
++        // the same fact for the two lists of REQUESTS (the salon's tab and the
++        // panel's), so an accepted request stops showing Accept the moment the
++        // answer lands — on every open screen, not just the one that answered.
++        emitBookingRequestEvent(io, BOOKING_REQUEST_UPDATED, bookingRequestEventPayload(bookingRequest));
++
+         return {
+             httpStatus: 200,
+             payload: {
+diff --git a/src/services/bookingRequestLead.service.js b/src/services/bookingRequestLead.service.js
+index d55c3d3..b2cd060 100644
+--- a/src/services/bookingRequestLead.service.js
++++ b/src/services/bookingRequestLead.service.js
+@@ -129,7 +129,7 @@ const servicesOf = (raw) => {
+ 
+ const totalOf = (services) => services.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
+ 
+-const toRow = (row, { now = Date.now(), admin = false } = {}) => {
++const toRow = (row, { now = Date.now(), admin = false, customer = false } = {}) => {
+     const services = servicesOf(row.serviceIds);
+     const status = effectiveStatus(row, now);
+     const respondedAt = row.respondedAt || null;
+@@ -151,6 +151,20 @@ const toRow = (row, { now = Date.now(), admin = false } = {}) => {
+         total: totalOf(services)
+     };
+ 
++    // The customer's own history: they know the salon, not their own name, and
++    // the row has to say WHICH salon the request went to. The rest is the same
++    // line the salon reads, so both sides of one request can never disagree
++    // about what was asked for or what happened to it.
++    if (customer) {
++        return {
++            ...line,
++            salonId: row.salonId,
++            salonName: row.salon?.salonName || 'My Naai salon',
++            salonCity: row.salon?.city || '',
++            salonPhone: row.salon?.phoneNumber || ''
++        };
++    }
++
+     if (!admin) return line;
+ 
+     // Admin-only columns: who the lead belonged to, and how quickly they
+@@ -211,9 +225,12 @@ const withRelations = () => ([
+  * `status: 'PENDING'` must exclude them. That asymmetry is why the status
+  * filter cannot be a plain `IN`.
+  */
+-const buildWhere = ({ salonId, status, search, fromDate, toDate } = {}) => {
++const buildWhere = ({ salonId, customerId, status, search, fromDate, toDate } = {}) => {
+     const where = {};
+     if (salonId) where.salonId = salonId;
++    // The customer's own list. Like `salonId`, this comes from the token and
++    // never from a body — a customer reads their requests and nobody else's.
++    if (customerId) where.customerId = customerId;
+ 
+     // Filters that need an OR of their own are collected here and ANDed
+     // together at the end. They used to be written straight into `where[Op.or]`,
+@@ -275,7 +292,7 @@ const buildWhere = ({ salonId, status, search, fromDate, toDate } = {}) => {
+     return where;
+ };
+ 
+-const pagedQuery = async ({ where, page, limit, admin }) => {
++const pagedQuery = async ({ where, page, limit, admin, customer = false }) => {
+     const safePage = parseInt(page, 10) > 0 ? parseInt(page, 10) : 1;
+     const safeLimit = clampLimit(limit);
+ 
+@@ -293,7 +310,7 @@ const pagedQuery = async ({ where, page, limit, admin }) => {
+ 
+     const now = Date.now();
+     return {
+-        requests: rows.map((row) => toRow(row, { admin, now })),
++        requests: rows.map((row) => toRow(row, { admin, customer, now })),
+         pagination: {
+             page: safePage,
+             limit: safeLimit,
+@@ -452,6 +469,31 @@ const listSalonLeads = async ({ salonId, status = 'ALL', page, limit, fromDate,
+     return pagedQuery({ where: buildWhere({ salonId, status, fromDate, toDate }), page, limit, admin: false });
+ };
+ 
++/**
++ * The customer's side of the same table: every request THEY sent, newest first.
++ *
++ * Read-only by design. There is no accept / reject for a customer — that is the
++ * salon's answer — and no cancel here either: the request already lives in My
++ * bookings, where cancelling one is the existing flow. This list exists so the
++ * five-minute window is visible to the person waiting on it.
++ */
++const listCustomerLeads = async ({ customerId, status = 'ALL', page, limit, fromDate, toDate } = {}) => {
++    if (!customerId) {
++        const error = new Error('Not authorized');
++        error.status = 401;
++        throw error;
++    }
++    await ensureShopSchema();
++    await sweepQuietly();
++    return pagedQuery({
++        where: buildWhere({ customerId, status, fromDate, toDate }),
++        page,
++        limit,
++        admin: false,
++        customer: true
++    });
++};
++
+ const salonSummary = async ({ salonId, range = 'ALL', fromDate, toDate } = {}) => {
+     await ensureShopSchema();
+     await sweepQuietly();
+@@ -636,6 +678,7 @@ module.exports = {
+     buildWhere,
+     sweepExpiredRequests,
+     listSalonLeads,
++    listCustomerLeads,
+     salonSummary,
+     listAdminLeads,
+     adminSummary,
+diff --git a/src/utils/bookingRequestEvents.js b/src/utils/bookingRequestEvents.js
+new file mode 100644
+index 0000000..6c5da93
+--- /dev/null
++++ b/src/utils/bookingRequestEvents.js
+@@ -0,0 +1,73 @@
++// Live booking-request events.
++//
++// Three screens have to know about a request the moment it moves: the salon's
++// Booking requests tab (so a customer's request appears without a refresh), the
++// admin panel (the same page, for every salon) and the customer's own request
++// history (the countdown has to stop when it is answered). One helper emits to
++// all three rooms so a new call site cannot reach two of them and forget the
++// third.
++//
++// The payload is a label, not a record: ids plus a few strings the client can
++// say out loud. Every screen still reads the rows it shows from its own
++// authenticated endpoint — an event says "something changed", never "here is
++// the truth". That is what keeps a socket message from being able to invent a
++// request that the database does not have.
++const BOOKING_REQUEST_CREATED = 'booking_request_created';
++const BOOKING_REQUEST_UPDATED = 'booking_request_updated';
++
++// `admin` is the panel-wide room (index.js joins it on `join_admin`); the other
++// two are per-identity rooms that already existed.
++const roomsFor = (payload = {}) => {
++    const rooms = [];
++    if (payload.salonId) rooms.push(`salon_${payload.salonId}`);
++    if (payload.customerId) rooms.push(`user_${payload.customerId}`);
++    rooms.push('admin');
++    return [...new Set(rooms)];
++};
++
++const emitBookingRequestEvent = (io, event, payload = {}) => {
++    if (!io || typeof io.to !== 'function') return;
++    const body = {
++        bookingRequestId: payload.bookingRequestId || null,
++        salonId: payload.salonId || null,
++        salonName: payload.salonName || '',
++        customerId: payload.customerId || null,
++        customerName: payload.customerName || '',
++        bookingDate: payload.bookingDate || null,
++        bookingTime: payload.bookingTime || null,
++        status: payload.status || null,
++        createdAt: payload.createdAt || null,
++        expiresAt: payload.expiresAt || null
++    };
++
++    for (const room of roomsFor(payload)) {
++        try {
++            io.to(room).emit(event, body);
++        } catch (error) {
++            // A dead socket must never break the write that caused it.
++            console.error(`[booking-request] could not emit ${event} to ${room}:`, error.message);
++        }
++    }
++};
++
++// `bookingRequest` is a Sequelize instance (or a plain object) from
++// `booking_requests`; the extra fields are the ones the row does not carry
++// (the customer's name, the salon's name).
++const bookingRequestEventPayload = (bookingRequest = {}, extra = {}) => ({
++    bookingRequestId: bookingRequest.bookingRequestId,
++    salonId: bookingRequest.salonId,
++    customerId: bookingRequest.customerId,
++    bookingDate: bookingRequest.bookingDate,
++    bookingTime: bookingRequest.startTime || bookingRequest.bookingTime,
++    status: bookingRequest.status,
++    createdAt: bookingRequest.createdAt,
++    expiresAt: bookingRequest.expiresAt,
++    ...extra
++});
++
++module.exports = {
++    BOOKING_REQUEST_CREATED,
++    BOOKING_REQUEST_UPDATED,
++    bookingRequestEventPayload,
++    emitBookingRequestEvent
++};
+-- 
+2.39.5
+

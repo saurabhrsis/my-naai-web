@@ -191,3 +191,30 @@ export const LEAD_STATE_TONE = {
   autoCancelled: 'neutral',
   cancelled: 'neutral',
 };
+
+// The same six states, said from the CUSTOMER's side of the counter. A customer
+// is not "awaiting your answer" — they are waiting for the salon — and a request
+// the salon never answered was not "missed" by them, it simply ran out of time.
+// Kept beside the salon labels so the two lists can never disagree about what a
+// state means, only about who it happened to.
+export const LEAD_CUSTOMER_LABEL = {
+  awaiting: 'Waiting for the salon',
+  accepted: 'Accepted',
+  rejected: 'Declined by the salon',
+  delayed: 'New time proposed',
+  autoCancelled: 'No answer — expired',
+  cancelled: 'Cancelled',
+};
+
+// One sentence per state for the customer's history card. A request tab is read
+// weeks later, so each row says what happened in plain words rather than
+// leaving a status pill to explain itself.
+export const LEAD_CUSTOMER_NOTE = {
+  awaiting: `The salon has ${bookingWindowLabel} to accept or decline. The request cancels itself if nobody answers in time.`,
+  accepted: 'Your booking is confirmed — it is in My bookings now.',
+  rejected: 'The salon could not take this slot. Nothing was charged.',
+  delayed: 'The salon suggested a different time. Check My bookings for what happens next.',
+  autoCancelled: `Nobody answered within ${bookingWindowLabel}, so this request was cancelled automatically.`,
+  cancelled: 'You cancelled this request.',
+};
+
