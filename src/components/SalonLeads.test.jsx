@@ -6,10 +6,11 @@ import { ConfirmProvider } from './ConfirmDialog';
 import { SalonLeadsScreen } from './SalonLeads';
 import { LEAD_STATE, leadView, normalizeLead, summarizeLeads, filterLeads, leadStateFromStatus } from '../lib/bookingLeads';
 
-const { salonBookingRequestList, salonNotificationList, bookingRequestOwnerAction } = vi.hoisted(() => ({
+const { salonBookingRequestList, salonNotificationList, bookingRequestOwnerAction, subscribeToLiveUpdates } = vi.hoisted(() => ({
   salonBookingRequestList: vi.fn(),
   salonNotificationList: vi.fn(),
   bookingRequestOwnerAction: vi.fn(),
+  subscribeToLiveUpdates: vi.fn(() => () => {}),
 }));
 
 vi.mock('../lib/api', async () => {
@@ -19,6 +20,10 @@ vi.mock('../lib/api', async () => {
     api: { ...actual.api, salonBookingRequestList, salonNotificationList, bookingRequestOwnerAction },
   };
 });
+
+// jsdom has no socket server: record the subscriptions and deliver the events
+// the backend would push into `salon_<id>`.
+vi.mock('../lib/socket', () => ({ subscribeToLiveUpdates }));
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -37,6 +42,14 @@ const awaiting = overrides => ({
   services: [{ serviceId: 's1', serviceName: 'Haircut', price: 300 }],
   ...overrides,
 });
+
+const emitLive = (event, payload) => {
+  act(() => {
+    subscribeToLiveUpdates.mock.calls
+      .filter(([args]) => args.event === event && typeof args.handler === 'function')
+      .forEach(([args]) => args.handler(payload));
+  });
+};
 
 const flush = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); };
 
@@ -181,6 +194,43 @@ describe('SalonLeadsScreen', () => {
     expect(missed).not.toBeNull();
     expect(missed.textContent).toContain('cancelled automatically');
     expect(Array.from(missed.querySelectorAll('button')).map(button => button.textContent.trim())).not.toContain('Accept');
+  });
+
+  it('clears the timer when My Naai answers on this salon\'s behalf', async () => {
+    const { container } = await render(<SalonLeadsScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    expect(container.querySelector('.lead-card.lead-awaiting .lead-countdown')).not.toBeNull();
+
+    // An admin accepted it from the panel. The backend emits into this salon's
+    // room with the status attached; the card must stop counting immediately,
+    // not when the quiet reload happens to land.
+    emitLive('booking_request_updated', { bookingRequestId: 'live-1', status: 'ACCEPTED' });
+
+    expect(container.querySelector('.lead-card.lead-awaiting')).toBeNull();
+    const accepted = container.querySelector('.lead-card.lead-accepted');
+    expect(accepted).not.toBeNull();
+    expect(accepted.querySelector('.lead-countdown')).toBeNull();
+    await flush();
+  });
+
+  it('re-reads the list for the admin-answer and queue events too', async () => {
+    await render(<SalonLeadsScreen session={SESSION} navigate={vi.fn()} notify={vi.fn()} />);
+    const before = salonBookingRequestList.mock.calls.length;
+
+    // A deployment whose backend predates `booking_request_updated` still sends
+    // these two; an admin's accept must not be invisible there either.
+    emitLive('booking_request_answered_by_admin', { bookingRequestId: 'live-1', action: 'ACCEPT' });
+    await flush();
+    emitLive('queue_updated', { bookingId: 'bk-1' });
+    await flush();
+
+    expect(salonBookingRequestList.mock.calls.length).toBeGreaterThanOrEqual(before + 2);
+    const events = subscribeToLiveUpdates.mock.calls.map(([args]) => args.event);
+    expect(events).toEqual(expect.arrayContaining([
+      'booking_request_created',
+      'booking_request_updated',
+      'booking_request_answered_by_admin',
+      'queue_updated',
+    ]));
   });
 
   it('accepts a request and records the outcome on the card', async () => {

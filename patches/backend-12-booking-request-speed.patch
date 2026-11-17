@@ -1,0 +1,690 @@
+From 54ed7b4348588ec3db7c8f692882a12674d2d699 Mon Sep 17 00:00:00 2001
+From: My Naai <dev@mynaai.in>
+Date: Tue, 17 Nov 2026 07:01:05 +0000
+Subject: [PATCH] Booking-request tabs: stop paying for the sweep, the join
+ count and the same summary
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Both Booking requests tabs (the customer's and the panel's) felt slow to open and
+slow to refresh. Three separate costs, none of them necessary:
+
+**The expiry sweep was on the read path.** Every list and every summary awaited a
+bulk `UPDATE booking_requests … RETURNING` with row locks before answering, so a
+tab's latency included writing down rows nobody was looking at. The statuses the
+tab shows are already derived from `expires_at`, and the status filters already
+include "PENDING but past its window" — the sweep is bookkeeping. It is now
+kicked off and not awaited (`kickSweep`), still throttled and still idempotent.
+
+**The count paid for a join it did not need.** `findAndCountAll` always ran
+`distinct: true, subQuery: false`, i.e. `COUNT(DISTINCT booking_request_id)` over
+three LEFT JOINs, for every page turn and filter chip. Only a search filters on a
+joined table, so only a search asks for that now; everything else is a plain
+`COUNT(*)` on `booking_requests`.
+
+**The panel recomputed five aggregates every 20 seconds.** Counts, last-received,
+the per-salon roll-up, salon names and the `percentile_cont` median reply were
+rebuilt on every load and every poll for filters that change far less often.
+`utils/shortCache.js` answers the identical question inside 15 s, keyed by the
+exact arguments, and every write path (create, accept, reject, delay,
+auto-cancel) clears it — so the number after an answer is the number the row has.
+
+Also: the two indexes these tabs order and filter by are now created at boot,
+`CONCURRENTLY` and `IF NOT EXISTS` (`ensureBookingRequestIndexes`), because a live
+table must not be locked and a read must not wait for an index build.
+
+`node scripts/test-booking-request-speed.js` → 8 checks (a read returns while a
+sweep that never settles is still running; the join count appears only with a
+search; a summary is computed once per filter set and again after a write).
+---
+ index.js                                      |   6 +
+ package.json                                  |   3 +-
+ scripts/test-booking-request-speed.js         | 205 ++++++++++++++++++
+ .../autoCancelBookingRequest.js               |   2 +
+ .../bookingRequest/bookingRequest.js          |   2 +
+ .../config/ensureBookingRequestIndexes.js     |  59 +++++
+ src/services/bookingRequestAction.service.js  |   5 +
+ src/services/bookingRequestLead.service.js    |  84 +++++--
+ src/utils/shortCache.js                       |  65 ++++++
+ 9 files changed, 417 insertions(+), 14 deletions(-)
+ create mode 100644 scripts/test-booking-request-speed.js
+ create mode 100644 src/database/config/ensureBookingRequestIndexes.js
+ create mode 100644 src/utils/shortCache.js
+
+diff --git a/index.js b/index.js
+index 40b9193..95d725e 100644
+--- a/index.js
++++ b/index.js
+@@ -8,6 +8,7 @@ const { closeConnection, connectDb } = require("./src/database/config/db");
+ const { ensureShopBuyerSchema } = require("./src/database/config/ensureShopBuyerSchema");
+ const { ensureShopSchema } = require("./src/database/config/ensureShopSchema");
+ const { ensurePlanSchema } = require("./src/database/config/ensurePlanSchema");
++const { ensureBookingRequestIndexes } = require("./src/database/config/ensureBookingRequestIndexes");
+ const db = require("./src/database/models");
+ const routes = require("./src/routes/routes");
+ const errorHandler = require("./src/utils/middleware/error.middleware");
+@@ -226,6 +227,11 @@ connectDb().then((connected) => {
+ 
+         // Initialize partner plan schema (idempotent).
+         ensurePlanSchema();
++
++        // The two booking-request tabs' indexes (idempotent, CONCURRENTLY so a
++        // live table is never blocked). Fire-and-forget: an index build must not
++        // hold up the first request the API serves.
++        ensureBookingRequestIndexes().catch(() => {});
+     }
+ });
+ // sendPushNotification("fc2A21LpQ4W3IBj7ry6RyW:APA91bHexWAirHUAVKOZKqsl_BSxon1wTcvqhk40qWCWE1YGzQjdd76Q520S-zuX0rUtcNfyux60kk7GdtuNtm6H6f_G60SL4ODvKPTUbx55qBmKWtQVrjI","Test Title","This is test notification body")
+diff --git a/package.json b/package.json
+index 4ab0c0f..dfbb312 100644
+--- a/package.json
++++ b/package.json
+@@ -11,7 +11,8 @@
+     "shop:test-categories": "node scripts/test-shop-categories.js",
+     "event:test-notifications": "node scripts/test-event-notifications.js",
+     "notification:test-inbox": "node scripts/test-admin-notification-inbox.js",
+-    "booking:test-live": "node scripts/test-booking-request-live.js"
++    "booking:test-live": "node scripts/test-booking-request-live.js",
++    "booking:test-speed": "node scripts/test-booking-request-speed.js"
+   },
+   "repository": {
+     "type": "git",
+diff --git a/scripts/test-booking-request-speed.js b/scripts/test-booking-request-speed.js
+new file mode 100644
+index 0000000..53649d7
+--- /dev/null
++++ b/scripts/test-booking-request-speed.js
+@@ -0,0 +1,205 @@
++// Booking-request list speed — the three things that made the tabs slow.
++//
++//   node scripts/test-booking-request-speed.js
++//
++// No `npm ci`, no database, no network: `sequelize` and the model layer are
++// stubbed through `Module._load`, and the timings are simulated by a promise
++// that never settles (the sweep) and by counting queries (the summaries).
++//
++// What it checks:
++//   1. a list does NOT wait for the expiry sweep — the read returns while the
++//      bulk UPDATE is still running;
++//   2. the count is a plain `COUNT(*)` unless a search joins another table
++//      (which is the only case that needs `distinct` + `subQuery: false`);
++//   3. the admin summary answers from its 15-second cache, and a write clears
++//      that cache so the counters can never lag behind an answer;
++//   4. the indexes the tabs need are created idempotently and concurrently.
++const assert = require('assert');
++const fs = require('fs');
++const path = require('path');
++const Module = require('module');
++
++const ROOT = path.join(__dirname, '..');
++const read = (relative) => fs.readFileSync(path.join(ROOT, relative), 'utf8');
++
++// ── stubs ───────────────────────────────────────────────────────────────────
++const calls = { pagedQuery: [], grouped: 0, salonNames: 0, counts: 0, max: 0 };
++let sweepCalls = 0;
++let sweepPending = null; // set to a promise to simulate a slow sweep
++
++const row = {
++    bookingRequestId: 'req-1',
++    customerId: 'cust-1',
++    salonId: 'salon-1',
++    serviceIds: [],
++    bookingDate: '2026-11-06',
++    startTime: '18:30:00',
++    status: 'PENDING',
++    expiresAt: null,
++    createdAt: new Date(),
++    customer: null,
++    salon: { salonName: 'Glow Studio', city: 'Nagpur' },
++    barber: null
++};
++
++const fakeDb = {
++    sequelize: {
++        query: async (sql) => {
++            if (/UPDATE booking_requests/i.test(sql)) {
++                sweepCalls += 1;
++                if (sweepPending) return sweepPending;
++                return [];
++            }
++            return [];
++        }
++    },
++    BookingRequest: {
++        findAndCountAll: async (options) => {
++            calls.pagedQuery.push(options);
++            return { count: 1, rows: [row] };
++        },
++        findAll: async (options) => {
++            // The per-salon roll-up groups by salonId; the status counts group
++            // by the derived status expression — only the former is counted here.
++            if (Array.isArray(options?.group) && options.group.includes('salonId')) {
++                calls.grouped += 1;
++                return [{ salonId: 'salon-1', status: 'ACCEPTED', total: 1 }];
++            }
++            calls.counts += 1; // countByStatus
++            return [{ status: 'ACCEPTED', total: 1 }];
++        },
++        max: async () => { calls.max += 1; return new Date(); }
++    },
++    Salon: { findAll: async () => { calls.salonNames += 1; return [{ salonId: 'salon-1', salonName: 'Glow Studio', city: 'Nagpur' }]; } },
++    User: {},
++    Barber: {},
++    Service: {}
++};
++
++const fakeSequelize = {
++    Op: { in: 'in', gt: 'gt', gte: 'gte', lt: 'lt', lte: 'lte', iLike: 'iLike', or: 'or', and: 'and' },
++    fn: (...args) => ({ fn: args }),
++    col: (name) => ({ col: name }),
++    literal: (value) => ({ literal: value }),
++    QueryTypes: { SELECT: 'SELECT' }
++};
++
++const originalLoad = Module._load;
++Module._load = function load(request, parent, isMain) {
++    if (request === 'sequelize') return fakeSequelize;
++    if (/database[\\/]models$/.test(request)) return fakeDb;
++    if (/ensureShopSchema$/.test(request)) return { ensureShopSchema: async () => {} };
++    if (/firebase[\\/]sendNotification$/.test(request)) return async () => ({});
++    return originalLoad.apply(this, arguments);
++};
++
++const leadService = require('../src/services/bookingRequestLead.service');
++const { leadSummaryCache } = require('../src/utils/shortCache');
++
++let passed = 0;
++const check = async (name, fn) => {
++    try {
++        await fn();
++        passed += 1;
++        console.log(`  ✓ ${name}`);
++    } catch (error) {
++        console.error(`  ✗ ${name}\n    ${error.message}`);
++        process.exitCode = 1;
++    }
++};
++
++const reset = () => {
++    calls.pagedQuery.length = 0;
++    calls.grouped = 0;
++    calls.salonNames = 0;
++    calls.counts = 0;
++    calls.max = 0;
++    sweepCalls = 0;
++    sweepPending = null;
++    leadSummaryCache.clear();
++};
++
++(async () => {
++    console.log('booking-request list speed\n');
++
++    await check('a list answers while the expiry sweep is still running', async () => {
++        reset();
++        // A sweep that never settles: before this fix the read awaited it, and
++        // every poll after a burst of leads hung on the bulk UPDATE.
++        sweepPending = new Promise(() => {});
++        const data = await leadService.listSalonLeads({ salonId: 'salon-1', page: 1, limit: 20 });
++        assert.strictEqual(data.requests.length, 1);
++        assert.ok(sweepCalls >= 1, 'the sweep still has to be kicked off');
++    });
++
++    await check('a plain list counts straight off booking_requests', async () => {
++        reset();
++        await leadService.listSalonLeads({ salonId: 'salon-1', page: 1, limit: 20 });
++        const options = calls.pagedQuery[0];
++        assert.strictEqual(options.distinct, undefined);
++        assert.strictEqual(options.subQuery, undefined);
++        // …and the relations are still included, so the rows are complete.
++        assert.strictEqual(options.include.length, 3);
++    });
++
++    await check('only a search pays for the join-aware count', async () => {
++        reset();
++        await leadService.listAdminLeads({ search: 'asha', page: 1, limit: 25 });
++        const options = calls.pagedQuery[0];
++        assert.strictEqual(options.distinct, true);
++        assert.strictEqual(options.subQuery, false);
++    });
++
++    await check('the customer list is scoped and just as cheap', async () => {
++        reset();
++        const data = await leadService.listCustomerLeads({ customerId: 'cust-1', page: 1, limit: 20 });
++        const options = calls.pagedQuery[0];
++        assert.strictEqual(options.where.customerId, 'cust-1');
++        assert.strictEqual(options.distinct, undefined);
++        assert.strictEqual(data.requests[0].salonName, 'Glow Studio');
++    });
++
++    await check('the admin summary is computed once per filter set, not per poll', async () => {
++        reset();
++        const first = await leadService.adminSummary({ range: 'TODAY' });
++        assert.strictEqual(calls.grouped, 1, 'the roll-up runs on a cold cache');
++        const second = await leadService.adminSummary({ range: 'TODAY' });
++        assert.strictEqual(calls.grouped, 1, 'the second call is answered from the cache');
++        assert.deepStrictEqual(second.bySalon, first.bySalon);
++    });
++
++    await check('a different range is a different question', async () => {
++        reset();
++        await leadService.adminSummary({ range: 'TODAY' });
++        await leadService.adminSummary({ range: 'WEEK' });
++        assert.strictEqual(calls.grouped, 2);
++    });
++
++    await check('an answer clears the cached counters immediately', async () => {
++        reset();
++        await leadService.adminSummary({ range: 'TODAY' });
++        leadService.invalidateLeadCaches();
++        await leadService.adminSummary({ range: 'TODAY' });
++        assert.strictEqual(calls.grouped, 2, 'the panel must see the new count after an accept');
++    });
++
++    await check('the indexes are idempotent and built concurrently', () => {
++        const file = read('src/database/config/ensureBookingRequestIndexes.js');
++        const statements = file.match(/CREATE INDEX CONCURRENTLY IF NOT EXISTS[^`]*/g) || [];
++        assert.ok(statements.length >= 3, `expected 3 index statements, found ${statements.length}`);
++        assert.ok(/salon_id, created_at DESC/.test(file));
++        assert.ok(/customer_id, created_at DESC/.test(file));
++        assert.ok(/WHERE responded_at IS NOT NULL/.test(file));
++        // Boot only: never on a read path.
++        assert.ok(/ensureBookingRequestIndexes/.test(read('index.js')));
++        const service = read('src/services/bookingRequestLead.service.js');
++        assert.ok(!/ensureBookingRequestIndexes/.test(service));
++    });
++
++    console.log(`\n${passed} checks passed${process.exitCode ? ' — with failures above' : ''}`);
++    // The pending sweep promise would otherwise keep the event loop alive.
++    process.exit(process.exitCode || 0);
++})().catch((error) => {
++    console.error(error);
++    process.exit(1);
++});
+diff --git a/src/controller/bookingRequest/autoCancelBookingRequest.js b/src/controller/bookingRequest/autoCancelBookingRequest.js
+index 60df2b3..c68b149 100644
+--- a/src/controller/bookingRequest/autoCancelBookingRequest.js
++++ b/src/controller/bookingRequest/autoCancelBookingRequest.js
+@@ -5,6 +5,7 @@ const {
+     bookingRequestEventPayload,
+     emitBookingRequestEvent
+ } = require('../../utils/bookingRequestEvents');
++const { invalidateLeadCaches } = require('../../services/bookingRequestLead.service');
+ 
+ const autoCancelBooking = async (req, res) => {
+     try {
+@@ -80,6 +81,7 @@ const autoCancelBooking = async (req, res) => {
+         // The window closed with nobody answering. The salon's tab, the panel and
+         // the customer's own request history all have to stop showing this as a
+         // live request — for the customer that is the countdown reaching zero.
++        invalidateLeadCaches();
+         emitBookingRequestEvent(req.io, BOOKING_REQUEST_UPDATED, bookingRequestEventPayload(bookingRequest));
+ 
+         return res.status(200).json({ status: 'SUCCESS', message: 'Booking auto-cancelled' });
+diff --git a/src/controller/bookingRequest/bookingRequest.js b/src/controller/bookingRequest/bookingRequest.js
+index 441cc41..520a16d 100644
+--- a/src/controller/bookingRequest/bookingRequest.js
++++ b/src/controller/bookingRequest/bookingRequest.js
+@@ -7,6 +7,7 @@ const {
+     bookingRequestEventPayload,
+     emitBookingRequestEvent
+ } = require('../../utils/bookingRequestEvents');
++const { invalidateLeadCaches } = require('../../services/bookingRequestLead.service');
+ const { scheduleAutoCancelTask } = require('../../tasks/autoCancelTask');
+ const { createBookingRequestSchema } = require('../../validations/bookingRequest.validation');
+ const { WINDOW_MS, WINDOW_SECONDS } = require('../../services/bookingRequestLead.service');
+@@ -309,6 +310,7 @@ const createBookingRequest = async (req, res) => {
+         // page, and the customer's own request history (which starts its
+         // countdown from this request's `expires_at`). Emitted AFTER the
+         // commit: an event must never announce a request that was rolled back.
++        invalidateLeadCaches();
+         emitBookingRequestEvent(req.io, BOOKING_REQUEST_CREATED, bookingRequestEventPayload(bookingRequest, {
+             salonName: '',
+             customerName: userName
+diff --git a/src/database/config/ensureBookingRequestIndexes.js b/src/database/config/ensureBookingRequestIndexes.js
+new file mode 100644
+index 0000000..cf1c771
+--- /dev/null
++++ b/src/database/config/ensureBookingRequestIndexes.js
+@@ -0,0 +1,59 @@
++// The indexes the two booking-request tabs actually ask for.
++//
++// Why at boot, and why `CONCURRENTLY`:
++//
++//   · The lists are ordered `created_at DESC` and filtered by owner
++//     (`salon_id` or `customer_id`). The existing indexes cover
++//     `(salon_id, status, created_at)` — good for "this salon, this status" but
++//     not for "this salon, newest first", which is what the tab opens on — and
++//     `(customer_id, created_at DESC)`, which the customer tab added.
++//   · The admin's per-salon report and the median reply time both scan
++//     `created_at` over rows that have `responded_at`; a partial index on the
++//     answered rows keeps that report from reading the whole table.
++//
++// Every statement is `IF NOT EXISTS`, so this is a no-op on a database that has
++// them, and `CONCURRENTLY` means building one does not block writes to a live
++// `booking_requests` table. It runs once per process at boot (index.js) and never
++// on a read path: an index build must not delay the tab it is meant to speed up.
++// A failure — no CREATE right, an old Postgres, an index still building under the
++// same name — is logged and ignored; the API keeps answering.
++const db = require('../models');
++
++const STATEMENTS = [
++    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_booking_requests_salon_created
++        ON booking_requests (salon_id, created_at DESC);`,
++    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_booking_requests_customer_created
++        ON booking_requests (customer_id, created_at DESC);`,
++    `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_booking_requests_answered_created
++        ON booking_requests (created_at)
++        WHERE responded_at IS NOT NULL;`
++];
++
++let started = null;
++
++const ensureBookingRequestIndexes = async ({ force = false } = {}) => {
++    if (started && !force) return started;
++    started = (async () => {
++        const failures = [];
++        for (const statement of STATEMENTS) {
++            try {
++                await db.sequelize.query(statement);
++            } catch (error) {
++                failures.push(error.message);
++            }
++        }
++        if (failures.length) {
++            console.error('[booking-request] could not build every index (the tabs still work, just slower):', failures[0]);
++            return false;
++        }
++        console.log('[booking-request] request indexes present');
++        return true;
++    })();
++
++    return started;
++};
++
++module.exports = {
++    ensureBookingRequestIndexes,
++    BOOKING_REQUEST_INDEX_STATEMENTS: STATEMENTS
++};
+diff --git a/src/services/bookingRequestAction.service.js b/src/services/bookingRequestAction.service.js
+index 0af29ff..cca09ec 100644
+--- a/src/services/bookingRequestAction.service.js
++++ b/src/services/bookingRequestAction.service.js
+@@ -36,6 +36,7 @@ const {
+     bookingRequestEventPayload,
+     emitBookingRequestEvent
+ } = require('../utils/bookingRequestEvents');
++const { invalidateLeadCaches } = require('./bookingRequestLead.service');
+ 
+ const ACTOR_ROLES = ['SALON', 'ADMIN'];
+ 
+@@ -136,6 +137,7 @@ const applyRequestAction = async ({
+             bookingRequest.respondedAt = bookingRequest.respondedAt || bookingRequest.expiresAt;
+             await bookingRequest.save({ transaction });
+             await transaction.commit();
++            invalidateLeadCaches();
+             // The refusal is a state change too: the salon's tab, the panel and
+             // the customer's countdown all have to stop showing it as live.
+             emitBookingRequestEvent(io, BOOKING_REQUEST_UPDATED, bookingRequestEventPayload(bookingRequest));
+@@ -219,6 +221,7 @@ const applyRequestAction = async ({
+             }
+ 
+             await transaction.commit();
++            invalidateLeadCaches();
+             emitBookingRequestEvent(io, BOOKING_REQUEST_UPDATED, bookingRequestEventPayload(bookingRequest));
+             return {
+                 httpStatus: 200,
+@@ -288,6 +291,7 @@ const applyRequestAction = async ({
+             // The request stays OPEN on a delay, but its state changed — the
+             // salon's tab and the panel show "new time proposed" now, and the
+             // customer's countdown keeps running against the same deadline.
++            invalidateLeadCaches();
+             emitBookingRequestEvent(io, BOOKING_REQUEST_UPDATED, bookingRequestEventPayload(bookingRequest));
+ 
+             return {
+@@ -405,6 +409,7 @@ const applyRequestAction = async ({
+         // the same fact for the two lists of REQUESTS (the salon's tab and the
+         // panel's), so an accepted request stops showing Accept the moment the
+         // answer lands — on every open screen, not just the one that answered.
++        invalidateLeadCaches();
+         emitBookingRequestEvent(io, BOOKING_REQUEST_UPDATED, bookingRequestEventPayload(bookingRequest));
+ 
+         return {
+diff --git a/src/services/bookingRequestLead.service.js b/src/services/bookingRequestLead.service.js
+index b2cd060..3becb49 100644
+--- a/src/services/bookingRequestLead.service.js
++++ b/src/services/bookingRequestLead.service.js
+@@ -2,6 +2,7 @@ const { Op, fn, col, literal, QueryTypes } = require('sequelize');
+ const db = require('../database/models');
+ const { ensureShopSchema } = require('../database/config/ensureShopSchema');
+ const { addDays, parseBound, resolveRange, startOfIstDay } = require('../utils/istRange');
++const { leadSummaryCache } = require('../utils/shortCache');
+ 
+ /**
+  * Booking REQUESTS — the leads API behind the salon's Booking requests tab and
+@@ -292,7 +293,17 @@ const buildWhere = ({ salonId, customerId, status, search, fromDate, toDate } =
+     return where;
+ };
+ 
+-const pagedQuery = async ({ where, page, limit, admin, customer = false }) => {
++/**
++ * One page of the tab.
++ *
++ * `joined` is the search flag: ONLY a search filters on `customer` / `salon`
++ * columns (`$customer.full_name$ …`), and only then does the count have to run
++ * over the joined result. Every other query — which is every page turn, every
++ * filter chip, every poll — used to pay for `COUNT(DISTINCT booking_request_id)`
++ * across three LEFT JOINs anyway. On a busy platform that count was most of the
++ * request's duration, and the rows themselves were already indexed.
++ */
++const pagedQuery = async ({ where, page, limit, admin, customer = false, joined = false }) => {
+     const safePage = parseInt(page, 10) > 0 ? parseInt(page, 10) : 1;
+     const safeLimit = clampLimit(limit);
+ 
+@@ -302,10 +313,11 @@ const pagedQuery = async ({ where, page, limit, admin, customer = false }) => {
+         order: [['createdAt', 'DESC'], ['bookingRequestId', 'DESC']],
+         limit: safeLimit,
+         offset: (safePage - 1) * safeLimit,
+-        // The search joins two tables, so the count has to be over the joined
+-        // result rather than over booking_requests alone.
+-        distinct: true,
+-        subQuery: false
++        // A search filters on a joined table, so the count has to be over the
++        // joined result (and `subQuery: false` keeps `limit` on the request
++        // rows, not on the join). Without a search, a plain count over
++        // `booking_requests` answers the same number for a fraction of the cost.
++        ...(joined ? { distinct: true, subQuery: false } : {})
+     });
+ 
+     const now = Date.now();
+@@ -366,6 +378,33 @@ const sweepQuietly = async () => {
+     }
+ };
+ 
++/**
++ * The sweep, without making the reader wait for it.
++ *
++ * It used to be `await sweepQuietly()` in front of every list and every summary:
++ * a bulk `UPDATE … RETURNING` (with row locks) ran on the critical path of each
++ * poll, and the API's answer was as slow as the slowest expired-row write. But
++ * the tab does not NEED that write to be correct — every status it shows is
++ * already derived from `expires_at` (`effectiveStatus`, `DERIVED_STATUS_SQL`),
++ * and every status filter already includes "PENDING but past its window". The
++ * sweep is bookkeeping: start it, return the rows.
++ *
++ * `sweepExpiredRequests` is idempotent and throttled (2 s), so a burst of polls
++ * still results in one write, and a failure is logged and forgotten — no reader
++ * ever sees it.
++ */
++const kickSweep = () => {
++    sweepQuietly().catch(() => {});
++};
++
++/**
++ * The summary cache can be emptied from anywhere a request changes.
++ * Cheap enough to call unconditionally (see utils/shortCache.js).
++ */
++const invalidateLeadCaches = () => {
++    leadSummaryCache.clear();
++};
++
+ // ------------------------------------------------------------------ counting
+ 
+ // A request past its window IS auto-cancelled, whether or not the sweeper has
+@@ -465,7 +504,7 @@ const summarize = async (where) => {
+ 
+ const listSalonLeads = async ({ salonId, status = 'ALL', page, limit, fromDate, toDate } = {}) => {
+     await ensureShopSchema();
+-    await sweepQuietly();
++    kickSweep();
+     return pagedQuery({ where: buildWhere({ salonId, status, fromDate, toDate }), page, limit, admin: false });
+ };
+ 
+@@ -484,7 +523,7 @@ const listCustomerLeads = async ({ customerId, status = 'ALL', page, limit, from
+         throw error;
+     }
+     await ensureShopSchema();
+-    await sweepQuietly();
++    kickSweep();
+     return pagedQuery({
+         where: buildWhere({ customerId, status, fromDate, toDate }),
+         page,
+@@ -496,23 +535,29 @@ const listCustomerLeads = async ({ customerId, status = 'ALL', page, limit, from
+ 
+ const salonSummary = async ({ salonId, range = 'ALL', fromDate, toDate } = {}) => {
+     await ensureShopSchema();
+-    await sweepQuietly();
++    kickSweep();
+ 
+     const start = rangeStart(range);
+-    const where = buildWhere({ salonId, status: 'ALL', fromDate: fromDate || (start ? start.toISOString() : undefined), toDate });
+-    return summarize(where);
++    const from = fromDate || (start ? start.toISOString() : undefined);
++    // Polled by the tab, so the same question inside 15 s is the same answer.
++    return leadSummaryCache.remember(
++        `salon|${salonId}|${range}|${from || ''}|${toDate || ''}`,
++        () => summarize(buildWhere({ salonId, status: 'ALL', fromDate: from, toDate }))
++    );
+ };
+ 
+ const listAdminLeads = async ({ salonId, status = 'ALL', search, page, limit, fromDate, toDate } = {}) => {
+     await ensureShopSchema();
+-    await sweepQuietly();
++    kickSweep();
++    const joined = Boolean(String(search || '').trim());
+ 
+     const [result, chips] = await Promise.all([
+         pagedQuery({
+             where: buildWhere({ salonId, status, search, fromDate, toDate }),
+             page,
+             limit,
+-            admin: true
++            admin: true,
++            joined
+         }),
+         statusCounts({ salonId, fromDate, toDate }).catch((error) => {
+             console.error('[booking-request] status counts skipped:', error.message);
+@@ -574,8 +619,19 @@ const medianResponseBySalon = async (where = {}) => {
+  */
+ const adminSummary = async ({ range = 'ALL', salonId, fromDate, toDate } = {}) => {
+     await ensureShopSchema();
+-    await sweepQuietly();
++    kickSweep();
++
++    // Five aggregates (counts, last-received, per-salon roll-up, names, median)
++    // ran on every panel load AND every 20-second poll, for a set of filters that
++    // changes far less often than that. Answered from the cache inside 15 s;
++    // every write path clears it.
++    return leadSummaryCache.remember(
++        `admin|${range}|${salonId || ''}|${fromDate || ''}|${toDate || ''}`,
++        () => buildAdminSummary({ range, salonId, fromDate, toDate })
++    );
++};
+ 
++const buildAdminSummary = async ({ range = 'ALL', salonId, fromDate, toDate } = {}) => {
+     const start = rangeStart(range);
+     const where = buildWhere({
+         salonId,
+@@ -680,6 +736,8 @@ module.exports = {
+     listSalonLeads,
+     listCustomerLeads,
+     salonSummary,
++    kickSweep,
++    invalidateLeadCaches,
+     listAdminLeads,
+     adminSummary,
+     summarize,
+diff --git a/src/utils/shortCache.js b/src/utils/shortCache.js
+new file mode 100644
+index 0000000..561c184
+--- /dev/null
++++ b/src/utils/shortCache.js
+@@ -0,0 +1,65 @@
++// A cache for the two booking-request summaries — and nothing else.
++//
++// Why it exists: both tabs poll their counters (the admin panel re-reads them
++// every 20 seconds) and both are built from the same expensive aggregates — a
++// GROUP BY over the window, a per-salon roll-up and a `percentile_cont` for the
++// median reply. Answering the same question with the same rows twice inside a
++// few seconds is pure cost: the numbers cannot have changed in a way the panel
++// would notice, and the panel's own answer is one poll behind either way.
++//
++// What keeps it honest:
++//   · the TTL is short (15 s by default) — a filter change is answered fresh;
++//   · every write path that can change a request calls `clear()` on the way out
++//     (an accept, a reject, a delay, an auto-cancel, a new request), so the
++//     number a screen shows after an action is the number the row now has;
++//   · the key is the exact argument set, so two ranges never share an entry;
++//   · it is bounded, so a pathological set of filters cannot grow it.
++//
++// It is deliberately a plain in-process Map: one API process per instance, and a
++// cold cache costs one query, not a wrong answer.
++const createShortCache = ({ ttlMs = 15000, maxEntries = 64 } = {}) => {
++    const entries = new Map();
++
++    const isFresh = (entry) => Boolean(entry) && Date.now() - entry.at < ttlMs;
++
++    return {
++        get(key) {
++            const entry = entries.get(key);
++            if (!isFresh(entry)) {
++                if (entry) entries.delete(key);
++                return { hit: false, value: undefined };
++            }
++            return { hit: true, value: entry.value };
++        },
++        set(key, value) {
++            entries.set(key, { at: Date.now(), value });
++            if (entries.size > maxEntries) {
++                // Drop the oldest — a Map keeps insertion order, and a bucket
++                // that has just been written is the one worth keeping.
++                const oldest = entries.keys().next().value;
++                if (oldest !== undefined) entries.delete(oldest);
++            }
++            return value;
++        },
++        /** Answer from the cache when it can, otherwise compute and remember. */
++        async remember(key, producer) {
++            const hit = this.get(key);
++            if (hit.hit) return hit.value;
++            return this.set(key, await producer());
++        },
++        clear() {
++            entries.clear();
++        },
++        get size() {
++            return entries.size;
++        }
++    };
++};
++
++// One cache shared by the service that fills it and the writers that empty it.
++const leadSummaryCache = createShortCache({ ttlMs: 15000, maxEntries: 64 });
++
++module.exports = {
++    createShortCache,
++    leadSummaryCache
++};
+-- 
+2.39.5
+

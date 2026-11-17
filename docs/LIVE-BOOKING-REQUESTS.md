@@ -104,20 +104,50 @@ sweeper expires→ └───────────────────�
 * **Web client.** `src/lib/socket.js` rooms now carry several events (a booking
   requests tab listens for created *and* updated); before, the second event
   replaced the first for cross-tab relay.
+* **What a screen does with an event.** Not "refetch and hope", and not "trust
+  the label" either — both, in that order: the status the event carries is
+  applied to the card **immediately**, and the authenticated list is re-read
+  quietly after it. Reported live: an admin accepted a request, the panel
+  updated, and the customer's card still counted down *"0:30 left to be
+  answered"*; the salon's screen kept its timer too. The event was arriving — the
+  card was waiting for the refetch to come back before it stopped ticking, and
+  the full-screen `BookingRequestScreen` (the one the notification opens) was not
+  subscribed at all. Now:
+
+  | Screen | Hears | What it does |
+  | --- | --- | --- |
+  | `CustomerBookingRequests` (`user_<id>`) | `booking_request_updated`, `booking_status_updated` | flips the card by `status`, then quiet reload |
+  | `SalonLeads` (`salon_<id>`) | `booking_request_created`, `booking_request_updated`, `booking_request_answered_by_admin`, `queue_updated` | toasts a new request; flips + reloads on an answer |
+  | `BookingRequestScreen` (`salon_<id>`) | `booking_request_updated`, `booking_request_answered_by_admin`, `queue_updated` | quiet reload, card flipped by `status` first; also re-reads once when its own clock reaches 0:00, so an accept made elsewhere wins over the local "expired" guess |
+
+  The older events (`booking_request_answered_by_admin`, `queue_updated`) are in
+  the list on purpose: they exist on every deployment, so the salon side of an
+  admin's answer works even before `backend-11` is applied.
 * **Admin client.** `src/services/liveSocket.js` — one socket, `join_admin` on
   connect, `subscribeToAdminEvents(event, handler)`. `BookingRequests.jsx` puts a
   toast on `created` ("New booking request from Asha") and quietly refreshes the
   table and the tiles on either event. Without the patch the page still works;
   it just doesn't move on its own.
 
+* **The floor under the socket.** `src/lib/liveRefresh.js`: a screen with a
+  request genuinely waiting on an answer re-reads every **5 s**; with nothing
+  waiting, every 20–30 s. Coming back to the tab (visibility, focus, network
+  returned) re-reads immediately. A socket message that never arrives — a
+  sleeping phone, a proxy, a suspended tab — costs a few seconds, never a timer
+  that runs forever.
+
 Verify (restart the API after applying the backend patch):
 
 ```bash
 cd my_naai_backend && node scripts/test-booking-request-live.js   # 10 checks
+node scripts/test-booking-request-speed.js                        # 8 checks (backend-12)
 ```
 
 Then, with the salon's Booking requests tab and the panel's own tab open, send a
-request from the website: the card appears in both without a refresh.
+request from the website: the card appears in both without a refresh. Accept it
+from the **panel** with the customer's `Booking requests` tab open: the customer's
+countdown stops on the spot, and the number after it is the one the database
+holds.
 
 ## 4. The customer's Booking requests tab
 
@@ -158,3 +188,31 @@ POST /api/bookingRequest/user/list       (Authorization: Bearer <user token>)
 Nothing is written by this tab, and a deployment without the endpoint answers
 404 — the tab then says *"Your request history appears here after the next
 backend update"* instead of showing an empty history.
+
+## 5. Why the two Booking requests tabs felt slow
+
+Reported together with the timer: *"the customer Booking requests API and the
+admin Booking requests API take too long to fetch."* Three separate costs, all of
+them on the read path, none of them the query the screen actually asked for.
+Fixed in **`backend-12-booking-request-speed.patch`**.
+
+| Cost | What it was | What it is now |
+| --- | --- | --- |
+| **The sweep** | `await sweepQuietly()` before every list *and* every summary — a bulk `UPDATE … RETURNING` with row locks, written down before the tab could answer | `kickSweep()`: fired and not awaited. Safe because the statuses on screen are already derived from `expires_at` (`effectiveStatus` / `DERIVED_STATUS_SQL`) and the status filters already include "PENDING but past its window", so the sweep is bookkeeping, not the answer |
+| **The count** | `findAndCountAll` with `distinct: true, subQuery: false` — `COUNT(DISTINCT …)` over three LEFT JOINs on every page turn and every filter chip | the join-aware count only when `search` is set; otherwise `COUNT(*)` on `booking_requests` |
+| **The panel's roll-up** | five aggregates per load *and per 20 s poll*: counts, last-received, per-salon roll-up, salon names, `percentile_cont` median reply | `src/utils/shortCache.js` — 15 s TTL, 64 entries, keyed by the exact filter arguments; every write path (create, accept, reject, delay, auto-cancel) calls `invalidateLeadCaches()`, so the number after an answer is the number the row has |
+
+Plus the indexes these tabs order and filter by, created at boot
+(`src/database/config/ensureBookingRequestIndexes.js`, `CONCURRENTLY` +
+`IF NOT EXISTS`, never inside a transaction): `(salon_id, created_at DESC)`,
+`(customer_id, created_at DESC)`, and a partial `(created_at) WHERE responded_at
+IS NOT NULL` for the median-reply report. The same three statements ship as
+[`patches/migrations/2026-11-17-booking-request-indexes.sql`](../patches/migrations/2026-11-17-booking-request-indexes.sql)
+for deployments that would rather run their own migrations.
+
+**What the cache may and may not hold.** Only the two *summaries* — never a list,
+never a row, never anything a person decides on. A 15-second-old count is a
+number on a tile; a 15-second-old list would be a screen that hides the request
+someone is waiting to answer. No write can leave it stale: create, accept,
+reject, delay and auto-cancel all clear it, so the count a screen reads after an
+answer is the count of rows that answer left behind.

@@ -9,6 +9,7 @@ import {
   Timer,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { refreshWhenVisible, useAdaptiveRefresh } from '../lib/liveRefresh';
 import { subscribeToLiveUpdates } from '../lib/socket';
 import {
   LEAD_CUSTOMER_LABEL,
@@ -17,6 +18,7 @@ import {
   LEAD_STATE_TONE,
   bookingWindowLabel,
   filterLeads,
+  leadStateFromStatus,
   leadView,
   normalizeLead,
   summarizeLeads,
@@ -168,15 +170,46 @@ export function CustomerBookingRequests({ session, notify }) {
   // Live, like the salon's tab: the same `user_<id>` room already carries
   // `booking_status_updated` (accept / reject / delay proposal) and the backend
   // now also sends `booking_request_updated` when a request is answered or
-  // expires. Either one re-reads the list quietly — the card never invents an
-  // outcome, it just stops waiting for one.
-  const onLiveChange = useCallback(() => load({ quiet: true }), [load]);
+  // expires.
+  //
+  // The event is applied to the card FIRST and the list is re-read after. That
+  // ordering is the fix for "it still says 0:30 left after the salon accepted":
+  // the refetch is a network round trip, and a countdown that keeps ticking
+  // while an answer is already known is a lie the screen tells for as long as
+  // that round trip takes. `booking_request_updated` carries the status, so the
+  // card flips to "Accepted" (or "Declined", or "expired") on the spot; the
+  // quiet reload then replaces it with whatever the server actually recorded.
+  const applyStatus = useCallback(payload => {
+    const id = payload?.bookingRequestId ? String(payload.bookingRequestId) : '';
+    if (!id || !payload?.status) return false;
+    const state = leadStateFromStatus(payload.status);
+    let matched = false;
+    setRequests(items => items.map(item => {
+      if (item.id !== id) return item;
+      matched = true;
+      return { ...item, status: state, rawStatus: String(payload.status) };
+    }));
+    return matched;
+  }, []);
+
+  const onLiveChange = useCallback(payload => {
+    applyStatus(payload);
+    load({ quiet: true });
+  }, [applyStatus, load]);
+
   useEffect(() => subscribeToLiveUpdates({
     scope: 'user', id: session?.userId, event: 'booking_status_updated', handler: onLiveChange,
   }), [onLiveChange, session?.userId]);
   useEffect(() => subscribeToLiveUpdates({
     scope: 'user', id: session?.userId, event: 'booking_request_updated', handler: onLiveChange,
   }), [onLiveChange, session?.userId]);
+
+  // …and the floor under the socket: while a request is waiting on an answer the
+  // list re-reads every 5 s (a stuck socket, a sleeping phone), every 30 s when
+  // nothing is waiting, and immediately when the tab is shown again.
+  const anyWaiting = useMemo(() => requests.some(lead => leadView(lead, Date.now()).state === LEAD_STATE.awaiting), [requests]);
+  useAdaptiveRefresh(load, anyWaiting, { active: 5000, idle: 30000 });
+  useEffect(() => refreshWhenVisible(() => load({ quiet: true })), [load]);
 
   const summary = useMemo(() => summarizeLeads(requests, now), [requests, now]);
   const visible = useMemo(() => {
