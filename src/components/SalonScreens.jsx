@@ -33,10 +33,11 @@ import {
   Zap,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { refreshWhenVisible } from '../lib/liveRefresh';
 import { closeNotification } from '../lib/push';
 import { DEFAULT_SERVICES } from '../lib/defaultServices';
 import { normalizePlanDetails } from '../lib/planDetails';
-import { LEAD_STATE, LEAD_STATE_LABEL, bookingWindowLabel, leadView, normalizeLead } from '../lib/bookingLeads';
+import { LEAD_STATE, LEAD_STATE_LABEL, bookingWindowLabel, leadStateFromStatus, leadView, normalizeLead } from '../lib/bookingLeads';
 import { customerMobileFrom } from '../lib/customerPhone';
 import {
   EARLIER_OFFSETS,
@@ -1318,27 +1319,67 @@ export function EditSalonProfileScreen({ params, session, navigate, notify, onSe
 // now? A request whose minute is up, or that the server has already accepted,
 // rejected or cancelled, shows its outcome and no buttons at all — the salon is
 // never offered an action that cannot succeed.
-export function BookingRequestScreen({ params, navigate, notify }) {
+export function BookingRequestScreen({ params, navigate, notify, session }) {
   const [details, setDetails] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState('');
   const [delayOpen, setDelayOpen] = useState(params?.openDelayModal === true || params?.openDelayModal === 'true');
   const [now, setNow] = useState(Date.now());
   const bookingRequestId = params?.bookingRequestId || '';
+  const salonId = params?.salonId || session?.userId || '';
 
-  const loadRequest = useCallback(() => {
+  // `quiet` is the difference between opening the screen and keeping it
+  // current: a live refresh must not replace the card with a spinner.
+  const loadRequest = useCallback(({ quiet = false } = {}) => {
     if (!bookingRequestId) {
       setLoading(false);
       return undefined;
     }
-    setLoading(true);
+    if (!quiet) setLoading(true);
     return api.getBookingRequestById(bookingRequestId)
       .then(response => { setDetails(response?.data || null); })
-      .catch(error => notify?.('error', getErrorMessage(error, 'Unable to load booking request.')))
-      .finally(() => setLoading(false));
+      .catch(error => { if (!quiet) notify?.('error', getErrorMessage(error, 'Unable to load booking request.')); })
+      .finally(() => { if (!quiet) setLoading(false); });
   }, [bookingRequestId, notify]);
 
   useEffect(() => { loadRequest(); }, [loadRequest]);
+
+  // ── This screen is the one that says "answer me" ───────────────────────────
+  // It is opened from the notification, and until now it only ever read the
+  // request once. So when My Naai answered on the salon's behalf — or the salon
+  // answered it on another device, or the sweeper cancelled it — this screen
+  // kept counting down a request that was already settled. That is the "timer
+  // still running after the admin accepted" half of the report.
+  //
+  // Three events land in `salon_<id>` and all of them mean "re-read":
+  //   booking_request_updated      — answered anywhere (carries the status, so
+  //                                  the card flips immediately)
+  //   booking_request_answered_by_admin — the older admin-side event
+  //   queue_updated                — the booking was created, so the request
+  //                                  is accepted even if no request event came
+  const onLiveUpdate = useCallback(payload => {
+    const id = payload?.bookingRequestId ? String(payload.bookingRequestId) : '';
+    if (id && id === String(bookingRequestId) && payload?.status) {
+      // Optimistic first: an accept flips the card now, the reload a moment
+      // later makes sure it matches what the server recorded.
+      setDetails(current => (current ? { ...current, status: leadStateFromStatus(payload.status) } : current));
+    }
+    loadRequest({ quiet: true });
+  }, [bookingRequestId, loadRequest]);
+
+  useEffect(() => {
+    if (!salonId) return undefined;
+    const offUpdated = subscribeToLiveUpdates({ scope: 'salon', id: salonId, event: 'booking_request_updated', handler: onLiveUpdate });
+    const offAdmin = subscribeToLiveUpdates({ scope: 'salon', id: salonId, event: 'booking_request_answered_by_admin', handler: onLiveUpdate });
+    const offQueue = subscribeToLiveUpdates({ scope: 'salon', id: salonId, event: 'queue_updated', handler: onLiveUpdate });
+    return () => { offUpdated?.(); offAdmin?.(); offQueue?.(); };
+  }, [onLiveUpdate, salonId]);
+
+  // …and the floor under the socket: coming back to the tab re-reads, and once
+  // the window this screen is counting down runs out it re-reads once more, so
+  // the outcome shown is the server's (accepted / declined / cancelled), not
+  // the screen's assumption.
+  useEffect(() => refreshWhenVisible(() => loadRequest({ quiet: true })), [loadRequest]);
 
   // The one-minute window ends while the screen is open, so the clock has to
   // keep ticking: the countdown, and the moment the buttons retire, both come
@@ -1362,10 +1403,21 @@ export function BookingRequestScreen({ params, navigate, notify }) {
 
   // A window that closes on screen also closes the browser notification the
   // salon was handed, so the two cannot disagree.
+  //
+  // It also asks the server what it decided. The clock running out here is a
+  // local inference; the row is the answer, and it may well be ACCEPTED (the
+  // salon answered on another device, or My Naai answered for it) — the screen
+  // must say so rather than "cancelled automatically". Once only, so a server
+  // that has not swept yet cannot turn this into a poll.
+  const closedCheckRef = useRef('');
   useEffect(() => {
     if (!details || canAnswer) return;
     if (state === LEAD_STATE.autoCancelled && bookingRequestId) closeNotification(bookingRequestId);
-  }, [bookingRequestId, canAnswer, details, state]);
+    if (state === LEAD_STATE.autoCancelled && bookingRequestId && closedCheckRef.current !== bookingRequestId) {
+      closedCheckRef.current = bookingRequestId;
+      loadRequest({ quiet: true });
+    }
+  }, [bookingRequestId, canAnswer, details, loadRequest, state]);
 
   const action = async (value, delayMinutes) => {
     setActionLoading(value);

@@ -4,10 +4,11 @@ import { createRoot } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BookingRequestScreen } from './SalonScreens';
 
-const { getBookingRequestById, bookingRequestOwnerAction, salonDelayBooking } = vi.hoisted(() => ({
+const { getBookingRequestById, bookingRequestOwnerAction, salonDelayBooking, subscribeToLiveUpdates } = vi.hoisted(() => ({
   getBookingRequestById: vi.fn(),
   bookingRequestOwnerAction: vi.fn(),
   salonDelayBooking: vi.fn(),
+  subscribeToLiveUpdates: vi.fn(() => () => {}),
 }));
 
 vi.mock('../lib/api', async () => {
@@ -17,6 +18,8 @@ vi.mock('../lib/api', async () => {
     api: { ...actual.api, getBookingRequestById, bookingRequestOwnerAction, salonDelayBooking },
   };
 });
+
+vi.mock('../lib/socket', () => ({ subscribeToLiveUpdates }));
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -45,6 +48,14 @@ async function render(node) {
   await flush();
   return { container, root };
 }
+
+const emitLive = (event, payload) => {
+  act(() => {
+    subscribeToLiveUpdates.mock.calls
+      .filter(([args]) => args.event === event && typeof args.handler === 'function')
+      .forEach(([args]) => args.handler(payload));
+  });
+};
 
 const texts = container => Array.from(container.querySelectorAll('button')).map(button => button.textContent.trim());
 
@@ -113,6 +124,42 @@ describe('BookingRequestScreen', () => {
     await act(async () => { back.click(); });
     expect(navigate).toHaveBeenCalledWith('bookingRequests');
     expect(navigate).not.toHaveBeenCalledWith('queue');
+  });
+
+  // Reported: the admin accepted the request, the panel updated, and this screen
+  // — the one opened from the notification — kept counting down and kept offering
+  // Accept. It only ever read the request once.
+  it('stops the timer when My Naai answers while the screen is open', async () => {
+    const { container } = await render(<BookingRequestScreen params={{ bookingRequestId: 'req-1' }} session={{ role: 'SALON', userId: 'salon-1' }} navigate={vi.fn()} notify={vi.fn()} />);
+    expect(container.querySelector('.request-timer')).not.toBeNull();
+
+    // The admin's accept re-reads the request; the re-read is what the salon
+    // sees (accepted by My Naai, no buttons).
+    getBookingRequestById.mockResolvedValue({
+      status: 'SUCCESS',
+      data: { ...REQUEST, status: 'ACCEPTED' },
+    });
+    emitLive('booking_request_updated', { bookingRequestId: 'req-1', status: 'ACCEPTED' });
+
+    expect(container.querySelector('.request-timer')).toBeNull();
+    expect(texts(container)).not.toContain('Accept');
+    await flush();
+    expect(getBookingRequestById.mock.calls.length).toBeGreaterThan(1);
+    expect(container.textContent).toContain('You accepted this request');
+  });
+
+  it('re-reads for the admin-answer and queue events, and only for this salon', async () => {
+    await render(<BookingRequestScreen params={{ bookingRequestId: 'req-1' }} session={{ role: 'SALON', userId: 'salon-1' }} navigate={vi.fn()} notify={vi.fn()} />);
+    const before = getBookingRequestById.mock.calls.length;
+
+    emitLive('booking_request_answered_by_admin', { bookingRequestId: 'req-1', action: 'ACCEPT' });
+    await flush();
+    emitLive('queue_updated', { bookingId: 'bk-1' });
+    await flush();
+
+    expect(getBookingRequestById.mock.calls.length).toBeGreaterThanOrEqual(before + 2);
+    // Every subscription is in the signed-in salon's own room.
+    expect(subscribeToLiveUpdates.mock.calls.every(([args]) => args.scope === 'salon' && args.id === 'salon-1')).toBe(true);
   });
 
   it('answers in place and records the outcome on the server', async () => {

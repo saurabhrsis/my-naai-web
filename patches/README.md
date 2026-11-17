@@ -5,6 +5,7 @@ and verified with `git apply --check` on a clean checkout:
 
 | Patch | Repo | What it does |
 | --- | --- | --- |
+| [`backend-12-booking-request-speed.patch`](backend-12-booking-request-speed.patch) | `rightserveinfotechsystems/my_naai_backend` | **the two Booking requests tabs answer now, not after the bookkeeping** — the expiry sweep is fired instead of awaited, the join-aware count runs only for a search, the panel's roll-up is cached for 15 s and cleared by every answer, and the three indexes the tabs order by are built `CONCURRENTLY` at boot ([docs](../docs/LIVE-BOOKING-REQUESTS.md) §5) — **apply after `backend-11`; needs nothing else** |
 | [`backend-11-live-customer-booking-requests.patch`](backend-11-live-customer-booking-requests.patch) | `rightserveinfotechsystems/my_naai_backend` | **a request reaches all three screens the moment it moves** — `booking_request_created` / `booking_request_updated` fan out to the salon room, the customer's room and the new `admin` room (`join_admin`), and `POST /api/bookingRequest/user/list` is the customer's read-only history ([docs](../docs/LIVE-BOOKING-REQUESTS.md) §§3–4) — **apply after `backend-10`** |
 | [`admin-panel-9-live-booking-requests.patch`](admin-panel-9-live-booking-requests.patch) | `rightserveinfotechsystems/my-naai-frontend` | **the panel's Booking requests tab moves on its own** — a panel socket joins the `admin` room and the table + tiles re-read themselves on either event, with a toast naming the customer ([docs](../docs/LIVE-BOOKING-REQUESTS.md) §3) — **apply after `admin-panel-8`; needs `npm ci` (adds `socket.io-client`)** |
 | [`admin-panel-8-compact-headers.patch`](admin-panel-8-compact-headers.patch) | `rightserveinfotechsystems/my-naai-frontend` | **no page subtitles, and buttons that hold their labels** — the four pages that carried a title paragraph lose it, and `.btn` wraps its own text instead of spilling past the rounded edge on a phone ([docs](../docs/LIVE-BOOKING-REQUESTS.md) §§1–2) — **apply after `admin-panel-7`** |
@@ -94,6 +95,12 @@ npm ci                                                          # 9 adds socket.
 # backend — live booking requests + the customer's own list
 git am /path/to/patches/backend-11-live-customer-booking-requests.patch
 node scripts/test-booking-request-live.js                       # 10 checks
+
+# backend — the tabs stop waiting on bookkeeping
+git am /path/to/patches/backend-12-booking-request-speed.patch
+node scripts/test-booking-request-speed.js                      # 8 checks
+# the indexes build themselves at boot; to run them by hand instead:
+#   psql "$DATABASE_URL" -f patches/migrations/2026-11-17-booking-request-indexes.sql
 ```
 
 **Order matters.** Backend: `backend-8` → `backend-6` → `backend-7` (the

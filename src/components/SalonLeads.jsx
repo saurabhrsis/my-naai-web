@@ -16,6 +16,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { refreshWhenVisible, useAdaptiveRefresh } from '../lib/liveRefresh';
 import { subscribeToLiveUpdates } from '../lib/socket';
 import { LeadDetailSheet } from './LeadDetailSheet';
 import {
@@ -28,6 +29,7 @@ import {
   bookingWindowMissed,
   bookingWindowShort,
   filterLeads,
+  leadStateFromStatus,
   leadView,
   normalizeLead,
   summarizeLeads,
@@ -250,28 +252,62 @@ export function SalonLeadsScreen({ session, notify }) {
   //
   // An event only says "something changed in your room": the list itself is
   // still read from the API, so the card can never show a request the server
-  // does not have. Both handlers are quiet loads — no spinner, no cleared
+  // does not have. The handlers are quiet loads — no spinner, no cleared
   // scroll — and a new request announces itself so a phone lying on the counter
   // is noticed.
+  //
+  // `booking_request_updated` carries the new status, so the card is patched
+  // on the spot and the reload follows. Without that, an admin accepting on the
+  // salon's behalf left the card counting down ("0:30 left") until the refetch
+  // came back.
+  //
+  // The two OLDER events matter as much as the new one: this backend has always
+  // told the salon when an admin answered (`booking_request_answered_by_admin`)
+  // and when a booking entered the queue (`queue_updated`). Listening to them
+  // means an admin's accept clears this tab even on a deployment that predates
+  // the `booking_request_*` events.
+  const applyStatus = useCallback(payload => {
+    const id = payload?.bookingRequestId ? String(payload.bookingRequestId) : '';
+    if (!id || !payload?.status) return;
+    const state = leadStateFromStatus(payload.status);
+    setLeads(items => items.map(item => (
+      item.id === id ? { ...item, status: state, rawStatus: String(payload.status) } : item
+    )));
+  }, []);
+
   const onCreated = useCallback(payload => {
     load({ quiet: true });
     const who = payload?.customerName ? ` from ${payload.customerName}` : '';
     notify?.('info', `New booking request${who} — ${bookingWindowLabel} to answer.`);
   }, [load, notify]);
-  const onUpdated = useCallback(() => load({ quiet: true }), [load]);
+  const onUpdated = useCallback(payload => {
+    applyStatus(payload);
+    load({ quiet: true });
+  }, [applyStatus, load]);
+  // Answered by an admin on this salon's behalf: no status in the payload, so
+  // the list is re-read (the card must show the answer the server gave, not a
+  // guess at it).
+  const onAnsweredForUs = useCallback(() => load({ quiet: true }), [load]);
+
   useEffect(() => subscribeToLiveUpdates({
     scope: 'salon', id: salonId, event: 'booking_request_created', handler: onCreated,
   }), [onCreated, salonId]);
   useEffect(() => subscribeToLiveUpdates({
     scope: 'salon', id: salonId, event: 'booking_request_updated', handler: onUpdated,
   }), [onUpdated, salonId]);
+  useEffect(() => subscribeToLiveUpdates({
+    scope: 'salon', id: salonId, event: 'booking_request_answered_by_admin', handler: onAnsweredForUs,
+  }), [onAnsweredForUs, salonId]);
+  useEffect(() => subscribeToLiveUpdates({
+    scope: 'salon', id: salonId, event: 'queue_updated', handler: onAnsweredForUs,
+  }), [onAnsweredForUs, salonId]);
 
-  // …and the 20-second poll stays: it is the fallback for a deployment whose
-  // backend predates those two events, and it repairs a socket that dropped.
-  useEffect(() => {
-    const timer = window.setInterval(() => load({ quiet: true }), 20000);
-    return () => window.clearInterval(timer);
-  }, [load]);
+  // …and the floor under the socket: 5 s while a request is actually waiting on
+  // an answer, 20 s otherwise, plus an immediate re-read when the tab is shown
+  // again. A socket that never delivered still cannot leave a timer running.
+  const anyAwaiting = useMemo(() => leads.some(lead => leadView(lead, Date.now()).state === LEAD_STATE.awaiting), [leads]);
+  useAdaptiveRefresh(load, anyAwaiting, { active: 5000, idle: 20000 });
+  useEffect(() => refreshWhenVisible(() => load({ quiet: true })), [load]);
 
   const summary = useMemo(() => summarizeLeads(leads, now), [leads, now]);
   const visible = useMemo(() => filterLeads(leads, filter, now), [leads, filter, now]);

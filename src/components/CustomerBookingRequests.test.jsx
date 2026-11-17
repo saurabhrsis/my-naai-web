@@ -6,16 +6,20 @@ import { ConfirmProvider } from './ConfirmDialog';
 import { CustomerBookingRequests } from './CustomerBookingRequests';
 import { LEAD_CUSTOMER_LABEL, LEAD_STATE, leadView, normalizeLead } from '../lib/bookingLeads';
 
-const { userBookingRequestList } = vi.hoisted(() => ({ userBookingRequestList: vi.fn() }));
+const { userBookingRequestList, subscribeToLiveUpdates } = vi.hoisted(() => ({
+  userBookingRequestList: vi.fn(),
+  subscribeToLiveUpdates: vi.fn(() => () => {}),
+}));
 
 vi.mock('../lib/api', async () => {
   const actual = await vi.importActual('../lib/api');
   return { ...actual, api: { ...actual.api, userBookingRequestList } };
 });
 
-// The tab subscribes to the shared socket; jsdom has no server, and the
-// subscription is a no-op that must not reach the network in a test.
-vi.mock('../lib/socket', () => ({ subscribeToLiveUpdates: vi.fn(() => () => {}) }));
+// The tab subscribes to the shared socket; jsdom has no server, so the
+// subscriptions are recorded here and the tests deliver the events themselves —
+// exactly what the server would push into `user_<id>`.
+vi.mock('../lib/socket', () => ({ subscribeToLiveUpdates }));
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -32,6 +36,16 @@ const request = overrides => ({
   services: [{ serviceId: 's1', serviceName: 'Haircut', price: 300 }],
   ...overrides,
 });
+
+// Deliver a server event to every handler the screen registered for it, the way
+// lib/socket does when the socket delivers one.
+const emitLive = (event, payload) => {
+  act(() => {
+    subscribeToLiveUpdates.mock.calls
+      .filter(([args]) => args.event === event && typeof args.handler === 'function')
+      .forEach(([args]) => args.handler(payload));
+  });
+};
 
 const flush = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); };
 
@@ -105,6 +119,31 @@ describe('customer booking requests tab', () => {
     expect(container.textContent).toContain('next backend update');
     // A missing endpoint is not an error the customer can act on.
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('stops the countdown the moment the answer arrives, before any reload', async () => {
+    const { container } = await render(<CustomerBookingRequests session={SESSION} notify={vi.fn()} />);
+    expect(container.textContent).toMatch(/left to be answered/);
+
+    // The admin accepted it on the salon's behalf: the backend emits into this
+    // customer's own room. The card must act on the status it was given, not
+    // wait for the refetch to come back with it.
+    emitLive('booking_request_updated', { bookingRequestId: 'live-1', status: 'ACCEPTED' });
+
+    expect(container.textContent).not.toMatch(/left to be answered/);
+    expect(container.textContent).toContain(LEAD_CUSTOMER_LABEL.accepted);
+    // …and it still re-reads afterwards, so the card ends up with the row the
+    // server actually holds rather than the event's label.
+    await flush();
+    expect(userBookingRequestList.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('subscribes to the customer room for both request events', async () => {
+    await render(<CustomerBookingRequests session={SESSION} notify={vi.fn()} />);
+    const events = subscribeToLiveUpdates.mock.calls.map(([args]) => args.event);
+    expect(events).toContain('booking_request_updated');
+    expect(events).toContain('booking_status_updated');
+    expect(subscribeToLiveUpdates.mock.calls.every(([args]) => args.scope === 'user' && args.id === 'user-1')).toBe(true);
   });
 
   it('stops counting down the instant the window closes', () => {
